@@ -1,7 +1,7 @@
 import React from 'react';
 import type { SupportState } from '../types';
 import type { KickstandState } from '../SupportTypes/Kickstand/types';
-import { computeSupportRenderLookup, type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
+import { type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
 
 interface UseSupportRenderLookupOptions {
   state: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'knots'>;
@@ -24,168 +24,188 @@ const EMPTY_LOOKUP: SupportRenderLookupSnapshot = {
   previewCandidateKnots: {},
 };
 
-// Worker request timeout: if no response after 5s, assume worker is dead
 const WORKER_REQUEST_TIMEOUT_MS = 5000;
+const WORKER_RESPAWN_DELAY_MS = 150;
 
-interface PendingWorkerRequest {
+type PendingRequestInfo = {
   requestId: number;
-  timeout: number;
-  timestamp: number;
-}
+  startedAt: number;
+  version: number;
+};
+
+type WorkerHealth = {
+  failureCount: number;
+  lastFailureReason: string | null;
+};
 
 export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): SupportRenderLookupSnapshot {
   const [lookup, setLookup] = React.useState<SupportRenderLookupSnapshot>(EMPTY_LOOKUP);
-  const workerRef = React.useRef<Worker | null>(null);
-  const requestSeqRef = React.useRef(1);
-  const latestAppliedRequestRef = React.useRef(0);
-  const pendingRequestsRef = React.useRef<Map<number, PendingWorkerRequest>>(new Map());
-  const workerHealthRef = React.useRef({ isHealthy: true, failureCount: 0 });
-  const timeoutCheckIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
-  const respawnScheduledRef = React.useRef(false);
+  const [workerGeneration, setWorkerGeneration] = React.useState(0);
 
-  // Initiate worker respawn (deferred to avoid immediate recursive calls)
-  const scheduleWorkerRespawn = React.useCallback(() => {
-    if (respawnScheduledRef.current) return;
-    respawnScheduledRef.current = true;
-    
-    setTimeout(() => {
-      respawnScheduledRef.current = false;
-      // Clear refs and trigger useEffect to recreate worker
+  const workerRef = React.useRef<Worker | null>(null);
+  const pendingRequestRef = React.useRef<PendingRequestInfo | null>(null);
+  const requestVersionRef = React.useRef(0);
+  const latestAppliedRequestRef = React.useRef(0);
+  const latestOptionsRef = React.useRef(options);
+  const workerHealthRef = React.useRef<WorkerHealth>({ failureCount: 0, lastFailureReason: null });
+  const restartTimerRef = React.useRef<number | null>(null);
+  const flushTimerRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    latestOptionsRef.current = options;
+    requestVersionRef.current += 1;
+  }, [options]);
+
+  const restartWorker = React.useCallback((reason: string) => {
+    workerHealthRef.current = {
+      failureCount: workerHealthRef.current.failureCount + 1,
+      lastFailureReason: reason,
+    };
+
+    pendingRequestRef.current = null;
+
+    const worker = workerRef.current;
+    if (worker) {
+      try {
+        worker.terminate();
+      } catch {
+        // already dead
+      }
       workerRef.current = null;
-      workerHealthRef.current = { isHealthy: true, failureCount: 0 };
-    }, 100);
+    }
+
+    if (restartTimerRef.current !== null) return;
+
+    restartTimerRef.current = window.setTimeout(() => {
+      restartTimerRef.current = null;
+      setWorkerGeneration((generation) => generation + 1);
+    }, WORKER_RESPAWN_DELAY_MS);
   }, []);
 
-  // Respawn worker — setup/teardown function
+  const flushLatestRequest = React.useCallback(() => {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+
+    const worker = workerRef.current;
+    if (!worker) return;
+    if (pendingRequestRef.current) return;
+
+    const version = requestVersionRef.current;
+    const requestId = latestAppliedRequestRef.current + 1;
+    const startedAt = performance.now();
+
+    pendingRequestRef.current = { requestId, startedAt, version };
+
+    try {
+      worker.postMessage({ requestId, input: latestOptionsRef.current });
+    } catch (error) {
+      console.error('[SupportRenderLookup] Failed to post request to worker:', error);
+      pendingRequestRef.current = null;
+      restartWorker('postMessage');
+    }
+  }, [restartWorker]);
+
+  const scheduleFlush = React.useCallback(() => {
+    if (flushTimerRef.current !== null) return;
+
+    flushTimerRef.current = window.setTimeout(() => {
+      flushTimerRef.current = null;
+      flushLatestRequest();
+    }, 0);
+  }, [flushLatestRequest]);
+
   React.useEffect(() => {
     if (typeof Worker === 'undefined') return;
 
-    // Only respawn if worker is null
-    if (workerRef.current) return;
+    const worker = new Worker(new URL('./supportRenderLookup.worker.ts', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
 
-    try {
-      const worker = new Worker(new URL('./supportRenderLookup.worker.ts', import.meta.url), { type: 'module' });
-      workerRef.current = worker;
+    const timeoutId = window.setInterval(() => {
+      const pending = pendingRequestRef.current;
+      if (!pending) return;
 
-      worker.onmessage = (event: MessageEvent<{ requestId: number; snapshot: SupportRenderLookupSnapshot }>) => {
-        const msg = event.data;
-        if (!msg || msg.requestId < latestAppliedRequestRef.current) return;
+      if (performance.now() - pending.startedAt <= WORKER_REQUEST_TIMEOUT_MS) return;
 
-        // Mark request as complete
-        pendingRequestsRef.current.delete(msg.requestId);
+      console.warn('[SupportRenderLookup] Worker request timed out:', pending.requestId);
+      restartWorker(`timeout:${pending.requestId}`);
+    }, 1000);
 
-        // Worker is healthy, reset failure count
-        if (workerHealthRef.current.failureCount > 0) {
-          console.debug('[SupportRenderLookup] Worker recovered after', workerHealthRef.current.failureCount, 'failures');
-        }
-        workerHealthRef.current = { isHealthy: true, failureCount: 0 };
+    worker.onmessage = (event: MessageEvent<{ requestId: number; snapshot: SupportRenderLookupSnapshot }>) => {
+      const msg = event.data;
+      const pending = pendingRequestRef.current;
+      if (!msg || !pending || msg.requestId !== pending.requestId) return;
 
-        latestAppliedRequestRef.current = msg.requestId;
-        setLookup(msg.snapshot);
-      };
+      pendingRequestRef.current = null;
 
-      worker.onerror = () => {
-        console.error('[SupportRenderLookup] Worker error detected');
-        workerRef.current = null;
-        workerHealthRef.current.isHealthy = false;
-        workerHealthRef.current.failureCount++;
+      if (workerHealthRef.current.failureCount > 0) {
+        console.debug(
+          '[SupportRenderLookup] Worker recovered after',
+          workerHealthRef.current.failureCount,
+          'failures',
+        );
+      }
+      workerHealthRef.current = { failureCount: 0, lastFailureReason: null };
 
-        // Clear all pending requests on worker error
-        pendingRequestsRef.current.clear();
+      latestAppliedRequestRef.current = msg.requestId;
+      setLookup(msg.snapshot);
 
-        // Schedule respawn after a brief delay to avoid tight retry loops
-        scheduleWorkerRespawn();
-      };
-    } catch (err) {
-      console.error('[SupportRenderLookup] Failed to create worker:', err);
-      workerRef.current = null;
-      workerHealthRef.current.failureCount++;
-    }
+      if (requestVersionRef.current > pending.version) {
+        scheduleFlush();
+      }
+    };
+
+    worker.onerror = (event) => {
+      console.error('[SupportRenderLookup] Worker error detected', event.message || event.error || event);
+      restartWorker('error');
+    };
+
+    scheduleFlush();
 
     return () => {
-      if (workerRef.current) {
-        try {
-          workerRef.current.terminate();
-        } catch {
-          // Already terminated
-        }
-      }
-      workerRef.current = null;
-    };
-  }, [scheduleWorkerRespawn]);
+      window.clearInterval(timeoutId);
 
-  // Health monitoring: detect stalled requests that never respond
+      if (restartTimerRef.current !== null) {
+        window.clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+
+      pendingRequestRef.current = null;
+
+      if (workerRef.current === worker) {
+        workerRef.current = null;
+      }
+
+      try {
+        worker.terminate();
+      } catch {
+        // already terminated
+      }
+    };
+  }, [restartWorker, scheduleFlush, workerGeneration]);
+
   React.useEffect(() => {
-    const checkTimeouts = () => {
-      const now = performance.now();
-      const stalled: number[] = [];
-
-      for (const [requestId, pending] of pendingRequestsRef.current.entries()) {
-        if (now - pending.timestamp > WORKER_REQUEST_TIMEOUT_MS) {
-          stalled.push(requestId);
-        }
-      }
-
-      if (stalled.length > 0) {
-        console.warn('[SupportRenderLookup] Worker timeout detected for requests:', stalled, '— respawning worker');
-        workerHealthRef.current.failureCount++;
-        workerRef.current = null;
-        pendingRequestsRef.current.clear();
-        scheduleWorkerRespawn();
-      }
-    };
-
-    timeoutCheckIntervalRef.current = setInterval(checkTimeouts, 1000);
-
-    return () => {
-      if (timeoutCheckIntervalRef.current) {
-        clearInterval(timeoutCheckIntervalRef.current);
-      }
-    };
-  }, [scheduleWorkerRespawn]);
+    scheduleFlush();
+  }, [options, scheduleFlush]);
 
   React.useEffect(() => {
     return () => {
-      if (timeoutCheckIntervalRef.current) {
-        clearInterval(timeoutCheckIntervalRef.current);
+      if (restartTimerRef.current !== null) {
+        window.clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
       }
     };
   }, []);
-
-  React.useEffect(() => {
-    const worker = workerRef.current;
-    if (!worker) {
-      // Fall back to main thread computation if worker is unavailable
-      const snapshot = computeSupportRenderLookup(options);
-      setLookup(snapshot);
-      if (workerHealthRef.current.failureCount > 0) {
-        console.debug('[SupportRenderLookup] Using main-thread fallback; worker failure#', workerHealthRef.current.failureCount);
-      }
-      return;
-    }
-
-    const requestId = requestSeqRef.current++;
-    const now = performance.now();
-
-    // Track pending request for timeout detection
-    pendingRequestsRef.current.set(requestId, {
-      requestId,
-      timeout: WORKER_REQUEST_TIMEOUT_MS,
-      timestamp: now,
-    });
-
-    try {
-      worker.postMessage({ requestId, input: options });
-    } catch (err) {
-      console.error('[SupportRenderLookup] Failed to post message to worker:', err);
-      pendingRequestsRef.current.delete(requestId);
-      workerRef.current = null;
-      workerHealthRef.current.failureCount++;
-      // Fall back to main thread
-      const snapshot = computeSupportRenderLookup(options);
-      setLookup(snapshot);
-    }
-  }, [options]);
 
   return lookup;
 }
