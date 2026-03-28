@@ -56,6 +56,7 @@ const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
 
 function ConeBucketMesh({
     bucket,
+    diskThicknessByCone,
     color,
     emissive,
     emissiveIntensity,
@@ -66,6 +67,7 @@ function ConeBucketMesh({
     onConePointerOut,
 }: {
     bucket: ConeBucket;
+    diskThicknessByCone: ReadonlyMap<InstancedContactCone, number>;
     color: string;
     emissive: string;
     emissiveIntensity: number;
@@ -79,6 +81,12 @@ function ConeBucketMesh({
     const bodyRef = useRef<THREE.InstancedMesh>(null);
     const tipSphereRef = useRef<THREE.InstancedMesh>(null);
     const lastHoveredRef = useRef<InstancedContactCone | null>(null);
+
+    const resolveDiskThickness = (cone: InstancedContactCone) => {
+        if (cone.profile.type !== 'disk') return 0;
+        return diskThicknessByCone.get(cone)
+            ?? getDiskThicknessForCone(cone);
+    };
 
     useLayoutEffect(() => {
         const tempObject = new THREE.Object3D();
@@ -103,7 +111,7 @@ function ConeBucketMesh({
 
         setInstanceMatrices(bodyRef.current, (cone) => {
             const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
-            const primitiveThickness = bucket.profileType === 'disk' ? getDiskThicknessForCone(cone) : 0;
+            const primitiveThickness = bucket.profileType === 'disk' ? resolveDiskThickness(cone) : 0;
             const coneStart = {
                 x: cone.pos.x + effectiveSurfaceNormal.x * primitiveThickness,
                 y: cone.pos.y + effectiveSurfaceNormal.y * primitiveThickness,
@@ -118,7 +126,7 @@ function ConeBucketMesh({
 
         setInstanceMatrices(tipSphereRef.current, (cone) => {
             const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
-            const primitiveThickness = bucket.profileType === 'disk' ? getDiskThicknessForCone(cone) : 0;
+            const primitiveThickness = bucket.profileType === 'disk' ? resolveDiskThickness(cone) : 0;
             const coneStart = new THREE.Vector3(
                 cone.pos.x + effectiveSurfaceNormal.x * primitiveThickness,
                 cone.pos.y + effectiveSurfaceNormal.y * primitiveThickness,
@@ -129,7 +137,7 @@ function ConeBucketMesh({
 
         setInstanceMatrices(diskRef.current, (cone) => {
             const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
-            const thickness = getDiskThicknessForCone(cone);
+            const thickness = resolveDiskThickness(cone);
             const center = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
             const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
             return {
@@ -141,7 +149,7 @@ function ConeBucketMesh({
                 quaternion: getDiskRotation(effectiveSurfaceNormal),
             };
         });
-    }, [bucket]);
+    }, [bucket, diskThicknessByCone]);
 
     const resolveCone = (instanceId: number | undefined | null) => {
         if (instanceId == null) return null;
@@ -257,12 +265,22 @@ export function InstancedContactConeGroup({
         });
     }, [cones]);
 
+    const diskThicknessByCone = useMemo(() => {
+        const map = new Map<InstancedContactCone, number>();
+        for (const cone of validCones) {
+            map.set(cone, getDiskThicknessForCone(cone));
+        }
+        return map;
+    }, [validCones]);
+
     const buckets = useMemo(() => {
         const grouped = new Map<string, ConeBucket>();
 
         for (const cone of validCones) {
             const profileType = getProfileType(cone.profile);
-            const diskThickness = profileType === 'disk' ? getDiskThicknessForCone(cone) : 0;
+            const diskThickness = profileType === 'disk'
+                ? (diskThicknessByCone.get(cone) ?? getDiskThicknessForCone(cone))
+                : 0;
             const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
             const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
             const length = Math.max(0.001, cone.profile.lengthMm);
@@ -296,7 +314,7 @@ export function InstancedContactConeGroup({
         }
 
         return Array.from(grouped.values());
-    }, [validCones]);
+    }, [validCones, diskThicknessByCone]);
 
     if (validCones.length === 0) return null;
 
@@ -306,6 +324,7 @@ export function InstancedContactConeGroup({
                 <ConeBucketMesh
                     key={bucket.key}
                     bucket={bucket}
+                    diskThicknessByCone={diskThicknessByCone}
                     color={color}
                     emissive={emissive}
                     emissiveIntensity={emissiveIntensity}

@@ -27,7 +27,7 @@ import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
 import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf } from './types';
-import { bezierToLineSegments } from './Curves/BezierUtils';
+import { bezierToLineSegments, calculateAdaptiveBezierResolution } from './Curves/BezierUtils';
 import type { SupportData } from './rendering';
 import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
@@ -94,8 +94,21 @@ function tesselllateBezierToShafts(
     supportId: string,
     modelId?: string,
 ): InstancedShaft[] {
-    const BATCHED_BEZIER_RESOLUTION = 8;
-    const res = Math.max(2, segment.resolution ?? BATCHED_BEZIER_RESOLUTION);
+    const BATCHED_BEZIER_MIN_RESOLUTION = 4;
+    const BATCHED_BEZIER_MAX_RESOLUTION = 24;
+    const adaptiveResolution = calculateAdaptiveBezierResolution(
+        startPos,
+        segment.controlPoint1,
+        segment.controlPoint2,
+        endPos,
+        {
+            minResolution: BATCHED_BEZIER_MIN_RESOLUTION,
+            maxResolution: BATCHED_BEZIER_MAX_RESOLUTION,
+            targetChordLengthMm: 2.5,
+            curvatureWeight: 2.0,
+        },
+    );
+    const res = Math.max(2, segment.resolution ?? adaptiveResolution);
     const points = bezierToLineSegments(startPos, segment.controlPoint1, segment.controlPoint2, endPos, res);
     const shafts: InstancedShaft[] = [];
     for (let i = 0; i < points.length - 1; i++) {
@@ -121,8 +134,19 @@ function tessellateBraceBezierToShafts(
     supportId: string,
     modelId?: string,
 ): InstancedShaft[] {
-    const BATCHED_BEZIER_RESOLUTION = 8;
-    const points = bezierToLineSegments(startPos, controlPoint1, controlPoint2, endPos, BATCHED_BEZIER_RESOLUTION);
+    const adaptiveResolution = calculateAdaptiveBezierResolution(
+        startPos,
+        controlPoint1,
+        controlPoint2,
+        endPos,
+        {
+            minResolution: 4,
+            maxResolution: 24,
+            targetChordLengthMm: 2.5,
+            curvatureWeight: 2.0,
+        },
+    );
+    const points = bezierToLineSegments(startPos, controlPoint1, controlPoint2, endPos, adaptiveResolution);
     const shafts: InstancedShaft[] = [];
     for (let i = 0; i < points.length - 1; i++) {
         shafts.push({
@@ -2875,7 +2899,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 next.push({
                     ...batch,
                     roots: [],
-                    cones: [],
                 });
                 return;
             }
