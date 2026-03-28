@@ -60,6 +60,7 @@ export function KnotGizmo() {
     const dragEndedResetTimeoutRef = useRef<number | null>(null);
     const gizmoTargetRef = useRef<THREE.Group>(null);
     const dragProjectionOffsetTRef = useRef(0);
+    const selectionCooldownUntilRef = useRef(0);
 
     // Elastic chain state - captured at drag start
     const elasticStateRef = useRef<Record<string, ElasticChainInitialState>>({});
@@ -254,6 +255,15 @@ export function KnotGizmo() {
 
     const result = findKnotAndShaft();
 
+    useEffect(() => {
+        if (selectedCategory !== 'knot' || !selectedId) {
+            selectionCooldownUntilRef.current = 0;
+            return;
+        }
+
+        selectionCooldownUntilRef.current = Date.now() + 200;
+    }, [selectedCategory, selectedId]);
+
     useFrame(() => {
         // Only show/update gizmo when a knot is selected
         if (selectedCategory !== 'knot') return;
@@ -361,13 +371,17 @@ export function KnotGizmo() {
     const handleMoveStart = useCallback((axis?: 'x' | 'y' | 'z') => {
         if (!result) return false;
 
+        if (selectionCooldownUntilRef.current && Date.now() < selectionCooldownUntilRef.current) {
+            return false;
+        }
+
         const dominantAxis = getDominantAxis(result.axis);
         if (axis && axis !== dominantAxis) {
             return false;
         }
 
         isDraggingRef.current = true;
-        setKnotGizmoInteractionFlags(true);
+        setKnotGizmoInteractionFlags(true, 0);
         getKnotGizmoWindowState().__gizmoDragEndedThisFrame = false;
         document.body.style.cursor = 'grabbing';
         beforeHistoryRef.current = captureSupportEditSnapshot();
@@ -486,13 +500,13 @@ export function KnotGizmo() {
                 showCenter={false}
                 axisLock={dominantAxis}
                 moveHandleBidirectional={true}
-                moveHandleLengthScale={0.62}
-                moveHandleThicknessScale={0.72}
+                moveHandleLengthScale={1.0}
+                moveHandleThicknessScale={1.0}
                 onMoveStart={handleMoveStart}
                 onMove={handleMove}
                 onMoveEnd={handleMoveEnd}
                 scaleFactor={0.02}
-                handleScale={2.35}
+                handleScale={3.0}
             />
         </>
     );

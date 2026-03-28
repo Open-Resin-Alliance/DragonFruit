@@ -152,31 +152,29 @@ export function KnotRenderer({
         const pointerOverKnot = isPointerOverThisKnot(e);
         if (!isParentSelected || !isInteractable || !pointerOverKnot) return;
 
-        e.stopPropagation();
-
-        const beginDirectDrag = () => {
-            onDragStart();
-            document.body.style.cursor = 'grabbing';
-
-            const handlePointerUp = () => {
-                onDragEnd();
-                document.body.style.cursor = 'grab';
-                window.removeEventListener('pointerup', handlePointerUp, true);
-                window.removeEventListener('pointercancel', handlePointerUp, true);
-                window.removeEventListener('mouseup', handlePointerUp, true);
-            };
-
-            window.addEventListener('pointerup', handlePointerUp, true);
-            window.addEventListener('pointercancel', handlePointerUp, true);
-            window.addEventListener('mouseup', handlePointerUp, true);
-        };
-
-        // Select the knot if needed, but allow immediate direct drag on first pointer-down.
+        // First press should select only; second press can start drag.
         if (!isSelected) {
             selectPrimitiveById(knot.id);
+            e.stopPropagation();
+            return;
         }
 
-        beginDirectDrag();
+        e.stopPropagation();
+
+        onDragStart();
+        document.body.style.cursor = 'grabbing';
+
+        const handlePointerUp = () => {
+            onDragEnd();
+            document.body.style.cursor = 'grab';
+            window.removeEventListener('pointerup', handlePointerUp, true);
+            window.removeEventListener('pointercancel', handlePointerUp, true);
+            window.removeEventListener('mouseup', handlePointerUp, true);
+        };
+
+        window.addEventListener('pointerup', handlePointerUp, true);
+        window.addEventListener('pointercancel', handlePointerUp, true);
+        window.addEventListener('mouseup', handlePointerUp, true);
     };
 
     // Grab cursor on hover when parent is selected
