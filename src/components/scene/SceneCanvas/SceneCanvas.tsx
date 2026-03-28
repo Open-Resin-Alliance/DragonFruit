@@ -3604,8 +3604,14 @@ export function SceneCanvas({
                   ?? (isMultiGizmoSelection
                     ? (liveActiveTransformForMultiPreview ?? model.transform)
                     : (transform ?? model.transform));
+                const shouldApplyLiveLiftAlignment =
+                  isGizmoDragging
+                  || isGizmoRetargeting
+                  || isPostGizmoInteractionGuardActive;
                 const activeTransformForRender = isActive
-                  ? (alignLiveTransformToLift(model, rawActiveTransformForRender) ?? rawActiveTransformForRender)
+                  ? (shouldApplyLiveLiftAlignment
+                    ? (alignLiveTransformToLift(model, rawActiveTransformForRender) ?? rawActiveTransformForRender)
+                    : rawActiveTransformForRender)
                   : rawActiveTransformForRender;
                 const transformToUse = isActive
                   ? (duplicateActivePreviewTransform ?? activeTransformForRender)
