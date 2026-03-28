@@ -37,9 +37,10 @@ interface ActiveHost {
 }
 
 export function useKnotInteraction(enabled: boolean = true) {
-    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm epsilon to drop high-frequency jitter churn
+    const MIN_DRAG_DELTA_SQ = 1e-4; // ~0.01mm epsilon to drop high-frequency jitter churn
     const BEZIER_PROJECTION_STEPS = 36;
     const FAST_KNOT_DRAG_ELASTIC_PREVIEW = true;
+    const DRAG_SNAP_MM = 0.01;
 
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer } = useThree();
@@ -61,6 +62,8 @@ export function useKnotInteraction(enabled: boolean = true) {
     const previewKnotRef = useRef<Knot | null>(null);
     const lastEmittedKnotPreviewPosRef = useRef<{ x: number; y: number; z: number } | null>(null);
     const lastEmittedBranchPreviewRef = useRef<Record<string, Branch['segments']> | null>(null);
+    const knotDragUpdatePendingRef = useRef(false);
+    const knotDragListenersAttachedRef = useRef(false);
 
     const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -158,6 +161,18 @@ export function useKnotInteraction(enabled: boolean = true) {
         if (lenSq < 0.000001) return 0;
         const v = new THREE.Vector3(pos.x - host.start.x, pos.y - host.start.y, pos.z - host.start.z);
         return THREE.MathUtils.clamp(v.dot(dir) / lenSq, 0, 1);
+    };
+
+    const markKnotDragUpdatePending = useCallback(() => {
+        if (!activeKnotId.current) return;
+        knotDragUpdatePendingRef.current = true;
+    }, []);
+
+    const snapVec3 = (vec: THREE.Vector3) => {
+        vec.x = Math.round(vec.x / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        vec.y = Math.round(vec.y / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        vec.z = Math.round(vec.z / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        return vec;
     };
 
     const clampTToLeafAngleConstraints = (
@@ -705,6 +720,11 @@ export function useKnotInteraction(enabled: boolean = true) {
             activeHost.current = host;
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
+            knotDragUpdatePendingRef.current = true;
+            if (!knotDragListenersAttachedRef.current) {
+                window.addEventListener('pointermove', markKnotDragUpdatePending, true);
+                knotDragListenersAttachedRef.current = true;
+            }
             lastAppliedKnotPosRef.current = null;
             previewBranchSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
@@ -860,6 +880,11 @@ export function useKnotInteraction(enabled: boolean = true) {
             forceEndDragRef.current = false;
             initialEditSnapshotRef.current = null;
             setKnotDragInteractionLock(false);
+            knotDragUpdatePendingRef.current = false;
+            if (knotDragListenersAttachedRef.current) {
+                window.removeEventListener('pointermove', markKnotDragUpdatePending, true);
+                knotDragListenersAttachedRef.current = false;
+            }
 
             if (leafClampWarningTimeout.current) {
                 window.clearTimeout(leafClampWarningTimeout.current);
@@ -877,10 +902,13 @@ export function useKnotInteraction(enabled: boolean = true) {
             lastEmittedBranchPreviewRef.current = null;
             clearKnotDragPreview();
         }
-    }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
+    }, [isDragging, hit, enabled, setKnotDragInteractionLock, markKnotDragUpdatePending]);
 
     useFrame(() => {
+        if (!knotDragUpdatePendingRef.current) return;
         if (!activeKnotId.current || !activeHost.current) return;
+
+        knotDragUpdatePendingRef.current = false;
 
         const knot = getKnotById(activeKnotId.current);
         if (!knot) return;
@@ -903,7 +931,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             const t = THREE.MathUtils.clamp(projected.t, minT, 1);
 
             const lineVec = new THREE.Vector3().subVectors(host.end, host.start);
-            const finalOnLine = host.start.clone().add(lineVec.multiplyScalar(t));
+            const finalOnLine = snapVec3(host.start.clone().add(lineVec.multiplyScalar(t)));
 
             const contactDia = cone.profile?.contactDiameterMm ?? 0.4;
             const bodyDia = cone.profile?.bodyDiameterMm ?? 1.2;
@@ -938,7 +966,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         raycaster.setFromCamera(pointer, camera);
 
         const quickProjected = projectOntoSegment(raycaster.ray, host.start, host.end);
-        const quickProjectedVec = new THREE.Vector3(quickProjected.point.x, quickProjected.point.y, quickProjected.point.z);
+        const quickProjectedVec = snapVec3(new THREE.Vector3(quickProjected.point.x, quickProjected.point.y, quickProjected.point.z));
         const hasLastApplied = !!lastAppliedKnotPosRef.current;
         const deltaSq = hasLastApplied
             ? lastAppliedKnotPosRef.current!.distanceToSquared(quickProjectedVec)
@@ -1085,7 +1113,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         // 1. Initial Constraint (Shaft + Basic Angle)
         // We IGNORE elastic branches here because ElasticChainSolver will handle them properly.
         // Static constraint solver would clamp the Knot based on the OLD joint position, preventing movement.
-        let constrainedPos = solveKnotConstraint(knot, result.point, maxAngleDeg, host.initialTopology, elasticBranchIds);
+        let constrainedPos = solveKnotConstraint(knot, snapVec3(new THREE.Vector3(result.point.x, result.point.y, result.point.z)), maxAngleDeg, host.initialTopology, elasticBranchIds);
 
         // 1b. Leaf Constraint (if this knot owns a Leaf)
         // Prevent dragging past the same 10° from horizontal rule that placement enforces.
@@ -1095,7 +1123,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         const leafClamp = clampTToLeafAngleConstraints(tDesired, tCurrent, host, maxAngleDeg);
         if (leafClamp.clamped) {
             const dir = new THREE.Vector3().subVectors(host.end, host.start);
-            const newPos = host.start.clone().add(dir.multiplyScalar(leafClamp.t));
+            const newPos = snapVec3(host.start.clone().add(dir.multiplyScalar(leafClamp.t)));
             constrainedPos = { x: newPos.x, y: newPos.y, z: newPos.z };
 
             const epsilonZ = 0.0001;
@@ -1142,7 +1170,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                 const dir = new THREE.Vector3().subVectors(host.end, host.start);
                 if (Math.abs(dir.z) > 0.001) {
                     const t = (minAllowedZ - host.start.z) / dir.z;
-                    const newPos = host.start.clone().add(dir.multiplyScalar(t));
+                    const newPos = snapVec3(host.start.clone().add(dir.multiplyScalar(t)));
                     constrainedPos = { x: newPos.x, y: newPos.y, z: newPos.z };
                 } else {
                     constrainedPos = { ...constrainedPos, z: minAllowedZ };
@@ -1220,7 +1248,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             t = Math.max(0, Math.min(1, t));
         }
 
-        let finalOnLine = host.start.clone().add(lineVec.clone().multiplyScalar(t));
+        let finalOnLine = snapVec3(host.start.clone().add(lineVec.clone().multiplyScalar(t)));
 
         // For curved braces: keep knot exactly on the curve and derive t from closest sample.
         if (host.containerType === 'brace' && host.brace?.curve?.type === 'bezier') {
@@ -1252,7 +1280,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                 }
 
                 t = bt;
-                finalOnLine = bp;
+                finalOnLine = snapVec3(bp);
 
                 const startDia = Math.max(
                     0.001,
@@ -1279,7 +1307,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                         BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1296,7 +1324,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                         BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1313,7 +1341,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                         BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1330,7 +1358,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                         BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }

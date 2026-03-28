@@ -272,7 +272,9 @@ export function SupportBuilder({
                     transparent={isPreview}
                     opacity={opacity}
                     raycast={nullRaycast}
-                    enablePicking={!isPreview}
+                    // Keep support hover/click on the direct raycast path so support editing
+                    // does not pay GPU-picking registration costs.
+                    enablePicking={false}
                 />
             </React.Fragment>
         );
@@ -363,7 +365,8 @@ export function SupportBuilder({
                         transparent={isPreview}
                         opacity={opacity}
                         raycast={nullRaycast}
-                        enablePicking={!isPreview}
+                        // Support primitives use raycast-based hover only.
+                        enablePicking={false}
                         isParentSelected={shouldHighlight}
                     />
                 );
@@ -379,7 +382,8 @@ export function SupportBuilder({
                     transparent={isPreview}
                     opacity={opacity}
                     raycast={nullRaycast}
-                    enablePicking={!isPreview}
+                    // Support primitives use raycast-based hover only.
+                    enablePicking={false}
                 />
             )}
 

@@ -22,8 +22,9 @@ import { subscribeSupportInteractionReset } from '../../interaction/supportInter
  * It monitors the picking state and handles drag operations for any 'joint' object.
  */
 export function useJointInteraction(enabled: boolean = true) {
-    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm positional epsilon to drop high-frequency jitter churn
+    const MIN_DRAG_DELTA_SQ = 1e-4; // ~0.01mm positional epsilon to drop high-frequency jitter churn
     const MIN_PUBLISHED_CLAMPED_DELTA_SQ = 1e-8;
+    const DRAG_SNAP_MM = 0.01;
     const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
     const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
     const JOINT_PARENT_CACHE_MAX_ENTRIES = 12000;
@@ -51,6 +52,8 @@ export function useJointInteraction(enabled: boolean = true) {
     const lastWarningEvalAtRef = useRef(0);
     const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
     const activeJointBindingRef = useRef<{ jointId: string; segmentIndex: number; jointKey: 'topJoint' | 'bottomJoint' } | null>(null);
+    const jointDragUpdatePendingRef = useRef(false);
+    const jointDragListenersAttachedRef = useRef(false);
     const activeConstraintRootRef = useRef<Roots | undefined>(undefined);
     const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
     const dragGestureSelectionAtStartRef = useRef<string | null>(null);
@@ -124,6 +127,11 @@ export function useJointInteraction(enabled: boolean = true) {
             return;
         }
         lastPublishedClampedJointPosRef.current = { x: clampedPos.x, y: clampedPos.y, z: clampedPos.z };
+    }, []);
+
+    const markJointDragUpdatePending = useCallback(() => {
+        if (!activeJointId.current) return;
+        jointDragUpdatePendingRef.current = true;
     }, []);
 
     const applyWarningForDragDelta = useCallback((clampedPos: Vec3 | null, rawPos: Vec3) => {
@@ -399,6 +407,11 @@ export function useJointInteraction(enabled: boolean = true) {
 
                 activeJointId.current = jointId;
                 setJointInteractionLock(true);
+                jointDragUpdatePendingRef.current = true;
+                if (!jointDragListenersAttachedRef.current) {
+                    window.addEventListener('pointermove', markJointDragUpdatePending, true);
+                    jointDragListenersAttachedRef.current = true;
+                }
                 lastAppliedDragPosRef.current = null;
                 lastResolvedJointPosRef.current = null;
                 lastPublishedClampedJointPosRef.current = null;
@@ -582,6 +595,11 @@ export function useJointInteraction(enabled: boolean = true) {
             activeConstraintRootRef.current = undefined;
             activeConstraintStartRef.current = undefined;
             activeJointBindingRef.current = null;
+            jointDragUpdatePendingRef.current = false;
+            if (jointDragListenersAttachedRef.current) {
+                window.removeEventListener('pointermove', markJointDragUpdatePending, true);
+                jointDragListenersAttachedRef.current = false;
+            }
             applyInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
             clearJointDragPositionPreview(activeJointIdAtEnd);
@@ -595,7 +613,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
             setJointInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning, resolveJointBinding]);
+    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning, resolveJointBinding, markJointDragUpdatePending]);
 
     const emitPreviewJointPos = (clampedPos: Vec3 | null, rawPos: Vec3) => {
         const stablePos = clampedPos ?? lastResolvedJointPosRef.current ?? rawPos;
@@ -612,8 +630,20 @@ export function useJointInteraction(enabled: boolean = true) {
         emitJointDragPositionPreview(activeJointId.current!, stablePos);
     };
 
+    const snapDragPos = (pos: THREE.Vector3) => {
+        pos.x = Math.round(pos.x / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        pos.y = Math.round(pos.y / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        pos.z = Math.round(pos.z / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        return pos;
+    };
+
     // Update loop
     useFrame(() => {
+        if (!jointDragUpdatePendingRef.current) return;
+        if (!(activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current))) return;
+
+        jointDragUpdatePendingRef.current = false;
+
         if (activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current)) {
             raycaster.setFromCamera(pointer, camera);
             const intersection = planeIntersectionRef.current;
@@ -621,7 +651,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
             if (intersected) {
                 // Apply offset
-                const newPos = intersection.add(dragOffset.current);
+                const newPos = snapDragPos(intersection.add(dragOffset.current));
                 const hasLastAppliedPos = !!lastAppliedDragPosRef.current;
                 const deltaSq = hasLastAppliedPos
                     ? lastAppliedDragPosRef.current!.distanceToSquared(newPos)
