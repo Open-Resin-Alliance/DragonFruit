@@ -29,7 +29,6 @@ function initializeImmediateModelHoverStore() {
     };
 
     window.addEventListener('model-pointer-hover-immediate', handleModelHover as EventListener);
-    window.addEventListener('sat-hover-model-changed', handleModelHover as EventListener);
     window.addEventListener('blur', clearImmediateModelHover);
     document.addEventListener('visibilitychange', clearImmediateModelHover);
 }

@@ -12,7 +12,6 @@ import { MeshClassificationRenderer } from '@/components/scene/MeshClassificatio
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { PickingDebugOverlay } from '@/components/picking';
-import { SATHoverPicker } from '@/components/picking/SATHoverPicker';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -882,25 +881,6 @@ export function SceneCanvas({
     };
   }, []);
 
-  // Listen for SAT-based hover changes (when enabled)
-  React.useEffect(() => {
-    if (!activeBuildVolumeSettings.useSATForHoverPicking) return;
-
-    const handleSATHoverModelChanged = (event: Event) => {
-      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
-      const modelId = customEvent.detail?.modelId ?? null;
-      // When SAT picking is active, it replaces GPU picking for hover state
-      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
-      // Clear support/raft hover states when SAT is enabled (they're now included in the hull)
-      setHoveredRaftModelId(null);
-      setHoveredSupportPointerModelId(null);
-    };
-
-    window.addEventListener('sat-hover-model-changed', handleSATHoverModelChanged as EventListener);
-    return () => {
-      window.removeEventListener('sat-hover-model-changed', handleSATHoverModelChanged as EventListener);
-    };
-  }, [activeBuildVolumeSettings.useSATForHoverPicking]);
 
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
     if (mode !== 'prepare') return;
@@ -3647,34 +3627,6 @@ export function SceneCanvas({
     };
   }, []);
 
-  // Callbacks for SATHoverPicker to access model data
-  const getModelTransformForSAT = React.useCallback((modelId: string) => {
-    const model = models.find((m) => m.id === modelId);
-    if (!model) return null;
-    return {
-      position: model.transform.position.clone(),
-      rotation: model.transform.rotation.clone(),
-      scale: model.transform.scale.clone(),
-    };
-  }, [models]);
-
-  const getModelGeometryForSAT = React.useCallback((modelId: string) => {
-    const model = models.find((m) => m.id === modelId);
-    return model?.geometry?.geometry ?? null;
-  }, [models]);
-
-  const getSupportLocalPointsForSAT = React.useCallback((modelId: string) => {
-    // Collect all support joint vertices for this model's supports
-    // We don't have direct access to support hull points here, so return null
-    // The SAT picker can handle null gracefully
-    return null;
-  }, []);
-
-  const visibleModelIds = React.useMemo(
-    () => models.filter((m) => m.visible).map((m) => m.id),
-    [models],
-  );
-
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -3696,17 +3648,6 @@ export function SceneCanvas({
         <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
         <LoggingHelper mode={mode} />
         
-        {/* SAT-based hover detection (experimental) */}
-        {activeBuildVolumeSettings.useSATForHoverPicking && (
-          <SATHoverPicker
-            enabled={activeBuildVolumeSettings.useSATForHoverPicking}
-            visibleModelIds={visibleModelIds}
-            getModelTransform={getModelTransformForSAT}
-            getModelGeometry={getModelGeometryForSAT}
-            getSupportLocalPoints={getSupportLocalPointsForSAT}
-          />
-        )}
-
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
           directionalIntensity={directionalIntensity ?? 0.3}
