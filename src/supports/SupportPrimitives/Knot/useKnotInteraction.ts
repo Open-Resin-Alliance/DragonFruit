@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { applyKnotDragFramePreview, getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateBranch, getBranchById, subscribe } from '../../state';
+import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateBranch, getBranchById, subscribe } from '../../state';
 import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../types';
 import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
@@ -14,6 +14,7 @@ import { getFinalSocketPosition, getSocketPosition } from '../ContactCone';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { clearKnotDragPreview, emitKnotDragPreview } from '../../interaction/knotDragPreview';
 
 interface ActiveHost {
     segmentId: string;
@@ -55,7 +56,8 @@ export function useKnotInteraction(enabled: boolean = true) {
     const prewarmedHostRef = useRef<ActiveHost | null>(null);
     const prewarmedElasticStateRef = useRef<Record<string, ElasticChainInitialState> | null>(null);
     const lastAppliedKnotPosRef = useRef<THREE.Vector3 | null>(null);
-    const dragUpdatedBranchIdsRef = useRef<Set<string>>(new Set());
+    const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
+    const previewKnotRef = useRef<Knot | null>(null);
 
     const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -75,6 +77,7 @@ export function useKnotInteraction(enabled: boolean = true) {
     useEffect(() => {
         return () => {
             setKnotDragInteractionLock(false, 0);
+            clearKnotDragPreview();
         };
     }, [setKnotDragInteractionLock]);
 
@@ -700,7 +703,9 @@ export function useKnotInteraction(enabled: boolean = true) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
             lastAppliedKnotPosRef.current = null;
-            dragUpdatedBranchIdsRef.current.clear();
+            previewBranchSegmentsByIdRef.current = {};
+            previewKnotRef.current = null;
+            clearKnotDragPreview();
 
             // Capture/restore state
             elasticState.current = prewarmedKnotIdRef.current === knot.id && prewarmedElasticStateRef.current
@@ -717,21 +722,22 @@ export function useKnotInteraction(enabled: boolean = true) {
         if (shouldEndDrag) {
             const activeKnotIdAtEnd = activeKnotId.current;
             const activeHostAtEnd = activeHost.current;
-            const updatedBranchIdsAtEnd = Array.from(dragUpdatedBranchIdsRef.current);
+            const previewBranchSegmentsByIdAtEnd = previewBranchSegmentsByIdRef.current;
+            const previewKnotAtEnd = previewKnotRef.current;
 
             // Reconcile drag-time fast-path edits with an exact pass once on release.
-            for (const branchId of updatedBranchIdsAtEnd) {
+            for (const [branchId, previewSegments] of Object.entries(previewBranchSegmentsByIdAtEnd)) {
                 const branch = getBranchById(branchId);
                 if (branch) {
-                    updateBranch(branch);
+                    updateBranch({ ...branch, segments: previewSegments });
                 }
             }
 
-            if (activeKnotIdAtEnd) {
-                const latestKnot = getKnotById(activeKnotIdAtEnd);
-                if (latestKnot) {
-                    updateKnot(latestKnot);
-                }
+            if (previewKnotAtEnd && previewKnotAtEnd.id === activeKnotIdAtEnd) {
+                updateKnot(previewKnotAtEnd);
+            } else if (activeKnotIdAtEnd) {
+                const knotAtEnd = getKnotById(activeKnotIdAtEnd);
+                if (knotAtEnd) updateKnot(knotAtEnd);
             }
 
             if (activeHostAtEnd && initialEditSnapshotRef.current) {
@@ -763,7 +769,9 @@ export function useKnotInteraction(enabled: boolean = true) {
             prewarmedHostRef.current = null;
             prewarmedElasticStateRef.current = null;
             lastAppliedKnotPosRef.current = null;
-            dragUpdatedBranchIdsRef.current.clear();
+            previewBranchSegmentsByIdRef.current = {};
+            previewKnotRef.current = null;
+            clearKnotDragPreview();
         }
     }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
 
@@ -804,7 +812,12 @@ export function useKnotInteraction(enabled: boolean = true) {
                 diameter: hostDia + 0.1,
             };
 
-            applyKnotDragFramePreview(finalKnot);
+            previewKnotRef.current = finalKnot;
+            emitKnotDragPreview({
+                knotId: finalKnot.id,
+                knot: finalKnot,
+                branchSegmentsById: previewBranchSegmentsByIdRef.current,
+            });
             return;
         }
 
@@ -1077,7 +1090,10 @@ export function useKnotInteraction(enabled: boolean = true) {
 
             if (branchChanged) {
                 branchSegmentsById[branch.id] = newSegments;
-                dragUpdatedBranchIdsRef.current.add(branch.id);
+            } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
+                // Branch returned to committed geometry; keep an explicit sync entry so
+                // we can prune stale preview overrides below.
+                branchSegmentsById[branch.id] = branch.segments;
             }
         }
 
@@ -1247,6 +1263,28 @@ export function useKnotInteraction(enabled: boolean = true) {
             lastAppliedKnotPosRef.current.copy(finalOnLine);
         }
 
-        applyKnotDragFramePreview(finalKnot, branchSegmentsById);
+        const updatedBranchIds = Object.keys(branchSegmentsById);
+        if (updatedBranchIds.length > 0) {
+            const nextPreviewBranchSegmentsById = { ...previewBranchSegmentsByIdRef.current };
+
+            for (const branchId of updatedBranchIds) {
+                const nextSegments = branchSegmentsById[branchId];
+                const committedBranch = getBranchById(branchId);
+                if (committedBranch && committedBranch.segments === nextSegments) {
+                    delete nextPreviewBranchSegmentsById[branchId];
+                } else {
+                    nextPreviewBranchSegmentsById[branchId] = nextSegments;
+                }
+            }
+
+            previewBranchSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
+        }
+        previewKnotRef.current = finalKnot;
+
+        emitKnotDragPreview({
+            knotId: finalKnot.id,
+            knot: finalKnot,
+            branchSegmentsById: previewBranchSegmentsByIdRef.current,
+        });
     });
 }

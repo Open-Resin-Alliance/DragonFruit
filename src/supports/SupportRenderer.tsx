@@ -20,6 +20,7 @@ import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPl
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
+import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
 import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectGhostedBraceIds, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
@@ -223,6 +224,7 @@ const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
 const PLACEMENT_PREVIEW_OPACITY = 0.5;
 const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
 const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
+const EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
 
 function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
     if (preview.error) {
@@ -543,6 +545,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportIds = supportSelectionAndHoverSuppressed ? EMPTY_SUPPORT_ID_LIST : marqueeHover.supportIds;
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
     const activeJointDragPreview = useActiveJointDragPreview();
+    const activeKnotDragPreview = useActiveKnotDragPreview();
     const supportRenderLookupInput = useMemo(() => ({
         state: {
             roots: state.roots,
@@ -1503,7 +1506,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         });
     }, [freezeDependentPreviewDuringJointDrag, activeJointDragPreview, basePreviewKnotOverrides, branchesByParentKnotId, branchCandidateKnotIdsByBranchId, state.branches, state.knots]);
 
-    const previewKnotOverrideIds = useMemo(() => Object.keys(previewKnotOverrides), [previewKnotOverrides]);
+    const previewKnotOverridesWithKnotDrag = useMemo(() => {
+        const knotPreview = activeKnotDragPreview?.knot;
+        if (!knotPreview) return previewKnotOverrides;
+        if (previewKnotOverrides[knotPreview.id] === knotPreview) return previewKnotOverrides;
+        return {
+            ...previewKnotOverrides,
+            [knotPreview.id]: knotPreview,
+        };
+    }, [previewKnotOverrides, activeKnotDragPreview]);
+
+    const previewKnotOverrideIds = useMemo(() => Object.keys(previewKnotOverridesWithKnotDrag), [previewKnotOverridesWithKnotDrag]);
     const hasPreviewKnotOverrides = previewKnotOverrideIds.length > 0;
 
     const previewLeavesById = useMemo(() => {
@@ -1511,12 +1524,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!hasPreviewKnotOverrides) return new Map<string, Leaf>();
         return collectPreviewLeavesById({
             previewKnotOverrideIds,
-            previewKnotOverrides,
+            previewKnotOverrides: previewKnotOverridesWithKnotDrag,
             leafIdsByParentKnotId,
             leavesById: state.leaves,
             recomputeLeafPreviewContactCone,
         });
-    }, [freezeDependentPreviewDuringJointDrag, hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves]);
+    }, [freezeDependentPreviewDuringJointDrag, hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverridesWithKnotDrag, leafIdsByParentKnotId, state.leaves]);
 
     const activePreviewTrunk = activeJointDragPreview?.kind === 'trunk'
         ? (activeJointDragPreview.support as (typeof state.trunks)[string])
@@ -1551,18 +1564,29 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!hasPreviewKnotOverrides) return state.knots;
         const knots = Object.create(state.knots) as typeof state.knots;
         for (const knotId of previewKnotOverrideIds) {
-            knots[knotId] = previewKnotOverrides[knotId];
+            knots[knotId] = previewKnotOverridesWithKnotDrag[knotId];
         }
         return knots;
-    }, [state.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
+    }, [state.knots, previewKnotOverridesWithKnotDrag, previewKnotOverrideIds, hasPreviewKnotOverrides]);
     const renderKickstandKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return kickstandState.knots;
         const knots = Object.create(kickstandState.knots) as typeof kickstandState.knots;
         for (const knotId of previewKnotOverrideIds) {
-            knots[knotId] = previewKnotOverrides[knotId];
+            knots[knotId] = previewKnotOverridesWithKnotDrag[knotId];
         }
         return knots;
-    }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
+    }, [kickstandState.knots, previewKnotOverridesWithKnotDrag, previewKnotOverrideIds, hasPreviewKnotOverrides]);
+
+    const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
+    const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
+    const branchListWithKnotDragPreview = useMemo(() => {
+        if (knotDragPreviewBranchIds.length === 0) return branchList;
+        return branchList.map((branch) => {
+            const previewSegments = knotDragPreviewBranchSegmentsById[branch.id];
+            if (!previewSegments || previewSegments === branch.segments) return branch;
+            return { ...branch, segments: previewSegments };
+        });
+    }, [branchList, knotDragPreviewBranchSegmentsById, knotDragPreviewBranchIds]);
 
     const renderTrunkList = useMemo(() => {
         if (!activePreviewTrunk) return trunkList;
@@ -1582,7 +1606,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!activePreviewBranch) return branchList;
 
         let replaced = false;
-        const result = branchList.map((branch) => {
+        const result = branchListWithKnotDragPreview.map((branch) => {
             if (branch.id !== activePreviewBranch.id) return branch;
             replaced = true;
             return activePreviewBranch;
@@ -1590,7 +1614,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         if (!replaced) result.push(activePreviewBranch);
         return result;
-    }, [branchList, activePreviewBranch]);
+    }, [branchListWithKnotDragPreview, activePreviewBranch]);
 
     const renderLeafList = useMemo(() => {
         if (previewLeavesById.size === 0) return leafList;
@@ -1614,16 +1638,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [kickstandList, activePreviewKickstand]);
     const renderKnotList = useMemo(() => {
         if (!hasPreviewKnotOverrides) return knotList;
-        return knotList.map((knot) => previewKnotOverrides[knot.id] ?? knot);
-    }, [hasPreviewKnotOverrides, knotList, previewKnotOverrides]);
+        return knotList.map((knot) => previewKnotOverridesWithKnotDrag[knot.id] ?? knot);
+    }, [hasPreviewKnotOverrides, knotList, previewKnotOverridesWithKnotDrag]);
     const renderKickstandKnotList = useMemo(() => {
         if (!hasPreviewKnotOverrides) return kickstandKnotList;
-        return kickstandKnotList.map((knot) => previewKnotOverrides[knot.id] ?? knot);
-    }, [hasPreviewKnotOverrides, kickstandKnotList, previewKnotOverrides]);
+        return kickstandKnotList.map((knot) => previewKnotOverridesWithKnotDrag[knot.id] ?? knot);
+    }, [hasPreviewKnotOverrides, kickstandKnotList, previewKnotOverridesWithKnotDrag]);
 
     const resolvePreviewKnot = React.useCallback((knotId: string) => {
-        return previewKnotOverrides[knotId] ?? state.knots[knotId] ?? kickstandState.knots[knotId] ?? null;
-    }, [previewKnotOverrides, state.knots, kickstandState.knots]);
+        return previewKnotOverridesWithKnotDrag[knotId] ?? state.knots[knotId] ?? kickstandState.knots[knotId] ?? null;
+    }, [previewKnotOverridesWithKnotDrag, state.knots, kickstandState.knots]);
 
     const trunkShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1746,8 +1770,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const brace of renderBraceList) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
 
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
+            const startKnot = renderKnotsById[brace.startKnotId];
+            const endKnot = renderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
             const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
@@ -1780,7 +1804,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderBraceList, state.knots, isModelVisible]);
+    }, [renderBraceList, renderKnotsById, isModelVisible]);
 
     const twigShaftsBySupport = useMemo(() => {
         if (!enableTwigSceneBatching) {
@@ -3941,8 +3965,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     || marqueeHoveredSupportIdSet.has(brace.id);
                 const deferBraceInteractionToSceneBatch = !effectiveSelected && isBraceBatchable;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
-                const braceStartKnot = state.knots[brace.startKnotId];
-                const braceEndKnot = state.knots[brace.endKnotId];
+                const braceStartKnot = renderKnotsById[brace.startKnotId];
+                const braceEndKnot = renderKnotsById[brace.endKnotId];
                 if (!braceStartKnot || !braceEndKnot) return null;
 
                 return (

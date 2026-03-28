@@ -18,12 +18,13 @@ import {
     getTwigById,
     getStickById,
 } from '../../state';
-import { Knot } from '../../types';
+import { Branch, Knot } from '../../types';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints, projectOntoSegment } from './knotUtils';
 import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
 import { getSettings } from '../../Settings';
 import { getSocketPosition } from '../ContactCone';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { clearKnotDragPreview, emitKnotDragPreview, useActiveKnotDragPreview } from '../../interaction/knotDragPreview';
 
 type KnotGizmoWindowState = Window & {
     __knotGizmoDragging?: boolean;
@@ -44,6 +45,7 @@ export function KnotGizmo() {
     const selectedId = state.selectedId;
     const selectedCategory = state.selectedCategory;
     const { camera, raycaster, pointer } = useThree();
+    const activeKnotDragPreview = useActiveKnotDragPreview();
 
     const isDraggingRef = useRef(false);
     const shaftAxisRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 1));
@@ -64,6 +66,13 @@ export function KnotGizmo() {
 
     // Elastic chain state - captured at drag start
     const elasticStateRef = useRef<Record<string, ElasticChainInitialState>>({});
+    const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
+    const previewKnotRef = useRef<Knot | null>(null);
+    const activePreviewKnotIdRef = useRef<string | null>(null);
+
+    const selectedPreviewKnot = selectedId && activeKnotDragPreview?.knotId === selectedId
+        ? activeKnotDragPreview.knot
+        : null;
 
     const setKnotGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
         const w = getKnotGizmoWindowState();
@@ -104,7 +113,7 @@ export function KnotGizmo() {
     } | null => {
         if (!selectedId) return null;
 
-        const knot = getKnotById(selectedId);
+        const knot = selectedPreviewKnot ?? getKnotById(selectedId);
         if (!knot) return null;
 
         const cached = selectedKnotParentRef.current;
@@ -251,7 +260,7 @@ export function KnotGizmo() {
         selectedKnotParentRef.current = null;
         return null;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedId, state]);
+    }, [selectedId, selectedPreviewKnot, state]);
 
     const result = findKnotAndShaft();
 
@@ -302,6 +311,7 @@ export function KnotGizmo() {
         let wasLocked = false;
 
         // Run elastic solver for each attached branch
+        const branchSegmentsById: Record<string, Branch['segments']> = {};
         for (const branchId in elasticStateRef.current) {
             const initialState = elasticStateRef.current[branchId];
             const res = solveElasticChain(finalKnotPos, initialState, maxAngleDeg);
@@ -346,7 +356,10 @@ export function KnotGizmo() {
             });
 
             if (branchChanged) {
-                updateBranch({ ...branch, segments: newSegments });
+                branchSegmentsById[branch.id] = newSegments;
+            } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
+                // Branch returned to committed geometry; mark it for preview-prune below.
+                branchSegmentsById[branch.id] = branch.segments;
             }
         }
 
@@ -365,7 +378,29 @@ export function KnotGizmo() {
             pos: finalKnotPos,
             t,
         };
-        updateKnot(updated);
+
+        const updatedBranchIds = Object.keys(branchSegmentsById);
+        if (updatedBranchIds.length > 0) {
+            const nextPreviewBranchSegmentsById = { ...previewBranchSegmentsByIdRef.current };
+            for (const branchId of updatedBranchIds) {
+                const nextSegments = branchSegmentsById[branchId];
+                const committedBranch = getBranchById(branchId);
+                if (committedBranch && committedBranch.segments === nextSegments) {
+                    delete nextPreviewBranchSegmentsById[branchId];
+                } else {
+                    nextPreviewBranchSegmentsById[branchId] = nextSegments;
+                }
+            }
+            previewBranchSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
+        }
+
+        previewKnotRef.current = updated;
+        activePreviewKnotIdRef.current = updated.id;
+        emitKnotDragPreview({
+            knotId: updated.id,
+            knot: updated,
+            branchSegmentsById: previewBranchSegmentsByIdRef.current,
+        });
     });
 
     const handleMoveStart = useCallback((axis?: 'x' | 'y' | 'z') => {
@@ -385,6 +420,10 @@ export function KnotGizmo() {
         getKnotGizmoWindowState().__gizmoDragEndedThisFrame = false;
         document.body.style.cursor = 'grabbing';
         beforeHistoryRef.current = captureSupportEditSnapshot();
+        previewBranchSegmentsByIdRef.current = {};
+        previewKnotRef.current = null;
+        activePreviewKnotIdRef.current = result.knot.id;
+        clearKnotDragPreview();
 
         // Preserve click offset so the knot doesn't snap to the raw pointer projection on first drag frame.
         const currentKnotPos = new THREE.Vector3(result.knot.pos.x, result.knot.pos.y, result.knot.pos.z);
@@ -441,6 +480,26 @@ export function KnotGizmo() {
         elasticStateRef.current = {};
         dragProjectionOffsetTRef.current = 0;
 
+        const previewBranchSegmentsById = previewBranchSegmentsByIdRef.current;
+        const previewKnot = previewKnotRef.current;
+
+        for (const [branchId, previewSegments] of Object.entries(previewBranchSegmentsById)) {
+            const branch = getBranchById(branchId);
+            if (!branch) continue;
+            updateBranch({ ...branch, segments: previewSegments });
+        }
+
+        if (previewKnot) {
+            updateKnot(previewKnot);
+        }
+
+        if (activePreviewKnotIdRef.current) {
+            clearKnotDragPreview();
+        }
+        activePreviewKnotIdRef.current = null;
+        previewBranchSegmentsByIdRef.current = {};
+        previewKnotRef.current = null;
+
         // Prevent canvas click deselect on drag release
         getKnotGizmoWindowState().__gizmoDragEndedThisFrame = true;
         if (dragEndedResetTimeoutRef.current !== null) {
@@ -475,6 +534,10 @@ export function KnotGizmo() {
                 dragEndedResetTimeoutRef.current = null;
             }
             dragProjectionOffsetTRef.current = 0;
+            clearKnotDragPreview();
+            activePreviewKnotIdRef.current = null;
+            previewBranchSegmentsByIdRef.current = {};
+            previewKnotRef.current = null;
             setKnotGizmoInteractionFlags(false, 0);
         };
     }, [setKnotGizmoInteractionFlags]);
