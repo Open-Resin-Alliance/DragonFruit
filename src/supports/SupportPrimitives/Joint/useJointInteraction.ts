@@ -22,7 +22,6 @@ import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDra
  */
 export function useJointInteraction(enabled: boolean = true) {
     const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm positional epsilon to drop high-frequency jitter churn
-    const FAST_DRAG_DELTA_SQ = 0.04; // >0.2mm/frame considered fast sweep; decimate heavy preview recomputes
     const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
     const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
 
@@ -46,7 +45,6 @@ export function useJointInteraction(enabled: boolean = true) {
     const lastResolvedJointPosRef = useRef<Vec3 | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
-    const fastDragFrameSkipToggleRef = useRef(false);
     const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
     const activeConstraintRootRef = useRef<Roots | undefined>(undefined);
     const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
@@ -247,7 +245,6 @@ export function useJointInteraction(enabled: boolean = true) {
                 lastResolvedJointPosRef.current = null;
                 lastWarningRef.current = null;
                 lastWarningEvalAtRef.current = 0;
-                fastDragFrameSkipToggleRef.current = false;
 
                 // While dragging a joint, disable OrbitControls so camera movement cannot
                 // influence drag math (which is computed from the camera ray).
@@ -420,7 +417,6 @@ export function useJointInteraction(enabled: boolean = true) {
             lastAppliedDragPosRef.current = null;
             lastResolvedJointPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
-            fastDragFrameSkipToggleRef.current = false;
             activeConstraintRootRef.current = undefined;
             activeConstraintStartRef.current = undefined;
             applyInteractionWarning(null); // Clear warning on release
@@ -437,9 +433,6 @@ export function useJointInteraction(enabled: boolean = true) {
             setJointInteractionLock(false);
         }
     }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning]);
-
-    const PREVIEW_COMPUTE_INTERVAL_MS = 12; // throttle heavy support recompute to ~80Hz target for smoother frame pacing
-    const lastPreviewComputeAtRef = useRef(0);
 
     const resolveJointPosById = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, jointId: string): Vec3 | null => {
         for (const s of segments) {
@@ -482,29 +475,6 @@ export function useJointInteraction(enabled: boolean = true) {
                     lastAppliedDragPosRef.current.copy(newPos);
                 }
 
-                // The gizmo is updated every frame from jointDragPosition, but the support preview path
-                // can be very expensive if recomputed at full render rate on complex trunks/branches.
-                // Throttle expensive preview recomputes to 60Hz while still updating joint/gizmo position every frame.
-                const frameNow = performance.now();
-                let shouldComputePreview = frameNow - lastPreviewComputeAtRef.current >= PREVIEW_COMPUTE_INTERVAL_MS;
-                // During fast pointer sweeps, skip every other heavy recompute to reduce CPU spikes
-                // while still updating visual joint position each frame.
-                if (shouldComputePreview && hasLastAppliedPos && deltaSq > FAST_DRAG_DELTA_SQ) {
-                    fastDragFrameSkipToggleRef.current = !fastDragFrameSkipToggleRef.current;
-                    if (fastDragFrameSkipToggleRef.current) {
-                        shouldComputePreview = false;
-                    }
-                }
-
-                if (shouldComputePreview) {
-                    lastPreviewComputeAtRef.current = frameNow;
-                }
-
-                if (!shouldComputePreview) {
-                    emitPreviewJointPos(null, newPosVec3);
-                    return;
-                }
-
                 if (activeTrunkId.current) {
                     // Update trunk
                     const trunk = getTrunkById(activeTrunkId.current);
@@ -521,6 +491,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             isCurveMode: false,
                             root,
                             contextStart,
+                            skipContactConeSolve: true,
                         });
                         if (liveTrunkPreviewRef.current !== newTrunk) {
                             liveTrunkPreviewRef.current = newTrunk;
@@ -573,6 +544,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             newPos: newPosVec3,
                             isCurveMode: false,
                             contextStart,
+                            skipContactConeSolve: true,
                         });
                         if (liveBranchPreviewRef.current !== newBranch) {
                             liveBranchPreviewRef.current = newBranch;
@@ -631,6 +603,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             isCurveMode: false,
                             root,
                             contextStart,
+                            skipContactConeSolve: true,
                         });
                         if (getKickstandSnapshot().kickstands[activeKickstandId.current] !== newKickstand) {
                             publishJointDragSupportPreview('kickstand', newKickstand);

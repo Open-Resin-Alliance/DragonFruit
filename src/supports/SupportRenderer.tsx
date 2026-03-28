@@ -222,6 +222,7 @@ const PLACEMENT_PREVIEW_WARNING_COLOR = '#ffcc00';
 const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
 const PLACEMENT_PREVIEW_OPACITY = 0.5;
 const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
+const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
 
 function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
     if (preview.error) {
@@ -1484,7 +1485,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         [branchList, knotIdsByParentShaftId],
     );
 
+    const freezeDependentPreviewDuringJointDrag = FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG
+        && !!activeJointDragPreview?.support;
+
     const previewKnotOverrides = useMemo(() => {
+        if (freezeDependentPreviewDuringJointDrag) {
+            return basePreviewKnotOverrides;
+        }
+
         return computeCascadedPreviewKnotOverrides({
             activeJointDragPreview,
             basePreviewKnotOverrides,
@@ -1493,12 +1501,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             branchesById: state.branches,
             committedKnotsById: state.knots,
         });
-    }, [activeJointDragPreview, basePreviewKnotOverrides, branchesByParentKnotId, branchCandidateKnotIdsByBranchId, state.branches, state.knots]);
+    }, [freezeDependentPreviewDuringJointDrag, activeJointDragPreview, basePreviewKnotOverrides, branchesByParentKnotId, branchCandidateKnotIdsByBranchId, state.branches, state.knots]);
 
     const previewKnotOverrideIds = useMemo(() => Object.keys(previewKnotOverrides), [previewKnotOverrides]);
     const hasPreviewKnotOverrides = previewKnotOverrideIds.length > 0;
 
     const previewLeavesById = useMemo(() => {
+        if (freezeDependentPreviewDuringJointDrag) return new Map<string, Leaf>();
         if (!hasPreviewKnotOverrides) return new Map<string, Leaf>();
         return collectPreviewLeavesById({
             previewKnotOverrideIds,
@@ -1507,7 +1516,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             leavesById: state.leaves,
             recomputeLeafPreviewContactCone,
         });
-    }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves]);
+    }, [freezeDependentPreviewDuringJointDrag, hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves]);
 
     const activePreviewTrunk = activeJointDragPreview?.kind === 'trunk'
         ? (activeJointDragPreview.support as (typeof state.trunks)[string])
@@ -1521,7 +1530,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const renderLeavesById = useMemo(() => {
         if (previewLeavesById.size === 0) return state.leaves;
-        const leaves: typeof state.leaves = { ...state.leaves };
+        const leaves = Object.create(state.leaves) as typeof state.leaves;
         for (const [leafId, previewLeaf] of previewLeavesById) {
             leaves[leafId] = previewLeaf;
         }
@@ -1540,12 +1549,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [activeJointDragPreview, hasPreviewKnotOverrides, previewKnotOverrideIds, braceIdsByKnotId, state.braces, isModelVisible]);
     const renderKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return state.knots;
-        return { ...state.knots, ...previewKnotOverrides };
-    }, [state.knots, previewKnotOverrides, hasPreviewKnotOverrides]);
+        const knots = Object.create(state.knots) as typeof state.knots;
+        for (const knotId of previewKnotOverrideIds) {
+            knots[knotId] = previewKnotOverrides[knotId];
+        }
+        return knots;
+    }, [state.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
     const renderKickstandKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return kickstandState.knots;
-        return { ...kickstandState.knots, ...previewKnotOverrides };
-    }, [kickstandState.knots, previewKnotOverrides, hasPreviewKnotOverrides]);
+        const knots = Object.create(kickstandState.knots) as typeof kickstandState.knots;
+        for (const knotId of previewKnotOverrideIds) {
+            knots[knotId] = previewKnotOverrides[knotId];
+        }
+        return knots;
+    }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
 
     const renderTrunkList = useMemo(() => {
         if (!activePreviewTrunk) return trunkList;
@@ -1575,7 +1592,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return result;
     }, [branchList, activePreviewBranch]);
 
-    const renderLeafList = useMemo(() => Object.values(renderLeavesById), [renderLeavesById]);
+    const renderLeafList = useMemo(() => {
+        if (previewLeavesById.size === 0) return leafList;
+        return leafList.map((leaf) => previewLeavesById.get(leaf.id) ?? leaf);
+    }, [leafList, previewLeavesById]);
     const renderTwigList = twigList;
     const renderStickList = stickList;
     const renderBraceList = braceList;
@@ -1594,12 +1614,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [kickstandList, activePreviewKickstand]);
     const renderKnotList = useMemo(() => {
         if (!hasPreviewKnotOverrides) return knotList;
-        return Object.values(renderKnotsById);
-    }, [hasPreviewKnotOverrides, knotList, renderKnotsById]);
+        return knotList.map((knot) => previewKnotOverrides[knot.id] ?? knot);
+    }, [hasPreviewKnotOverrides, knotList, previewKnotOverrides]);
     const renderKickstandKnotList = useMemo(() => {
         if (!hasPreviewKnotOverrides) return kickstandKnotList;
-        return Object.values(renderKickstandKnotsById);
-    }, [hasPreviewKnotOverrides, kickstandKnotList, renderKickstandKnotsById]);
+        return kickstandKnotList.map((knot) => previewKnotOverrides[knot.id] ?? knot);
+    }, [hasPreviewKnotOverrides, kickstandKnotList, previewKnotOverrides]);
 
     const resolvePreviewKnot = React.useCallback((knotId: string) => {
         return previewKnotOverrides[knotId] ?? state.knots[knotId] ?? kickstandState.knots[knotId] ?? null;
@@ -1610,7 +1630,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
-        for (const trunk of trunkList) {
+        for (const trunk of renderTrunkList) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
 
             const root = state.roots[trunk.rootId];

@@ -3044,7 +3044,8 @@ export function removeKnotById(knotId: string): Knot | null {
     return deepClone(knot);
 }
 
-export function updateKnot(knot: Knot) {
+export function updateKnot(knot: Knot, options?: { skipDependentGeometry?: boolean }) {
+    const skipDependentGeometry = options?.skipDependentGeometry === true;
     const existing = state.knots[knot.id];
     if (!existing) return;
 
@@ -3062,6 +3063,15 @@ export function updateKnot(knot: Knot) {
 
     const baseKnots = { ...state.knots, [knot.id]: knot };
 
+    if (skipDependentGeometry) {
+        // Drag-time fast path: keep knot + brace-segment knots responsive while
+        // deferring expensive leaf-dependent geometry recomputes until commit.
+        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, baseKnots);
+        state = { ...state, knots: braceSeg.knots };
+        notify();
+        return;
+    }
+
     let nextLeaves = recomputeKnotDependentGeometry(state.leaves, { [knot.id]: knot.pos });
     const leafCone1 = recomputeLeafConeKnotGeometry(nextLeaves, baseKnots);
     const braceSeg1 = recomputeBraceSegmentKnotGeometry(state.braces, leafCone1.knots);
@@ -3077,6 +3087,78 @@ export function updateKnot(knot: Knot) {
     }
 
     state = { ...state, knots: nextKnots, leaves: nextLeaves };
+    notify();
+}
+
+export function applyKnotDragFramePreview(
+    knot: Knot,
+    branchSegmentsById: Record<string, Branch['segments']> = {},
+) {
+    const existing = state.knots[knot.id];
+    if (!existing) return;
+
+    const knotUnchanged = existing.parentShaftId === knot.parentShaftId
+        && existing.t === knot.t
+        && existing.diameter === knot.diameter
+        && existing.pos.x === knot.pos.x
+        && existing.pos.y === knot.pos.y
+        && existing.pos.z === knot.pos.z;
+
+    let nextBranches = state.branches;
+    const branchIds = Object.keys(branchSegmentsById);
+    let branchesChanged = false;
+    if (branchIds.length > 0) {
+        const updatedBranches: Record<string, Branch> = { ...state.branches };
+
+        for (const branchId of branchIds) {
+            const branch = state.branches[branchId];
+            const nextSegments = branchSegmentsById[branchId];
+            if (!branch || !nextSegments) continue;
+            if (branch.segments === nextSegments) continue;
+            updatedBranches[branchId] = { ...branch, segments: nextSegments };
+            branchesChanged = true;
+        }
+
+        if (branchesChanged) {
+            nextBranches = updatedBranches;
+        }
+    }
+
+    if (knotUnchanged && !branchesChanged) {
+        return;
+    }
+
+    if (!knotUnchanged) {
+        const kickstandState = getKickstandSnapshot();
+        const hostKickstand = Object.values(kickstandState.kickstands).find((kickstand) => kickstand.hostKnotId === knot.id);
+        if (hostKickstand) {
+            setKickstandSnapshot({
+                ...kickstandState,
+                knots: {
+                    ...kickstandState.knots,
+                    [knot.id]: knot,
+                },
+            });
+        }
+    }
+
+    let nextKnots = state.knots;
+    if (!knotUnchanged) {
+        const baseKnots = { ...state.knots, [knot.id]: knot };
+        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, baseKnots);
+        nextKnots = braceSeg.knots;
+    }
+
+    state = {
+        ...state,
+        branches: nextBranches,
+        knots: nextKnots,
+    };
+
+    if (!knotUnchanged) {
+        syncKickstandHostKnotsFromSharedKnots(nextKnots);
+    }
+
     notify();
 }
 

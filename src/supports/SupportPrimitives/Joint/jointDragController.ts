@@ -23,6 +23,7 @@ interface ComputeJointDragSupportPreviewOptions<K extends JointDragSupportKind> 
   isCurveMode: boolean;
   root?: Roots;
   contextStart?: Vec3;
+  skipContactConeSolve?: boolean;
 }
 
 interface CommitJointDragSupportOptions {
@@ -38,6 +39,7 @@ export function computeJointDragSupportPreview<K extends JointDragSupportKind>({
   isCurveMode,
   root,
   contextStart,
+  skipContactConeSolve,
 }: ComputeJointDragSupportPreviewOptions<K>): JointDragSupportByKind[K] {
   if (kind === 'trunk') {
     return moveJoint(
@@ -48,6 +50,7 @@ export function computeJointDragSupportPreview<K extends JointDragSupportKind>({
       isCurveMode,
       root,
       contextStart,
+      { skipContactConeSolve },
     ) as JointDragSupportByKind[K];
   }
 
@@ -60,6 +63,7 @@ export function computeJointDragSupportPreview<K extends JointDragSupportKind>({
       isCurveMode,
       undefined,
       contextStart,
+      { skipContactConeSolve },
     ) as unknown as JointDragSupportByKind[K];
   }
 
@@ -71,6 +75,7 @@ export function computeJointDragSupportPreview<K extends JointDragSupportKind>({
     isCurveMode,
     root,
     contextStart,
+    { skipContactConeSolve },
   ) as unknown as JointDragSupportByKind[K];
 }
 

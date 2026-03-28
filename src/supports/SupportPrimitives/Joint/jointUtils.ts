@@ -540,7 +540,17 @@ import { clampShaftAngle } from '../../PlacementLogic/ShaftAngleConstraint';
  * @param parentStartPos Optional start position of the parent chain (Root pos or Knot pos) for constraint calculation
  * @returns A new Trunk object with updated joint
  */
-export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: THREE.Mesh, isCurveMode: boolean = false, root?: Roots, parentStartPos?: Vec3): Trunk {
+export function moveJoint(
+    trunk: Trunk,
+    jointId: string,
+    newPos: Vec3,
+    mesh?: THREE.Mesh,
+    isCurveMode: boolean = false,
+    root?: Roots,
+    parentStartPos?: Vec3,
+    options?: { skipContactConeSolve?: boolean }
+): Trunk {
+    const skipContactConeSolve = options?.skipContactConeSolve === true;
     // 0. Apply Shaft Angle Constraints
     const settings = getSettings();
     const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
@@ -588,6 +598,23 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
     if (trunk.contactCone?.socketJointId && trunk.contactCone.socketJointId === jointId) {
         const contactPos = new THREE.Vector3(trunk.contactCone.pos.x, trunk.contactCone.pos.y, trunk.contactCone.pos.z);
         const socketPos = new THREE.Vector3(newPos.x, newPos.y, newPos.z);
+
+        if (skipContactConeSolve) {
+            const axis = new THREE.Vector3().subVectors(socketPos, contactPos);
+            const axisLen = axis.length();
+            if (axisLen > 0.001) {
+                axis.normalize();
+                newContactCone = {
+                    ...trunk.contactCone,
+                    normal: { x: axis.x, y: axis.y, z: axis.z },
+                    diskLengthOverride: undefined,
+                    profile: {
+                        ...trunk.contactCone.profile,
+                        lengthMm: Math.max(0.1, axisLen),
+                    },
+                };
+            }
+        } else {
 
         // 1. Calculate Vector from Contact (Surface) -> New Socket Position
         const toSocket = new THREE.Vector3().subVectors(socketPos, contactPos);
@@ -731,6 +758,7 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
                     lengthMm: finalLength
                 }
             };
+        }
         }
     }
 

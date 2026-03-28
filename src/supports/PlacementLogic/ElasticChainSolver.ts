@@ -173,17 +173,6 @@ export function solveElasticChain(
             // UPWARD segment: need to push joint UP to maintain angle
             const requiredZ = currentPos.z + minVDist;
             finalZ = Math.max(initialJointPos.z, requiredZ);
-
-            console.log('[ElasticChain] UPWARD segment check:', {
-                jointId: joint.id.slice(0, 8),
-                currentBaseZ: currentPos.z.toFixed(2),
-                jointInitialZ: initialJointPos.z.toFixed(2),
-                hDist: hDist.toFixed(2),
-                minVDist: minVDist.toFixed(2),
-                requiredZ: requiredZ.toFixed(2),
-                finalZ: finalZ.toFixed(2),
-                pushed: finalZ > initialJointPos.z
-            });
         } else {
             // DOWNWARD segment (or same level): 
             // Joint is at or below the base. As base moves up, angle improves.
@@ -209,14 +198,6 @@ export function solveElasticChain(
                 const clampedKnotZ = initialJointPos.z + (currentPos.z > initialJointPos.z ? minVDist : -minVDist);
                 maxKnotZ = Math.min(maxKnotZ, clampedKnotZ);
 
-                console.log('[ElasticChain] Downward segment angle exceeded!', {
-                    jointZ: initialJointPos.z.toFixed(2),
-                    knotZ: currentPos.z.toFixed(2),
-                    hDist: hDist.toFixed(2),
-                    minVDist: minVDist.toFixed(2),
-                    actualVDist: vDist.toFixed(2),
-                    clampedKnotZ: clampedKnotZ.toFixed(2)
-                });
             }
 
             finalZ = initialJointPos.z; // Joint doesn't move for downward segments
@@ -270,12 +251,6 @@ export function solveElasticChain(
             const minVDistToSocket = hDistToSocket / Math.tan(maxAngleRad);
             const maxLastJointZ = socketPos.z - minVDistToSocket;
 
-            console.log('[ElasticChain] TOPOLOGY VIOLATION - joint crossed above socket:', {
-                socketZ: socketPos.z.toFixed(2),
-                lastJointZ: lastPoint.z.toFixed(2),
-                maxAllowedZ: maxLastJointZ.toFixed(2)
-            });
-
             // Back-propagate constraint down the chain
             let allowedZ = maxLastJointZ;
             for (let i = chainPoints.length - 1; i >= 0; i--) {
@@ -326,18 +301,6 @@ export function solveElasticChain(
         // Check angle constraint for socket segment
         const minVDistToSocket = hDistToSocket / Math.tan(maxAngleRad);
         const actualVDist = Math.abs(socketPos.z - lastPoint.z);
-
-        // Log socket constraint check
-        console.log('[ElasticChain] Socket constraint check:', {
-            socketZ: socketPos.z.toFixed(2),
-            lastJointZ: lastPoint.z.toFixed(2),
-            hDistToSocket: hDistToSocket.toFixed(2),
-            minVDistToSocket: minVDistToSocket.toFixed(2),
-            actualVDist: actualVDist.toFixed(2),
-            violated: actualVDist < minVDistToSocket - 0.001,
-            hasContactCone: !!initialState.contactCone,
-            wasSocketOriginallyAbove
-        });
 
         if (actualVDist < minVDistToSocket - 0.001) {
             constraintViolated = true;
