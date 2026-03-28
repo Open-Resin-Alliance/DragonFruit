@@ -741,10 +741,14 @@ export function SceneCanvas({
   const orbitChangeQueuedRef = React.useRef(false);
   const orbitInteractionActiveRef = React.useRef(false);
   const orbitInteractionMovedRef = React.useRef(false);
+  const wheelZoomEndTimeoutRef = React.useRef<number | null>(null);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
+  const [isWheelZoomInteracting, setIsWheelZoomInteracting] = React.useState(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
+  const [supportGizmoInteractionActive, setSupportGizmoInteractionActive] = React.useState(false);
+  const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
     const isOrbitInRotateState = React.useCallback(() => {
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
@@ -809,6 +813,21 @@ export function SceneCanvas({
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!supportGizmoInteractionActive) return;
+
+    pendingHoverModelIdRef.current = null;
+    if (hoverModelRafRef.current !== null) {
+      cancelAnimationFrame(hoverModelRafRef.current);
+      hoverModelRafRef.current = null;
+    }
+
+    setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+    window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+      detail: { modelId: null },
+    }));
+  }, [supportGizmoInteractionActive]);
 
   const onModelHoverModelChange = React.useCallback((id: string | null) => {
     const nextId = id ?? null;
@@ -2881,7 +2900,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
-  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
+  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -2937,39 +2956,39 @@ export function SceneCanvas({
         accelerationExponent: 0.5,
         rotateBase: 0.72,
         panBase: 0.82,
-        zoomBase: 0.82,
+        zoomBase: 1.25,
         rotateMin: 0.45,
         rotateMax: 1.45,
         panMin: 0.45,
         panMax: 1.9,
-        zoomMin: 0.5,
-        zoomMax: 2.0,
+        zoomMin: 0.75,
+        zoomMax: 2.8,
         responseLerp: 0.14,
       },
       balanced: {
         accelerationExponent: 0.42,
         rotateBase: 0.85,
         panBase: 1.0,
-        zoomBase: 0.95,
+        zoomBase: 1.45,
         rotateMin: 0.6,
         rotateMax: 1.9,
         panMin: 0.65,
         panMax: 2.4,
-        zoomMin: 0.65,
-        zoomMax: 2.6,
+        zoomMin: 0.95,
+        zoomMax: 3.4,
         responseLerp: 0.2,
       },
       fast: {
         accelerationExponent: 0.34,
         rotateBase: 1.03,
         panBase: 1.2,
-        zoomBase: 1.15,
+        zoomBase: 1.75,
         rotateMin: 0.75,
         rotateMax: 2.25,
         panMin: 0.8,
         panMax: 2.8,
-        zoomMin: 0.85,
-        zoomMax: 3.0,
+        zoomMin: 1.2,
+        zoomMax: 4.0,
         responseLerp: 0.26,
       },
     };
@@ -2994,6 +3013,65 @@ export function SceneCanvas({
   React.useEffect(() => {
     updateOrbitControlSpeeds();
   }, [updateOrbitControlSpeeds]);
+
+  const navigationResumeDelayMs = React.useMemo(() => {
+    if (cameraFeelPreset === 'raw') return 0;
+    if (cameraFeelPreset === 'precise') return 320;
+    if (cameraFeelPreset === 'fast') return 150;
+    return 220;
+  }, [cameraFeelPreset]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof window === 'undefined') return;
+
+    const clearPendingZoomEnd = () => {
+      if (wheelZoomEndTimeoutRef.current === null) return;
+      window.clearTimeout(wheelZoomEndTimeoutRef.current);
+      wheelZoomEndTimeoutRef.current = null;
+    };
+
+    const endZoomInteraction = () => {
+      setIsWheelZoomInteracting(false);
+      window.dispatchEvent(new CustomEvent('picking-zoom-end', {
+        detail: { resumeAfterMs: navigationResumeDelayMs },
+      }));
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+
+      if (!isWheelZoomInteracting) {
+        setIsWheelZoomInteracting(true);
+        window.dispatchEvent(new Event('picking-zoom-start'));
+      }
+
+      window.dispatchEvent(new Event('picking-zoom-change'));
+
+      clearPendingZoomEnd();
+      wheelZoomEndTimeoutRef.current = window.setTimeout(() => {
+        wheelZoomEndTimeoutRef.current = null;
+        endZoomInteraction();
+      }, 120);
+    };
+
+    window.addEventListener('wheel', onWheel, { passive: true });
+
+    return () => {
+      window.removeEventListener('wheel', onWheel);
+      clearPendingZoomEnd();
+    };
+  }, [isWheelZoomInteracting, navigationResumeDelayMs]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      if (wheelZoomEndTimeoutRef.current !== null) {
+        window.clearTimeout(wheelZoomEndTimeoutRef.current);
+      }
+      wheelZoomEndTimeoutRef.current = null;
+    };
+  }, []);
 
   React.useEffect(() => {
     const dispatchProgress = (detail: DiagnosticsBenchmarkProgressDetail) => {
@@ -3261,7 +3339,9 @@ export function SceneCanvas({
         setIsOrbitInteracting(false);
         updateCameraBelowBuildPlate();
         onCameraEnd?.();
-        window.dispatchEvent(new Event('picking-orbit-end'));
+        window.dispatchEvent(new CustomEvent('picking-orbit-end', {
+          detail: { resumeAfterMs: navigationResumeDelayMs },
+        }));
         benchmarkRunIdRef.current = null;
       }
     };
@@ -3281,6 +3361,7 @@ export function SceneCanvas({
     };
   }, [
     cameraFeelPreset,
+    navigationResumeDelayMs,
     cameraProjectionMode,
     modelWorldBounds,
     models,
@@ -3314,6 +3395,9 @@ export function SceneCanvas({
 
       if (orbitActive) {
         window.dispatchEvent(new Event('picking-orbit-change'));
+        if (!isOrbitInRotateState()) {
+          window.dispatchEvent(new Event('picking-pan-change'));
+        }
       }
     });
   }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
@@ -3328,13 +3412,74 @@ export function SceneCanvas({
     };
   }, []);
 
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    type SupportGizmoWindowState = Window & {
+      __jointGizmoDragging?: boolean;
+      __knotGizmoDragging?: boolean;
+      __bezierGizmoDragging?: boolean;
+      __jointGizmoGuardUntil?: number;
+      __knotGizmoGuardUntil?: number;
+      __bezierGizmoGuardUntil?: number;
+    };
+
+    const clearPendingSupportGizmoTimeout = () => {
+      if (supportGizmoInteractionTimeoutRef.current === null) return;
+      window.clearTimeout(supportGizmoInteractionTimeoutRef.current);
+      supportGizmoInteractionTimeoutRef.current = null;
+    };
+
+    const refreshSupportGizmoInteraction = () => {
+      const w = window as SupportGizmoWindowState;
+      const dragging = !!(w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging);
+      const guardUntil = Math.max(
+        Number(w.__jointGizmoGuardUntil ?? 0),
+        Number(w.__knotGizmoGuardUntil ?? 0),
+        Number(w.__bezierGizmoGuardUntil ?? 0),
+      );
+      const now = Date.now();
+      const guardActive = guardUntil > now;
+
+      setSupportGizmoInteractionActive(dragging || guardActive);
+      clearPendingSupportGizmoTimeout();
+
+      if (!dragging && guardActive) {
+        supportGizmoInteractionTimeoutRef.current = window.setTimeout(() => {
+          supportGizmoInteractionTimeoutRef.current = null;
+          refreshSupportGizmoInteraction();
+        }, Math.max(0, guardUntil - now + 1));
+      }
+    };
+
+    const handleSupportGizmoInteractionLock = () => {
+      refreshSupportGizmoInteraction();
+    };
+
+    refreshSupportGizmoInteraction();
+    window.addEventListener('joint-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+    window.addEventListener('knot-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+    window.addEventListener('bezier-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+
+    return () => {
+      window.removeEventListener('joint-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+      window.removeEventListener('knot-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+      window.removeEventListener('bezier-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+      clearPendingSupportGizmoTimeout();
+    };
+  }, []);
+
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
-    setIsOrbitRotating(isOrbitInRotateState());
+    const isRotateInteraction = isOrbitInRotateState();
+    setIsOrbitRotating(isRotateInteraction);
     setIsOrbitInteracting(true);
     setMouseOrbitDragRunId((id) => id + 1);
     window.dispatchEvent(new Event('picking-orbit-start'));
+    if (!isRotateInteraction) {
+      window.dispatchEvent(new Event('picking-pan-start'));
+    }
   }, [isOrbitInRotateState]);
 
   const handleOrbitEnd = React.useCallback(() => {
@@ -3348,8 +3493,24 @@ export function SceneCanvas({
 
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
-    window.dispatchEvent(new Event('picking-orbit-end'));
-  }, [mode, onCameraEnd, updateCameraBelowBuildPlate]);
+    window.dispatchEvent(new CustomEvent('picking-orbit-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+    window.dispatchEvent(new CustomEvent('picking-pan-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+  }, [mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+
+  React.useEffect(() => {
+    if (spaceMouseNavigationActive) {
+      window.dispatchEvent(new Event('picking-pan-start'));
+      return;
+    }
+
+    window.dispatchEvent(new CustomEvent('picking-pan-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+  }, [navigationResumeDelayMs, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,
@@ -3581,8 +3742,8 @@ export function SceneCanvas({
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || isOrbitInteracting;
-                const interactionLodEnabled = (isOrbitInteracting || spaceMouseNavigationActive) && !isActive;
+                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive;
+                const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
                   hideDuplicateSourceDuringApply
@@ -4795,7 +4956,7 @@ export function SceneCanvas({
           dampingFactor={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
           rotateSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
           panSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
-          zoomSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.15 : 0.95}
+          zoomSpeed={cameraFeelPreset === 'raw' ? 1.6 : cameraFeelPreset === 'precise' ? 1.25 : cameraFeelPreset === 'fast' ? 1.75 : 1.45}
           screenSpacePanning
           zoomToCursor
           enablePan

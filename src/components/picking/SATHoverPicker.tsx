@@ -45,6 +45,7 @@ export function SATHoverPicker({
   const hullCacheRef = useRef<Map<string, ModelHoverData>>(new Map());
   const cursorPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastHoveredModelIdRef = useRef<string | null>(null);
+  const orbitInteractingRef = useRef(false);
 
   const isSupportGizmoDragging = useCallback(() => {
     if (typeof window === 'undefined') return false;
@@ -222,6 +223,16 @@ export function SATHoverPicker({
   }, [camera, canvasSize]);
 
   const runHoverCheck = useCallback(() => {
+    if (orbitInteractingRef.current) {
+      if (lastHoveredModelIdRef.current !== null) {
+        lastHoveredModelIdRef.current = null;
+        window.dispatchEvent(new CustomEvent('sat-hover-model-changed', {
+          detail: { modelId: null },
+        }));
+      }
+      return;
+    }
+
     if (isSupportGizmoDragging()) {
       if (lastHoveredModelIdRef.current !== null) {
         lastHoveredModelIdRef.current = null;
@@ -272,6 +283,7 @@ export function SATHoverPicker({
     }
 
     let rafId: number | null = null;
+    let resumeHoverTimeoutId: number | null = null;
     const scheduleCheck = () => {
       if (rafId !== null) return;
       rafId = window.requestAnimationFrame(() => {
@@ -280,18 +292,120 @@ export function SATHoverPicker({
       });
     };
 
+    const clearPendingResume = () => {
+      if (resumeHoverTimeoutId === null) return;
+      window.clearTimeout(resumeHoverTimeoutId);
+      resumeHoverTimeoutId = null;
+    };
+
+    const clearHoverNow = () => {
+      if (lastHoveredModelIdRef.current === null) return;
+      lastHoveredModelIdRef.current = null;
+      window.dispatchEvent(new CustomEvent('sat-hover-model-changed', {
+        detail: { modelId: null },
+      }));
+    };
+
+    const handleOrbitStartOrChange = () => {
+      clearPendingResume();
+      orbitInteractingRef.current = true;
+      clearHoverNow();
+    };
+
+    const handleOrbitEnd = (event: Event) => {
+      const resumeAfterMs = Math.max(0, Number((event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs ?? 0));
+      clearPendingResume();
+
+      if (resumeAfterMs <= 0) {
+        orbitInteractingRef.current = false;
+        scheduleCheck();
+        return;
+      }
+
+      resumeHoverTimeoutId = window.setTimeout(() => {
+        resumeHoverTimeoutId = null;
+        orbitInteractingRef.current = false;
+        scheduleCheck();
+      }, resumeAfterMs);
+    };
+
+    const handlePanStartOrChange = () => {
+      clearPendingResume();
+      orbitInteractingRef.current = true;
+      clearHoverNow();
+    };
+
+    const handlePanEnd = (event: Event) => {
+      const resumeAfterMs = Math.max(0, Number((event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs ?? 0));
+      clearPendingResume();
+
+      if (resumeAfterMs <= 0) {
+        orbitInteractingRef.current = false;
+        scheduleCheck();
+        return;
+      }
+
+      resumeHoverTimeoutId = window.setTimeout(() => {
+        resumeHoverTimeoutId = null;
+        orbitInteractingRef.current = false;
+        scheduleCheck();
+      }, resumeAfterMs);
+    };
+
+    const handleZoomStartOrChange = () => {
+      clearPendingResume();
+      orbitInteractingRef.current = true;
+      clearHoverNow();
+    };
+
+    const handleZoomEnd = (event: Event) => {
+      const resumeAfterMs = Math.max(0, Number((event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs ?? 0));
+      clearPendingResume();
+
+      if (resumeAfterMs <= 0) {
+        orbitInteractingRef.current = false;
+        scheduleCheck();
+        return;
+      }
+
+      resumeHoverTimeoutId = window.setTimeout(() => {
+        resumeHoverTimeoutId = null;
+        orbitInteractingRef.current = false;
+        scheduleCheck();
+      }, resumeAfterMs);
+    };
+
     const onMouseMove = (event: MouseEvent) => {
-      if (isSupportGizmoDragging()) return;
+      if (isSupportGizmoDragging() || orbitInteractingRef.current) return;
       cursorPosRef.current = { x: event.clientX, y: event.clientY };
       scheduleCheck();
     };
 
     window.addEventListener('mousemove', onMouseMove, { passive: true });
+    window.addEventListener('picking-orbit-start', handleOrbitStartOrChange);
+    window.addEventListener('picking-orbit-change', handleOrbitStartOrChange);
+    window.addEventListener('picking-orbit-end', handleOrbitEnd);
+    window.addEventListener('picking-pan-start', handlePanStartOrChange);
+    window.addEventListener('picking-pan-change', handlePanStartOrChange);
+    window.addEventListener('picking-pan-end', handlePanEnd);
+    window.addEventListener('picking-zoom-start', handleZoomStartOrChange);
+    window.addEventListener('picking-zoom-change', handleZoomStartOrChange);
+    window.addEventListener('picking-zoom-end', handleZoomEnd);
     // Run once on enable/model-change so state is never stale.
     scheduleCheck();
 
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('picking-orbit-start', handleOrbitStartOrChange);
+      window.removeEventListener('picking-orbit-change', handleOrbitStartOrChange);
+      window.removeEventListener('picking-orbit-end', handleOrbitEnd);
+      window.removeEventListener('picking-pan-start', handlePanStartOrChange);
+      window.removeEventListener('picking-pan-change', handlePanStartOrChange);
+      window.removeEventListener('picking-pan-end', handlePanEnd);
+      window.removeEventListener('picking-zoom-start', handleZoomStartOrChange);
+      window.removeEventListener('picking-zoom-change', handleZoomStartOrChange);
+      window.removeEventListener('picking-zoom-end', handleZoomEnd);
+      clearPendingResume();
       if (rafId !== null) {
         window.cancelAnimationFrame(rafId);
       }
