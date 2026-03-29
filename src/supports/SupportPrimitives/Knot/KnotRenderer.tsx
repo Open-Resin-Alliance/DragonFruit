@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Knot } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { getSnapshot, setHoveredCategory, setHoveredId, subscribe } from '../../state';
+import { getSnapshot, subscribe } from '../../state';
 import { handleKnotClick } from '../../interaction/clickHandlers';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -51,7 +51,6 @@ export function KnotRenderer({
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
-    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const isSelected = state.selectedId === knot.id;
@@ -92,7 +91,7 @@ export function KnotRenderer({
         && hit.category === 'knot'
         && hit.objectId === knot.id
         && isParentSelected;
-    const isHovered = !isDragging && !isSupportEditInteractionActive() && (isTopPickedKnot || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && !isSupportEditInteractionActive() && isTopPickedKnot && !isSelected;
 
     const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor));
     const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
@@ -180,27 +179,8 @@ export function KnotRenderer({
         }
     }, [isHovered, isInteractable]);
 
-    React.useEffect(() => {
-        if (!isDragging && isInteractable && !isSupportEditInteractionActive()) return;
-
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
-        }
-    }, [isDragging, isInteractable, knot.id, state.hoveredCategory, state.hoveredId]);
-
-    React.useEffect(() => {
-        if (!isParentSelected || !pointerHoverActive) return;
-        if (state.hoveredCategory !== 'knot' || state.hoveredId !== knot.id) {
-            setHoveredCategory('knot');
-            setHoveredId(knot.id);
-        }
-    }, [isParentSelected, knot.id, pointerHoverActive, state.hoveredCategory, state.hoveredId]);
-
     const handlePointerMove = (e: any) => {
         if (isDragging || isSupportEditInteractionActive()) {
-            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(null);
             return;
         }
@@ -208,7 +188,6 @@ export function KnotRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -217,26 +196,11 @@ export function KnotRenderer({
             setFrontBlockingModelId(null);
         }
         emitImmediateModelHover(null);
-
-        const pointerOverKnot = isPointerOverThisKnot(e);
-        if (!pointerOverKnot || !isParentSelected) {
-            setPointerHoverActive((prev) => (prev ? false : prev));
-            return;
-        }
-
-        if (isParentSelected && isInteractable) {
-            setPointerHoverActive((prev) => (prev ? prev : true));
-        }
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-        }
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
         }
         emitImmediateModelHover(null);
         document.body.style.cursor = '';

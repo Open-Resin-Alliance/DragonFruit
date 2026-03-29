@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Joint } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { subscribe, getSnapshot, setHoveredId, setHoveredCategory } from '../../state';
+import { subscribe, getSnapshot } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
@@ -48,7 +48,6 @@ export function JointRenderer({
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
-    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     // State Subscription
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -93,7 +92,7 @@ export function JointRenderer({
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = !isDragging && !isSupportEditInteractionActive() && (isTopPickedJoint || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && !isSupportEditInteractionActive() && isTopPickedJoint && !isSelected;
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
@@ -184,29 +183,9 @@ export function JointRenderer({
             document.body.style.cursor = 'grab';
         }
     }, [isHovered, isInteractable]);
-
-    React.useEffect(() => {
-        if (!isDragging && isInteractable && !isSupportEditInteractionActive()) return;
-
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
-        }
-    }, [isDragging, isInteractable, joint.id, state.hoveredCategory, state.hoveredId]);
-
-    // Sync global hover state so the picking system can resolve the hovered support owner
-    React.useEffect(() => {
-        if (!isParentSelected || !isHovered) return;
-        if (state.hoveredCategory !== 'joint' || state.hoveredId !== joint.id) {
-            setHoveredCategory('joint');
-            setHoveredId(joint.id);
-        }
-    }, [isParentSelected, joint.id, isHovered, state.hoveredCategory, state.hoveredId]);
     
     const handlePointerMove = (e: any) => {
         if (isDragging || isSupportEditInteractionActive()) {
-            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(null);
             return;
         }
@@ -214,7 +193,6 @@ export function JointRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -223,26 +201,11 @@ export function JointRenderer({
             setFrontBlockingModelId(null);
         }
         emitImmediateModelHover(null);
-
-        const pointerOverJoint = isPointerOverThisJoint(e);
-        if (!pointerOverJoint || !isParentSelected) {
-            setPointerHoverActive((prev) => (prev ? false : prev));
-            return;
-        }
-
-        if (isParentSelected && isInteractable) {
-            setPointerHoverActive((prev) => (prev ? prev : true));
-        }
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-        }
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
         }
         emitImmediateModelHover(null);
         document.body.style.cursor = '';
