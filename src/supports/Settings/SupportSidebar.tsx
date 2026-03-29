@@ -514,7 +514,7 @@ export function SupportSidebar() {
                                                 </div>
                                             </div>
 
-                                            <div className="rounded-md border p-2" style={ACCENT_CARD_STYLE}>
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <PresetSelector />
                                             </div>
                                         </>
@@ -536,30 +536,17 @@ export function SupportSidebar() {
                         </div>
                     </div>
 
-                    <Section title="Actions" accent>
-                        {saveStatus !== 'idle' && (
-                            <div
-                                className="mb-2 text-[10px]"
-                                style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
-                            >
-                                {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
-                            </div>
-                        )}
-
-                        {activeKind === 'trunk' ? (
-                            <div>
-                                <Button
-                                    type="button"
-                                    onClick={handleRestoreDefaults}
-                                    variant="accent"
-                                    size="md"
-                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
+                    {activeKind !== 'trunk' ? (
+                        <Section title="Actions" accent>
+                            {saveStatus !== 'idle' && (
+                                <div
+                                    className="mb-2 text-[10px]"
+                                    style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
                                 >
-                                    <RotateCcw className="h-4 w-4" />
-                                    <span>Defaults</span>
-                                </Button>
-                            </div>
-                        ) : (
+                                    {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
+                                </div>
+                            )}
+
                             <div className="grid grid-cols-2 gap-1.5">
                                 <Button
                                     type="button"
@@ -583,8 +570,8 @@ export function SupportSidebar() {
                                     <span>Defaults</span>
                                 </Button>
                             </div>
-                        )}
-                    </Section>
+                        </Section>
+                    ) : null}
                 </div>
             )}
         </Card>

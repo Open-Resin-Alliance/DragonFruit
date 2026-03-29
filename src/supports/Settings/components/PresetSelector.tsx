@@ -1,7 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
-import ReactDOM from 'react-dom';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/primitives';
 import {
     getPresetList,
@@ -12,6 +11,7 @@ import {
     renamePreset,
     createPreset,
 } from '../presets';
+import { setAnatomyPreviewHoveredPresetSettings } from '../AnatomyPreview/previewState';
 
 // Modal for confirming preset deletion
 function DeletePresetModal({
@@ -89,14 +89,7 @@ export function PresetSelector() {
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
     const [isEditingName, setIsEditingName] = useState(false);
     const [tempName, setTempName] = useState('');
-    const [isCreateMode, setIsCreateMode] = useState(false);
-    const [isNamingNewPreset, setIsNamingNewPreset] = useState(false);
     const [newPresetName, setNewPresetName] = useState('My Preset');
-    const [popoverOpen, setPopoverOpen] = useState(false);
-    const popoverButtonRef = useRef<HTMLButtonElement | null>(null);
-    const popoverRef = useRef<HTMLDivElement | null>(null);
-    const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
-
     useEffect(() => {
         const unsubscribe = subscribeToPresets(() => {
             setPresets(getPresetList());
@@ -104,38 +97,6 @@ export function PresetSelector() {
         });
         return unsubscribe;
     }, []);
-
-    // Close popover on outside click or Escape
-    useEffect(() => {
-        function onDocClick(e: MouseEvent) {
-            if (!popoverOpen) return;
-            const target = e.target as Node;
-            // If click is inside the button or the popover, ignore
-            if (popoverButtonRef.current && popoverButtonRef.current.contains(target)) return;
-            if (popoverRef.current && popoverRef.current.contains(target)) return;
-            setPopoverOpen(false);
-        }
-
-        function onKey(e: KeyboardEvent) {
-            if (e.key === 'Escape') setPopoverOpen(false);
-        }
-        document.addEventListener('mousedown', onDocClick);
-        // Use pointerdown in capture phase to reliably detect outside clicks
-        const onDocPointer = (ev: Event) => {
-            if (!popoverOpen) return;
-            const target = ev.target as Node;
-            if (popoverButtonRef.current && popoverButtonRef.current.contains(target)) return;
-            if (popoverRef.current && popoverRef.current.contains(target)) return;
-            setPopoverOpen(false);
-        };
-        window.addEventListener('pointerdown', onDocPointer, { capture: true });
-        window.addEventListener('keydown', onKey);
-        return () => {
-            document.removeEventListener('mousedown', onDocClick);
-            window.removeEventListener('keydown', onKey);
-            window.removeEventListener('pointerdown', onDocPointer, { capture: true } as EventListenerOptions);
-        };
-    }, [popoverOpen]);
 
     useEffect(() => {
         if (!activePreset) {
@@ -152,8 +113,7 @@ export function PresetSelector() {
     const builtInPresets = presets.filter((preset) => preset.isBuiltIn);
     const customPresets = presets.filter((preset) => !preset.isBuiltIn);
 
-    const selectedPreset = !isCreateMode ? (activePreset ?? null) : null;
-    const selectedPresetId = isCreateMode ? '__create_new' : (activePreset?.id ?? 'structure');
+    const selectedPreset = activePreset ?? null;
     const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
 
     function fmt(n: number | undefined) {
@@ -162,25 +122,25 @@ export function PresetSelector() {
         return `${n.toFixed(1)}`;
     }
 
-    function renderPresetMetaChip(preset: (typeof presets)[number]) {
+    function renderPresetMetaChip(preset: (typeof presets)[number], isSelected: boolean) {
         return (
             <div
                 className="absolute right-2 top-1/2 -translate-y-1/2 flex justify-end pointer-events-none"
                 style={{ width: '5.85rem' }}
             >
                 <span
-                    className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+                    className="inline-flex items-center rounded-[4px] px-1.5 py-0.5 text-[10px] leading-none"
                     style={{
-                        background: 'var(--surface-2)',
-                        border: '1px solid var(--border-subtle)',
-                        color: 'var(--text-muted)',
+                        background: isSelected ? 'var(--primary-button-surface)' : 'var(--surface-2)',
+                        border: isSelected ? '1px solid color-mix(in srgb, var(--primary-button-surface), white 14%)' : '1px solid var(--border-subtle)',
+                        color: isSelected ? 'var(--accent-contrast)' : 'var(--text-muted)',
                         width: '5.85rem',
                         boxSizing: 'border-box',
                         overflow: 'hidden',
                         whiteSpace: 'nowrap',
                     }}
                 >
-                    <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>Ø{fmt(preset.settings.tip.contactDiameterMm)}</span>
+                    <span style={{ color: isSelected ? 'var(--accent-contrast)' : 'var(--text-strong)', fontWeight: 600 }}>Ø{fmt(preset.settings.tip.contactDiameterMm)}</span>
                     <span style={{ margin: '0 0.25rem', opacity: 0.65 }}>│</span>
                     <span>L{fmt(preset.settings.tip.lengthMm)}</span>
                     <span style={{ margin: '0 0.25rem', opacity: 0.65 }}>│</span>
@@ -190,59 +150,54 @@ export function PresetSelector() {
         );
     }
 
+    function renderPresetRow(preset: (typeof presets)[number]) {
+        const isSelected = activePreset?.id === preset.id;
+
+        return (
+            <button
+                key={preset.id}
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm relative rounded-[5px] border transition-colors"
+                onClick={() => {
+                    handlePresetSelect(preset.id);
+                }}
+                onMouseEnter={() => setAnatomyPreviewHoveredPresetSettings(preset.settings)}
+                onMouseLeave={() => setAnatomyPreviewHoveredPresetSettings(null)}
+                onFocus={() => setAnatomyPreviewHoveredPresetSettings(preset.settings)}
+                onBlur={() => setAnatomyPreviewHoveredPresetSettings(null)}
+                style={{
+                    background: isSelected ? 'color-mix(in srgb, var(--secondary-button-surface), var(--surface-0) 90%)' : 'transparent',
+                    borderColor: isSelected ? 'color-mix(in srgb, var(--secondary-button-surface), var(--border-subtle) 30%)' : 'transparent',
+                }}
+            >
+                <div className="w-full">
+                    <div className="flex items-center">
+                        <div className="flex-1 truncate pr-[6.25rem]" style={{ color: isSelected ? 'var(--text-strong)' : undefined }}>
+                            {preset.name}
+                        </div>
+                    </div>
+                    {renderPresetMetaChip(preset, isSelected)}
+                </div>
+            </button>
+        );
+    }
+
     const handlePresetSelect = (presetId: string) => {
         if (presetId === '__separator') {
             return;
         }
 
-        if (presetId === '__create_new') {
-            setIsCreateMode(true);
-            setConfirmId(null);
-            setIsEditingName(false);
-            setIsNamingNewPreset(false);
-            setNewPresetName('My Preset');
-            return;
-        }
-
         setActivePreset(presetId);
-        setIsCreateMode(false);
         setConfirmId(null);
         setIsEditingName(false);
-        setIsNamingNewPreset(false);
     };
 
     const handleSaveRequest = () => {
-        if (isCreateMode) {
-            if (isNamingNewPreset) {
-                handleCreateFromName();
-                return;
-            }
-            setIsNamingNewPreset(true);
-            setConfirmId(null);
-            setIsEditingName(false);
-            return;
-        }
-
-        if (!selectedPreset) return;
+        if (!selectedPreset || selectedPresetIsBuiltIn) return;
         setConfirmId(selectedPreset.id);
     };
 
-    const handleConfirmSave = () => {
-        if (!selectedPreset) return;
-        savePreset(selectedPreset.id);
-        setConfirmId(null);
-    };
-
     const handleEditClick = () => {
-        if (isCreateMode) {
-            if (isNamingNewPreset) {
-                setIsNamingNewPreset(false);
-                setNewPresetName('My Preset');
-                return;
-            }
-            return;
-        }
-
         if (!selectedPreset || selectedPreset.isBuiltIn) return;
 
         if (isEditingName) {
@@ -258,16 +213,11 @@ export function PresetSelector() {
 
         setTempName(selectedPreset.name);
         setIsEditingName(true);
-        setIsCreateMode(false);
-        setIsNamingNewPreset(false);
     };
 
-    const handleCreateFromName = () => {
+    const handleCreateNewClick = () => {
         const created = createPreset(newPresetName);
         setActivePreset(created.id);
-        setIsCreateMode(false);
-        setIsNamingNewPreset(false);
-        setNewPresetName(created.name);
         setConfirmId(null);
         setIsEditingName(false);
     };
@@ -278,118 +228,29 @@ export function PresetSelector() {
                 <h4 className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                     Presets
                 </h4>
-                {/* Custom popover dropdown so we can style items */}
-                <div className="relative">
-                    <button
-                        type="button"
-                        className="ui-input w-full h-8 px-2.5 text-xs text-left flex items-center justify-between"
-                        onClick={() => {
-                            const rect = popoverButtonRef.current?.getBoundingClientRect() ?? null;
-                            setAnchorRect(rect);
-                            setPopoverOpen((s) => !s);
-                        }}
-                        ref={popoverButtonRef}
-                        aria-haspopup="listbox"
-                        aria-expanded={popoverOpen}
-                    >
-                        <span>{isCreateMode ? 'New Profile' : (selectedPreset ? selectedPreset.name : 'Select')}</span>
-                        <svg className="w-3.5 h-3.5 text-[--text-muted]" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </button>
+                <div className="rounded-md border bg-[var(--surface-1)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="max-h-[19rem] overflow-y-auto custom-scrollbar py-1">
+                        <div className="space-y-0.5 px-1">
+                            {builtInPresets.map(renderPresetRow)}
+                        </div>
 
-                    {popoverOpen && anchorRect && ReactDOM.createPortal(
-                        <div className="fixed inset-0 z-[140]" aria-hidden={false}>
-                            {/* click-catcher only; keep visual emphasis to the popover itself via box-shadow */}
-                            <div className="absolute inset-0" onMouseDown={() => setPopoverOpen(false)} />
-                            <div
-                                ref={popoverRef}
-                                className="absolute rounded-md border overflow-hidden bg-[var(--surface-1)]"
-                                style={{
-                                    // subtle accent border so the dropdown stands out
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 72%)',
-                                    top: Math.min(window.innerHeight - 8, anchorRect.bottom) + 'px',
-                                    left: Math.max(8, anchorRect.left) + 'px',
-                                    width: anchorRect.width + 'px',
-                                    maxWidth: 'calc(100vw - 16px)',
-                                    boxSizing: 'border-box',
-                                    zIndex: 150,
-                                    boxShadow: '0 24px 46px rgba(0,0,0,0.45)',
-                                }}
-                                role="listbox"
-                            >
-                                <div className="py-1">
-                                    <button type="button" className="w-full text-left px-3 py-2 text-sm font-medium text-green-400 hover:bg-[var(--surface-0)]" onClick={() => { handlePresetSelect('__create_new'); setPopoverOpen(false); }}>
-                                        Create New
-                                    </button>
-                                    <div className="border-t mx-2 my-1" style={{ borderColor: 'var(--border-subtle)' }} />
+                        <div className="mx-3 my-2 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
 
-                                    {builtInPresets.map((preset) => (
-                                        <button key={preset.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-0)] relative" onClick={() => { handlePresetSelect(preset.id); setPopoverOpen(false); }}>
-                                            <div className="w-full">
-                                                <div className="flex items-center">
-                                                    <div className="flex-1 truncate pr-[6.25rem]">{preset.name}</div>
-                                                </div>
-
-                                                {renderPresetMetaChip(preset)}
-                                            </div>
-                                        </button>
-                                    ))}
-
-                                    <div className="border-t mx-2 my-1" style={{ borderColor: 'var(--border-subtle)' }} />
-
-                                    {customPresets.length === 0 ? (
-                                        <div className="px-3 py-2 text-sm text-[var(--text-muted)]">No custom presets</div>
-                                    ) : (
-                                        customPresets.map((preset) => (
-                                                <button key={preset.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-0)] relative" onClick={() => { handlePresetSelect(preset.id); setPopoverOpen(false); }}>
-                                                    <div className="w-full">
-                                                        <div className="flex items-center">
-                                                            <div className="flex-1 truncate pr-[6.25rem]">{preset.name}</div>
-                                                        </div>
-
-                                                        {renderPresetMetaChip(preset)}
-                                                    </div>
-                                                </button>
-                                            ))
-                                    )}
-                                </div>
-                            </div>
-                        </div>,
-                        document.body,
-                    )}
+                        <div className="space-y-0.5 px-1">
+                            {customPresets.length === 0 ? (
+                                <div className="px-3 py-2 text-sm text-[var(--text-muted)]">No custom presets</div>
+                            ) : (
+                                customPresets.map(renderPresetRow)
+                            )}
+                        </div>
+                    </div>
                 </div>
                 {selectedPreset ? (
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    <div className="text-[11px] text-center" style={{ color: 'var(--text-muted)' }}>
                         {selectedPreset.description}
-                    </div>
-                ) : isCreateMode ? (
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        Press Save to create a new preset from current settings.
                     </div>
                 ) : null}
             </div>
-
-            {isNamingNewPreset ? (
-                <div className="space-y-1">
-                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                        New preset name
-                    </div>
-                    <input
-                        type="text"
-                        value={newPresetName}
-                        onChange={(event) => setNewPresetName(event.target.value)}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                                handleCreateFromName();
-                            } else if (event.key === 'Escape') {
-                                setIsNamingNewPreset(false);
-                                setNewPresetName('My Preset');
-                            }
-                        }}
-                        placeholder="My Preset"
-                        className="ui-input h-8 w-full px-2.5 text-xs sm:text-sm"
-                    />
-                </div>
-            ) : null}
 
             {isEditingName && selectedPreset && !selectedPresetIsBuiltIn ? (
                 <div className="space-y-1">
@@ -414,7 +275,7 @@ export function PresetSelector() {
             ) : null}
 
             {/* Action row: Create, Edit, or Rename/Delete */}
-            {isEditingName && selectedPreset && !selectedPresetIsBuiltIn ? (
+            {confirmId && selectedPreset && confirmId === selectedPreset.id ? null : isEditingName && selectedPreset && !selectedPresetIsBuiltIn ? (
                 <>
                     <div className="grid grid-cols-2 gap-1.5">
                         <Button
@@ -452,42 +313,51 @@ export function PresetSelector() {
                     />
                 </>
             ) : (
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-3 gap-1.5">
+                    <Button
+                        type="button"
+                        variant="accent"
+                        size="md"
+                        className="h-9 text-[12px] font-semibold"
+                        onClick={handleCreateNewClick}
+                        title="Create a new preset from current settings"
+                    >
+                        New
+                    </Button>
                     <Button
                         type="button"
                         variant="primary"
                         size="md"
                         className="h-9 text-[12px] font-semibold"
                         onClick={handleSaveRequest}
-                        disabled={!isCreateMode && !selectedPreset}
+                        disabled={!selectedPreset || selectedPresetIsBuiltIn}
+                        title={selectedPresetIsBuiltIn ? 'Built-in presets cannot be saved' : 'Save current settings to this preset'}
                     >
-                        {isCreateMode ? 'Save as New' : 'Save'}
+                        Save
                     </Button>
                     <Button
                         type="button"
-                        variant="accent"
+                        variant="secondary"
                         size="md"
                         className="h-9 text-[12px] font-semibold"
                         onClick={handleEditClick}
-                        disabled={isCreateMode ? true : (!selectedPreset || selectedPresetIsBuiltIn || isNamingNewPreset)}
-                        title={isCreateMode
-                            ? 'Create mode is active'
-                            : (selectedPresetIsBuiltIn ? 'Built-in presets cannot be renamed' : 'Rename selected preset')}
+                        disabled={!selectedPreset || selectedPresetIsBuiltIn}
+                        title={selectedPresetIsBuiltIn ? 'Built-in presets cannot be renamed' : 'Rename selected preset'}
                     >
-                        {isCreateMode ? 'Edit' : 'Edit'}
+                        More
                     </Button>
                 </div>
             )}
 
-            {confirmId && selectedPreset && confirmId === selectedPreset.id && !isCreateMode && !isNamingNewPreset ? (
-                <div className="rounded-md border px-3 py-2 bg-[var(--surface-0)]" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="flex items-start justify-between gap-3">
+            {confirmId && selectedPreset && confirmId === selectedPreset.id ? (
+                <div className="rounded-md border px-3 py-2 bg-[var(--surface-0)]" style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 72%)' }}>
+                    <div className="flex items-center justify-between gap-3">
                         <div>
                             <div className="text-[12px] font-medium" style={{ color: 'var(--text-strong)' }}>
-                                Overwrite preset
+                                Overwrite Preset
                             </div>
                             <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                Replace "{selectedPreset.name}" with the current settings.
+                                Replace "{selectedPreset.name}" with the current settings?
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -496,13 +366,16 @@ export function PresetSelector() {
                                 variant="secondary"
                                 size="sm"
                                 className="h-8 px-3 text-[12px] font-semibold"
-                                onClick={handleConfirmSave}
+                                onClick={() => {
+                                    savePreset(selectedPreset.id);
+                                    setConfirmId(null);
+                                }}
                             >
                                 Save
                             </Button>
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="secondary"
                                 size="sm"
                                 className="h-8 px-3 text-[12px]"
                                 onClick={() => setConfirmId(null)}

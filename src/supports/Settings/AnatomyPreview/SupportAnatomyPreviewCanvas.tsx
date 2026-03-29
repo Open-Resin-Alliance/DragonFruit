@@ -296,6 +296,7 @@ function PreviewContent({
     const { camera } = useThree();
     const settings = React.useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
+    const previewSettings = previewState.hoveredPresetSettings ?? settings;
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
@@ -306,12 +307,12 @@ function PreviewContent({
     const [liveConfig, setLiveConfig] = React.useState({
         previewHeightMm: ANATOMY_CONFIG.support.previewHeightMm,
         coneAngleDeg: ANATOMY_CONFIG.support.coneAngleDeg,
-        tipContactDiameterMm: settings.tip.contactDiameterMm,
-        tipLengthMm: settings.tip.lengthMm,
-        rootsDiameterMm: settings.roots.diameterMm,
-        rootsDiskHeightMm: settings.roots.diskHeightMm,
-        rootsConeHeightMm: settings.roots.coneHeightMm,
-        shaftDiameterMm: settings.shaft.diameterMm,
+        tipContactDiameterMm: previewSettings.tip.contactDiameterMm,
+        tipLengthMm: previewSettings.tip.lengthMm,
+        rootsDiameterMm: previewSettings.roots.diameterMm,
+        rootsDiskHeightMm: previewSettings.roots.diskHeightMm,
+        rootsConeHeightMm: previewSettings.roots.coneHeightMm,
+        shaftDiameterMm: previewSettings.shaft.diameterMm,
     });
 
     // ANIMATION ENGINE
@@ -322,9 +323,9 @@ function PreviewContent({
     // Sync global settings to liveConfig for Roots
     // This allows sidebar changes to update the preview while preserving the structure for the Tuner
     React.useEffect(() => {
-        let tipContact = settings.tip.contactDiameterMm;
-        let tipLength = settings.tip.lengthMm;
-        let shaftDiameter = settings.shaft.diameterMm;
+        let tipContact = previewSettings.tip.contactDiameterMm;
+        let tipLength = previewSettings.tip.lengthMm;
+        let shaftDiameter = previewSettings.shaft.diameterMm;
 
         // Apply Overrides if hovering a preset
         if (previewState.activeSettingValue !== null) {
@@ -335,20 +336,20 @@ function PreviewContent({
 
         setLiveConfig(prev => ({
             ...prev,
-            rootsDiameterMm: settings.roots.diameterMm,
-            rootsDiskHeightMm: settings.roots.diskHeightMm,
-            rootsConeHeightMm: settings.roots.coneHeightMm,
+            rootsDiameterMm: previewSettings.roots.diameterMm,
+            rootsDiskHeightMm: previewSettings.roots.diskHeightMm,
+            rootsConeHeightMm: previewSettings.roots.coneHeightMm,
             tipContactDiameterMm: tipContact,
             tipLengthMm: tipLength,
             shaftDiameterMm: shaftDiameter,
         }));
     }, [
-        settings.roots.diameterMm,
-        settings.roots.diskHeightMm,
-        settings.roots.coneHeightMm,
-        settings.tip.contactDiameterMm,
-        settings.tip.lengthMm,
-        settings.shaft.diameterMm,
+        previewSettings.roots.diameterMm,
+        previewSettings.roots.diskHeightMm,
+        previewSettings.roots.coneHeightMm,
+        previewSettings.tip.contactDiameterMm,
+        previewSettings.tip.lengthMm,
+        previewSettings.shaft.diameterMm,
         previewState.activeSettingKey,
         previewState.activeSettingValue
     ]);
@@ -486,16 +487,16 @@ function PreviewContent({
                 const tipProfile: SupportTipProfile = {
                     type: 'disk',
                     contactDiameterMm: liveConfigRef.current.tipContactDiameterMm,
-                    bodyDiameterMm: settings.shaft.diameterMm,
+                    bodyDiameterMm: previewSettings.shaft.diameterMm,
                     lengthMm: liveConfigRef.current.tipLengthMm,
-                    penetrationMm: settings.tip.penetrationMm,
-                    diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
-                    maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
-                    standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),
+                    penetrationMm: previewSettings.tip.penetrationMm,
+                    diskThicknessMm: previewSettings.tip.diskThicknessMm ?? 0.1,
+                    maxStandoffMm: previewSettings.tip.maxStandoffMm ?? 1.5,
+                    standoffAngleThreshold: previewSettings.tip.standoffAngleThreshold ?? (Math.PI / 4),
                 };
 
-                const coneAngleMode = settings.tip.coneAngleMode ?? 'normal';
-                const adaptiveConeAngleOffsetDeg = settings.tip.adaptiveConeAngleOffsetDeg ?? 30;
+                const coneAngleMode = previewSettings.tip.coneAngleMode ?? 'normal';
+                const adaptiveConeAngleOffsetDeg = previewSettings.tip.adaptiveConeAngleOffsetDeg ?? 30;
 
                 const { coneAxis } = resolveConeAxisPolicy({
                     surfaceNormal: tipNormal,
@@ -750,7 +751,7 @@ function PreviewContent({
             <group ref={groupRef}>
                 {activeKind === 'raft' && (
                     <RaftPreview
-                        settings={settings}
+                            settings={previewSettings}
                         liveConfig={liveConfig}
                         activeKind={activeKind}
                         raftSettings={raftSettings}
@@ -760,7 +761,7 @@ function PreviewContent({
 
                 {activeKind === 'grid' && (
                     <GridPreview
-                        settings={settings}
+                            settings={previewSettings}
                         liveConfig={liveConfig}
                         activeKind={activeKind}
                         previewState={previewState}
@@ -770,7 +771,7 @@ function PreviewContent({
 
                 {activeKind !== 'raft' && activeKind !== 'grid' && (
                     <TrunkPreview
-                        settings={settings}
+                            settings={previewSettings}
                         liveConfig={liveConfig}
                         activeKind={activeKind}
                         previewState={previewState}
