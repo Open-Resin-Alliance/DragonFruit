@@ -10,7 +10,7 @@ export const SUPPORT_HOME_FOCUS_STATE: CameraFocusState = {
 export const TRUNK_HOME_FOCUS_STATE: CameraFocusState = {
     position: [0, -49.53, 10],
     target: [0, 0, 8],
-    zoom: 30,
+    zoom: 27.00,
 };
 
 export const STICK_HOME_FOCUS_STATE: CameraFocusState = {

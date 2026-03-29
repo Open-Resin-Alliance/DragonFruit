@@ -115,6 +115,16 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
     onChange(normalized);
   }, [displayValue, formatValue, maxBound, minBound, onChange, safeValue, stepPrecision, stepSize]);
 
+  const handleWheel = (e: React.WheelEvent<HTMLInputElement>) => {
+    if (props.onWheel) props.onWheel(e);
+    if (e.defaultPrevented) return;
+    if (props.disabled || props.readOnly) return;
+    if (e.deltaY === 0) return;
+
+    e.preventDefault();
+    applyStepDelta(e.deltaY < 0 ? 1 : -1);
+  };
+
   const parsedCurrent = Number.parseFloat(displayValue);
   const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
   const disableIncrement = props.disabled || (maxBound != null && currentValue >= maxBound);
@@ -129,6 +139,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
         onChange={handleChange}
         onBlur={handleBlur}
         onFocus={handleFocus}
+        onWheel={handleWheel}
         className={className}
       />
     );
@@ -143,6 +154,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
         onChange={handleChange}
         onBlur={handleBlur}
         onFocus={handleFocus}
+        onWheel={handleWheel}
         className={className}
       />
 
