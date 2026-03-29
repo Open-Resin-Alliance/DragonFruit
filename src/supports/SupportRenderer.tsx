@@ -357,6 +357,15 @@ function buildSupportPlacementPreviewBatch(
         currentStart = new THREE.Vector3(0, 0, 0);
     }
 
+    if (preview.knot && preview.segments.length > 0) {
+        jointsMap.set(preview.knot.id, {
+            id: preview.knot.id,
+            pos: preview.knot.pos,
+            diameter: Math.max(0.001, preview.knot.diameter ?? ((preview.segments[0]?.diameter ?? 1) + 0.1)),
+            supportId: id,
+        });
+    }
+
     for (const segment of preview.segments) {
         if (segment.bottomJoint) {
             jointsMap.set(segment.bottomJoint.id, {

@@ -39,7 +39,7 @@ import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacement
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
 
@@ -409,13 +409,17 @@ export function BranchPlacementController() {
             let hoveredSnapResolved = false;
             const hoveredShaft = hoveredShaftRef.current;
 
-            if (hoveredShaft?.segmentId && hoveredShaft.point) {
+            if (hoveredShaft?.segmentId) {
                 const pathCandidates = allTargets.filter((target) => target.id === hoveredShaft.segmentId && !!target.pathSegment);
-                const hoveredTarget = pathCandidates.length > 1
+                const hoveredTarget = (hoveredShaft.point && pathCandidates.length > 1)
                     ? selectNearestPathTarget(hoveredShaft.point, pathCandidates) ?? pathCandidates[0]
                     : pathCandidates[0] ?? getTarget(hoveredShaft.segmentId);
 
-                const projected = hoveredTarget ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point) : null;
+                const projected = hoveredTarget
+                    ? (hoveredShaft.point
+                        ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point)
+                        : projectRayToSnapTargetPath(raycaster.ray, hoveredTarget))
+                    : null;
 
                 if (hoveredTarget?.pathSegment && projected) {
                     hoveredSnapResolved = true;

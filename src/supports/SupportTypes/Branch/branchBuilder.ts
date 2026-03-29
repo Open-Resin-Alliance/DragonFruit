@@ -131,6 +131,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const supportData: SupportData = {
         id: branchId,
         startPos: parentKnot.pos,
+        knot: parentKnot,
         segments: [bottomSegment, topSegment],
         contactCone,
     };
