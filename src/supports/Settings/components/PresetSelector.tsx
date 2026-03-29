@@ -129,7 +129,7 @@ export function PresetSelector() {
                 style={{ width: '5.85rem' }}
             >
                 <span
-                    className="inline-flex items-center rounded-[4px] px-1.5 py-0.5 text-[10px] leading-none"
+                    className="inline-flex items-center rounded-[4px] px-1.5 py-0.5 pr-2 text-[10px] leading-none"
                     style={{
                         background: isSelected ? 'var(--primary-button-surface)' : 'var(--surface-2)',
                         border: isSelected ? '1px solid color-mix(in srgb, var(--primary-button-surface), white 14%)' : '1px solid var(--border-subtle)',
@@ -141,9 +141,9 @@ export function PresetSelector() {
                     }}
                 >
                     <span style={{ color: isSelected ? 'var(--accent-contrast)' : 'var(--text-strong)', fontWeight: 600 }}>Ø{fmt(preset.settings.tip.contactDiameterMm)}</span>
-                    <span style={{ margin: '0 0.25rem', opacity: 0.65 }}>│</span>
+                    <span style={{ margin: '0 0.18rem', opacity: 0.65 }}>│</span>
                     <span>L{fmt(preset.settings.tip.lengthMm)}</span>
-                    <span style={{ margin: '0 0.25rem', opacity: 0.65 }}>│</span>
+                    <span style={{ margin: '0 0.18rem', opacity: 0.65 }}>│</span>
                     <span>T{fmt(preset.settings.shaft.diameterMm)}</span>
                 </span>
             </div>
