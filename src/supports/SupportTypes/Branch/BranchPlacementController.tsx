@@ -120,7 +120,10 @@ export function BranchPlacementController() {
         scene.traverse((obj) => {
             const objModelId = obj.userData?.modelId;
             if (!objModelId) return;
-            if (modelId === 'unknown' || objModelId === modelId) meshes.push(obj);
+            if (modelId !== 'unknown' && objModelId !== modelId) return;
+            const mesh = obj as THREE.Mesh;
+            if (!mesh.isMesh || !mesh.geometry) return;
+            meshes.push(mesh);
         });
         modelMeshesRef.current = meshes;
     }, [scene, modelId, altActive, stage]);
@@ -134,7 +137,7 @@ export function BranchPlacementController() {
             includeBranches: true,
             includeBraces: true,
         });
-    }, [stage, supportState]);
+    }, [stage, supportState.trunks, supportState.branches, supportState.braces]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -297,19 +300,9 @@ export function BranchPlacementController() {
                 return;
             }
 
-            raycaster.setFromCamera(pointer, camera);
-            const modelMeshes = modelMeshesRef.current;
-            if (modelMeshes.length > 0) {
-                const intersects = raycaster.intersectObjects(modelMeshes, true);
-                if (intersects.length > 0) {
-                    const hit = intersects[0];
-                    branchPlacementStore.setHoverPosition({ x: hit.point.x, y: hit.point.y, z: hit.point.z });
-                } else {
-                    branchPlacementStore.setHoverPosition(null);
-                }
-            } else {
-                branchPlacementStore.setHoverPosition(null);
-            }
+            // Hover dot is updated immediately by useBranchPlacement.onModelHover via
+            // support interaction routing. Avoid a redundant per-frame full mesh raycast
+            // here to keep cursor-follow latency low in dense scenes.
             publishPreview('idle:hover-dot', null);
             return;
         }
@@ -322,8 +315,12 @@ export function BranchPlacementController() {
         // Update raycaster for mouse position
         raycaster.setFromCamera(pointer, camera);
 
-        // Try to snap to a shaft first
-        const resolvedSnap = updateAndGetResolvedSnap();
+        // Fast path: when shaft-hover already provides a concrete segment+point,
+        // skip the heavier global snapping pass for this frame.
+        const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
+        const resolvedSnap = hasHoveredShaftFastPath
+            ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
+            : updateAndGetResolvedSnap();
 
         const settings = getSettings();
         const fallbackHostDiameterMm = settings.shaft.diameterMm;
@@ -501,7 +498,7 @@ export function BranchPlacementController() {
 
                 let meshHit: THREE.Intersection | null = null;
                 if (modelMeshes.length > 0) {
-                    const intersects = raycaster.intersectObjects(modelMeshes, true);
+                    const intersects = raycaster.intersectObjects(modelMeshes, false);
                     if (intersects.length > 0) {
                         meshHit = intersects[0];
                     }

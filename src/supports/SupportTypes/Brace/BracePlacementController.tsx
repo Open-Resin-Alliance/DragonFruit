@@ -193,7 +193,18 @@ export function BracePlacementController() {
         targets.push(...buildLeafConePathSnapTargets(leafMeta));
 
         return targets;
-    }, [altActive, stage, start, supportState, kickstandState, leafMeta]);
+    }, [
+        altActive,
+        stage,
+        start,
+        supportState.trunks,
+        supportState.branches,
+        supportState.braces,
+        supportState.twigs,
+        supportState.sticks,
+        kickstandState.kickstands,
+        leafMeta,
+    ]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -334,7 +345,12 @@ export function BracePlacementController() {
 
         if (!altActive && stage === 'idle') return;
 
-        const resolvedSnap = updateAndGetResolvedSnap();
+        // Fast path: when shaft-hover already provides a concrete segment+point,
+        // skip the heavier global snapping pass for this frame.
+        const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
+        const resolvedSnap = hasHoveredShaftFastPath
+            ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
+            : updateAndGetResolvedSnap();
 
         // Hover preview (before first click): show a knot-sized sphere on the hovered segment.
         if (stage === 'idle') {

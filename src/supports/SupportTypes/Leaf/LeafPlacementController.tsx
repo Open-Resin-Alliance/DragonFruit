@@ -46,7 +46,10 @@ export function LeafPlacementController() {
         scene.traverse((obj) => {
             const objModelId = obj.userData?.modelId;
             if (!objModelId) return;
-            if (modelId === 'unknown' || objModelId === modelId) meshes.push(obj);
+            if (modelId !== 'unknown' && objModelId !== modelId) return;
+            const mesh = obj as THREE.Mesh;
+            if (!mesh.isMesh || !mesh.geometry) return;
+            meshes.push(mesh);
         });
         modelMeshesRef.current = meshes;
         return () => {
@@ -65,7 +68,13 @@ export function LeafPlacementController() {
             }),
             ...buildKickstandPathSnapTargets(kickstandState),
         ];
-    }, [stage, supportState, kickstandState]);
+    }, [
+        stage,
+        supportState.trunks,
+        supportState.branches,
+        supportState.braces,
+        kickstandState.kickstands,
+    ]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -147,19 +156,8 @@ export function LeafPlacementController() {
         const liveStage = snap.stage;
 
         if (liveActive && liveStage === 'idle') {
-            raycaster.setFromCamera(pointer, camera);
-            const modelMeshes = modelMeshesRef.current;
-            if (modelMeshes.length > 0) {
-                const intersects = raycaster.intersectObjects(modelMeshes, true);
-                if (intersects.length > 0) {
-                    const hit = intersects[0];
-                    leafPlacementStore.setHoverPosition({ x: hit.point.x, y: hit.point.y, z: hit.point.z });
-                } else {
-                    leafPlacementStore.setHoverPosition(null);
-                }
-            } else {
-                leafPlacementStore.setHoverPosition(null);
-            }
+            // Hover dot is updated immediately by useLeafPlacement.onModelHover.
+            // Skip redundant per-frame mesh raycasts to reduce cursor trailing.
             return;
         }
 
@@ -169,7 +167,12 @@ export function LeafPlacementController() {
 
         raycaster.setFromCamera(pointer, camera);
 
-        const resolvedSnap = updateAndGetResolvedSnap();
+        // Fast path: when shaft-hover already provides segment+point, skip
+        // the heavier global snapping pass for this frame.
+        const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
+        const resolvedSnap = hasHoveredShaftFastPath
+            ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
+            : updateAndGetResolvedSnap();
 
         let knotPos: Vec3 | null = null;
         let segmentId = 'free';
@@ -270,7 +273,7 @@ export function LeafPlacementController() {
                 const modelMeshes = modelMeshesRef.current;
 
                 if (modelMeshes.length > 0) {
-                    const intersects = raycaster.intersectObjects(modelMeshes, true);
+                    const intersects = raycaster.intersectObjects(modelMeshes, false);
                     if (intersects.length > 0) {
                         const hit = intersects[0];
                         knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
