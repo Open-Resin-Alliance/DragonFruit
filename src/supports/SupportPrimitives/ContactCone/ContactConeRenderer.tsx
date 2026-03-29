@@ -10,6 +10,7 @@ import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interact
 
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ContactConeRendererProps {
     contactDiskId?: string;
@@ -151,6 +152,14 @@ export function ContactConeRenderer({
             return;
         }
 
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            setIsHovered(false);
+            return;
+        }
+
         const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
         for (const intersection of intersections) {
             let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
@@ -185,6 +194,13 @@ export function ContactConeRenderer({
     const handleConePointerOut = React.useCallback(() => {
         setIsHovered(false);
         if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            return;
+        }
 
         emitImmediateModelHover(null);
         setHoveredId(null);

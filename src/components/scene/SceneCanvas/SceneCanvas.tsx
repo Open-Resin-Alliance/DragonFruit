@@ -108,6 +108,7 @@ import {
 } from '@/utils/modelBounds';
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -121,7 +122,7 @@ export function SceneCanvas({
   clipLower,
   clipUpper,
   meshColor, // Global fallback color? Each model has color.
-  meshVisible, // Global fallback visibility?
+  meshVisible,
   shaderType,
   matcapVariant,
   flatUseVertexColors,
@@ -131,7 +132,9 @@ export function SceneCanvas({
   heatmapContrast,
   heatmapColors,
   disableRaycast,
-  hideCrossSectionCap,
+  ambientIntensity,
+  directionalIntensity,
+  headlightIntensity,
   onCameraChange,
   onCameraEnd,
   islandMarkers,
@@ -139,9 +142,6 @@ export function SceneCanvas({
   overlayColor,
   overlayOpacity,
   overlaySelectedIslandId,
-  ambientIntensity,
-  directionalIntensity,
-  headlightIntensity,
   materialRoughness,
   scanResults,
   layerHeightMm,
@@ -823,9 +823,7 @@ export function SceneCanvas({
     }
 
     setHoveredMeshModelId((prev) => (prev === null ? prev : null));
-    window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-      detail: { modelId: null },
-    }));
+    emitImmediateModelHover(null);
   }, [supportGizmoInteractionActive]);
 
   const onModelHoverModelChange = React.useCallback((id: string | null) => {

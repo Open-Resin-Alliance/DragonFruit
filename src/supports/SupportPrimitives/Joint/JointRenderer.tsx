@@ -8,6 +8,7 @@ import { handleJointClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { useJointDragPosition } from '../../interaction/jointDragPosition';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface JointRendererProps {
     joint: Joint;
@@ -88,10 +89,11 @@ export function JointRenderer({
     const isTopPickedJoint = frontBlockingModelId === null
         && isInteractable
         && !isDragging
+        && !isSupportEditInteractionActive()
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = !isDragging && (isTopPickedJoint || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && !isSupportEditInteractionActive() && (isTopPickedJoint || pointerHoverActive) && !isSelected;
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
@@ -184,7 +186,7 @@ export function JointRenderer({
     }, [isHovered, isInteractable]);
 
     React.useEffect(() => {
-        if (!isDragging && isInteractable) return;
+        if (!isDragging && isInteractable && !isSupportEditInteractionActive()) return;
 
         setPointerHoverActive((prev) => (prev ? false : prev));
         if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
@@ -203,8 +205,9 @@ export function JointRenderer({
     }, [isParentSelected, joint.id, isHovered, state.hoveredCategory, state.hoveredId]);
     
     const handlePointerMove = (e: any) => {
-        if (isDragging) {
+        if (isDragging || isSupportEditInteractionActive()) {
             setPointerHoverActive((prev) => (prev ? false : prev));
+            emitImmediateModelHover(null);
             return;
         }
 

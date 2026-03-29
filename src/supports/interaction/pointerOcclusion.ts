@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { isSupportEditInteractionActive } from './gizmoInteractionLock';
 
 type PointerIntersectionLike = {
     object?: THREE.Object3D | null;
@@ -37,8 +39,14 @@ export function hasFrontBlockingModel(event: PointerEventLike | null | undefined
     return getFrontBlockingModelId(event, targetRoot) !== null;
 }
 
+function shouldSuppressImmediateModelHover(modelId: string | null) {
+    return modelId !== null && (isSupportEditInteractionActive() || isContactDiskHudInteractionActive());
+}
+
 export function emitImmediateModelHover(modelId: string | null) {
     if (typeof window === 'undefined') return;
+
+    if (shouldSuppressImmediateModelHover(modelId)) return;
 
     const w = window as any;
     if (w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging) return;

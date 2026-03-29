@@ -7,6 +7,7 @@ import { getSnapshot, setHoveredCategory, setHoveredId, subscribe } from '../../
 import { handleKnotClick } from '../../interaction/clickHandlers';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface KnotRendererProps {
     knot: Knot;
@@ -87,10 +88,11 @@ export function KnotRenderer({
     const isTopPickedKnot = frontBlockingModelId === null
         && isInteractable
         && !isDragging
+        && !isSupportEditInteractionActive()
         && hit.category === 'knot'
         && hit.objectId === knot.id
         && isParentSelected;
-    const isHovered = !isDragging && (isTopPickedKnot || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && !isSupportEditInteractionActive() && (isTopPickedKnot || pointerHoverActive) && !isSelected;
 
     const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor));
     const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
@@ -179,7 +181,7 @@ export function KnotRenderer({
     }, [isHovered, isInteractable]);
 
     React.useEffect(() => {
-        if (!isDragging && isInteractable) return;
+        if (!isDragging && isInteractable && !isSupportEditInteractionActive()) return;
 
         setPointerHoverActive((prev) => (prev ? false : prev));
         if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
@@ -197,8 +199,9 @@ export function KnotRenderer({
     }, [isParentSelected, knot.id, pointerHoverActive, state.hoveredCategory, state.hoveredId]);
 
     const handlePointerMove = (e: any) => {
-        if (isDragging) {
+        if (isDragging || isSupportEditInteractionActive()) {
             setPointerHoverActive((prev) => (prev ? false : prev));
+            emitImmediateModelHover(null);
             return;
         }
 

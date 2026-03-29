@@ -9,6 +9,7 @@ import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setContactDiskHudDraggingActive, setContactDiskHudHoverActive, setContactDiskHudInteractionTarget, setContactDiskHudPointerCaptureActive } from './contactDiskHudInteraction';
 import { setHoveredCategory, setHoveredId } from '../../state';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ContactDiskRendererProps {
     id?: string;
@@ -92,6 +93,13 @@ export function ContactDiskRenderer({
     const handlePointerMove = React.useCallback((e: any) => {
         if (!id || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
 
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            return;
+        }
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             emitImmediateModelHover(frontModelId);
@@ -107,6 +115,13 @@ export function ContactDiskRenderer({
 
     const handlePointerOut = React.useCallback(() => {
         if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            return;
+        }
 
         emitImmediateModelHover(null);
         setHoveredId(null);

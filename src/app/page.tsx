@@ -6182,7 +6182,6 @@ export default function Home() {
       return;
     }
 
-    schedulePrintingPreviewSettle();
     pendingPrintingSelectedLayerRef.current = clamped;
 
     if (printingSelectedLayerRafRef.current !== null) return;

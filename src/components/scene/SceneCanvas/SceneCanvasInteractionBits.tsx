@@ -2,6 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
+import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
 export function SceneRenderBindings({
   rendererRef,
@@ -62,17 +63,13 @@ export function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }
         hoverClearTimeoutRef.current = null;
         if (lastModelHoverIdRef.current === null) return;
         lastModelHoverIdRef.current = null;
-        window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-          detail: { modelId: null },
-        }));
+        emitImmediateModelHover(null);
       }, 72);
     }
 
     if (lastModelHoverIdRef.current !== hoveredModelIdFromPicking) {
       lastModelHoverIdRef.current = hoveredModelIdFromPicking;
-      window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-        detail: { modelId: hoveredModelIdFromPicking },
-      }));
+      emitImmediateModelHover(hoveredModelIdFromPicking);
     }
 
     const isEmpty = hit.category === 'none';
@@ -84,9 +81,7 @@ export function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }
     if (wasEmptyRef.current) return;
     wasEmptyRef.current = true;
 
-    window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-      detail: { modelId: null },
-    }));
+    emitImmediateModelHover(null);
     window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
       detail: { modelId: null, category: 'support' },
     }));

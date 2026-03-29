@@ -20,6 +20,7 @@ import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings } from '@/featu
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
 export function StlMesh({
   geometry,
@@ -561,9 +562,7 @@ export function StlMesh({
             schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
-            window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-              detail: { modelId: null },
-            }));
+            emitImmediateModelHover(null);
             if (mode === 'support' && onSupportHover) {
               onSupportHover(null);
             }
@@ -574,6 +573,7 @@ export function StlMesh({
             schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
             return;
           }
 
@@ -588,9 +588,7 @@ export function StlMesh({
           schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
-          window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-            detail: { modelId },
-          }));
+          emitImmediateModelHover(modelId);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
@@ -645,9 +643,7 @@ export function StlMesh({
           schedulePointerHover(false);
           onModelHoverPointChange?.(null);
           onModelHoverModelChange?.(null);
-          window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-            detail: { modelId: null },
-          }));
+          emitImmediateModelHover(null);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             setMeshSmoothingHover(null, null);
