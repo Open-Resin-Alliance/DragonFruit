@@ -119,12 +119,21 @@ export function PresetSelector() {
         function onKey(e: KeyboardEvent) {
             if (e.key === 'Escape') setPopoverOpen(false);
         }
-
         document.addEventListener('mousedown', onDocClick);
+        // Use pointerdown in capture phase to reliably detect outside clicks
+        const onDocPointer = (ev: Event) => {
+            if (!popoverOpen) return;
+            const target = ev.target as Node;
+            if (popoverButtonRef.current && popoverButtonRef.current.contains(target)) return;
+            if (popoverRef.current && popoverRef.current.contains(target)) return;
+            setPopoverOpen(false);
+        };
+        window.addEventListener('pointerdown', onDocPointer, { capture: true });
         window.addEventListener('keydown', onKey);
         return () => {
             document.removeEventListener('mousedown', onDocClick);
             window.removeEventListener('keydown', onKey);
+            window.removeEventListener('pointerdown', onDocPointer, { capture: true } as EventListenerOptions);
         };
     }, [popoverOpen]);
 
@@ -146,6 +155,40 @@ export function PresetSelector() {
     const selectedPreset = !isCreateMode ? (activePreset ?? null) : null;
     const selectedPresetId = isCreateMode ? '__create_new' : (activePreset?.id ?? 'structure');
     const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
+
+    function fmt(n: number | undefined) {
+        if (n == null || Number.isNaN(n)) return '-';
+        if (Math.abs(n - Math.round(n)) < 0.05) return `${Math.round(n)}`;
+        return `${n.toFixed(1)}`;
+    }
+
+    function renderPresetMetaChip(preset: (typeof presets)[number]) {
+        return (
+            <div
+                className="absolute right-2 top-1/2 -translate-y-1/2 flex justify-end pointer-events-none"
+                style={{ width: '5.85rem' }}
+            >
+                <span
+                    className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+                    style={{
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border-subtle)',
+                        color: 'var(--text-muted)',
+                        width: '5.85rem',
+                        boxSizing: 'border-box',
+                        overflow: 'hidden',
+                        whiteSpace: 'nowrap',
+                    }}
+                >
+                    <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>Ø{fmt(preset.settings.tip.contactDiameterMm)}</span>
+                    <span style={{ margin: '0 0.25rem', opacity: 0.65 }}>│</span>
+                    <span>L{fmt(preset.settings.tip.lengthMm)}</span>
+                    <span style={{ margin: '0 0.25rem', opacity: 0.65 }}>│</span>
+                    <span>T{fmt(preset.settings.shaft.diameterMm)}</span>
+                </span>
+            </div>
+        );
+    }
 
     const handlePresetSelect = (presetId: string) => {
         if (presetId === '__separator') {
@@ -261,10 +304,13 @@ export function PresetSelector() {
                                 ref={popoverRef}
                                 className="absolute rounded-md border overflow-hidden bg-[var(--surface-1)]"
                                 style={{
-                                    borderColor: 'var(--border-subtle)',
+                                    // subtle accent border so the dropdown stands out
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 72%)',
                                     top: Math.min(window.innerHeight - 8, anchorRect.bottom) + 'px',
                                     left: Math.max(8, anchorRect.left) + 'px',
-                                    minWidth: anchorRect.width + 'px',
+                                    width: anchorRect.width + 'px',
+                                    maxWidth: 'calc(100vw - 16px)',
+                                    boxSizing: 'border-box',
                                     zIndex: 150,
                                     boxShadow: '0 24px 46px rgba(0,0,0,0.45)',
                                 }}
@@ -277,8 +323,14 @@ export function PresetSelector() {
                                     <div className="border-t mx-2 my-1" style={{ borderColor: 'var(--border-subtle)' }} />
 
                                     {builtInPresets.map((preset) => (
-                                        <button key={preset.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-0)]" onClick={() => { handlePresetSelect(preset.id); setPopoverOpen(false); }}>
-                                            {preset.name}
+                                        <button key={preset.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-0)] relative" onClick={() => { handlePresetSelect(preset.id); setPopoverOpen(false); }}>
+                                            <div className="w-full">
+                                                <div className="flex items-center">
+                                                    <div className="flex-1 truncate pr-[6.25rem]">{preset.name}</div>
+                                                </div>
+
+                                                {renderPresetMetaChip(preset)}
+                                            </div>
                                         </button>
                                     ))}
 
@@ -288,10 +340,16 @@ export function PresetSelector() {
                                         <div className="px-3 py-2 text-sm text-[var(--text-muted)]">No custom presets</div>
                                     ) : (
                                         customPresets.map((preset) => (
-                                            <button key={preset.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-0)]" onClick={() => { handlePresetSelect(preset.id); setPopoverOpen(false); }}>
-                                                {preset.name}
-                                            </button>
-                                        ))
+                                                <button key={preset.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-0)] relative" onClick={() => { handlePresetSelect(preset.id); setPopoverOpen(false); }}>
+                                                    <div className="w-full">
+                                                        <div className="flex items-center">
+                                                            <div className="flex-1 truncate pr-[6.25rem]">{preset.name}</div>
+                                                        </div>
+
+                                                        {renderPresetMetaChip(preset)}
+                                                    </div>
+                                                </button>
+                                            ))
                                     )}
                                 </div>
                             </div>

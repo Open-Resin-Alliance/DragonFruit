@@ -517,12 +517,6 @@ export function SupportSidebar() {
                                             <div className="rounded-md border p-2" style={ACCENT_CARD_STYLE}>
                                                 <PresetSelector />
                                             </div>
-
-                                            <Section title="Placement notes">
-                                                <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                                                    Click the model to place a support. Tip aligns to the surface and the base drops to the build plate.
-                                                </p>
-                                            </Section>
                                         </>
                                     ) : (
                                         <>
@@ -534,11 +528,7 @@ export function SupportSidebar() {
                                                 {supportGeometryFields}
                                             </Section>
 
-                                            <Section title="Placement notes">
-                                                <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                                                    Click the model to place a support. Tip aligns to the surface and the base drops to the build plate.
-                                                </p>
-                                            </Section>
+                                            {/* Placement notes removed per design request */}
                                         </>
                                     )}
                                 </>
@@ -556,29 +546,44 @@ export function SupportSidebar() {
                             </div>
                         )}
 
-                        <div className="grid grid-cols-2 gap-1.5">
-                            <Button
-                                type="button"
-                                onClick={handleSave}
-                                variant="primary"
-                                size="md"
-                                className="w-full !h-10 !text-[13px] !font-semibold !inline-flex !items-center !justify-center !gap-2"
-                            >
-                                <Save className="h-4 w-4" />
-                                <span>Save</span>
-                            </Button>
+                        {activeKind === 'trunk' ? (
+                            <div>
+                                <Button
+                                    type="button"
+                                    onClick={handleRestoreDefaults}
+                                    variant="accent"
+                                    size="md"
+                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
+                                >
+                                    <RotateCcw className="h-4 w-4" />
+                                    <span>Defaults</span>
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 gap-1.5">
+                                <Button
+                                    type="button"
+                                    onClick={handleSave}
+                                    variant="primary"
+                                    size="md"
+                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    <span>Save</span>
+                                </Button>
 
-                            <Button
-                                type="button"
-                                onClick={handleRestoreDefaults}
-                                variant="accent"
-                                size="md"
-                                className="w-full !h-10 !text-[13px] !font-semibold !inline-flex !items-center !justify-center !gap-2"
-                            >
-                                <RotateCcw className="h-4 w-4" />
-                                <span>Defaults</span>
-                            </Button>
-                        </div>
+                                <Button
+                                    type="button"
+                                    onClick={handleRestoreDefaults}
+                                    variant="accent"
+                                    size="md"
+                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
+                                >
+                                    <RotateCcw className="h-4 w-4" />
+                                    <span>Defaults</span>
+                                </Button>
+                            </div>
+                        )}
                     </Section>
                 </div>
             )}
