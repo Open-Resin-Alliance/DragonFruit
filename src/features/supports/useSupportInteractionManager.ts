@@ -340,6 +340,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           if (recordHistory) {
             pushHistory({
               type: SUPPORT_UPDATE_TRUNK,
+              description: 'Delete trunk joint',
               payload: { before: result.before, after: result.after },
             });
           }

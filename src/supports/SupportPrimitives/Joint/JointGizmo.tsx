@@ -458,6 +458,7 @@ export function JointGizmo() {
                 const appliedTrunk = commitJointDragSupport('trunk', committedTrunk);
                 pushHistory({
                     type: SUPPORT_UPDATE_TRUNK,
+                    description: 'Move trunk joint',
                     payload: {
                         before: initialTrunkRef.current,
                         after: cloneObj(appliedTrunk),

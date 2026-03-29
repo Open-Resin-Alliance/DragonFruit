@@ -11,6 +11,7 @@ import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
+import { clearSupportDragPreview, emitSupportDragPreview } from '../../SupportPrimitives/Joint/jointDragRuntime';
 
 interface HandleContext {
     id: string; // Unique ID for key
@@ -29,6 +30,7 @@ interface HandleContext {
 }
 
 export function BezierGizmoManager() {
+    const MIN_CONTROL_POINT_DELTA_SQ = 1e-10;
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
     const selectedId = state.selectedId;
@@ -41,6 +43,11 @@ export function BezierGizmoManager() {
     const initialBraceRef = useRef<Brace | null>(null);
     const initialKickstandRef = useRef<KickstandEntity | null>(null);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
+    const liveTrunkPreviewRef = useRef<Trunk | null>(null);
+    const liveBranchPreviewRef = useRef<Branch | null>(null);
+    const liveTwigPreviewRef = useRef<Twig | null>(null);
+    const liveStickPreviewRef = useRef<Stick | null>(null);
+    const liveKickstandPreviewRef = useRef<KickstandEntity | null>(null);
 
     const setBezierGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -57,11 +64,35 @@ export function BezierGizmoManager() {
         }));
     }, []);
 
+    const clearLiveSupportPreviews = useCallback(() => {
+        if (liveTrunkPreviewRef.current) {
+            clearSupportDragPreview('trunk', liveTrunkPreviewRef.current.id);
+            liveTrunkPreviewRef.current = null;
+        }
+        if (liveBranchPreviewRef.current) {
+            clearSupportDragPreview('branch', liveBranchPreviewRef.current.id);
+            liveBranchPreviewRef.current = null;
+        }
+        if (liveTwigPreviewRef.current) {
+            clearSupportDragPreview('twig', liveTwigPreviewRef.current.id);
+            liveTwigPreviewRef.current = null;
+        }
+        if (liveStickPreviewRef.current) {
+            clearSupportDragPreview('stick', liveStickPreviewRef.current.id);
+            liveStickPreviewRef.current = null;
+        }
+        if (liveKickstandPreviewRef.current) {
+            clearSupportDragPreview('kickstand', liveKickstandPreviewRef.current.id);
+            liveKickstandPreviewRef.current = null;
+        }
+    }, []);
+
     useEffect(() => {
         return () => {
+            clearLiveSupportPreviews();
             setBezierGizmoInteractionFlags(false, 0);
         };
-    }, [setBezierGizmoInteractionFlags]);
+    }, [setBezierGizmoInteractionFlags, clearLiveSupportPreviews]);
 
     const gizmoContextIndex = useMemo(() => {
         const jointContextsById = new Map<string, HandleContext[]>();
@@ -614,6 +645,7 @@ export function BezierGizmoManager() {
      * Update Logic
      */
     const handleDragStart = (ctx: HandleContext) => {
+        clearLiveSupportPreviews();
         curveInteractionStore.setIsDraggingHandle(true);
         setBezierGizmoInteractionFlags(true);
         // Snapshot for history
@@ -644,29 +676,56 @@ export function BezierGizmoManager() {
 
         // Push history for trunks
         if (initialTrunkRef.current && ctx.trunk) {
-            const latestTrunk = getTrunkById(ctx.trunk.id);
+            const latestTrunk = liveTrunkPreviewRef.current ?? getTrunkById(ctx.trunk.id);
             if (latestTrunk) {
+                // Final exact reconciliation after drag-time fast-path updates.
+                updateTrunk(latestTrunk);
                 pushHistory({
                     type: SUPPORT_UPDATE_TRUNK,
+                    description: 'Edit trunk curve',
                     payload: {
                         before: initialTrunkRef.current,
                         after: JSON.parse(JSON.stringify(latestTrunk)),
                     },
                 });
             }
+            clearSupportDragPreview('trunk', ctx.trunk.id);
+            liveTrunkPreviewRef.current = null;
             initialTrunkRef.current = null;
         }
 
         if (initialEditSnapshotRef.current) {
             if (ctx.branch) {
+                const latestBranch = liveBranchPreviewRef.current ?? getBranchById(ctx.branch.id);
+                if (latestBranch) {
+                    // Final exact reconciliation after drag-time fast-path updates.
+                    updateBranch(latestBranch);
+                }
+                clearSupportDragPreview('branch', ctx.branch.id);
+                liveBranchPreviewRef.current = null;
                 pushSupportEditHistory('Edit branch curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (ctx.twig) {
+                if (liveTwigPreviewRef.current) {
+                    updateTwig(liveTwigPreviewRef.current);
+                }
+                clearSupportDragPreview('twig', ctx.twig.id);
+                liveTwigPreviewRef.current = null;
                 pushSupportEditHistory('Edit twig curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (ctx.stick) {
+                if (liveStickPreviewRef.current) {
+                    updateStick(liveStickPreviewRef.current);
+                }
+                clearSupportDragPreview('stick', ctx.stick.id);
+                liveStickPreviewRef.current = null;
                 pushSupportEditHistory('Edit stick curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (ctx.brace) {
                 pushSupportEditHistory('Edit brace curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (ctx.kickstand) {
+                if (liveKickstandPreviewRef.current) {
+                    updateKickstand(liveKickstandPreviewRef.current);
+                }
+                clearSupportDragPreview('kickstand', ctx.kickstand.id);
+                liveKickstandPreviewRef.current = null;
                 pushSupportEditHistory('Edit kickstand curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             }
             initialEditSnapshotRef.current = null;
@@ -677,11 +736,23 @@ export function BezierGizmoManager() {
         initialStickRef.current = null;
         initialBraceRef.current = null;
         initialKickstandRef.current = null;
+        clearLiveSupportPreviews();
     };
 
     const handleDrag = (ctx: HandleContext, newPos: THREE.Vector3) => {
         const { trunk, branch, twig, stick, brace, kickstand, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
         const jointPos = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
+
+        const controlPointUnchanged = (
+            cp: { x: number; y: number; z: number } | undefined,
+            point: THREE.Vector3,
+        ) => {
+            if (!cp) return false;
+            const dx = cp.x - point.x;
+            const dy = cp.y - point.y;
+            const dz = cp.z - point.z;
+            return (dx * dx + dy * dy + dz * dz) <= MIN_CONTROL_POINT_DELTA_SQ;
+        };
 
         if (brace) {
             if (!brace.curve || brace.curve.type !== 'bezier') return;
@@ -729,6 +800,8 @@ export function BezierGizmoManager() {
              const targetSeg = newSegments[outgoingIndex] as BezierSegment;
              if (!targetSeg || targetSeg.type !== 'bezier') return;
 
+               if (controlPointUnchanged(targetSeg.controlPoint1, newPos)) return;
+
              targetSeg.startTangent = { x: direction.x, y: direction.y, z: direction.z };
              targetSeg.controlPoint1 = { x: newPos.x, y: newPos.y, z: newPos.z };
 
@@ -751,6 +824,8 @@ export function BezierGizmoManager() {
              // Tangent = -HandleVector
              const targetSeg = newSegments[incomingIndex] as BezierSegment;
              if (!targetSeg || targetSeg.type !== 'bezier') return;
+
+               if (controlPointUnchanged(targetSeg.controlPoint2, newPos)) return;
              
              const tangent = direction.clone().negate();
              targetSeg.endTangent = { x: tangent.x, y: tangent.y, z: tangent.z };
@@ -773,15 +848,25 @@ export function BezierGizmoManager() {
 
         // Update the appropriate store
         if (trunk) {
-            updateTrunk(newParent as Trunk);
+            const previewTrunk = newParent as Trunk;
+            liveTrunkPreviewRef.current = previewTrunk;
+            emitSupportDragPreview('trunk', previewTrunk.id, previewTrunk);
         } else if (branch) {
-            updateBranch(newParent as Branch);
+            const previewBranch = newParent as Branch;
+            liveBranchPreviewRef.current = previewBranch;
+            emitSupportDragPreview('branch', previewBranch.id, previewBranch);
         } else if (twig) {
-            updateTwig(newParent as Twig);
+            const previewTwig = newParent as Twig;
+            liveTwigPreviewRef.current = previewTwig;
+            emitSupportDragPreview('twig', previewTwig.id, previewTwig);
         } else if (stick) {
-            updateStick(newParent as Stick);
+            const previewStick = newParent as Stick;
+            liveStickPreviewRef.current = previewStick;
+            emitSupportDragPreview('stick', previewStick.id, previewStick);
         } else if (kickstand) {
-            updateKickstand(newParent as KickstandEntity);
+            const previewKickstand = newParent as KickstandEntity;
+            liveKickstandPreviewRef.current = previewKickstand;
+            emitSupportDragPreview('kickstand', previewKickstand.id, previewKickstand);
         }
     };
 

@@ -125,7 +125,7 @@ export function InstancedShaftGroup({
             onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
             onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
         >
-            <cylinderGeometry args={[0.5, 0.5, 1, radialSegments]} />
+            <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, true]} />
             <meshStandardMaterial
                 color={color}
                 emissive={emissive}

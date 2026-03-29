@@ -86,6 +86,48 @@ interface PlacementPreviewBatch {
     cones: InstancedContactCone[];
 }
 
+function applyBatchedBezierSeamOverlap(
+    points: Array<{ x: number; y: number; z: number }>,
+    index: number,
+    diameter: number,
+) {
+    const start = points[index];
+    const end = points[index + 1];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const length = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+
+    if (length < 1e-6) {
+        return { start, end };
+    }
+
+    const invLen = 1 / length;
+    const ux = dx * invLen;
+    const uy = dy * invLen;
+    const uz = dz * invLen;
+
+    const baseOverlap = Math.max(0.015, Math.min(0.45, diameter * 0.22));
+    const overlap = Math.min(baseOverlap, Math.max(0, length * 0.45));
+    const isFirst = index === 0;
+    const isLast = index === points.length - 2;
+    const startShift = isFirst ? 0 : overlap;
+    const endShift = isLast ? 0 : overlap;
+
+    return {
+        start: {
+            x: start.x - (ux * startShift),
+            y: start.y - (uy * startShift),
+            z: start.z - (uz * startShift),
+        },
+        end: {
+            x: end.x + (ux * endShift),
+            y: end.y + (uy * endShift),
+            z: end.z + (uz * endShift),
+        },
+    };
+}
+
 /** Tessellate a bezier segment into multiple straight InstancedShaft entries for batched rendering. */
 function tesselllateBezierToShafts(
     segment: BezierSegment,
@@ -112,10 +154,11 @@ function tesselllateBezierToShafts(
     const points = bezierToLineSegments(startPos, segment.controlPoint1, segment.controlPoint2, endPos, res);
     const shafts: InstancedShaft[] = [];
     for (let i = 0; i < points.length - 1; i++) {
+        const overlapped = applyBatchedBezierSeamOverlap(points, i, segment.diameter);
         shafts.push({
             id: segment.id,
-            start: points[i],
-            end: points[i + 1],
+            start: overlapped.start,
+            end: overlapped.end,
             diameter: segment.diameter,
             supportId,
             modelId,
@@ -149,10 +192,11 @@ function tessellateBraceBezierToShafts(
     const points = bezierToLineSegments(startPos, controlPoint1, controlPoint2, endPos, adaptiveResolution);
     const shafts: InstancedShaft[] = [];
     for (let i = 0; i < points.length - 1; i++) {
+        const overlapped = applyBatchedBezierSeamOverlap(points, i, diameter);
         shafts.push({
             id: segmentId,
-            start: points[i],
-            end: points[i + 1],
+            start: overlapped.start,
+            end: overlapped.end,
             diameter,
             supportId,
             modelId,

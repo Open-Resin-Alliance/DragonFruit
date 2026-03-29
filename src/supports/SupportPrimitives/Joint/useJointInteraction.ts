@@ -563,6 +563,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 if (currentTrunk) {
                     pushHistory({
                         type: SUPPORT_UPDATE_TRUNK,
+                        description: 'Move trunk joint',
                         payload: {
                             before: initialTrunkSnapshot.current,
                             after: cloneTrunk(currentTrunk),
