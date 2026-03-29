@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Knot } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { getSnapshot, subscribe } from '../../state';
+import { getSelectedId, subscribe } from '../../state';
 import { handleKnotClick } from '../../interaction/clickHandlers';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -52,8 +52,8 @@ export function KnotRenderer({
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
-    const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-    const isSelected = state.selectedId === knot.id;
+    const selectedId = useSyncExternalStore(subscribe, getSelectedId, getSelectedId);
+    const isSelected = selectedId === knot.id;
 
     const pickIdRef = useRef<number | null>(null);
     const { register, unregister, hit, isDragging } = usePicking();

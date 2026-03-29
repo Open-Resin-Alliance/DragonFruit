@@ -31,8 +31,7 @@ import {
   updateKnot,
   updateTrunk,
   setSelectedId,
-  setHoveredCategory,
-  setHoveredId,
+  setHoveredState,
   subscribe,
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -651,8 +650,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         }
 
         clearSupportSelection();
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
         if (anyDeleted) return;
       }
 
@@ -662,8 +660,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
       deleteSelectionByCategoryAndId(category, id);
 
-      setHoveredId(null);
-      setHoveredCategory('none');
+      setHoveredState('none', null);
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -682,8 +679,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           e.preventDefault();
           e.stopPropagation();
           clearSupportSelection();
-          setHoveredId(null);
-          setHoveredCategory('none');
+          setHoveredState('none', null);
         }
         return;
       }

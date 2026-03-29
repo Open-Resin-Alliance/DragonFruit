@@ -5,7 +5,7 @@ import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
-import { setHoveredCategory, setHoveredId } from '../../state';
+import { setHoveredState } from '../../state';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 // Primitives
@@ -154,8 +154,7 @@ export function ContactConeRenderer({
 
         if (isSupportEditInteractionActive()) {
             emitImmediateModelHover(null);
-            setHoveredId(null);
-            setHoveredCategory('none');
+            setHoveredState('none', null);
             setIsHovered(false);
             return;
         }
@@ -167,8 +166,7 @@ export function ContactConeRenderer({
                 const primitiveType = current.userData?.supportPrimitiveType;
                 if (primitiveType === 'joint' || primitiveType === 'knot') {
                     emitImmediateModelHover(null);
-                    setHoveredId(null);
-                    setHoveredCategory('none');
+                    setHoveredState('none', null);
                     setIsHovered(false);
                     return;
                 }
@@ -179,15 +177,13 @@ export function ContactConeRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             emitImmediateModelHover(frontModelId);
-            setHoveredId(null);
-            setHoveredCategory('none');
+            setHoveredState('none', null);
             setIsHovered(false);
             return;
         }
 
         emitImmediateModelHover(null);
-        setHoveredId(contactDiskId);
-        setHoveredCategory('contactDisk');
+        setHoveredState('contactDisk', contactDiskId);
         setIsHovered(true);
     }, [contactDiskId, isInteractable, isParentSelected, isContactDiskSelected]);
 
@@ -197,14 +193,12 @@ export function ContactConeRenderer({
 
         if (isSupportEditInteractionActive()) {
             emitImmediateModelHover(null);
-            setHoveredId(null);
-            setHoveredCategory('none');
+            setHoveredState('none', null);
             return;
         }
 
         emitImmediateModelHover(null);
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }, [isInteractable, isParentSelected, isContactDiskSelected]);
 
     React.useEffect(() => {

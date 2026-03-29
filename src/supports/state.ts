@@ -2346,6 +2346,15 @@ export function setHoveredCategory(category: 'model' | 'support' | 'contactDisk'
     notify();
 }
 
+export function setHoveredState(
+    category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none',
+    id: string | null,
+) {
+    if (state.hoveredCategory === category && state.hoveredId === id) return;
+    state = { ...state, hoveredCategory: category, hoveredId: id };
+    notify();
+}
+
 export function setInteractionWarning(warning: import('./types').WarningCode | null) {
     if (state.interactionWarning === warning) return;
     state = { ...state, interactionWarning: warning };

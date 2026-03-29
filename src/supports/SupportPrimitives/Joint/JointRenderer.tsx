@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Joint } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { subscribe, getSnapshot } from '../../state';
+import { getSelectedId, subscribe } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
@@ -50,8 +50,8 @@ export function JointRenderer({
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     // State Subscription
-    const state = useSyncExternalStore(subscribe, getSnapshot);
-    const isSelected = state.selectedId === joint.id;
+    const selectedId = useSyncExternalStore(subscribe, getSelectedId, getSelectedId);
+    const isSelected = selectedId === joint.id;
 
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);

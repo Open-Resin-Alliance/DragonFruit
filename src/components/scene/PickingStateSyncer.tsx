@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { usePicking } from '@/components/picking';
-import { setHoveredCategory, setHoveredId } from '@/supports/state';
+import { setHoveredState } from '@/supports/state';
 import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { isSupportEditInteractionActive } from '@/supports/interaction/gizmoInteractionLock';
 
@@ -30,14 +30,12 @@ export function PickingStateSyncer() {
         const hoverSyncSuppressed = contactDiskHudInteractionActive || isDragging || isSupportEditInteractionActive();
 
         if (hoverSyncSuppressed) {
-            setHoveredCategory('none');
-            setHoveredId(null);
+            setHoveredState('none', null);
             return;
         }
 
         // Update global store with the category and ID of the hovered item
-        setHoveredCategory(hit.category);
-        setHoveredId(hit.objectId);
+        setHoveredState(hit.category, hit.objectId);
     }, [hit.category, hit.objectId, contactDiskHudInteractionActive, isDragging]);
 
     return null;
