@@ -741,6 +741,8 @@ export function SceneCanvas({
   const orbitInteractionActiveRef = React.useRef(false);
   const orbitInteractionMovedRef = React.useRef(false);
   const wheelZoomEndTimeoutRef = React.useRef<number | null>(null);
+  const wheelZoomInteractionActiveRef = React.useRef(false);
+  const navigationResumeDelayRef = React.useRef(0);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
@@ -3000,6 +3002,10 @@ export function SceneCanvas({
   }, [cameraFeelPreset]);
 
   React.useEffect(() => {
+    navigationResumeDelayRef.current = navigationResumeDelayMs;
+  }, [navigationResumeDelayMs]);
+
+  React.useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof window === 'undefined') return;
 
@@ -3010,22 +3016,24 @@ export function SceneCanvas({
     };
 
     const endZoomInteraction = () => {
+      clearPendingZoomEnd();
+      if (!wheelZoomInteractionActiveRef.current) return;
+
+      wheelZoomInteractionActiveRef.current = false;
       setIsWheelZoomInteracting(false);
       window.dispatchEvent(new CustomEvent('picking-zoom-end', {
-        detail: { resumeAfterMs: navigationResumeDelayMs },
+        detail: { resumeAfterMs: navigationResumeDelayRef.current },
       }));
     };
 
-    const onWheel = (event: WheelEvent) => {
-      if (!container.contains(event.target as Node | null)) return;
+    const beginZoomInteraction = () => {
+      if (wheelZoomInteractionActiveRef.current) return;
+      wheelZoomInteractionActiveRef.current = true;
+      setIsWheelZoomInteracting(true);
+      window.dispatchEvent(new Event('picking-zoom-start'));
+    };
 
-      if (!isWheelZoomInteracting) {
-        setIsWheelZoomInteracting(true);
-        window.dispatchEvent(new Event('picking-zoom-start'));
-      }
-
-      window.dispatchEvent(new Event('picking-zoom-change'));
-
+    const scheduleZoomInteractionEnd = () => {
       clearPendingZoomEnd();
       wheelZoomEndTimeoutRef.current = window.setTimeout(() => {
         wheelZoomEndTimeoutRef.current = null;
@@ -3033,13 +3041,38 @@ export function SceneCanvas({
       }, 120);
     };
 
+    const onWheel = (event: WheelEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+
+      beginZoomInteraction();
+
+      window.dispatchEvent(new Event('picking-zoom-change'));
+      scheduleZoomInteractionEnd();
+    };
+
+    const forceZoomInteractionEnd = () => {
+      endZoomInteraction();
+    };
+
     window.addEventListener('wheel', onWheel, { passive: true });
+    window.addEventListener('pointerup', forceZoomInteractionEnd, true);
+    window.addEventListener('pointercancel', forceZoomInteractionEnd, true);
+    window.addEventListener('mouseup', forceZoomInteractionEnd, true);
+    window.addEventListener('contextmenu', forceZoomInteractionEnd, true);
+    window.addEventListener('blur', forceZoomInteractionEnd);
+    document.addEventListener('visibilitychange', forceZoomInteractionEnd);
 
     return () => {
       window.removeEventListener('wheel', onWheel);
-      clearPendingZoomEnd();
+      window.removeEventListener('pointerup', forceZoomInteractionEnd, true);
+      window.removeEventListener('pointercancel', forceZoomInteractionEnd, true);
+      window.removeEventListener('mouseup', forceZoomInteractionEnd, true);
+      window.removeEventListener('contextmenu', forceZoomInteractionEnd, true);
+      window.removeEventListener('blur', forceZoomInteractionEnd);
+      document.removeEventListener('visibilitychange', forceZoomInteractionEnd);
+      endZoomInteraction();
     };
-  }, [isWheelZoomInteracting, navigationResumeDelayMs]);
+  }, []);
 
   React.useEffect(() => {
     return () => {
@@ -3048,6 +3081,7 @@ export function SceneCanvas({
         window.clearTimeout(wheelZoomEndTimeoutRef.current);
       }
       wheelZoomEndTimeoutRef.current = null;
+      wheelZoomInteractionActiveRef.current = false;
     };
   }, []);
 
