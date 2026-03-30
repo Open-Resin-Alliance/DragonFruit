@@ -20,9 +20,7 @@ import {
     subscribe as subscribeToSupportState,
     getSnapshot as getSupportSnapshot,
     resolveEditableSupportTarget,
-    getSupportSettingsForSelection,
     getSupportSettingsForTarget,
-    applySettingsToSupportSelection,
     applySettingsToSupportTarget,
     type EditableSupportTarget,
 } from '../state';
@@ -189,8 +187,8 @@ export function SupportSidebar() {
     );
     const selectedSupportSettings = React.useMemo(() => {
         if (!editableTarget) return null;
-        return getSupportSettingsForSelection(supportState.selectedId, selectedCategory);
-    }, [editableTarget, supportState, selectedCategory]);
+        return getSupportSettingsForTarget(editableTarget);
+    }, [editableTarget, supportState]);
     const selectedPresetIdOverride = React.useMemo(() => {
         if (!editableTarget || !selectedSupportSettings) return undefined;
         return findMatchingPresetIdForSettings(selectedSupportSettings);
@@ -342,8 +340,12 @@ export function SupportSidebar() {
     React.useEffect(() => {
         const targetKey = editableTarget ? `${editableTarget.kind}:${editableTarget.id}` : null;
 
-        if (!editableTarget || !selectedSupportSettings) {
-            lastEditableTargetKeyRef.current = targetKey;
+        if (!editableTarget) {
+            lastEditableTargetKeyRef.current = null;
+            return;
+        }
+
+        if (!selectedSupportSettings) {
             return;
         }
 
@@ -383,10 +385,7 @@ export function SupportSidebar() {
             return;
         }
 
-        const persistedSelectionSettings = getSupportSettingsForSelection(
-            supportState.selectedId,
-            selectedCategory,
-        );
+        const persistedSelectionSettings = getSupportSettingsForTarget(editableTarget);
 
         if (!persistedSelectionSettings) return;
 
@@ -404,8 +403,8 @@ export function SupportSidebar() {
 
         supportEditSessionDirtyRef.current = true;
         editSessionLatestSettingsRef.current = settings;
-        applySettingsToSupportSelection(supportState.selectedId, selectedCategory, settings);
-    }, [editableTarget, settings, supportState.selectedId, selectedCategory]);
+        applySettingsToSupportTarget(editableTarget, settings);
+    }, [editableTarget, settings]);
 
     React.useEffect(() => {
         if (!editableTarget) {

@@ -31,6 +31,12 @@ function logSupportSettingsDebug(...args: unknown[]): void {
 
 const listeners = new Set<() => void>();
 
+type SupportSettingsHexCache = {
+    trunk: Record<string, string>;
+    branch: Record<string, string>;
+    leaf: Record<string, string>;
+};
+
 const initialState: SupportState = {
     roots: {},
     trunks: {},
@@ -48,6 +54,12 @@ const initialState: SupportState = {
 };
 
 let state: SupportState = { ...initialState };
+
+let supportSettingsHexCache: SupportSettingsHexCache = {
+    trunk: {},
+    branch: {},
+    leaf: {},
+};
 
 type SelectionCategory = 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
 
@@ -878,6 +890,52 @@ function notify() {
     listeners.forEach((l) => l());
 }
 
+function rebuildSupportSettingsHexCacheFromState() {
+    const next: SupportSettingsHexCache = {
+        trunk: {},
+        branch: {},
+        leaf: {},
+    };
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.settingsCodeHex) next.trunk[trunk.id] = trunk.settingsCodeHex;
+    }
+    for (const branch of Object.values(state.branches)) {
+        if (branch.settingsCodeHex) next.branch[branch.id] = branch.settingsCodeHex;
+    }
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.settingsCodeHex) next.leaf[leaf.id] = leaf.settingsCodeHex;
+    }
+
+    supportSettingsHexCache = next;
+}
+
+function clearSupportSettingsHexCache() {
+    supportSettingsHexCache = {
+        trunk: {},
+        branch: {},
+        leaf: {},
+    };
+}
+
+function getCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string, entityHex?: string): string | null {
+    const cached = supportSettingsHexCache[kind][id];
+    if (cached) return cached;
+    if (entityHex) {
+        supportSettingsHexCache[kind][id] = entityHex;
+        return entityHex;
+    }
+    return null;
+}
+
+function setCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string, hex: string) {
+    supportSettingsHexCache[kind][id] = hex;
+}
+
+function deleteCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string) {
+    delete supportSettingsHexCache[kind][id];
+}
+
 function syncKickstandHostKnotsFromSharedKnots(sharedKnots: Record<string, Knot>) {
     const kickstandState = getKickstandSnapshot();
     let nextKnots = kickstandState.knots;
@@ -1020,6 +1078,7 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
 
 export function setSnapshot(next: SupportState) {
     state = next;
+    rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('setSnapshot');
     notify();
 }
@@ -1929,6 +1988,7 @@ export function toggleSegmentCurve(segmentId: string) {
 
 export function resetStore() {
     state = { ...initialState };
+    clearSupportSettingsHexCache();
     resetKickstandStore();
     emitSupportInteractionReset('resetStore');
     notify();
@@ -2012,6 +2072,7 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
     newState.leaves = normalized.leaves;
 
     state = newState;
+    rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('loadFromLychee');
     console.log('[SupportStore] Loaded from Lychee:', {
         roots: Object.keys(state.roots).length,
@@ -2328,6 +2389,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
     merged.leaves = normalized.leaves;
 
     state = merged;
+    rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('mergeFromLychee');
     console.log('[SupportStore] Merged from Lychee:', {
         roots: Object.keys(state.roots).length,
@@ -2387,6 +2449,10 @@ export function addRoot(root: Roots) {
 }
 
 export function addTrunk(trunk: Trunk) {
+    if (trunk.settingsCodeHex) {
+        setCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex);
+    }
+
     state = {
         ...state,
         trunks: { ...state.trunks, [trunk.id]: trunk }
@@ -2397,11 +2463,20 @@ export function addTrunk(trunk: Trunk) {
 export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: boolean }) {
     const skipDependentGeometry = options?.skipDependentGeometry === true;
 
+    const cachedHex = getCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex ?? undefined);
+    const nextTrunk = !trunk.settingsCodeHex && cachedHex
+        ? { ...trunk, settingsCodeHex: cachedHex }
+        : trunk;
+
+    if (nextTrunk.settingsCodeHex) {
+        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunk.settingsCodeHex);
+    }
+
     // Update trunk
-    const nextTrunks = { ...state.trunks, [trunk.id]: trunk };
+    const nextTrunks = { ...state.trunks, [nextTrunk.id]: nextTrunk };
 
     // Update any knots attached to this trunk's segments
-    const root = state.roots[trunk.rootId];
+    const root = state.roots[nextTrunk.rootId];
     let nextKnots = state.knots;
     let nextLeaves = state.leaves;
     let knotsChanged = false;
@@ -2412,11 +2487,11 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
 
         for (const knot of Object.values(state.knots)) {
             // Find if this knot is attached to one of this trunk's segments
-            const segIndex = trunk.segments.findIndex(s => s.id === knot.parentShaftId);
+            const segIndex = nextTrunk.segments.findIndex(s => s.id === knot.parentShaftId);
             if (segIndex === -1) continue;
 
-            const seg = trunk.segments[segIndex];
-            const endpoints = getTrunkSegmentEndpoints(trunk, seg, segIndex, root);
+            const seg = nextTrunk.segments[segIndex];
+            const endpoints = getTrunkSegmentEndpoints(nextTrunk, seg, segIndex, root);
             const nextDiameter = seg.diameter + 0.1;
 
             let nextPos = knot.pos;
@@ -2468,6 +2543,10 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
 }
 
 export function addBranch(branch: Branch) {
+    if (branch.settingsCodeHex) {
+        setCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex);
+    }
+
     state = {
         ...state,
         branches: { ...state.branches, [branch.id]: branch }
@@ -2476,6 +2555,10 @@ export function addBranch(branch: Branch) {
 }
 
 export function addLeaf(leaf: Leaf) {
+    if (leaf.settingsCodeHex) {
+        setCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex);
+    }
+
     state = {
         ...state,
         leaves: { ...state.leaves, [leaf.id]: leaf }
@@ -2486,7 +2569,16 @@ export function addLeaf(leaf: Leaf) {
 export function updateLeaf(leaf: Leaf) {
     if (!state.leaves[leaf.id]) return;
 
-    const nextLeaves = { ...state.leaves, [leaf.id]: leaf };
+    const cachedHex = getCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex ?? undefined);
+    const nextLeaf = !leaf.settingsCodeHex && cachedHex
+        ? { ...leaf, settingsCodeHex: cachedHex }
+        : leaf;
+
+    if (nextLeaf.settingsCodeHex) {
+        setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeaf.settingsCodeHex);
+    }
+
+    const nextLeaves = { ...state.leaves, [nextLeaf.id]: nextLeaf };
     const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, state.knots);
     const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
 
@@ -2979,6 +3071,14 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
     };
+
+    for (const id of branchIdsToRemove) {
+        deleteCachedSupportSettingsHex('branch', id);
+    }
+    for (const id of leafIdsToRemove) {
+        deleteCachedSupportSettingsHex('leaf', id);
+    }
+
     notify();
     return snapshots;
 }
@@ -2988,10 +3088,19 @@ export function updateBranch(branch: Branch, options?: { skipDependentGeometry?:
 
     if (!state.branches[branch.id]) return;
 
-    const nextBranches = { ...state.branches, [branch.id]: branch };
+    const cachedHex = getCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex ?? undefined);
+    const nextBranch = !branch.settingsCodeHex && cachedHex
+        ? { ...branch, settingsCodeHex: cachedHex }
+        : branch;
+
+    if (nextBranch.settingsCodeHex) {
+        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranch.settingsCodeHex);
+    }
+
+    const nextBranches = { ...state.branches, [nextBranch.id]: nextBranch };
 
     // Update any knots attached to this branch's segments
-    const parentKnot = state.knots[branch.parentKnotId];
+    const parentKnot = state.knots[nextBranch.parentKnotId];
     let nextKnots = state.knots;
     let nextLeaves = state.leaves;
 
@@ -3001,11 +3110,11 @@ export function updateBranch(branch: Branch, options?: { skipDependentGeometry?:
         let knotsChanged = false;
 
         for (const knot of Object.values(state.knots)) {
-            const segIndex = branch.segments.findIndex(s => s.id === knot.parentShaftId);
+            const segIndex = nextBranch.segments.findIndex(s => s.id === knot.parentShaftId);
             if (segIndex === -1) continue;
 
-            const seg = branch.segments[segIndex];
-            const endpoints = getBranchSegmentEndpoints(branch, seg, segIndex, parentKnot);
+            const seg = nextBranch.segments[segIndex];
+            const endpoints = getBranchSegmentEndpoints(nextBranch, seg, segIndex, parentKnot);
             if (!endpoints || knot.t === undefined) continue;
 
             const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, knot.t);
@@ -3226,6 +3335,8 @@ export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | 
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
     };
+
+    deleteCachedSupportSettingsHex('leaf', leafId);
 
     notify();
     return snapshots;
@@ -3466,6 +3577,14 @@ export function removeTrunk(
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
     };
+
+    deleteCachedSupportSettingsHex('trunk', trunkId);
+    for (const branch of snapshots.branches) {
+        deleteCachedSupportSettingsHex('branch', branch.id);
+    }
+    for (const leaf of snapshots.leaves) {
+        deleteCachedSupportSettingsHex('leaf', leaf.id);
+    }
 
     notify();
     return snapshots;
@@ -3896,10 +4015,11 @@ export function getSupportSettingsForTarget(target: EditableSupportTarget, base?
         const trunk = state.trunks[target.id];
         if (!trunk) return null;
         const root = state.roots[trunk.rootId] ?? null;
-        const decoded = trunk.settingsCodeHex ? decodeSupportSettingsHex(trunk.settingsCodeHex, base) : null;
+        const encoded = getCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex);
+        const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
         logSupportSettingsDebug('read target', target, {
-            hasHex: Boolean(trunk.settingsCodeHex),
-            hexPreview: trunk.settingsCodeHex?.slice(0, 18),
+            hasHex: Boolean(encoded),
+            hexPreview: encoded?.slice(0, 18),
             decodeOk: Boolean(decoded),
             source: decoded ? 'hex' : 'inferred',
         });
@@ -3909,10 +4029,11 @@ export function getSupportSettingsForTarget(target: EditableSupportTarget, base?
     if (target.kind === 'branch') {
         const branch = state.branches[target.id];
         if (!branch) return null;
-        const decoded = branch.settingsCodeHex ? decodeSupportSettingsHex(branch.settingsCodeHex, base) : null;
+        const encoded = getCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex);
+        const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
         logSupportSettingsDebug('read target', target, {
-            hasHex: Boolean(branch.settingsCodeHex),
-            hexPreview: branch.settingsCodeHex?.slice(0, 18),
+            hasHex: Boolean(encoded),
+            hexPreview: encoded?.slice(0, 18),
             decodeOk: Boolean(decoded),
             source: decoded ? 'hex' : 'inferred',
         });
@@ -3921,10 +4042,11 @@ export function getSupportSettingsForTarget(target: EditableSupportTarget, base?
 
     const leaf = state.leaves[target.id];
     if (!leaf) return null;
-    const decoded = leaf.settingsCodeHex ? decodeSupportSettingsHex(leaf.settingsCodeHex, base) : null;
+    const encoded = getCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex);
+    const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
     logSupportSettingsDebug('read target', target, {
-        hasHex: Boolean(leaf.settingsCodeHex),
-        hexPreview: leaf.settingsCodeHex?.slice(0, 18),
+        hasHex: Boolean(encoded),
+        hexPreview: encoded?.slice(0, 18),
         decodeOk: Boolean(decoded),
         source: decoded ? 'hex' : 'inferred',
     });
@@ -3990,6 +4112,8 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             contactCone: nextContactCone,
         };
 
+        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunk.settingsCodeHex);
+
         logSupportSettingsDebug('apply trunk hex', {
             target,
             prevHex: trunk.settingsCodeHex?.slice(0, 18),
@@ -4044,6 +4168,8 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             contactCone: nextContactCone,
         };
 
+        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranch.settingsCodeHex);
+
         logSupportSettingsDebug('apply branch hex', {
             target,
             prevHex: branch.settingsCodeHex?.slice(0, 18),
@@ -4073,6 +4199,8 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             },
         },
     };
+
+    setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeaf.settingsCodeHex);
 
     logSupportSettingsDebug('apply leaf hex', {
         target,
