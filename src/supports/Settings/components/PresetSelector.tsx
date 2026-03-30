@@ -19,6 +19,7 @@ export function PresetSelector() {
     const [activePreset, setActivePresetState] = useState(() => getActivePreset());
     const [confirmId, setConfirmId] = useState<string | null>(null);
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+    const [hoveredPresetId, setHoveredPresetId] = useState<string | null>(null);
     const [isEditingName, setIsEditingName] = useState(false);
     const [tempName, setTempName] = useState('');
     const [tempDescription, setTempDescription] = useState('');
@@ -50,6 +51,8 @@ export function PresetSelector() {
 
     const selectedPreset = activePreset ?? null;
     const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
+    const hoveredPreset = hoveredPresetId ? presets.find((preset) => preset.id === hoveredPresetId) ?? null : null;
+    const previewDescription = hoveredPreset?.description ?? selectedPreset?.description ?? '';
     const isInlineSaveConfirmOpen = Boolean(confirmId && selectedPreset && confirmId === selectedPreset.id);
     const isInlineDeleteConfirmOpen = Boolean(deleteConfirmId && selectedPreset && deleteConfirmId === selectedPreset.id);
 
@@ -94,10 +97,22 @@ export function PresetSelector() {
                 onClick={() => {
                     handlePresetSelect(preset.id);
                 }}
-                onMouseEnter={() => setAnatomyPreviewHoveredPresetSettings(preset.settings)}
-                onMouseLeave={() => setAnatomyPreviewHoveredPresetSettings(null)}
-                onFocus={() => setAnatomyPreviewHoveredPresetSettings(preset.settings)}
-                onBlur={() => setAnatomyPreviewHoveredPresetSettings(null)}
+                onMouseEnter={() => {
+                    setHoveredPresetId(preset.id);
+                    setAnatomyPreviewHoveredPresetSettings(preset.settings);
+                }}
+                onMouseLeave={() => {
+                    setHoveredPresetId(null);
+                    setAnatomyPreviewHoveredPresetSettings(null);
+                }}
+                onFocus={() => {
+                    setHoveredPresetId(preset.id);
+                    setAnatomyPreviewHoveredPresetSettings(preset.settings);
+                }}
+                onBlur={() => {
+                    setHoveredPresetId(null);
+                    setAnatomyPreviewHoveredPresetSettings(null);
+                }}
                 style={{
                     background: isSelected
                         ? 'color-mix(in srgb, var(--primary-button-surface), var(--surface-0) 90%)'
@@ -139,6 +154,7 @@ export function PresetSelector() {
         }
 
         setActivePreset(presetId);
+        setHoveredPresetId(null);
         setConfirmId(null);
         setDeleteConfirmId(null);
         setIsEditingName(false);
@@ -210,9 +226,9 @@ export function PresetSelector() {
                         ) : null}
                     </div>
                 </div>
-                {selectedPreset ? (
+                {previewDescription ? (
                     <div className="text-[11px] text-center" style={{ color: 'var(--text-muted)' }}>
-                        {selectedPreset.description}
+                        {previewDescription}
                     </div>
                 ) : null}
             </div>
