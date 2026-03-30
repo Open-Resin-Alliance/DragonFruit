@@ -461,9 +461,38 @@ export function renamePreset(id: string, newName: string): void {
     notify();
 }
 
+export function updateCustomPresetMetadata(id: string, name: string, description: string): void {
+    if (!presets.byId[id]) {
+        console.warn('[PresetStore] Cannot update preset metadata, preset not found:', id);
+        return;
+    }
+
+    if (presets.byId[id].isBuiltIn) {
+        console.warn('[PresetStore] Cannot update built-in preset metadata:', id);
+        return;
+    }
+
+    const uniqueName = ensureUniqueName(name, id);
+    const sanitizedDescription = sanitizePresetDescription(description);
+
+    presets.byId[id] = {
+        ...presets.byId[id],
+        name: uniqueName,
+        description: sanitizedDescription,
+    };
+
+    savePresetsToStorage();
+    notify();
+}
+
 function sanitizePresetName(name: string): string {
     const trimmed = name.trim();
     return trimmed.length > 0 ? trimmed : 'Custom Preset';
+}
+
+function sanitizePresetDescription(description: string): string {
+    const trimmed = description.trim();
+    return trimmed.length > 0 ? trimmed : 'User custom preset';
 }
 
 function ensureUniqueName(desiredName: string, excludeId?: string): string {

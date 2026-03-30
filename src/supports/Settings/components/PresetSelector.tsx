@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/primitives';
 import {
     getPresetList,
@@ -8,79 +8,11 @@ import {
     setActivePreset,
     subscribeToPresets,
     savePreset,
-    renamePreset,
+    updateCustomPresetMetadata,
     createPreset,
+    deletePreset,
 } from '../presets';
 import { setAnatomyPreviewHoveredPresetSettings } from '../AnatomyPreview/previewState';
-
-// Modal for confirming preset deletion
-function DeletePresetModal({
-    isOpen,
-    onCancel,
-    onDelete,
-    presetName,
-}: {
-    isOpen: boolean;
-    onCancel: () => void;
-    onDelete: () => void;
-    presetName: string;
-}) {
-    if (!isOpen) return null;
-    return (
-        <div
-            className="fixed inset-0 z-[130] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) onCancel();
-            }}
-        >
-            <div
-                className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
-                style={{
-                    background: 'var(--surface-0)',
-                    borderColor: 'var(--border-subtle)',
-                    boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-                }}
-                role="dialog"
-                aria-modal="true"
-                aria-label="Delete preset"
-            >
-                <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div>
-                        <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                            Delete Preset
-                        </h2>
-                        <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            Are you sure you want to delete <span style={{ color: 'var(--text-strong)' }}>&quot;{presetName}&quot;</span>?
-                        </p>
-                    </div>
-                </div>
-                <div className="p-4 space-y-3">
-                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        This action cannot be undone. The preset will be permanently removed.
-                    </p>
-                    <div className="flex items-center justify-end gap-2 pt-1">
-                        <Button
-                            variant="secondary"
-                            size="md"
-                            className="!h-9 px-3 text-xs"
-                            onClick={onCancel}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            variant="danger"
-                            size="md"
-                            className="!h-9 px-3 text-xs"
-                            onClick={onDelete}
-                        >
-                            Delete
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
 
 export function PresetSelector() {
     const [presets, setPresets] = useState(() => getPresetList());
@@ -89,6 +21,7 @@ export function PresetSelector() {
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
     const [isEditingName, setIsEditingName] = useState(false);
     const [tempName, setTempName] = useState('');
+    const [tempDescription, setTempDescription] = useState('');
     const [newPresetName, setNewPresetName] = useState('My Preset');
     useEffect(() => {
         const unsubscribe = subscribeToPresets(() => {
@@ -101,12 +34,14 @@ export function PresetSelector() {
     useEffect(() => {
         if (!activePreset) {
             setTempName('');
+            setTempDescription('');
             setIsEditingName(false);
             return;
         }
 
         if (!isEditingName) {
             setTempName(activePreset.name);
+            setTempDescription(activePreset.description ?? '');
         }
     }, [activePreset, isEditingName]);
 
@@ -115,49 +50,47 @@ export function PresetSelector() {
 
     const selectedPreset = activePreset ?? null;
     const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
+    const isInlineSaveConfirmOpen = Boolean(confirmId && selectedPreset && confirmId === selectedPreset.id);
+    const isInlineDeleteConfirmOpen = Boolean(deleteConfirmId && selectedPreset && deleteConfirmId === selectedPreset.id);
 
-    function fmt(n: number | undefined) {
-        if (n == null || Number.isNaN(n)) return '-';
-        if (Math.abs(n - Math.round(n)) < 0.05) return `${Math.round(n)}`;
-        return `${n.toFixed(1)}`;
-    }
+    // Dynamically calculate the available space for the preset list so we only shrink
+    // it as much as needed to avoid the outer Support Studio panel becoming scrollable.
+    const wrapperRef = useRef<HTMLDivElement | null>(null);
+    const [computedMaxHeight, setComputedMaxHeight] = useState<string>('19rem');
 
-    function renderPresetMetaChip(preset: (typeof presets)[number], isSelected: boolean) {
-        return (
-            <div
-                className="absolute right-2 top-1/2 -translate-y-1/2 flex justify-end pointer-events-none"
-                style={{ width: '5.85rem' }}
-            >
-                <span
-                    className="inline-flex items-center rounded-[4px] px-1.5 py-0.5 pr-2 text-[10px] leading-none"
-                    style={{
-                        background: isSelected ? 'var(--primary-button-surface)' : 'var(--surface-2)',
-                        border: isSelected ? '1px solid color-mix(in srgb, var(--primary-button-surface), white 14%)' : '1px solid var(--border-subtle)',
-                        color: isSelected ? 'var(--accent-contrast)' : 'var(--text-muted)',
-                        width: '5.85rem',
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
-                        whiteSpace: 'nowrap',
-                    }}
-                >
-                    <span style={{ color: isSelected ? 'var(--accent-contrast)' : 'var(--text-strong)', fontWeight: 600 }}>Ø{fmt(preset.settings.tip.contactDiameterMm)}</span>
-                    <span style={{ margin: '0 0.18rem', opacity: 0.65 }}>│</span>
-                    <span>L{fmt(preset.settings.tip.lengthMm)}</span>
-                    <span style={{ margin: '0 0.18rem', opacity: 0.65 }}>│</span>
-                    <span>T{fmt(preset.settings.shaft.diameterMm)}</span>
-                </span>
-            </div>
-        );
-    }
+    useEffect(() => {
+        function recalc() {
+            if (!wrapperRef.current) return;
+            const rect = wrapperRef.current.getBoundingClientRect();
+            const top = rect.top;
+            const viewportHeight = window.innerHeight;
+
+            // Reserve space for inline panels when open; tuned empirically.
+            const confirmReserve = 120; // px reserved for inline confirm panel area
+            const defaultReserve = 48; // px reserved for normal footer/action area
+
+            const reserved = (isInlineSaveConfirmOpen || isInlineDeleteConfirmOpen) ? confirmReserve : defaultReserve;
+
+            const available = Math.max(120, viewportHeight - top - reserved - 24); // keep a sane minimum
+
+            // Clamp to a reasonable maximum roughly matching earlier rem-based sizes (19rem ≈ 304px)
+            const maxClamp = 304;
+            const final = Math.min(available, maxClamp);
+            setComputedMaxHeight(`${final}px`);
+        }
+
+        recalc();
+        window.addEventListener('resize', recalc);
+        return () => window.removeEventListener('resize', recalc);
+    }, [isInlineSaveConfirmOpen, isInlineDeleteConfirmOpen]);
 
     function renderPresetRow(preset: (typeof presets)[number]) {
         const isSelected = activePreset?.id === preset.id;
 
         return (
             <button
-                key={preset.id}
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm relative rounded-[5px] border transition-colors"
+                className="w-full px-3 py-2 text-sm relative rounded-[5px] border transition-colors"
                 onClick={() => {
                     handlePresetSelect(preset.id);
                 }}
@@ -166,20 +99,38 @@ export function PresetSelector() {
                 onFocus={() => setAnatomyPreviewHoveredPresetSettings(preset.settings)}
                 onBlur={() => setAnatomyPreviewHoveredPresetSettings(null)}
                 style={{
-                    background: isSelected ? 'color-mix(in srgb, var(--secondary-button-surface), var(--surface-0) 90%)' : 'transparent',
-                    borderColor: isSelected ? 'color-mix(in srgb, var(--secondary-button-surface), var(--border-subtle) 30%)' : 'transparent',
+                    background: isSelected
+                        ? 'color-mix(in srgb, var(--primary-button-surface), var(--surface-0) 90%)'
+                        : 'var(--surface-0)',
+                    borderColor: isSelected
+                        ? 'color-mix(in srgb, var(--primary-button-surface), var(--border-subtle) 30%)'
+                        : 'var(--border-subtle)',
                 }}
             >
+                {isSelected ? (
+                    <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute left-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 rounded-full border"
+                        style={{
+                            background: 'var(--primary-button-surface)',
+                            borderColor: 'color-mix(in srgb, var(--primary-button-surface), var(--surface-0) 40%)',
+                        }}
+                    />
+                ) : null}
                 <div className="w-full">
-                    <div className="flex items-center">
-                        <div className="flex-1 truncate pr-[6.25rem]" style={{ color: isSelected ? 'var(--text-strong)' : undefined }}>
+                    <div className="flex items-center justify-center text-center">
+                        <div className="flex-1 truncate" style={{ color: isSelected ? 'var(--accent-contrast)' : undefined }}>
                             {preset.name}
                         </div>
                     </div>
-                    {renderPresetMetaChip(preset, isSelected)}
                 </div>
             </button>
         );
+    }
+
+    function rowSpanClass(index: number, total: number): string {
+        // If a row has only one tile (odd trailing item), let it fill the full row
+        return total % 2 === 1 && index === total - 1 ? 'col-span-2' : '';
     }
 
     const handlePresetSelect = (presetId: string) => {
@@ -189,6 +140,7 @@ export function PresetSelector() {
 
         setActivePreset(presetId);
         setConfirmId(null);
+        setDeleteConfirmId(null);
         setIsEditingName(false);
     };
 
@@ -203,15 +155,21 @@ export function PresetSelector() {
         if (isEditingName) {
             const trimmed = tempName.trim();
             if (trimmed.length > 0) {
-                renamePreset(selectedPreset.id, trimmed);
+                updateCustomPresetMetadata(selectedPreset.id, trimmed, tempDescription);
             } else {
                 setTempName(selectedPreset.name);
             }
+            setTempDescription(
+                tempDescription.trim().length > 0
+                    ? tempDescription.trim()
+                    : 'User custom preset',
+            );
             setIsEditingName(false);
             return;
         }
 
         setTempName(selectedPreset.name);
+        setTempDescription(selectedPreset.description ?? '');
         setIsEditingName(true);
     };
 
@@ -228,21 +186,28 @@ export function PresetSelector() {
                 <h4 className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                     Presets
                 </h4>
-                <div className="rounded-md border bg-[var(--surface-1)]" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="max-h-[19rem] overflow-y-auto custom-scrollbar py-1">
-                        <div className="space-y-0.5 px-1">
-                            {builtInPresets.map(renderPresetRow)}
+                <div ref={wrapperRef} className="rounded-md border bg-[var(--surface-1)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="overflow-y-auto custom-scrollbar py-1 transition-[max-height] duration-200" style={{ maxHeight: computedMaxHeight }}>
+                        <div className="grid grid-cols-2 gap-1 px-1">
+                            {builtInPresets.map((preset, index) => (
+                                <div key={preset.id} className={rowSpanClass(index, builtInPresets.length)}>
+                                    {renderPresetRow(preset)}
+                                </div>
+                            ))}
                         </div>
 
-                        <div className="mx-3 my-2 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-
-                        <div className="space-y-0.5 px-1">
-                            {customPresets.length === 0 ? (
-                                <div className="px-3 py-2 text-sm text-[var(--text-muted)]">No custom presets</div>
-                            ) : (
-                                customPresets.map(renderPresetRow)
-                            )}
-                        </div>
+                        {customPresets.length > 0 ? (
+                            <>
+                                <div className="mx-3 my-2 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
+                                <div className="grid grid-cols-2 gap-1 px-1">
+                                    {customPresets.map((preset, index) => (
+                                        <div key={preset.id} className={rowSpanClass(index, customPresets.length)}>
+                                            {renderPresetRow(preset)}
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        ) : null}
                     </div>
                 </div>
                 {selectedPreset ? (
@@ -255,7 +220,7 @@ export function PresetSelector() {
             {isEditingName && selectedPreset && !selectedPresetIsBuiltIn ? (
                 <div className="space-y-1">
                     <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                        Edit preset name
+                        Edit preset details
                     </div>
                     <input
                         type="text"
@@ -270,6 +235,24 @@ export function PresetSelector() {
                             }
                         }}
                         className="ui-input h-8 w-full px-2.5 text-xs sm:text-sm"
+                        placeholder="Preset name"
+                    />
+                    <input
+                        type="text"
+                        value={tempDescription}
+                        onChange={(event) => setTempDescription(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                                handleEditClick();
+                            } else if (event.key === 'Escape') {
+                                setTempName(selectedPreset.name);
+                                setTempDescription(selectedPreset.description ?? '');
+                                setDeleteConfirmId(null);
+                                setIsEditingName(false);
+                            }
+                        }}
+                        className="ui-input h-8 w-full px-2.5 text-xs sm:text-sm"
+                        placeholder="Preset description"
                     />
                 </div>
             ) : null}
@@ -277,40 +260,31 @@ export function PresetSelector() {
             {/* Action row: Create, Edit, or Rename/Delete */}
             {confirmId && selectedPreset && confirmId === selectedPreset.id ? null : isEditingName && selectedPreset && !selectedPresetIsBuiltIn ? (
                 <>
-                    <div className="grid grid-cols-2 gap-1.5">
-                        <Button
-                            type="button"
-                            variant="primary"
-                            size="md"
-                            className="h-9 text-[12px] font-semibold"
-                            onClick={handleEditClick}
-                            disabled={tempName.trim().length === 0}
-                            title="Apply new name"
-                        >
-                            Apply Name
-                        </Button>
-                        <Button
-                            type="button"
-                            variant="danger"
-                            size="md"
-                            className="h-9 text-[12px] font-semibold"
-                            onClick={() => setDeleteConfirmId(selectedPreset.id)}
-                            title="Delete this preset"
-                        >
-                            Delete
-                        </Button>
-                    </div>
-                    <DeletePresetModal
-                        isOpen={deleteConfirmId === selectedPreset.id}
-                        onCancel={() => setDeleteConfirmId(null)}
-                        onDelete={async () => {
-                            const mod = await import('../presets');
-                            mod.deletePreset(selectedPreset.id);
-                            setDeleteConfirmId(null);
-                            setIsEditingName(false);
-                        }}
-                        presetName={selectedPreset.name}
-                    />
+                    {deleteConfirmId === selectedPreset.id ? null : (
+                        <div className="grid grid-cols-2 gap-1.5">
+                            <Button
+                                type="button"
+                                variant="primary"
+                                size="md"
+                                className="h-9 text-[12px] font-semibold"
+                                onClick={handleEditClick}
+                                disabled={tempName.trim().length === 0}
+                                title="Apply preset details"
+                            >
+                                Apply
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="danger"
+                                size="md"
+                                className="h-9 text-[12px] font-semibold"
+                                onClick={() => setDeleteConfirmId(selectedPreset.id)}
+                                title="Delete this preset"
+                            >
+                                Delete
+                            </Button>
+                        </div>
+                    )}
                 </>
             ) : (
                 <div className="grid grid-cols-3 gap-1.5">
@@ -352,7 +326,7 @@ export function PresetSelector() {
             {confirmId && selectedPreset && confirmId === selectedPreset.id ? (
                 <div className="rounded-md border px-3 py-2 bg-[var(--surface-0)]" style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 72%)' }}>
                     <div className="flex items-center justify-between gap-3">
-                        <div>
+                        <div className="flex flex-col justify-center">
                             <div className="text-[12px] font-medium" style={{ color: 'var(--text-strong)' }}>
                                 Overwrite Preset
                             </div>
@@ -379,6 +353,45 @@ export function PresetSelector() {
                                 size="sm"
                                 className="h-8 px-3 text-[12px]"
                                 onClick={() => setConfirmId(null)}
+                            >
+                                Cancel
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
+            {deleteConfirmId && selectedPreset && deleteConfirmId === selectedPreset.id ? (
+                <div className="rounded-md border px-3 py-2 bg-[var(--surface-0)]" style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 72%)' }}>
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col justify-center">
+                            <div className="text-[12px] font-medium" style={{ color: 'var(--text-strong)' }}>
+                                Delete Preset
+                            </div>
+                            <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                Delete &quot;{selectedPreset.name}&quot;? This cannot be undone.
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                type="button"
+                                variant="danger"
+                                size="sm"
+                                className="h-8 px-3 text-[12px] font-semibold"
+                                onClick={() => {
+                                    deletePreset(selectedPreset.id);
+                                    setDeleteConfirmId(null);
+                                    setIsEditingName(false);
+                                }}
+                            >
+                                Delete
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="h-8 px-3 text-[12px]"
+                                onClick={() => setDeleteConfirmId(null)}
                             >
                                 Cancel
                             </Button>
