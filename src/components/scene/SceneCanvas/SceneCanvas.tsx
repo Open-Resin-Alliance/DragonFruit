@@ -4074,7 +4074,7 @@ export function SceneCanvas({
 
               {activeBuildVolumeSettings.showModelBoundingBoxes && !thumbnailCaptureActive
                 ? modelBoundingBoxDebugData.map((entry) => (
-                  <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={8} raycast={() => null}>
+                  <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={30} raycast={() => null}>
                     <bufferGeometry>
                       <bufferAttribute
                         attach="attributes-position"
@@ -4086,7 +4086,7 @@ export function SceneCanvas({
                       transparent
                       opacity={0.9}
                       depthWrite={false}
-                      depthTest={false}
+                      depthTest
                     />
                   </lineSegments>
                 ))
@@ -4099,7 +4099,7 @@ export function SceneCanvas({
                       ref={(node) => {
                         dragCornerCageRefs.current[modelId] = node;
                       }}
-                      renderOrder={11}
+                      renderOrder={31}
                       raycast={() => null}
                     >
                       <bufferGeometry>
@@ -4125,6 +4125,7 @@ export function SceneCanvas({
                 <group
                   ref={buildVolumeBoundsOverlayRef}
                   userData={{ thumbnailHelperType: 'buildVolumeOverlay' }}
+                  renderOrder={28}
                   position={[
                     (buildVolumeBounds!.min.x + buildVolumeBounds!.max.x) * 0.5,
                     (buildVolumeBounds!.min.y + buildVolumeBounds!.max.y) * 0.5,
@@ -4132,7 +4133,7 @@ export function SceneCanvas({
                   ]}
                   raycast={() => null}
                 >
-                  <mesh geometry={buildVolumeBoxGeometry} raycast={() => null} renderOrder={-1}>
+                  <mesh geometry={buildVolumeBoxGeometry} raycast={() => null} renderOrder={27}>
                     <meshBasicMaterial
                       color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#78b7ff'}
                       transparent
@@ -4141,12 +4142,13 @@ export function SceneCanvas({
                       side={THREE.BackSide}
                     />
                   </mesh>
-                  <lineSegments geometry={buildVolumeEdgeGeometry} raycast={() => null}>
+                  <lineSegments geometry={buildVolumeEdgeGeometry} renderOrder={29} raycast={() => null}>
                     <lineBasicMaterial
                       color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#8abfff'}
                       transparent
                       opacity={0.36}
                       depthWrite={false}
+                      depthTest
                     />
                   </lineSegments>
                 </group>
