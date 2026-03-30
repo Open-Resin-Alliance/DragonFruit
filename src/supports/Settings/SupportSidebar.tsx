@@ -198,7 +198,6 @@ export function SupportSidebar() {
     const isHydratingSelectedSupportRef = React.useRef(false);
     const lastEditableTargetKeyRef = React.useRef<string | null>(null);
     const skipFirstApplyForTargetKeyRef = React.useRef<string | null>(null);
-    const optimisticPresetTimeoutRef = React.useRef<number | null>(null);
     const latestSettingsRef = React.useRef(settings);
     const editSessionTargetRef = React.useRef<EditableSupportTarget | null>(null);
     const editSessionTargetKeyRef = React.useRef<string | null>(null);
@@ -323,10 +322,6 @@ export function SupportSidebar() {
                 window.clearTimeout(autoBraceStatusTimeoutRef.current);
                 autoBraceStatusTimeoutRef.current = null;
             }
-            if (optimisticPresetTimeoutRef.current !== null) {
-                window.clearTimeout(optimisticPresetTimeoutRef.current);
-                optimisticPresetTimeoutRef.current = null;
-            }
 
             commitPendingSettingsSession(editSessionTargetRef.current);
 
@@ -411,42 +406,18 @@ export function SupportSidebar() {
             if (optimisticPresetId !== null) {
                 setOptimisticPresetId(null);
             }
-            if (optimisticPresetTimeoutRef.current !== null) {
-                window.clearTimeout(optimisticPresetTimeoutRef.current);
-                optimisticPresetTimeoutRef.current = null;
-            }
             return;
         }
 
         if (optimisticPresetId === null) return;
 
-        // Clear optimistic selection once support-derived matching catches up
-        // to any concrete preset id.
-        if (selectedPresetIdOverride !== undefined && selectedPresetIdOverride !== null) {
+        // Clear optimistic selection only when support-derived matching catches up
+        // to the same preset id. This avoids dropping the visible active tile
+        // back to a stale preset during in-flight store updates.
+        if (selectedPresetIdOverride === optimisticPresetId) {
             setOptimisticPresetId(null);
         }
     }, [editableTarget, optimisticPresetId, selectedPresetIdOverride]);
-
-    React.useEffect(() => {
-        if (optimisticPresetTimeoutRef.current !== null) {
-            window.clearTimeout(optimisticPresetTimeoutRef.current);
-            optimisticPresetTimeoutRef.current = null;
-        }
-
-        if (!optimisticPresetId) return;
-
-        optimisticPresetTimeoutRef.current = window.setTimeout(() => {
-            setOptimisticPresetId((current) => (current === optimisticPresetId ? null : current));
-            optimisticPresetTimeoutRef.current = null;
-        }, 1400);
-
-        return () => {
-            if (optimisticPresetTimeoutRef.current !== null) {
-                window.clearTimeout(optimisticPresetTimeoutRef.current);
-                optimisticPresetTimeoutRef.current = null;
-            }
-        };
-    }, [optimisticPresetId]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -794,6 +765,7 @@ export function SupportSidebar() {
                                                             const preset = getPresetById(presetId);
                                                             if (preset) {
                                                                 const current = getSettings();
+
                                                                 supportEditSessionDirtyRef.current = true;
                                                                 const nextSettings: SupportSettings = {
                                                                     ...preset.settings,
