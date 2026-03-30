@@ -5,12 +5,15 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
-import { JOINT_DIAMETER_OFFSET_MM } from './constants';
+import { getJointDiameter, JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, setKickstandSnapshot, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
+import type { SupportSettings } from './Settings/types';
+import { createDefaultSettings } from './Settings/types';
+import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
 
 const listeners = new Set<() => void>();
 
@@ -3605,4 +3608,366 @@ export function getTwigById(twigId: string) {
 
 export function getStickById(stickId: string) {
     return state.sticks[stickId] ?? null;
+}
+
+export type EditableSupportKind = 'trunk' | 'branch' | 'leaf';
+
+export type EditableSupportTarget = {
+    kind: EditableSupportKind;
+    id: string;
+};
+
+function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettings {
+    const defaults = createDefaultSettings();
+    if (!base) return defaults;
+
+    return {
+        ...defaults,
+        ...base,
+        tip: { ...defaults.tip, ...base.tip },
+        shaft: { ...defaults.shaft, ...base.shaft },
+        roots: { ...defaults.roots, ...base.roots },
+        baseFlare: { ...defaults.baseFlare, ...base.baseFlare },
+        joint: { ...defaults.joint, ...base.joint },
+        grid: { ...defaults.grid, ...base.grid },
+        meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
+        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+    };
+}
+
+function inferSettingsFromTrunk(trunk: Trunk, root: Roots | null, base?: SupportSettings): SupportSettings {
+    const merged = mergeSettingsWithDefaults(base);
+    const coneProfile = trunk.contactCone?.profile;
+    const shaftDiameter = trunk.baseDiameterMm ?? trunk.segments[0]?.diameter ?? merged.shaft.diameterMm;
+
+    return {
+        ...merged,
+        tip: {
+            ...merged.tip,
+            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
+            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
+            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
+            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+        },
+        shaft: {
+            ...merged.shaft,
+            diameterMm: shaftDiameter,
+            secondaryDiameterMm: shaftDiameter,
+        },
+        roots: {
+            ...merged.roots,
+            diameterMm: root?.diameter ?? merged.roots.diameterMm,
+            diskHeightMm: root?.diskHeight ?? merged.roots.diskHeightMm,
+            coneHeightMm: root?.coneHeight ?? merged.roots.coneHeightMm,
+        },
+    };
+}
+
+function inferSettingsFromBranch(branch: Branch, base?: SupportSettings): SupportSettings {
+    const merged = mergeSettingsWithDefaults(base);
+    const coneProfile = branch.contactCone?.profile;
+    const shaftDiameter = branch.segments[0]?.diameter ?? merged.shaft.diameterMm;
+
+    return {
+        ...merged,
+        tip: {
+            ...merged.tip,
+            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
+            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
+            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
+            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+        },
+        shaft: {
+            ...merged.shaft,
+            diameterMm: shaftDiameter,
+            secondaryDiameterMm: shaftDiameter,
+        },
+    };
+}
+
+function inferSettingsFromLeaf(leaf: Leaf, base?: SupportSettings): SupportSettings {
+    const merged = mergeSettingsWithDefaults(base);
+    const coneProfile = leaf.contactCone?.profile;
+
+    return {
+        ...merged,
+        tip: {
+            ...merged.tip,
+            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
+            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
+            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
+            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+        },
+    };
+}
+
+function updateSegmentDiametersAndJoints(
+    segments: Segment[],
+    shaftDiameterMm: number,
+    socketJointId?: string,
+    socketPos?: Vec3,
+): Segment[] {
+    const jointDiameter = getJointDiameter(shaftDiameterMm);
+    return segments.map((segment) => {
+        const nextTopJoint = segment.topJoint
+            ? {
+                ...segment.topJoint,
+                diameter: jointDiameter,
+                pos: socketJointId && socketPos && segment.topJoint.id === socketJointId
+                    ? { ...socketPos }
+                    : segment.topJoint.pos,
+            }
+            : segment.topJoint;
+
+        const nextBottomJoint = segment.bottomJoint
+            ? {
+                ...segment.bottomJoint,
+                diameter: jointDiameter,
+                pos: socketJointId && socketPos && segment.bottomJoint.id === socketJointId
+                    ? { ...socketPos }
+                    : segment.bottomJoint.pos,
+            }
+            : segment.bottomJoint;
+
+        return {
+            ...segment,
+            diameter: shaftDiameterMm,
+            topJoint: nextTopJoint,
+            bottomJoint: nextBottomJoint,
+        };
+    });
+}
+
+export function resolveEditableSupportTarget(selectedId: string | null, selectedCategory: SelectionCategory | undefined): EditableSupportTarget | null {
+    if (!selectedId || !selectedCategory) return null;
+
+    if (selectedCategory === 'trunk' || selectedCategory === 'branch' || selectedCategory === 'leaf') {
+        return { kind: selectedCategory, id: selectedId };
+    }
+
+    if (selectedCategory === 'root') {
+        const trunk = Object.values(state.trunks).find((candidate) => candidate.rootId === selectedId);
+        if (!trunk) return null;
+        return { kind: 'trunk', id: trunk.id };
+    }
+
+    if (selectedCategory === 'segment' || selectedCategory === 'joint') {
+        for (const trunk of Object.values(state.trunks)) {
+            const owns = trunk.segments.some((segment) => {
+                if (selectedCategory === 'segment') return segment.id === selectedId;
+                return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || trunk.contactCone?.socketJointId === selectedId;
+            });
+            if (owns) return { kind: 'trunk', id: trunk.id };
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            const owns = branch.segments.some((segment) => {
+                if (selectedCategory === 'segment') return segment.id === selectedId;
+                return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || branch.contactCone?.socketJointId === selectedId;
+            });
+            if (owns) return { kind: 'branch', id: branch.id };
+        }
+    }
+
+    if (selectedCategory === 'knot') {
+        const knot = state.knots[selectedId];
+        if (!knot) return null;
+
+        if (knot.parentShaftId.startsWith('leafCone:')) {
+            const leafId = knot.parentShaftId.slice('leafCone:'.length);
+            if (state.leaves[leafId]) return { kind: 'leaf', id: leafId };
+        }
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.segments.some((segment) => segment.id === knot.parentShaftId)) {
+                return { kind: 'trunk', id: trunk.id };
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.segments.some((segment) => segment.id === knot.parentShaftId) || branch.parentKnotId === selectedId) {
+                return { kind: 'branch', id: branch.id };
+            }
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.parentKnotId === selectedId) {
+                return { kind: 'leaf', id: leaf.id };
+            }
+        }
+    }
+
+    return null;
+}
+
+export function getSupportSettingsForTarget(target: EditableSupportTarget, base?: SupportSettings): SupportSettings | null {
+    if (target.kind === 'trunk') {
+        const trunk = state.trunks[target.id];
+        if (!trunk) return null;
+        const root = state.roots[trunk.rootId] ?? null;
+        const decoded = trunk.settingsCodeHex ? decodeSupportSettingsHex(trunk.settingsCodeHex, base) : null;
+        return decoded ?? inferSettingsFromTrunk(trunk, root, base);
+    }
+
+    if (target.kind === 'branch') {
+        const branch = state.branches[target.id];
+        if (!branch) return null;
+        const decoded = branch.settingsCodeHex ? decodeSupportSettingsHex(branch.settingsCodeHex, base) : null;
+        return decoded ?? inferSettingsFromBranch(branch, base);
+    }
+
+    const leaf = state.leaves[target.id];
+    if (!leaf) return null;
+    const decoded = leaf.settingsCodeHex ? decodeSupportSettingsHex(leaf.settingsCodeHex, base) : null;
+    return decoded ?? inferSettingsFromLeaf(leaf, base);
+}
+
+export function getSupportSettingsForSelection(
+    selectedId: string | null,
+    selectedCategory: SelectionCategory | undefined,
+    base?: SupportSettings,
+): SupportSettings | null {
+    const target = resolveEditableSupportTarget(selectedId, selectedCategory);
+    if (!target) return null;
+    return getSupportSettingsForTarget(target, base);
+}
+
+export function applySettingsToSupportTarget(target: EditableSupportTarget, settings: SupportSettings): boolean {
+    if (target.kind === 'trunk') {
+        const trunk = state.trunks[target.id];
+        if (!trunk) return false;
+
+        const root = state.roots[trunk.rootId];
+        if (!root) return false;
+
+        const nextRoot: Roots = {
+            ...root,
+            diameter: settings.roots.diameterMm,
+            diskHeight: settings.roots.diskHeightMm,
+            coneHeight: settings.roots.coneHeightMm,
+        };
+
+        const nextContactCone = trunk.contactCone
+            ? {
+                ...trunk.contactCone,
+                profile: {
+                    ...trunk.contactCone.profile,
+                    contactDiameterMm: settings.tip.contactDiameterMm,
+                    bodyDiameterMm: settings.tip.bodyDiameterMm,
+                    lengthMm: settings.tip.lengthMm,
+                    penetrationMm: settings.tip.penetrationMm,
+                    diskThicknessMm: settings.tip.diskThicknessMm,
+                    maxStandoffMm: settings.tip.maxStandoffMm,
+                    standoffAngleThreshold: settings.tip.standoffAngleThreshold,
+                },
+            }
+            : trunk.contactCone;
+
+        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
+        const nextSegments = updateSegmentDiametersAndJoints(
+            trunk.segments,
+            settings.shaft.diameterMm,
+            nextContactCone?.socketJointId,
+            socketPos,
+        );
+
+        const nextTrunk: Trunk = {
+            ...trunk,
+            settingsCodeHex: encodeSupportSettingsHex(settings),
+            baseDiameterMm: settings.shaft.diameterMm,
+            segments: nextSegments,
+            contactCone: nextContactCone,
+        };
+
+        state = {
+            ...state,
+            roots: {
+                ...state.roots,
+                [nextRoot.id]: nextRoot,
+            },
+        };
+
+        updateTrunk(nextTrunk);
+        return true;
+    }
+
+    if (target.kind === 'branch') {
+        const branch = state.branches[target.id];
+        if (!branch) return false;
+
+        const nextContactCone = branch.contactCone
+            ? {
+                ...branch.contactCone,
+                profile: {
+                    ...branch.contactCone.profile,
+                    contactDiameterMm: settings.tip.contactDiameterMm,
+                    bodyDiameterMm: settings.tip.bodyDiameterMm,
+                    lengthMm: settings.tip.lengthMm,
+                    penetrationMm: settings.tip.penetrationMm,
+                    diskThicknessMm: settings.tip.diskThicknessMm,
+                    maxStandoffMm: settings.tip.maxStandoffMm,
+                    standoffAngleThreshold: settings.tip.standoffAngleThreshold,
+                },
+            }
+            : branch.contactCone;
+
+        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
+        const nextSegments = updateSegmentDiametersAndJoints(
+            branch.segments,
+            settings.shaft.diameterMm,
+            nextContactCone?.socketJointId,
+            socketPos,
+        );
+
+        const nextBranch: Branch = {
+            ...branch,
+            settingsCodeHex: encodeSupportSettingsHex(settings),
+            segments: nextSegments,
+            contactCone: nextContactCone,
+        };
+
+        updateBranch(nextBranch);
+        return true;
+    }
+
+    const leaf = state.leaves[target.id];
+    if (!leaf) return false;
+
+    const nextLeaf: Leaf = {
+        ...leaf,
+        settingsCodeHex: encodeSupportSettingsHex(settings),
+        contactCone: {
+            ...leaf.contactCone,
+            profile: {
+                ...leaf.contactCone.profile,
+                contactDiameterMm: settings.tip.contactDiameterMm,
+                penetrationMm: settings.tip.penetrationMm,
+                diskThicknessMm: settings.tip.diskThicknessMm,
+                maxStandoffMm: settings.tip.maxStandoffMm,
+                standoffAngleThreshold: settings.tip.standoffAngleThreshold,
+            },
+        },
+    };
+
+    updateLeaf(nextLeaf);
+    return true;
+}
+
+export function applySettingsToSupportSelection(
+    selectedId: string | null,
+    selectedCategory: SelectionCategory | undefined,
+    settings: SupportSettings,
+): boolean {
+    const target = resolveEditableSupportTarget(selectedId, selectedCategory);
+    if (!target) return false;
+    return applySettingsToSupportTarget(target, settings);
 }

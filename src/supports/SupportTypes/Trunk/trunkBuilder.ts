@@ -19,6 +19,7 @@ import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
 import { normalizeFirstConstructionJoint, withCentralStraightSupportJoint } from './trunkConstructionJoints';
+import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 
 function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -114,6 +115,7 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
 export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: TrunkPlacementResult): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, overrides } = input;
     const settings = getSettings();
+    const settingsCodeHex = encodeSupportSettingsHex(settings);
     const tipProfile = buildTipProfile(settings, overrides);
     const tipDiskLengthOverrideMm = overrides?.tipDiskLengthOverrideMm;
     const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
@@ -289,6 +291,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     const trunk: Trunk = {
         id: trunkId,
         modelId: modelId, // Link to model
+        settingsCodeHex,
         rootId: rootId,
         baseDiameterMm: shaftDiameter,
         segments: createdSegments,

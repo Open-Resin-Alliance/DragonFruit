@@ -317,6 +317,31 @@ export function getPresetById(id: string): SupportPreset | undefined {
     return presets.byId[id];
 }
 
+function doesPresetMatchSettings(presetSettings: SupportSettings, current: SupportSettings): boolean {
+    return (
+        current.tip.shape === presetSettings.tip.shape
+        && current.tip.contactDiameterMm === presetSettings.tip.contactDiameterMm
+        && current.tip.bodyDiameterMm === presetSettings.tip.bodyDiameterMm
+        && current.tip.lengthMm === presetSettings.tip.lengthMm
+        && current.tip.penetrationMm === presetSettings.tip.penetrationMm
+        && (current.tip.breakpointMm ?? 0) === (presetSettings.tip.breakpointMm ?? 0)
+        && JSON.stringify(current.shaft) === JSON.stringify(presetSettings.shaft)
+        && JSON.stringify(current.roots) === JSON.stringify(presetSettings.roots)
+        && JSON.stringify(current.baseFlare) === JSON.stringify(presetSettings.baseFlare)
+    );
+}
+
+export function findMatchingPresetIdForSettings(current: SupportSettings): string | null {
+    for (const id of presets.allIds) {
+        const preset = presets.byId[id];
+        if (!preset) continue;
+        if (doesPresetMatchSettings(preset.settings, current)) {
+            return id;
+        }
+    }
+    return null;
+}
+
 // --- Setters ---
 
 // Fields to EXCLUDE from being overwritten by a preset application

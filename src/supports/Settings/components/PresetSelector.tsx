@@ -14,7 +14,15 @@ import {
 } from '../presets';
 import { setAnatomyPreviewHoveredPresetSettings } from '../AnatomyPreview/previewState';
 
-export function PresetSelector() {
+type PresetSelectorProps = {
+    selectedPresetIdOverride?: string | null;
+    onPresetSelected?: (presetId: string) => void;
+};
+
+export function PresetSelector({
+    selectedPresetIdOverride,
+    onPresetSelected,
+}: PresetSelectorProps) {
     const [presets, setPresets] = useState(() => getPresetList());
     const [activePreset, setActivePresetState] = useState(() => getActivePreset());
     const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -32,8 +40,23 @@ export function PresetSelector() {
         return unsubscribe;
     }, []);
 
+    const builtInPresets = presets.filter((preset) => preset.isBuiltIn);
+    const customPresets = presets.filter((preset) => !preset.isBuiltIn);
+
+    const effectiveSelectedPresetId = selectedPresetIdOverride === undefined
+        ? activePreset?.id ?? null
+        : selectedPresetIdOverride;
+    const selectedPreset = effectiveSelectedPresetId
+        ? presets.find((preset) => preset.id === effectiveSelectedPresetId) ?? null
+        : null;
+    const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
+    const hoveredPreset = hoveredPresetId ? presets.find((preset) => preset.id === hoveredPresetId) ?? null : null;
+    const previewDescription = hoveredPreset?.description ?? selectedPreset?.description ?? '';
+    const isInlineSaveConfirmOpen = Boolean(confirmId && selectedPreset && confirmId === selectedPreset.id);
+    const isInlineDeleteConfirmOpen = Boolean(deleteConfirmId && selectedPreset && deleteConfirmId === selectedPreset.id);
+
     useEffect(() => {
-        if (!activePreset) {
+        if (!selectedPreset) {
             setTempName('');
             setTempDescription('');
             setIsEditingName(false);
@@ -41,20 +64,10 @@ export function PresetSelector() {
         }
 
         if (!isEditingName) {
-            setTempName(activePreset.name);
-            setTempDescription(activePreset.description ?? '');
+            setTempName(selectedPreset.name);
+            setTempDescription(selectedPreset.description ?? '');
         }
-    }, [activePreset, isEditingName]);
-
-    const builtInPresets = presets.filter((preset) => preset.isBuiltIn);
-    const customPresets = presets.filter((preset) => !preset.isBuiltIn);
-
-    const selectedPreset = activePreset ?? null;
-    const selectedPresetIsBuiltIn = selectedPreset?.isBuiltIn ?? false;
-    const hoveredPreset = hoveredPresetId ? presets.find((preset) => preset.id === hoveredPresetId) ?? null : null;
-    const previewDescription = hoveredPreset?.description ?? selectedPreset?.description ?? '';
-    const isInlineSaveConfirmOpen = Boolean(confirmId && selectedPreset && confirmId === selectedPreset.id);
-    const isInlineDeleteConfirmOpen = Boolean(deleteConfirmId && selectedPreset && deleteConfirmId === selectedPreset.id);
+    }, [selectedPreset, isEditingName]);
 
     // Dynamically calculate the available space for the preset list so we only shrink
     // it as much as needed to avoid the outer Support Studio panel becoming scrollable.
@@ -88,7 +101,7 @@ export function PresetSelector() {
     }, [isInlineSaveConfirmOpen, isInlineDeleteConfirmOpen]);
 
     function renderPresetRow(preset: (typeof presets)[number]) {
-        const isSelected = activePreset?.id === preset.id;
+        const isSelected = effectiveSelectedPresetId === preset.id;
 
         return (
             <button
@@ -154,6 +167,7 @@ export function PresetSelector() {
         }
 
         setActivePreset(presetId);
+        onPresetSelected?.(presetId);
         setHoveredPresetId(null);
         setConfirmId(null);
         setDeleteConfirmId(null);

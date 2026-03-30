@@ -16,9 +16,16 @@ import {
     updateGridSettings,
     updateAutoBracingSettings,
 } from './state';
-import { subscribe as subscribeToSupportState, getSnapshot as getSupportSnapshot } from '../state';
-import { checkPresetDrift } from './presets';
+import {
+    subscribe as subscribeToSupportState,
+    getSnapshot as getSupportSnapshot,
+    resolveEditableSupportTarget,
+    getSupportSettingsForSelection,
+    applySettingsToSupportSelection,
+} from '../state';
+import { checkPresetDrift, findMatchingPresetIdForSettings } from './presets';
 import { createDefaultSettings } from './types';
+import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
 import {
     PresetSelector,
     RaftSettingsCard,
@@ -132,6 +139,23 @@ export function SupportSidebar() {
     const activeKey = previewState.activeSettingKey;
     const curveSelection = getCurveSettingsSelection(supportState);
     const showCurvePage = curveSelection !== null;
+    const selectedCategory = supportState.selectedCategory ?? undefined;
+    const editableTarget = React.useMemo(
+        () => resolveEditableSupportTarget(supportState.selectedId, selectedCategory),
+        [supportState, selectedCategory],
+    );
+    const selectedSupportSettings = React.useMemo(() => {
+        if (!editableTarget) return null;
+        return getSupportSettingsForSelection(supportState.selectedId, selectedCategory);
+    }, [editableTarget, supportState, selectedCategory]);
+    const selectedPresetIdOverride = React.useMemo(() => {
+        if (!editableTarget || !selectedSupportSettings) return undefined;
+        return findMatchingPresetIdForSettings(selectedSupportSettings);
+    }, [editableTarget, selectedSupportSettings]);
+    const [optimisticPresetId, setOptimisticPresetId] = React.useState<string | null>(null);
+    const effectivePresetIdOverride = optimisticPresetId ?? selectedPresetIdOverride;
+    const isHydratingSelectedSupportRef = React.useRef(false);
+    const lastEditableTargetKeyRef = React.useRef<string | null>(null);
 
     const makeRowFocusHandlers = React.useCallback((key: string) => {
         return {
@@ -182,6 +206,75 @@ export function SupportSidebar() {
             }
         };
     }, []);
+
+    React.useEffect(() => {
+        const targetKey = editableTarget ? `${editableTarget.kind}:${editableTarget.id}` : null;
+
+        if (!editableTarget || !selectedSupportSettings) {
+            lastEditableTargetKeyRef.current = targetKey;
+            return;
+        }
+
+        const selectionChanged = targetKey !== lastEditableTargetKeyRef.current;
+        const geometryDiffers = !areSupportGeometrySettingsEqual(settings, selectedSupportSettings);
+
+        if (!selectionChanged) {
+            return;
+        }
+
+        if (geometryDiffers) {
+            isHydratingSelectedSupportRef.current = true;
+            setSettings({
+                ...settings,
+                tip: { ...settings.tip, ...selectedSupportSettings.tip },
+                shaft: { ...settings.shaft, ...selectedSupportSettings.shaft },
+                roots: { ...settings.roots, ...selectedSupportSettings.roots },
+                baseFlare: { ...settings.baseFlare, ...selectedSupportSettings.baseFlare },
+            });
+        }
+
+        if (selectionChanged && activeKind !== editableTarget.kind) {
+            setActiveSupportKind(editableTarget.kind);
+        }
+
+        lastEditableTargetKeyRef.current = targetKey;
+    }, [editableTarget, selectedSupportSettings, settings, activeKind]);
+
+    React.useEffect(() => {
+        if (!editableTarget) return;
+
+        if (isHydratingSelectedSupportRef.current) {
+            isHydratingSelectedSupportRef.current = false;
+            return;
+        }
+
+        const persistedSelectionSettings = getSupportSettingsForSelection(
+            supportState.selectedId,
+            selectedCategory,
+        );
+
+        if (!persistedSelectionSettings) return;
+        if (areSupportGeometrySettingsEqual(persistedSelectionSettings, settings)) return;
+
+        applySettingsToSupportSelection(supportState.selectedId, selectedCategory, settings);
+    }, [editableTarget, settings, supportState.selectedId, selectedCategory]);
+
+    React.useEffect(() => {
+        if (!editableTarget) {
+            if (optimisticPresetId !== null) {
+                setOptimisticPresetId(null);
+            }
+            return;
+        }
+
+        if (optimisticPresetId === null) return;
+
+        // Clear optimistic selection once support-derived matching catches up,
+        // or if support no longer matches any preset.
+        if (selectedPresetIdOverride === optimisticPresetId || selectedPresetIdOverride === null) {
+            setOptimisticPresetId(null);
+        }
+    }, [editableTarget, optimisticPresetId, selectedPresetIdOverride]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -515,7 +608,13 @@ export function SupportSidebar() {
                                             </div>
 
                                             <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
-                                                <PresetSelector />
+                                                <PresetSelector
+                                                    selectedPresetIdOverride={effectivePresetIdOverride}
+                                                    onPresetSelected={(presetId) => {
+                                                        if (!editableTarget) return;
+                                                        setOptimisticPresetId(presetId);
+                                                    }}
+                                                />
                                             </div>
                                         </>
                                     ) : (
