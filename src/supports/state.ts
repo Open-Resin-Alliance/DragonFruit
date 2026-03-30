@@ -15,6 +15,20 @@ import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
 
+function isSupportSettingsDebugEnabled(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+        return window.localStorage.getItem('df-debug-support-settings') === '1';
+    } catch {
+        return false;
+    }
+}
+
+function logSupportSettingsDebug(...args: unknown[]): void {
+    if (!isSupportSettingsDebugEnabled()) return;
+    console.log('[SupportSettingsDebug]', ...args);
+}
+
 const listeners = new Set<() => void>();
 
 const initialState: SupportState = {
@@ -3748,7 +3762,7 @@ function updateSegmentDiametersAndJoints(
 }
 
 export function resolveEditableSupportTarget(selectedId: string | null, selectedCategory: SelectionCategory | undefined): EditableSupportTarget | null {
-    if (!selectedId || !selectedCategory) return null;
+    if (!selectedId) return null;
 
     if (selectedCategory === 'trunk' || selectedCategory === 'branch' || selectedCategory === 'leaf') {
         return { kind: selectedCategory, id: selectedId };
@@ -3775,6 +3789,26 @@ export function resolveEditableSupportTarget(selectedId: string | null, selected
                 return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || branch.contactCone?.socketJointId === selectedId;
             });
             if (owns) return { kind: 'branch', id: branch.id };
+        }
+    }
+
+    if (selectedCategory === 'contactDisk') {
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.contactCone?.id === selectedId) {
+                return { kind: 'trunk', id: trunk.id };
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.contactCone?.id === selectedId) {
+                return { kind: 'branch', id: branch.id };
+            }
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.contactCone?.id === selectedId) {
+                return { kind: 'leaf', id: leaf.id };
+            }
         }
     }
 
@@ -3806,6 +3840,54 @@ export function resolveEditableSupportTarget(selectedId: string | null, selected
         }
     }
 
+    // Fallback: if category-based routing failed, resolve by ownership scans.
+    if (state.trunks[selectedId]) return { kind: 'trunk', id: selectedId };
+    if (state.branches[selectedId]) return { kind: 'branch', id: selectedId };
+    if (state.leaves[selectedId]) return { kind: 'leaf', id: selectedId };
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.rootId === selectedId) return { kind: 'trunk', id: trunk.id };
+        if (trunk.contactCone?.id === selectedId) return { kind: 'trunk', id: trunk.id };
+        if (trunk.contactCone?.socketJointId === selectedId) return { kind: 'trunk', id: trunk.id };
+        if (trunk.segments.some((segment) => segment.id === selectedId || segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)) {
+            return { kind: 'trunk', id: trunk.id };
+        }
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        if (branch.contactCone?.id === selectedId) return { kind: 'branch', id: branch.id };
+        if (branch.contactCone?.socketJointId === selectedId) return { kind: 'branch', id: branch.id };
+        if (branch.segments.some((segment) => segment.id === selectedId || segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)) {
+            return { kind: 'branch', id: branch.id };
+        }
+    }
+
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.contactCone?.id === selectedId) return { kind: 'leaf', id: leaf.id };
+        if (leaf.contactCone?.socketJointId === selectedId) return { kind: 'leaf', id: leaf.id };
+        if (leaf.parentKnotId === selectedId) return { kind: 'leaf', id: leaf.id };
+    }
+
+    if (state.knots[selectedId]) {
+        const knot = state.knots[selectedId];
+        if (knot.parentShaftId.startsWith('leafCone:')) {
+            const leafId = knot.parentShaftId.slice('leafCone:'.length);
+            if (state.leaves[leafId]) return { kind: 'leaf', id: leafId };
+        }
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.segments.some((segment) => segment.id === knot.parentShaftId)) {
+                return { kind: 'trunk', id: trunk.id };
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.segments.some((segment) => segment.id === knot.parentShaftId) || branch.parentKnotId === selectedId) {
+                return { kind: 'branch', id: branch.id };
+            }
+        }
+    }
+
     return null;
 }
 
@@ -3815,6 +3897,12 @@ export function getSupportSettingsForTarget(target: EditableSupportTarget, base?
         if (!trunk) return null;
         const root = state.roots[trunk.rootId] ?? null;
         const decoded = trunk.settingsCodeHex ? decodeSupportSettingsHex(trunk.settingsCodeHex, base) : null;
+        logSupportSettingsDebug('read target', target, {
+            hasHex: Boolean(trunk.settingsCodeHex),
+            hexPreview: trunk.settingsCodeHex?.slice(0, 18),
+            decodeOk: Boolean(decoded),
+            source: decoded ? 'hex' : 'inferred',
+        });
         return decoded ?? inferSettingsFromTrunk(trunk, root, base);
     }
 
@@ -3822,12 +3910,24 @@ export function getSupportSettingsForTarget(target: EditableSupportTarget, base?
         const branch = state.branches[target.id];
         if (!branch) return null;
         const decoded = branch.settingsCodeHex ? decodeSupportSettingsHex(branch.settingsCodeHex, base) : null;
+        logSupportSettingsDebug('read target', target, {
+            hasHex: Boolean(branch.settingsCodeHex),
+            hexPreview: branch.settingsCodeHex?.slice(0, 18),
+            decodeOk: Boolean(decoded),
+            source: decoded ? 'hex' : 'inferred',
+        });
         return decoded ?? inferSettingsFromBranch(branch, base);
     }
 
     const leaf = state.leaves[target.id];
     if (!leaf) return null;
     const decoded = leaf.settingsCodeHex ? decodeSupportSettingsHex(leaf.settingsCodeHex, base) : null;
+    logSupportSettingsDebug('read target', target, {
+        hasHex: Boolean(leaf.settingsCodeHex),
+        hexPreview: leaf.settingsCodeHex?.slice(0, 18),
+        decodeOk: Boolean(decoded),
+        source: decoded ? 'hex' : 'inferred',
+    });
     return decoded ?? inferSettingsFromLeaf(leaf, base);
 }
 
@@ -3842,6 +3942,8 @@ export function getSupportSettingsForSelection(
 }
 
 export function applySettingsToSupportTarget(target: EditableSupportTarget, settings: SupportSettings): boolean {
+    logSupportSettingsDebug('apply start', target);
+
     if (target.kind === 'trunk') {
         const trunk = state.trunks[target.id];
         if (!trunk) return false;
@@ -3888,6 +3990,12 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             contactCone: nextContactCone,
         };
 
+        logSupportSettingsDebug('apply trunk hex', {
+            target,
+            prevHex: trunk.settingsCodeHex?.slice(0, 18),
+            nextHex: nextTrunk.settingsCodeHex?.slice(0, 18),
+        });
+
         state = {
             ...state,
             roots: {
@@ -3897,6 +4005,7 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
         };
 
         updateTrunk(nextTrunk);
+        logSupportSettingsDebug('apply done', target);
         return true;
     }
 
@@ -3935,7 +4044,14 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             contactCone: nextContactCone,
         };
 
+        logSupportSettingsDebug('apply branch hex', {
+            target,
+            prevHex: branch.settingsCodeHex?.slice(0, 18),
+            nextHex: nextBranch.settingsCodeHex?.slice(0, 18),
+        });
+
         updateBranch(nextBranch);
+        logSupportSettingsDebug('apply done', target);
         return true;
     }
 
@@ -3958,7 +4074,14 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
         },
     };
 
+    logSupportSettingsDebug('apply leaf hex', {
+        target,
+        prevHex: leaf.settingsCodeHex?.slice(0, 18),
+        nextHex: nextLeaf.settingsCodeHex?.slice(0, 18),
+    });
+
     updateLeaf(nextLeaf);
+    logSupportSettingsDebug('apply done', target);
     return true;
 }
 

@@ -21,11 +21,15 @@ import {
     getSnapshot as getSupportSnapshot,
     resolveEditableSupportTarget,
     getSupportSettingsForSelection,
+    getSupportSettingsForTarget,
     applySettingsToSupportSelection,
+    applySettingsToSupportTarget,
+    type EditableSupportTarget,
 } from '../state';
-import { checkPresetDrift, findMatchingPresetIdForSettings } from './presets';
-import { createDefaultSettings } from './types';
+import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
+import { createDefaultSettings, type SupportSettings } from './types';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
+import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
 import {
     PresetSelector,
     RaftSettingsCard,
@@ -79,6 +83,45 @@ function normalizeTabKind(kind: SupportKind): SupportKind {
         return 'trunk';
     }
     return kind;
+}
+
+function hasMeaningfulSupportEditChange(
+    before: SupportEditHistorySnapshot,
+    after: SupportEditHistorySnapshot,
+): boolean {
+    const beforeSupport = {
+        ...before.support,
+        selectedId: null,
+        selectedCategory: null,
+        hoveredId: null,
+        hoveredCategory: 'none' as const,
+    };
+    const afterSupport = {
+        ...after.support,
+        selectedId: null,
+        selectedCategory: null,
+        hoveredId: null,
+        hoveredCategory: 'none' as const,
+    };
+
+    if (JSON.stringify(beforeSupport) !== JSON.stringify(afterSupport)) {
+        return true;
+    }
+
+    const beforeKickstand = {
+        ...before.kickstand,
+        selectedId: null,
+    };
+    const afterKickstand = {
+        ...after.kickstand,
+        selectedId: null,
+    };
+
+    return JSON.stringify(beforeKickstand) !== JSON.stringify(afterKickstand);
+}
+
+function formatSupportKindLabel(kind: EditableSupportTarget['kind']): string {
+    return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
 }
 
 function Section({
@@ -156,6 +199,15 @@ export function SupportSidebar() {
     const effectivePresetIdOverride = optimisticPresetId ?? selectedPresetIdOverride;
     const isHydratingSelectedSupportRef = React.useRef(false);
     const lastEditableTargetKeyRef = React.useRef<string | null>(null);
+    const skipFirstApplyForTargetKeyRef = React.useRef<string | null>(null);
+    const optimisticPresetTimeoutRef = React.useRef<number | null>(null);
+    const latestSettingsRef = React.useRef(settings);
+    const editSessionTargetRef = React.useRef<EditableSupportTarget | null>(null);
+    const editSessionTargetKeyRef = React.useRef<string | null>(null);
+    const editSessionBeforeSnapshotRef = React.useRef<SupportEditHistorySnapshot | null>(null);
+    const editSessionLatestSettingsRef = React.useRef<SupportSettings | null>(null);
+    const globalSettingsBeforeSupportEditRef = React.useRef<SupportSettings | null>(null);
+    const supportEditSessionDirtyRef = React.useRef(false);
 
     const makeRowFocusHandlers = React.useCallback((key: string) => {
         return {
@@ -195,6 +247,75 @@ export function SupportSidebar() {
     }, []);
 
     React.useEffect(() => {
+        latestSettingsRef.current = settings;
+    }, [settings]);
+
+    const commitPendingSettingsSession = React.useCallback((target: EditableSupportTarget | null) => {
+        if (!target) return;
+
+        const before = editSessionBeforeSnapshotRef.current;
+
+        if (!supportEditSessionDirtyRef.current) {
+            editSessionBeforeSnapshotRef.current = null;
+            editSessionLatestSettingsRef.current = null;
+            return;
+        }
+
+        const latestSettings = editSessionLatestSettingsRef.current ?? getSettings();
+        const persisted = getSupportSettingsForTarget(target);
+        if (!persisted || !areSupportGeometrySettingsEqual(persisted, latestSettings)) {
+            applySettingsToSupportTarget(target, latestSettings);
+        }
+
+        if (before) {
+            const after = captureSupportEditSnapshot();
+            if (hasMeaningfulSupportEditChange(before, after)) {
+                pushSupportEditHistory(
+                    `Adjust ${formatSupportKindLabel(target.kind)} Settings`,
+                    before,
+                    after,
+                );
+            }
+        }
+
+        editSessionBeforeSnapshotRef.current = null;
+        editSessionLatestSettingsRef.current = null;
+        supportEditSessionDirtyRef.current = false;
+    }, []);
+
+    React.useEffect(() => {
+        const nextTarget = editableTarget;
+        const nextKey = nextTarget ? `${nextTarget.kind}:${nextTarget.id}` : null;
+        const prevTarget = editSessionTargetRef.current;
+        const prevKey = editSessionTargetKeyRef.current;
+
+        const enteringSupportEdit = !prevTarget && !!nextTarget;
+        const leavingSupportEdit = !!prevTarget && !nextTarget;
+
+        if (enteringSupportEdit && globalSettingsBeforeSupportEditRef.current === null) {
+            globalSettingsBeforeSupportEditRef.current = getSettings();
+        }
+
+        if (prevTarget && prevKey !== nextKey) {
+            commitPendingSettingsSession(prevTarget);
+        }
+
+        if (nextTarget && prevKey !== nextKey) {
+            editSessionBeforeSnapshotRef.current = captureSupportEditSnapshot();
+            supportEditSessionDirtyRef.current = false;
+            editSessionLatestSettingsRef.current = getSupportSettingsForTarget(nextTarget) ?? getSettings();
+        }
+
+        editSessionTargetRef.current = nextTarget;
+        editSessionTargetKeyRef.current = nextKey;
+
+        if (leavingSupportEdit && globalSettingsBeforeSupportEditRef.current) {
+            setSettings(globalSettingsBeforeSupportEditRef.current);
+            globalSettingsBeforeSupportEditRef.current = null;
+        }
+    }, [editableTarget, commitPendingSettingsSession]);
+
+    React.useEffect(() => {
         return () => {
             if (saveStatusTimeoutRef.current !== null) {
                 window.clearTimeout(saveStatusTimeoutRef.current);
@@ -204,8 +325,19 @@ export function SupportSidebar() {
                 window.clearTimeout(autoBraceStatusTimeoutRef.current);
                 autoBraceStatusTimeoutRef.current = null;
             }
+            if (optimisticPresetTimeoutRef.current !== null) {
+                window.clearTimeout(optimisticPresetTimeoutRef.current);
+                optimisticPresetTimeoutRef.current = null;
+            }
+
+            commitPendingSettingsSession(editSessionTargetRef.current);
+
+            if (globalSettingsBeforeSupportEditRef.current) {
+                setSettings(globalSettingsBeforeSupportEditRef.current);
+                globalSettingsBeforeSupportEditRef.current = null;
+            }
         };
-    }, []);
+    }, [commitPendingSettingsSession]);
 
     React.useEffect(() => {
         const targetKey = editableTarget ? `${editableTarget.kind}:${editableTarget.id}` : null;
@@ -221,6 +353,8 @@ export function SupportSidebar() {
         if (!selectionChanged) {
             return;
         }
+
+        skipFirstApplyForTargetKeyRef.current = targetKey;
 
         if (geometryDiffers) {
             isHydratingSelectedSupportRef.current = true;
@@ -243,8 +377,9 @@ export function SupportSidebar() {
     React.useEffect(() => {
         if (!editableTarget) return;
 
-        if (isHydratingSelectedSupportRef.current) {
-            isHydratingSelectedSupportRef.current = false;
+        const targetKey = `${editableTarget.kind}:${editableTarget.id}`;
+        if (skipFirstApplyForTargetKeyRef.current === targetKey) {
+            skipFirstApplyForTargetKeyRef.current = null;
             return;
         }
 
@@ -254,8 +389,21 @@ export function SupportSidebar() {
         );
 
         if (!persistedSelectionSettings) return;
+
+        if (isHydratingSelectedSupportRef.current) {
+            // Only swallow the cycle when hydration has already converged.
+            // If settings diverge (e.g. quick preset click right after selection),
+            // allow apply so we don't lose that edit.
+            if (areSupportGeometrySettingsEqual(persistedSelectionSettings, settings)) {
+                isHydratingSelectedSupportRef.current = false;
+                return;
+            }
+            isHydratingSelectedSupportRef.current = false;
+        }
         if (areSupportGeometrySettingsEqual(persistedSelectionSettings, settings)) return;
 
+        supportEditSessionDirtyRef.current = true;
+        editSessionLatestSettingsRef.current = settings;
         applySettingsToSupportSelection(supportState.selectedId, selectedCategory, settings);
     }, [editableTarget, settings, supportState.selectedId, selectedCategory]);
 
@@ -264,17 +412,42 @@ export function SupportSidebar() {
             if (optimisticPresetId !== null) {
                 setOptimisticPresetId(null);
             }
+            if (optimisticPresetTimeoutRef.current !== null) {
+                window.clearTimeout(optimisticPresetTimeoutRef.current);
+                optimisticPresetTimeoutRef.current = null;
+            }
             return;
         }
 
         if (optimisticPresetId === null) return;
 
-        // Clear optimistic selection once support-derived matching catches up,
-        // or if support no longer matches any preset.
-        if (selectedPresetIdOverride === optimisticPresetId || selectedPresetIdOverride === null) {
+        // Clear optimistic selection once support-derived matching catches up
+        // to any concrete preset id.
+        if (selectedPresetIdOverride !== undefined && selectedPresetIdOverride !== null) {
             setOptimisticPresetId(null);
         }
     }, [editableTarget, optimisticPresetId, selectedPresetIdOverride]);
+
+    React.useEffect(() => {
+        if (optimisticPresetTimeoutRef.current !== null) {
+            window.clearTimeout(optimisticPresetTimeoutRef.current);
+            optimisticPresetTimeoutRef.current = null;
+        }
+
+        if (!optimisticPresetId) return;
+
+        optimisticPresetTimeoutRef.current = window.setTimeout(() => {
+            setOptimisticPresetId((current) => (current === optimisticPresetId ? null : current));
+            optimisticPresetTimeoutRef.current = null;
+        }, 1400);
+
+        return () => {
+            if (optimisticPresetTimeoutRef.current !== null) {
+                window.clearTimeout(optimisticPresetTimeoutRef.current);
+                optimisticPresetTimeoutRef.current = null;
+            }
+        };
+    }, [optimisticPresetId]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -610,8 +783,41 @@ export function SupportSidebar() {
                                             <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <PresetSelector
                                                     selectedPresetIdOverride={effectivePresetIdOverride}
+                                                    disableGlobalPresetActivation={Boolean(editableTarget)}
                                                     onPresetSelected={(presetId) => {
-                                                        if (!editableTarget) return;
+                                                        const liveSupportState = getSupportSnapshot();
+                                                        const liveTarget = resolveEditableSupportTarget(
+                                                            liveSupportState.selectedId,
+                                                            liveSupportState.selectedCategory ?? undefined,
+                                                        );
+
+                                                        if (liveTarget) {
+                                                            const preset = getPresetById(presetId);
+                                                            if (preset) {
+                                                                const current = getSettings();
+                                                                supportEditSessionDirtyRef.current = true;
+                                                                const nextSettings: SupportSettings = {
+                                                                    ...preset.settings,
+                                                                    grid: {
+                                                                        ...current.grid,
+                                                                    },
+                                                                    tip: {
+                                                                        ...preset.settings.tip,
+                                                                        coneAngleMode: current.tip.coneAngleMode,
+                                                                        adaptiveConeAngleOffsetDeg: current.tip.adaptiveConeAngleOffsetDeg,
+                                                                        coneAngleDeg: current.tip.coneAngleDeg,
+                                                                    },
+                                                                    autoBracing: {
+                                                                        ...current.autoBracing,
+                                                                    },
+                                                                };
+                                                                editSessionLatestSettingsRef.current = nextSettings;
+                                                                setSettings(nextSettings);
+                                                                applySettingsToSupportTarget(liveTarget, nextSettings);
+                                                            }
+                                                        }
+
+                                                        if (!liveTarget) return;
                                                         setOptimisticPresetId(presetId);
                                                     }}
                                                 />

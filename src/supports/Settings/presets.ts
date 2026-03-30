@@ -5,7 +5,7 @@
  */
 
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
-import { getSettings, setSettings } from './state';
+import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
 
 function normalizePresetSettings(
@@ -192,6 +192,7 @@ const ANCHOR_PRESET: SupportPreset = {
 
 const PRESET_STORAGE_KEY = 'support-presets-v1';
 const ACTIVE_PRESET_STORAGE_KEY = 'support-active-preset-id-v1';
+const SUPPORT_SETTINGS_STORAGE_KEY = 'support-settings';
 const LEGACY_CUSTOM_IDS = new Set(['custom1', 'custom2', 'custom3']);
 
 let presets: PresetCollection = loadPresetsFromStorage();
@@ -210,6 +211,7 @@ function loadPresetsFromStorage(): PresetCollection {
     if (typeof window === 'undefined') return defaults;
 
     try {
+        let resolvedActiveFromStorage = false;
         const stored = localStorage.getItem(PRESET_STORAGE_KEY);
         if (stored) {
             const parsed = JSON.parse(stored);
@@ -261,10 +263,30 @@ function loadPresetsFromStorage(): PresetCollection {
             // Restore active ID if valid
             if (parsed.activePresetId && defaults.byId[parsed.activePresetId]) {
                 defaults.activePresetId = parsed.activePresetId;
+                resolvedActiveFromStorage = true;
             } else {
                 const storedActivePresetId = localStorage.getItem(ACTIVE_PRESET_STORAGE_KEY);
                 if (storedActivePresetId && defaults.byId[storedActivePresetId]) {
                     defaults.activePresetId = storedActivePresetId;
+                    resolvedActiveFromStorage = true;
+                }
+            }
+        }
+
+        // Fallback: infer active preset from persisted settings when explicit active id
+        // is missing/invalid (older or stale localStorage cases).
+        if (!resolvedActiveFromStorage) {
+            const storedSettingsRaw = localStorage.getItem(SUPPORT_SETTINGS_STORAGE_KEY);
+            if (storedSettingsRaw) {
+                const parsedSettings = JSON.parse(storedSettingsRaw) as Partial<SupportSettings>;
+                const normalizedCurrent = normalizePresetSettings(parsedSettings, createDefaultSettings());
+                for (const id of defaults.allIds) {
+                    const preset = defaults.byId[id];
+                    if (!preset) continue;
+                    if (doesPresetMatchSettings(preset.settings, normalizedCurrent)) {
+                        defaults.activePresetId = id;
+                        break;
+                    }
                 }
             }
         }
@@ -329,6 +351,13 @@ function doesPresetMatchSettings(presetSettings: SupportSettings, current: Suppo
         && JSON.stringify(current.roots) === JSON.stringify(presetSettings.roots)
         && JSON.stringify(current.baseFlare) === JSON.stringify(presetSettings.baseFlare)
     );
+}
+
+export function isPresetDirtyForSettings(presetId: string | null | undefined, current: SupportSettings): boolean {
+    if (!presetId) return false;
+    const preset = presets.byId[presetId];
+    if (!preset) return false;
+    return !doesPresetMatchSettings(preset.settings, current);
 }
 
 export function findMatchingPresetIdForSettings(current: SupportSettings): string | null {
@@ -423,6 +452,11 @@ export function setActivePreset(id: string | null): void {
             ...current.autoBracing,
         },
     });
+
+    // Keep selected preset + persisted settings in sync across app restarts.
+    // Without this, active preset can persist while support-settings storage
+    // still holds older values, which produces a false "dirty" state on load.
+    saveSettingsToLocalStorage();
 
     savePresetsToStorage();
     notify();

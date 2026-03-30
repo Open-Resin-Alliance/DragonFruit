@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import { PenLine } from 'lucide-react';
 import { Button } from '@/components/ui/primitives';
 import {
     getPresetList,
@@ -11,18 +12,23 @@ import {
     updateCustomPresetMetadata,
     createPreset,
     deletePreset,
+    isPresetDirtyForSettings,
 } from '../presets';
+import { getSettings, subscribeToSettings } from '../state';
 import { setAnatomyPreviewHoveredPresetSettings } from '../AnatomyPreview/previewState';
 
 type PresetSelectorProps = {
     selectedPresetIdOverride?: string | null;
     onPresetSelected?: (presetId: string) => void;
+    disableGlobalPresetActivation?: boolean;
 };
 
 export function PresetSelector({
     selectedPresetIdOverride,
     onPresetSelected,
+    disableGlobalPresetActivation = false,
 }: PresetSelectorProps) {
+    const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [presets, setPresets] = useState(() => getPresetList());
     const [activePreset, setActivePresetState] = useState(() => getActivePreset());
     const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -54,6 +60,7 @@ export function PresetSelector({
     const previewDescription = hoveredPreset?.description ?? selectedPreset?.description ?? '';
     const isInlineSaveConfirmOpen = Boolean(confirmId && selectedPreset && confirmId === selectedPreset.id);
     const isInlineDeleteConfirmOpen = Boolean(deleteConfirmId && selectedPreset && deleteConfirmId === selectedPreset.id);
+    const selectedPresetIsDirty = isPresetDirtyForSettings(effectiveSelectedPresetId, settings);
 
     useEffect(() => {
         if (!selectedPreset) {
@@ -102,6 +109,7 @@ export function PresetSelector({
 
     function renderPresetRow(preset: (typeof presets)[number]) {
         const isSelected = effectiveSelectedPresetId === preset.id;
+        const showDirtyIndicator = isSelected && selectedPresetIsDirty;
 
         return (
             <button
@@ -145,6 +153,16 @@ export function PresetSelector({
                         }}
                     />
                 ) : null}
+                {showDirtyIndicator ? (
+                    <span
+                        aria-hidden="true"
+                        title="Preset has unsaved changes"
+                        className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2"
+                        style={{ color: isSelected ? 'var(--accent-contrast)' : 'var(--text-muted)' }}
+                    >
+                        <PenLine className="h-3 w-3" />
+                    </span>
+                ) : null}
                 <div className="w-full">
                     <div className="flex items-center justify-center text-center">
                         <div className="flex-1 truncate" style={{ color: isSelected ? 'var(--accent-contrast)' : undefined }}>
@@ -166,7 +184,9 @@ export function PresetSelector({
             return;
         }
 
-        setActivePreset(presetId);
+        if (!disableGlobalPresetActivation) {
+            setActivePreset(presetId);
+        }
         onPresetSelected?.(presetId);
         setHoveredPresetId(null);
         setConfirmId(null);
