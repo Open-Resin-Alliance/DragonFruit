@@ -4955,7 +4955,17 @@ export function SceneCanvas({
           mouseOrbitDragRunId={mouseOrbitDragRunId}
           onNavigationActiveChange={setSpaceMouseNavigationActive}
         />
-        <CameraFocusHotkeyController hoverPointRef={lastHoveredModelPointRef} setOrbitTargetFromPoint={setOrbitTargetFromPoint} />
+        <CameraFocusHotkeyController
+          hoverPointRef={lastHoveredModelPointRef}
+          setOrbitTargetFromPoint={setOrbitTargetFromPoint}
+          models={models}
+          activeModelId={activeModelId}
+          selectedModelIds={selectedModelIds ?? []}
+          hoveredModelId={hoveredModelId}
+          orbitTarget={orbitTarget}
+          cameraRef={cameraRef}
+          orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
+        />
         <CameraIntroController
           bounds={introControllerBounds}
           runId={introControllerRunId}
