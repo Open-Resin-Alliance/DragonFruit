@@ -386,7 +386,7 @@ export function Helpers({
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
         <meshStandardMaterial
-          color="#3a4048"
+          color="#323841"
           transparent
           opacity={0.94 * clampedBuildPlateOpacity}
           side={THREE.FrontSide}
