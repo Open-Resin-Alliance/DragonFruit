@@ -11,6 +11,7 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
+import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
     initial: '#00ff00',
@@ -93,18 +94,30 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const endVec = useMemo(() => new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z), [endKnot.pos.x, endKnot.pos.y, endKnot.pos.z]);
 
     const uniformBraceDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+    const startHostDiameter = Math.max(
+        0.001,
+        (startKnot.diameter ?? (uniformBraceDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+    );
+    const endHostDiameter = Math.max(
+        0.001,
+        (endKnot.diameter ?? (uniformBraceDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+    );
     const bezierCurve = brace.curve?.type === 'bezier' ? brace.curve : null;
     const isBezierBrace = !!bezierCurve;
+    const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;
 
     const batchedStraightShafts: InstancedShaft[] = useMemo(() => {
-        if (isSelected || isBezierBrace || deferStraightShaftToSceneBatch) return [];
+        if (isSelected || isBezierBrace || deferStraightShaftToSceneBatch || isTaperedBrace) return [];
         return [{
             id: segmentId,
             start: startKnot.pos,
             end: endKnot.pos,
             diameter: uniformBraceDiameter,
         }];
-    }, [isSelected, isBezierBrace, deferStraightShaftToSceneBatch, segmentId, startKnot.pos, endKnot.pos, uniformBraceDiameter]);
+    }, [isSelected, isBezierBrace, deferStraightShaftToSceneBatch, isTaperedBrace, segmentId, startKnot.pos, endKnot.pos, uniformBraceDiameter]);
+
+    const shouldRenderDetailedBezier = isBezierBrace && (isSelected || !deferStraightShaftToSceneBatch);
+    const shouldRenderDetailedStraight = !isBezierBrace && (isSelected || (!deferStraightShaftToSceneBatch && batchedStraightShafts.length === 0));
 
     const handleClick = (e: BraceRendererClickEvent) => {
         if (!effectiveInteractable) return;
@@ -165,16 +178,16 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                         transparent={shaftTransparent}
                         opacity={shaftOpacity}
                     />
-                    {isSelected && isBezierBrace ? (
+                    {shouldRenderDetailedBezier ? (
                         <BezierRenderer
                             id={segmentId}
                             start={startKnot.pos}
                             end={endKnot.pos}
                             control1={bezierCurve!.controlPoint1}
                             control2={bezierCurve!.controlPoint2}
-                            diameter={brace.profile?.diameter ?? 1.0}
-                            diameterStart={uniformBraceDiameter}
-                            diameterEnd={uniformBraceDiameter}
+                            diameter={Math.max(startHostDiameter, endHostDiameter)}
+                            diameterStart={startHostDiameter}
+                            diameterEnd={endHostDiameter}
                             resolution={bezierCurve!.resolution}
                             color={isSelected ? '#ff00ff' : shaftColor}
                             emissive={visuals.emissive}
@@ -188,14 +201,14 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             opacity={shaftOpacity}
                             onClick={() => selectPrimitiveById(segmentId)}
                         />
-                    ) : isSelected ? (
+                    ) : shouldRenderDetailedStraight ? (
                         <ShaftRenderer
                             id={segmentId}
                             start={startKnot.pos}
                             end={endKnot.pos}
-                            diameter={brace.profile?.diameter ?? 1.0}
-                            diameterStart={uniformBraceDiameter}
-                            diameterEnd={uniformBraceDiameter}
+                            diameter={Math.max(startHostDiameter, endHostDiameter)}
+                            diameterStart={startHostDiameter}
+                            diameterEnd={endHostDiameter}
                             color={shaftColor}
                             emissive={visuals.emissive}
                             emissiveIntensity={visuals.emissiveIntensity}

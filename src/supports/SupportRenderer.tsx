@@ -1858,7 +1858,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
-            const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+            const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+            const startHostDiameter = Math.max(
+                0.001,
+                (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+            );
+            const endHostDiameter = Math.max(
+                0.001,
+                (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+            );
+            const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;
+
+            // Tapered braces are rendered in the detailed path so we can preserve
+            // dynamic start/end diameters. Uniform braces remain batched for speed.
+            if (isTaperedBrace) {
+                continue;
+            }
+
+            const diameter = (startHostDiameter + endHostDiameter) * 0.5;
             const segmentId = `braceSegment:${brace.id}`;
             const shafts = brace.curve?.type === 'bezier'
                 ? tessellateBraceBezierToShafts(
