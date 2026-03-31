@@ -25,7 +25,8 @@
     "guard:plugin-boundaries": "node scripts/check-plugin-boundaries.mjs",
     "lint": "eslint",
     "test": "node --import tsx --test src/supports/__tests__/*.test.ts",
-    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts"
+    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts",
+    "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",

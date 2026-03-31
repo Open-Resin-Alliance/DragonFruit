@@ -11,6 +11,7 @@ import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
+import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import type { Kickstand } from './types';
 
 interface KickstandRendererProps {
@@ -33,7 +34,7 @@ interface KickstandRendererProps {
 }
 
 export const KickstandRenderer = React.memo(function KickstandRenderer({
-    kickstand,
+    kickstand: baseKickstand,
     root,
     hostKnot,
     isSelected,
@@ -50,6 +51,9 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
     hoverColor,
     selectedColor = '#80fffd',
 }: KickstandRendererProps) {
+    const previewKickstand = usePartDragUpdate<Kickstand>('kickstand', baseKickstand.id);
+    const kickstand = previewKickstand ?? baseKickstand;
+
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;

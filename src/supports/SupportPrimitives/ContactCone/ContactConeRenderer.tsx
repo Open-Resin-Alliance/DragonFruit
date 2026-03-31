@@ -5,11 +5,12 @@ import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
-import { setHoveredCategory, setHoveredId } from '../../state';
+import { setHoveredState } from '../../state';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ContactConeRendererProps {
     contactDiskId?: string;
@@ -55,7 +56,7 @@ export function ContactConeRenderer({
     surfaceNormal,
     diskLengthOverride,
     profile = DEFAULT_TIP_PROFILE,
-    color = '#ff8800',
+    color = '#c8752a',
     emissive = '#000000',
     emissiveIntensity = 0,
     jointColor = '#888888',
@@ -125,8 +126,8 @@ export function ContactConeRenderer({
     // Calculate cone center (based on shifted start position)
     const center = getConeCenterPosition(coneStartPos, normal, profile);
     const quaternion = getConeQuaternion(normal);
-    const displayEmissive = hoverVisible ? '#ffffff' : emissive;
-    const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.35) : emissiveIntensity;
+    const displayEmissive = hoverVisible ? '#efd8c2' : emissive;
+    const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.16) : emissiveIntensity;
 
     const handleConeClick = (e: any) => {
         const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
@@ -151,6 +152,13 @@ export function ContactConeRenderer({
             return;
         }
 
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredState('none', null);
+            setIsHovered(false);
+            return;
+        }
+
         const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
         for (const intersection of intersections) {
             let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
@@ -158,8 +166,7 @@ export function ContactConeRenderer({
                 const primitiveType = current.userData?.supportPrimitiveType;
                 if (primitiveType === 'joint' || primitiveType === 'knot') {
                     emitImmediateModelHover(null);
-                    setHoveredId(null);
-                    setHoveredCategory('none');
+                    setHoveredState('none', null);
                     setIsHovered(false);
                     return;
                 }
@@ -170,15 +177,13 @@ export function ContactConeRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             emitImmediateModelHover(frontModelId);
-            setHoveredId(null);
-            setHoveredCategory('none');
+            setHoveredState('none', null);
             setIsHovered(false);
             return;
         }
 
         emitImmediateModelHover(null);
-        setHoveredId(contactDiskId);
-        setHoveredCategory('contactDisk');
+        setHoveredState('contactDisk', contactDiskId);
         setIsHovered(true);
     }, [contactDiskId, isInteractable, isParentSelected, isContactDiskSelected]);
 
@@ -186,9 +191,14 @@ export function ContactConeRenderer({
         setIsHovered(false);
         if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
 
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredState('none', null);
+            return;
+        }
+
         emitImmediateModelHover(null);
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }, [isInteractable, isParentSelected, isContactDiskSelected]);
 
     React.useEffect(() => {

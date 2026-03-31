@@ -15,6 +15,7 @@ export interface SimplifyRouteJointsArgs {
     collisionRadius: number;
     mesh: THREE.Mesh;
     maxAngleFromVerticalDeg: number;
+    raycaster?: THREE.Raycaster;
 }
 
 function chainIsValid(args: {
@@ -23,14 +24,15 @@ function chainIsValid(args: {
     mesh: THREE.Mesh;
     maxAngleFromVerticalDeg: number;
     constructionJointCount: number;
+    raycaster?: THREE.Raycaster;
 }): boolean {
-    const { points, collisionRadius, mesh, maxAngleFromVerticalDeg, constructionJointCount } = args;
+    const { points, collisionRadius, mesh, maxAngleFromVerticalDeg, constructionJointCount, raycaster } = args;
 
     for (let i = 0; i < points.length - 1; i++) {
         if (!segmentSatisfiesMaxAngleFromVertical(points[i], points[i + 1], maxAngleFromVerticalDeg)) {
             return false;
         }
-        const hit = checkShaftCollision(points[i], points[i + 1], collisionRadius, mesh);
+        const hit = checkShaftCollision(points[i], points[i + 1], collisionRadius, mesh, raycaster);
         if (hit.hit) {
             return false;
         }
@@ -75,7 +77,7 @@ function jointAddsNegligibleLengthDetour(a: Vec3, b: Vec3, c: Vec3): boolean {
 }
 
 export function simplifyRouteJoints(args: SimplifyRouteJointsArgs): Vec3[] {
-    const { routeJoints, constructionJoints, socketPos, rootTopTarget, collisionRadius, mesh, maxAngleFromVerticalDeg } = args;
+    const { routeJoints, constructionJoints, socketPos, rootTopTarget, collisionRadius, mesh, maxAngleFromVerticalDeg, raycaster } = args;
 
     if (routeJoints.length < 2) {
         return routeJoints;
@@ -114,6 +116,7 @@ export function simplifyRouteJoints(args: SimplifyRouteJointsArgs): Vec3[] {
                 mesh,
                 maxAngleFromVerticalDeg,
                 constructionJointCount: constructionJoints.length,
+                raycaster,
             })) {
                 continue;
             }

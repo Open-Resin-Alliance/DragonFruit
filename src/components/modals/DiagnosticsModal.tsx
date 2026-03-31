@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { X } from 'lucide-react';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getPickingDiagnosticsSnapshot } from '@/components/picking/pickingDiagnostics';
@@ -471,7 +472,7 @@ export function DiagnosticsModal({
           </button>
         </div>
 
-        <div className="max-h-[calc(88vh-58px)] overflow-y-auto p-4 space-y-4">
+        <div className="max-h-[calc(88vh-58px)] overflow-y-auto custom-scrollbar p-4 space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>FPS</div>
@@ -516,22 +517,24 @@ export function DiagnosticsModal({
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <select
+                <SelectDropdown
                   value={benchmarkStressProfile}
-                  onChange={(event) => setBenchmarkStressProfile(event.target.value as DiagnosticsBenchmarkStressProfile)}
+                  onChange={(nextValue) => setBenchmarkStressProfile(nextValue as DiagnosticsBenchmarkStressProfile)}
                   disabled={benchmarkRunState.isRunning}
-                  className="h-9 rounded-md border px-2.5 text-[12px]"
-                  style={{
+                  ariaLabel="Benchmark stress profile"
+                  options={[
+                    { value: 'quick', label: 'Quick' },
+                    { value: 'standard', label: 'Standard' },
+                    { value: 'torture', label: 'Torture' },
+                  ]}
+                  className="space-y-0"
+                  selectClassName="!h-9 min-w-[118px] text-[12px]"
+                  selectStyle={{
                     borderColor: 'var(--border-subtle)',
                     background: 'var(--surface-0)',
                     color: 'var(--text-strong)',
                   }}
-                  aria-label="Benchmark stress profile"
-                >
-                  <option value="quick">Quick</option>
-                  <option value="standard">Standard</option>
-                  <option value="torture">Torture</option>
-                </select>
+                />
                 <button
                   type="button"
                   onClick={handleRunBenchmark}

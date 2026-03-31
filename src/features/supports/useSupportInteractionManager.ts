@@ -7,6 +7,7 @@ import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement'
 import { useBracePlacement } from '@/supports/SupportTypes/Brace/useBracePlacement';
 import { useKickstandPlacement } from '@/supports/SupportTypes/Kickstand/useKickstandPlacement';
 import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { isSupportEditInteractionActive } from '@/supports/interaction/gizmoInteractionLock';
 import { useInteractionStatus } from '@/supports/interaction/useInteractionStatus';
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
@@ -30,8 +31,7 @@ import {
   updateKnot,
   updateTrunk,
   setSelectedId,
-  setHoveredCategory,
-  setHoveredId,
+  setHoveredState,
   subscribe,
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -198,6 +198,13 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
     const nativeEvent = getNativeEventSource(hit);
 
+    if (isSupportEditInteractionActive()) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(null);
+      return;
+    }
+
     if (isContactDiskHudInteractionActive()) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
@@ -249,6 +256,10 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const onModelClick = useCallback((hit: THREE.Intersection) => {
     const nativeEvent = getNativeEventSource(hit);
 
+    if (isSupportEditInteractionActive()) {
+      return;
+    }
+
     if (jointCreationState.isActive) {
       return;
     }
@@ -279,6 +290,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
     if (mode !== 'support') return;
 
+    if (isSupportEditInteractionActive()) {
+      leafPlacement.onSupportHover(null);
+      branchPlacement.onSupportHover(null);
+      return;
+    }
+
     const nativeEvent = getNativeEventSource(hit);
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
@@ -292,6 +309,10 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   // Handler for SUPPORT click (branch base placement on existing support shaft)
   const onSupportClick = useCallback((hit: THREE.Intersection) => {
     if (mode !== 'support') return;
+
+    if (isSupportEditInteractionActive()) {
+      return;
+    }
 
     const nativeEvent = getNativeEventSource(hit);
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
@@ -319,6 +340,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           if (recordHistory) {
             pushHistory({
               type: SUPPORT_UPDATE_TRUNK,
+              description: 'Delete trunk joint',
               payload: { before: result.before, after: result.after },
             });
           }
@@ -629,8 +651,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         }
 
         clearSupportSelection();
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
         if (anyDeleted) return;
       }
 
@@ -640,8 +661,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
       deleteSelectionByCategoryAndId(category, id);
 
-      setHoveredId(null);
-      setHoveredCategory('none');
+      setHoveredState('none', null);
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -660,8 +680,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           e.preventDefault();
           e.stopPropagation();
           clearSupportSelection();
-          setHoveredId(null);
-          setHoveredCategory('none');
+          setHoveredState('none', null);
         }
         return;
       }

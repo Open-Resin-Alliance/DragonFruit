@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ThreeEvent } from '@react-three/fiber';
 
 interface ContactDiskHudProps {
     radius: number;
@@ -10,8 +11,8 @@ interface ContactDiskHudProps {
     isInteractable?: boolean;
     fillColor?: string;
     fillOpacity?: number;
-    onPointerDown?: (e: any) => void;
-    onPointerUp?: (e: any) => void;
+    onPointerDown?: (e: ThreeEvent<PointerEvent>) => void;
+    onPointerUp?: (e: ThreeEvent<PointerEvent> | null) => void;
     onHoverChange?: (hovered: boolean) => void;
     onDragStateChange?: (dragging: boolean) => void;
 }
@@ -48,13 +49,11 @@ export function ContactDiskHud({
         if (onDragStateChange) onDragStateChange(dragging);
     }, [onDragStateChange]);
 
-    const stopPointerEvent = React.useCallback((e: any) => {
+    const stopPointerEvent = React.useCallback((e: ThreeEvent<PointerEvent> | null) => {
         if (e?.stopPropagation) e.stopPropagation();
-        if (e?.preventDefault) e.preventDefault();
         if (e?.nativeEvent) {
             e.nativeEvent.stopPropagation?.();
             e.nativeEvent.stopImmediatePropagation?.();
-            e.nativeEvent.preventDefault?.();
         }
     }, []);
 
@@ -76,7 +75,7 @@ export function ContactDiskHud({
         };
     }, [isDragging, isHovered, onPointerUp, setDragging]);
 
-    const handlePointerDownInternal = React.useCallback((e: any) => {
+    const handlePointerDownInternal = React.useCallback((e: ThreeEvent<PointerEvent>) => {
         if (!isInteractable) return;
         if (typeof e?.pointerId === 'number') {
             activePointerIdRef.current = e.pointerId;
@@ -91,7 +90,7 @@ export function ContactDiskHud({
         if (onPointerDown) onPointerDown(e);
     }, [isInteractable, onPointerDown, setDragging, stopPointerEvent]);
 
-    const handlePointerUpInternal = React.useCallback((e: any) => {
+    const handlePointerUpInternal = React.useCallback((e: ThreeEvent<PointerEvent>) => {
         const pointerId = typeof e?.pointerId === 'number' ? e.pointerId : activePointerIdRef.current;
         if (pointerId !== null) {
             try {
@@ -108,18 +107,18 @@ export function ContactDiskHud({
         if (onPointerUp) onPointerUp(e);
     }, [isHovered, onPointerUp, setDragging, stopPointerEvent]);
 
-    const handleClickInternal = React.useCallback((e: any) => {
+    const handleClickInternal = React.useCallback((e: ThreeEvent<MouseEvent>) => {
         stopPointerEvent(e);
     }, [stopPointerEvent]);
 
-    const handlePointerEnterInternal = React.useCallback((e: any) => {
+    const handlePointerEnterInternal = React.useCallback((e: ThreeEvent<PointerEvent>) => {
         if (!isInteractable) return;
         setHovered(true);
         document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
         stopPointerEvent(e);
     }, [isDragging, isInteractable, setHovered, stopPointerEvent]);
 
-    const handlePointerMoveInternal = React.useCallback((e: any) => {
+    const handlePointerMoveInternal = React.useCallback((e: ThreeEvent<PointerEvent>) => {
         if (!isInteractable) return;
         if (!isHovered) {
             setHovered(true);
@@ -128,7 +127,7 @@ export function ContactDiskHud({
         stopPointerEvent(e);
     }, [isDragging, isHovered, isInteractable, setHovered, stopPointerEvent]);
 
-    const handlePointerLeaveInternal = React.useCallback((e: any) => {
+    const handlePointerLeaveInternal = React.useCallback((e: ThreeEvent<PointerEvent>) => {
         setHovered(false);
         if (!isDragging) document.body.style.cursor = '';
         stopPointerEvent(e);

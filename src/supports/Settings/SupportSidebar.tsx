@@ -2,7 +2,7 @@
 
 
 import React, { useState, useEffect, useSyncExternalStore } from 'react';
-import { Save, RotateCcw } from 'lucide-react';
+import { Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import {
     getSettings,
@@ -16,20 +16,32 @@ import {
     updateGridSettings,
     updateAutoBracingSettings,
 } from './state';
-import { checkPresetDrift } from './presets';
-import { createDefaultSettings } from './types';
+import {
+    subscribe as subscribeToSupportState,
+    getSnapshot as getSupportSnapshot,
+    resolveEditableSupportTarget,
+    getSupportSettingsForTarget,
+    applySettingsToSupportTarget,
+    type EditableSupportTarget,
+} from '../state';
+import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
+import { createDefaultSettings, type SupportSettings } from './types';
+import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
+import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
 import {
     PresetSelector,
     RaftSettingsCard,
     GridSettingsCard,
     SupportKindTabs,
 } from './components';
-import { Button } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
 import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
+import { CurveSettingsCard, getCurveSettingsSelection } from '../Curves/CurveSettingsCard';
 import { runAutoBracing } from '../autoBracing/autoBrace';
-import { setAnatomyPreviewActiveSettingKey, setAnatomyPreviewShowTuner, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
+import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
     getSupportKindSnapshot,
     setActiveSupportKind,
@@ -42,6 +54,106 @@ import {
     updateRaftSettings,
 } from '../Rafts/Crenelated/RaftState';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
+import type { SupportKind } from './supportKindState';
+
+const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm no-spinners';
+const SECTION_CARD_STYLE: React.CSSProperties = {
+    borderColor: 'var(--border-subtle)',
+    background: 'var(--surface-1)',
+};
+const ACCENT_CARD_STYLE: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 76%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)',
+};
+
+const KIND_META: Record<SupportKind, { label: string; icon: typeof Pickaxe }> = {
+    trunk: { label: 'Trunk', icon: Pickaxe },
+    branch: { label: 'Branch', icon: Wrench },
+    leaf: { label: 'Leaf', icon: Sparkles },
+    twig: { label: 'Twig', icon: WandSparkles },
+    raft: { label: 'Raft', icon: Sailboat },
+    grid: { label: 'Grid', icon: Grid3X3 },
+    stick: { label: 'Bracing', icon: WandSparkles },
+};
+
+function normalizeTabKind(kind: SupportKind): SupportKind {
+    if (kind === 'branch' || kind === 'leaf' || kind === 'twig') {
+        return 'trunk';
+    }
+    return kind;
+}
+
+function hasMeaningfulSupportEditChange(
+    before: SupportEditHistorySnapshot,
+    after: SupportEditHistorySnapshot,
+): boolean {
+    const beforeSupport = {
+        ...before.support,
+        selectedId: null,
+        selectedCategory: null,
+        hoveredId: null,
+        hoveredCategory: 'none' as const,
+    };
+    const afterSupport = {
+        ...after.support,
+        selectedId: null,
+        selectedCategory: null,
+        hoveredId: null,
+        hoveredCategory: 'none' as const,
+    };
+
+    if (JSON.stringify(beforeSupport) !== JSON.stringify(afterSupport)) {
+        return true;
+    }
+
+    const beforeKickstand = {
+        ...before.kickstand,
+        selectedId: null,
+    };
+    const afterKickstand = {
+        ...after.kickstand,
+        selectedId: null,
+    };
+
+    return JSON.stringify(beforeKickstand) !== JSON.stringify(afterKickstand);
+}
+
+function formatSupportKindLabel(kind: EditableSupportTarget['kind']): string {
+    return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+}
+
+function Section({
+    title,
+    children,
+    accent = false,
+    className,
+}: {
+    title: string;
+    children: React.ReactNode;
+    accent?: boolean;
+    className?: string;
+}) {
+    return (
+        <div className={`rounded-md border p-2 ${className ?? ''}`} style={accent ? ACCENT_CARD_STYLE : SECTION_CARD_STYLE}>
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                {title}
+            </div>
+            {children}
+        </div>
+    );
+}
+
+function fieldFocusProps(
+    key: string,
+    onFocus?: () => void,
+    onBlur?: (e: React.FocusEvent<HTMLDivElement>) => void,
+) {
+    return {
+        onFocusCapture: onFocus,
+        onBlurCapture: onBlur,
+        'data-setting-key': key,
+    };
+}
 
 /**
  * SupportSidebar
@@ -54,17 +166,46 @@ export function SupportSidebar() {
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const [autoBraceStatus, setAutoBraceStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
-    const [baseViewportScale, setBaseViewportScale] = useState(1);
-    const [appliedCompactScale, setAppliedCompactScale] = useState(1);
-    const [isCompactLayout, setIsCompactLayout] = useState(false);
-    const viewportRef = React.useRef<HTMLDivElement | null>(null);
-    const contentRef = React.useRef<HTMLDivElement | null>(null);
+    const [expanded, setExpanded] = React.useState(true);
+    const saveStatusTimeoutRef = React.useRef<number | null>(null);
+    const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
+    const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activeKind === 'trunk';
+    const tabKind = normalizeTabKind(activeKind);
+    const activeKindMeta = KIND_META[activeKind];
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+    const supportState = React.useSyncExternalStore(subscribeToSupportState, getSupportSnapshot, getSupportSnapshot);
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
     const activeKey = previewState.activeSettingKey;
+    const curveSelection = getCurveSettingsSelection(supportState);
+    const showCurvePage = curveSelection !== null;
+    const selectedCategory = supportState.selectedCategory ?? undefined;
+    const editableTarget = React.useMemo(
+        () => resolveEditableSupportTarget(supportState.selectedId, selectedCategory),
+        [supportState, selectedCategory],
+    );
+    const selectedSupportSettings = React.useMemo(() => {
+        if (!editableTarget) return null;
+        return getSupportSettingsForTarget(editableTarget);
+    }, [editableTarget, supportState]);
+    const selectedPresetIdOverride = React.useMemo(() => {
+        if (!editableTarget || !selectedSupportSettings) return undefined;
+        return findMatchingPresetIdForSettings(selectedSupportSettings);
+    }, [editableTarget, selectedSupportSettings]);
+    const [optimisticPresetId, setOptimisticPresetId] = React.useState<string | null>(null);
+    const effectivePresetIdOverride = optimisticPresetId ?? selectedPresetIdOverride;
+    const isHydratingSelectedSupportRef = React.useRef(false);
+    const lastEditableTargetKeyRef = React.useRef<string | null>(null);
+    const skipFirstApplyForTargetKeyRef = React.useRef<string | null>(null);
+    const latestSettingsRef = React.useRef(settings);
+    const editSessionTargetRef = React.useRef<EditableSupportTarget | null>(null);
+    const editSessionTargetKeyRef = React.useRef<string | null>(null);
+    const editSessionBeforeSnapshotRef = React.useRef<SupportEditHistorySnapshot | null>(null);
+    const editSessionLatestSettingsRef = React.useRef<SupportSettings | null>(null);
+    const globalSettingsBeforeSupportEditRef = React.useRef<SupportSettings | null>(null);
+    const supportEditSessionDirtyRef = React.useRef(false);
 
     const makeRowFocusHandlers = React.useCallback((key: string) => {
         return {
@@ -77,42 +218,6 @@ export function SupportSidebar() {
                 setAnatomyPreviewActiveSettingKey(null);
             },
         };
-    }, []);
-
-    const deriveViewportBaseScale = React.useCallback((viewportWidth: number, viewportHeight: number, contentHeight: number) => {
-        let nextScale = 1;
-
-        // Width-led compact tiers (panel-local, not full window)
-        if (viewportWidth <= 410) nextScale = 0.97;
-        if (viewportWidth <= 390) nextScale = 0.94;
-        if (viewportWidth <= 370) nextScale = 0.91;
-        if (viewportWidth <= 350) nextScale = 0.88;
-        if (viewportWidth <= 330) nextScale = 0.84;
-        if (viewportWidth <= 312) nextScale = 0.8;
-
-        // Height pressure only matters when genuinely short
-        if (viewportHeight <= 960) nextScale = Math.min(nextScale, 0.95);
-        if (viewportHeight <= 860) nextScale = Math.min(nextScale, 0.9);
-        if (viewportHeight <= 760) nextScale = Math.min(nextScale, 0.86);
-        if (viewportHeight <= 680) nextScale = Math.min(nextScale, 0.8);
-
-        // If there is meaningful vertical slack, recover readability (except on very small panes).
-        const verticalSlack = viewportHeight - contentHeight;
-        const isVerySmallPane = viewportWidth <= 335 || viewportHeight <= 700;
-        if (!isVerySmallPane && verticalSlack > 120) {
-            nextScale = Math.min(1, nextScale + 0.07);
-        }
-        if (!isVerySmallPane && verticalSlack > 220) {
-            nextScale = Math.min(1, nextScale + 0.05);
-        }
-
-        // Tall+narrow columns should keep larger fonts when possible.
-        const isTallNarrow = viewportHeight / Math.max(viewportWidth, 1) >= 1.9;
-        if (isTallNarrow) {
-            nextScale = Math.max(nextScale, 0.9);
-        }
-
-        return nextScale;
     }, []);
 
     useEffect(() => {
@@ -139,65 +244,181 @@ export function SupportSidebar() {
         };
     }, []);
 
-    React.useLayoutEffect(() => {
-        const viewportEl = viewportRef.current;
-        const contentEl = contentRef.current;
-        if (!viewportEl || !contentEl) return;
+    React.useEffect(() => {
+        latestSettingsRef.current = settings;
+    }, [settings]);
 
-        const computeFitScale = () => {
-            const viewportWidth = viewportEl.clientWidth;
-            const viewportHeight = viewportEl.clientHeight;
-            const contentWidth = contentEl.scrollWidth;
-            const contentHeight = contentEl.scrollHeight;
+    const commitPendingSettingsSession = React.useCallback((target: EditableSupportTarget | null) => {
+        if (!target) return;
 
-            if (viewportWidth <= 0 || viewportHeight <= 0 || contentWidth <= 0 || contentHeight <= 0) return;
+        const before = editSessionBeforeSnapshotRef.current;
 
-            const fitWidthScale = viewportWidth / contentWidth;
-            const fitHeightSafety = viewportHeight <= 950 ? 10 : 6;
-            const fitHeightScale = Math.max(0.45, (viewportHeight - fitHeightSafety) / contentHeight);
-            const fitScale = Math.min(1, fitWidthScale, fitHeightScale);
-            const nextBaseScale = deriveViewportBaseScale(viewportWidth, viewportHeight, contentHeight);
+        if (!supportEditSessionDirtyRef.current) {
+            editSessionBeforeSnapshotRef.current = null;
+            editSessionLatestSettingsRef.current = null;
+            return;
+        }
 
-            let windowScaleCap = 1;
-            if (typeof window !== 'undefined') {
-                const vw = window.innerWidth;
-                const vh = window.innerHeight;
-                if (vw <= 2000 || vh <= 950) windowScaleCap = 0.88;
-                if (vw <= 1850 || vh <= 900) windowScaleCap = 0.84;
-                if (vw <= 1700 || vh <= 840) windowScaleCap = 0.8;
+        const latestSettings = editSessionLatestSettingsRef.current ?? getSettings();
+        const persisted = getSupportSettingsForTarget(target);
+        if (!persisted || !areSupportGeometrySettingsEqual(persisted, latestSettings)) {
+            applySettingsToSupportTarget(target, latestSettings);
+        }
+
+        if (before) {
+            const after = captureSupportEditSnapshot();
+            if (hasMeaningfulSupportEditChange(before, after)) {
+                pushSupportEditHistory(
+                    `Adjust ${formatSupportKindLabel(target.kind)} Settings`,
+                    before,
+                    after,
+                );
             }
+        }
 
-            if (Math.abs(nextBaseScale - baseViewportScale) > 0.01) {
-                setBaseViewportScale(nextBaseScale);
-            }
+        editSessionBeforeSnapshotRef.current = null;
+        editSessionLatestSettingsRef.current = null;
+        supportEditSessionDirtyRef.current = false;
+    }, []);
 
-            const minScaleFloor = viewportWidth <= 320 || viewportHeight <= 660
-                ? 0.54
-                : viewportWidth <= 350 || viewportHeight <= 740
-                    ? 0.58
-                    : 0.64;
+    React.useEffect(() => {
+        const nextTarget = editableTarget;
+        const nextKey = nextTarget ? `${nextTarget.kind}:${nextTarget.id}` : null;
+        const prevTarget = editSessionTargetRef.current;
+        const prevKey = editSessionTargetKeyRef.current;
 
-            const nextScale = Math.max(minScaleFloor, Math.min(nextBaseScale, fitScale, windowScaleCap));
-            const nextCompactLayout = nextScale < 0.9 || viewportHeight <= 880;
+        const enteringSupportEdit = !prevTarget && !!nextTarget;
+        const leavingSupportEdit = !!prevTarget && !nextTarget;
 
-            if (Math.abs(nextScale - appliedCompactScale) > 0.01) {
-                setAppliedCompactScale(nextScale);
-            }
+        if (enteringSupportEdit && globalSettingsBeforeSupportEditRef.current === null) {
+            globalSettingsBeforeSupportEditRef.current = getSettings();
+        }
 
-            setIsCompactLayout((prev) => (prev === nextCompactLayout ? prev : nextCompactLayout));
-        };
+        if (prevTarget && prevKey !== nextKey) {
+            commitPendingSettingsSession(prevTarget);
+        }
 
-        computeFitScale();
-        const observer = new ResizeObserver(() => {
-            computeFitScale();
-        });
-        observer.observe(viewportEl);
-        observer.observe(contentEl);
+        if (nextTarget && prevKey !== nextKey) {
+            editSessionBeforeSnapshotRef.current = captureSupportEditSnapshot();
+            supportEditSessionDirtyRef.current = false;
+            editSessionLatestSettingsRef.current = getSupportSettingsForTarget(nextTarget) ?? getSettings();
+        }
 
+        editSessionTargetRef.current = nextTarget;
+        editSessionTargetKeyRef.current = nextKey;
+
+        if (leavingSupportEdit && globalSettingsBeforeSupportEditRef.current) {
+            setSettings(globalSettingsBeforeSupportEditRef.current);
+            globalSettingsBeforeSupportEditRef.current = null;
+        }
+    }, [editableTarget, commitPendingSettingsSession]);
+
+    React.useEffect(() => {
         return () => {
-            observer.disconnect();
+            if (saveStatusTimeoutRef.current !== null) {
+                window.clearTimeout(saveStatusTimeoutRef.current);
+                saveStatusTimeoutRef.current = null;
+            }
+            if (autoBraceStatusTimeoutRef.current !== null) {
+                window.clearTimeout(autoBraceStatusTimeoutRef.current);
+                autoBraceStatusTimeoutRef.current = null;
+            }
+
+            commitPendingSettingsSession(editSessionTargetRef.current);
+
+            if (globalSettingsBeforeSupportEditRef.current) {
+                setSettings(globalSettingsBeforeSupportEditRef.current);
+                globalSettingsBeforeSupportEditRef.current = null;
+            }
         };
-    }, [activeKind, appliedCompactScale, baseViewportScale, deriveViewportBaseScale]);
+    }, [commitPendingSettingsSession]);
+
+    React.useEffect(() => {
+        const targetKey = editableTarget ? `${editableTarget.kind}:${editableTarget.id}` : null;
+
+        if (!editableTarget) {
+            lastEditableTargetKeyRef.current = null;
+            return;
+        }
+
+        if (!selectedSupportSettings) {
+            return;
+        }
+
+        const selectionChanged = targetKey !== lastEditableTargetKeyRef.current;
+        const geometryDiffers = !areSupportGeometrySettingsEqual(settings, selectedSupportSettings);
+
+        if (!selectionChanged) {
+            return;
+        }
+
+        skipFirstApplyForTargetKeyRef.current = targetKey;
+
+        if (geometryDiffers) {
+            isHydratingSelectedSupportRef.current = true;
+            setSettings({
+                ...settings,
+                tip: { ...settings.tip, ...selectedSupportSettings.tip },
+                shaft: { ...settings.shaft, ...selectedSupportSettings.shaft },
+                roots: { ...settings.roots, ...selectedSupportSettings.roots },
+                baseFlare: { ...settings.baseFlare, ...selectedSupportSettings.baseFlare },
+            });
+        }
+
+        if (selectionChanged && activeKind !== editableTarget.kind) {
+            setActiveSupportKind(editableTarget.kind);
+        }
+
+        lastEditableTargetKeyRef.current = targetKey;
+    }, [editableTarget, selectedSupportSettings, settings, activeKind]);
+
+    React.useEffect(() => {
+        if (!editableTarget) return;
+
+        const targetKey = `${editableTarget.kind}:${editableTarget.id}`;
+        if (skipFirstApplyForTargetKeyRef.current === targetKey) {
+            skipFirstApplyForTargetKeyRef.current = null;
+            return;
+        }
+
+        const persistedSelectionSettings = getSupportSettingsForTarget(editableTarget);
+
+        if (!persistedSelectionSettings) return;
+
+        if (isHydratingSelectedSupportRef.current) {
+            // Only swallow the cycle when hydration has already converged.
+            // If settings diverge (e.g. quick preset click right after selection),
+            // allow apply so we don't lose that edit.
+            if (areSupportGeometrySettingsEqual(persistedSelectionSettings, settings)) {
+                isHydratingSelectedSupportRef.current = false;
+                return;
+            }
+            isHydratingSelectedSupportRef.current = false;
+        }
+        if (areSupportGeometrySettingsEqual(persistedSelectionSettings, settings)) return;
+
+        supportEditSessionDirtyRef.current = true;
+        editSessionLatestSettingsRef.current = settings;
+        applySettingsToSupportTarget(editableTarget, settings);
+    }, [editableTarget, settings]);
+
+    React.useEffect(() => {
+        if (!editableTarget) {
+            if (optimisticPresetId !== null) {
+                setOptimisticPresetId(null);
+            }
+            return;
+        }
+
+        if (optimisticPresetId === null) return;
+
+        // Clear optimistic selection only when support-derived matching catches up
+        // to the same preset id. This avoids dropping the visible active tile
+        // back to a stale preset during in-flight store updates.
+        if (selectedPresetIdOverride === optimisticPresetId) {
+            setOptimisticPresetId(null);
+        }
+    }, [editableTarget, optimisticPresetId, selectedPresetIdOverride]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -212,8 +433,12 @@ export function SupportSidebar() {
             setSaveStatus('error');
         }
 
-        window.setTimeout(() => {
+        if (saveStatusTimeoutRef.current !== null) {
+            window.clearTimeout(saveStatusTimeoutRef.current);
+        }
+        saveStatusTimeoutRef.current = window.setTimeout(() => {
             setSaveStatus('idle');
+            saveStatusTimeoutRef.current = null;
         }, 2000);
     }, []);
 
@@ -246,292 +471,388 @@ export function SupportSidebar() {
             setAutoBraceStatus({ kind: 'error', message: 'Auto Brace failed. Check console for details.' });
         }
 
-        window.setTimeout(() => {
+        if (autoBraceStatusTimeoutRef.current !== null) {
+            window.clearTimeout(autoBraceStatusTimeoutRef.current);
+        }
+        autoBraceStatusTimeoutRef.current = window.setTimeout(() => {
             setAutoBraceStatus(null);
+            autoBraceStatusTimeoutRef.current = null;
         }, 2800);
     }, []);
 
-    const getInputProps = (key: string, baseClass: string) => {
+    const getInputProps = React.useCallback((key: string, baseClass: string) => {
         const isActive = activeKey === key;
         if (isActive) {
             return {
                 className: `${baseClass} ring-2`,
                 style: {
                     borderColor: 'var(--accent)',
-                    '--tw-ring-color': 'var(--accent)',
+                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), white 8%) inset, 0 0 0 2px color-mix(in srgb, var(--accent), transparent 72%)',
                 } as React.CSSProperties
             };
         }
         return { className: baseClass };
-    };
+    }, [activeKey]);
 
-    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base no-spinners';
+    const compactInputClass = INPUT_CLASS;
+
     const renderPreviewBox = (heightClass: string, widthClass: string = 'w-full') => (
         <div
             data-no-drag="true"
             className={`relative ${widthClass} ${heightClass} rounded-md border overflow-hidden`}
             style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
         >
-            <div className="absolute bottom-2.5 left-2.5 z-20">
-                <button
-                    type="button"
-                    onClick={() => setAnatomyPreviewShowTuner(!previewState.showTuner)}
-                    className="rounded-md border px-3 py-1.5 text-[12px] font-semibold transition-colors"
-                    style={{
-                        borderColor: previewState.showTuner ? 'var(--accent)' : 'var(--border-subtle)',
-                        background: previewState.showTuner
-                            ? 'color-mix(in srgb, var(--accent), var(--surface-0) 74%)'
-                            : 'color-mix(in srgb, var(--surface-0), transparent 8%)',
-                        color: previewState.showTuner ? 'var(--text-strong)' : 'var(--text-strong)',
-                    }}
-                    title="Toggle Anatomy Preview Tuner"
-                >
-                    Tuner
-                </button>
-            </div>
             <SupportAnatomyPreviewSlot />
         </div>
     );
 
-    return (
-        <div ref={viewportRef} className="h-full w-full overflow-hidden">
-            <div
-                ref={contentRef}
-                className="h-full w-full flex flex-col"
-                style={{
-                    transform: `scale(${appliedCompactScale})`,
-                    transformOrigin: 'top left',
-                    width: `${100 / appliedCompactScale}%`,
-                    height: `${100 / appliedCompactScale}%`,
-                }}
-            >
-            <div className="px-2.5 py-2">
-                <SupportKindTabs
-                    value={activeKind}
-                    onChange={(kind) => {
-                        setAnatomyPreviewActiveSettingKey(null);
-                        setActiveSupportKind(kind);
-                    }}
+    const sectionScrollClass = 'max-h-[calc(100vh-var(--topbar-height)-190px)] overflow-y-auto custom-scrollbar pr-1';
+    const compactFieldLabelClass = 'text-[11px] font-medium leading-tight';
+    const supportGeometryFields = (
+        <div className="space-y-2.5">
+            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
+                <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact Diameter (mm)</div>
+                <NumberInput
+                    value={settings.tip.contactDiameterMm}
+                    onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
+                    step={0.1}
+                    {...getInputProps('tip.contactDiameterMm', compactInputClass)}
                 />
             </div>
 
-            <div className="flex-1 min-h-0 overflow-hidden px-2.5 pb-3 pt-2 space-y-2.5">
-                {activeKind === 'raft' ? (
-                    <div className="space-y-2.5">
-                        {renderPreviewBox('h-[212px]')}
-                        <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                            <RaftSettingsCard
-                                settings={raftSettings}
-                                onChange={(partial) => updateRaftSettings(partial)}
-                            />
-                        </div>
-                    </div>
-                ) : activeKind === 'grid' ? (
-                    <div className="space-y-2.5">
-                        {renderPreviewBox('h-[212px]')}
-                        <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                            <GridSettingsCard
-                                grid={settings.grid}
-                                onChange={(partial) => updateGridSettings(partial)}
-                            />
-                        </div>
-                    </div>
-                ) : activeKind === 'stick' ? (
-                    <div className="space-y-2.5">
-                        {renderPreviewBox('h-[240px]')}
-                        <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                            <AutoBracingSettingsCard
-                                settings={settings.autoBracing}
-                                onChange={(partial) => updateAutoBracingSettings(partial)}
-                                onAutoBrace={handleAutoBrace}
-                                status={autoBraceStatus}
-                            />
-                        </div>
-                    </div>
-                ) : (
-                    <div className="space-y-2.5">
-                        <div className="flex gap-2.5">
-                            {renderPreviewBox(
-                                'h-auto min-h-[340px]',
-                                'flex-1 min-w-0'
-                            )}
+            {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
+                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact Cone Length (mm)</div>
+                    <NumberInput
+                        value={settings.tip.lengthMm}
+                        onChange={(val) => updateTipProfile({ lengthMm: val })}
+                        step={0.1}
+                        {...getInputProps('tip.lengthMm', compactInputClass)}
+                    />
+                </div>
+            )}
 
-                            <div
-                                className="flex-1 min-w-0 rounded-md border p-2.5"
-                                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+            {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
+                <div className="space-y-1 min-w-0" {...fieldFocusProps('tip.coneAngleMode', () => setAnatomyPreviewActiveSettingKey('tip.coneAngleMode'), (e) => {
+                    const next = e.relatedTarget as Node | null;
+                    if (next && e.currentTarget.contains(next)) return;
+                    setAnatomyPreviewActiveSettingKey(null);
+                })}>
+                    <div
+                        className={isAdaptiveConeAngle ? 'grid grid-cols-[1fr_82px] gap-1 items-center' : 'flex items-center'}
+                    >
+                        <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Cone Angle</div>
+                        {isAdaptiveConeAngle && (
+                            <div className="justify-self-start text-[11px] text-left" style={{ color: 'var(--text-muted)' }}>Offset</div>
+                        )}
+                    </div>
+                    <div
+                        className={isAdaptiveConeAngle ? 'grid grid-cols-[1fr_82px] gap-1 items-center' : 'flex items-center gap-1'}
+                    >
+                        <SelectDropdown
+                            value={settings.tip.coneAngleMode ?? 'normal'}
+                            onChange={(value) => updateTipProfile({ coneAngleMode: value as 'normal' | 'locked' | 'adaptive' })}
+                            options={[
+                                { value: 'normal', label: 'Normal' },
+                                { value: 'locked', label: 'Locked' },
+                                { value: 'adaptive', label: 'Adaptive' },
+                            ]}
+                            className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 space-y-0`}
+                            selectClassName={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate`}
+                            selectedDisplay={useAdaptiveIconCompactDisplay ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
+                            hideSelectedText={useAdaptiveIconCompactDisplay}
+                            selectedDisplayAlignment={useAdaptiveIconCompactDisplay ? 'center' : 'left'}
+                            selectedDisplayOffsetX={useAdaptiveIconCompactDisplay ? -7 : 0}
+                            selectStyle={activeKey === 'tip.coneAngleMode'
+                                ? {
+                                    borderColor: 'var(--accent)',
+                                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), white 8%) inset, 0 0 0 2px color-mix(in srgb, var(--accent), transparent 72%)',
+                                }
+                                : undefined}
+                        />
+
+                        {isAdaptiveConeAngle && (
+                            <NumberInput
+                                value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
+                                onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
+                                aria-label="Adaptive offset (deg)"
+                                title="Adaptive offset (deg)"
+                                {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
+                            />
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {(activeKind === 'trunk' || activeKind === 'branch') && (
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
+                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Trunk Diameter (mm)</div>
+                    <NumberInput
+                        value={settings.shaft.diameterMm}
+                        onChange={(val) => updateShaftProfile({ diameterMm: val })}
+                        step={0.1}
+                        {...getInputProps('shaft.diameterMm', compactInputClass)}
+                    />
+                </div>
+            )}
+
+            {activeKind === 'trunk' && (
+                <>
+                    <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
+                    <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Roots</div>
+
+                    <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
+                        <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Roots Diameter (mm)</div>
+                        <NumberInput
+                            value={settings.roots.diameterMm}
+                            onChange={(val) => updateRootsProfile({ diameterMm: val })}
+                            step={0.1}
+                            {...getInputProps('roots.diameterMm', compactInputClass)}
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
+                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Disk Height (mm)</div>
+                            <NumberInput
+                                value={settings.roots.diskHeightMm}
+                                onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
+                                step={0.1}
+                                {...getInputProps('roots.diskHeightMm', compactInputClass)}
+                            />
+                        </div>
+
+                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.coneHeightMm')}>
+                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Cone Height (mm)</div>
+                            <NumberInput
+                                value={settings.roots.coneHeightMm}
+                                onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
+                                step={0.1}
+                                {...getInputProps('roots.coneHeightMm', compactInputClass)}
+                            />
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+
+    const activeKindIcon = activeKindMeta.icon;
+    const ActiveKindIcon = activeKindIcon;
+
+    return (
+        <Card>
+            <CardHeader
+                left={(
+                    <>
+                        <IconButton
+                            onClick={() => setExpanded((prev) => !prev)}
+                            className="!p-0.5"
+                            title={expanded ? 'Collapse card' : 'Expand card'}
+                        >
+                            <svg
+                                className="w-3 h-3 transform transition-transform"
+                                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
                             >
-                            <div className="space-y-2">
-                                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                    Support Geometry
-                                </div>
+                                {expanded ? (
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                ) : (
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                )}
+                            </svg>
+                        </IconButton>
+                        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Support Studio</h3>
+                    </>
+                )}
+                right={(
+                    <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                        <ActiveKindIcon className="h-3 w-3" style={{ color: 'var(--accent)' }} />
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{activeKindMeta.label}</span>
+                    </div>
+                )}
+            />
 
-                                <div className="space-y-2 items-start">
-                                    <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
-                                        <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact diameter</div>
-                                        <NumberInput
-                                            value={settings.tip.contactDiameterMm}
-                                            onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
-                                            {...getInputProps(
-                                                'tip.contactDiameterMm',
-                                                compactInputClass
-                                            )}
+            {expanded && (
+                <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
+                    <div className={sectionScrollClass}>
+                        <div className="space-y-2">
+                            {showCurvePage ? (
+                                <>
+                                    <Section title="Curves" accent>
+                                        <CurveSettingsCard embedded />
+                                    </Section>
+                                </>
+                            ) : (
+                                <>
+                                    <Section title="Support type" accent>
+                                        <SupportKindTabs
+                                            value={tabKind}
+                                            onChange={(kind) => {
+                                                setAnatomyPreviewActiveSettingKey(null);
+                                                setActiveSupportKind(kind);
+                                            }}
                                         />
-                                    </div>
+                                    </Section>
 
-                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
-                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
-                                            <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact cone length</div>
-                                            <NumberInput
-                                                value={settings.tip.lengthMm}
-                                                onChange={(val) => updateTipProfile({ lengthMm: val })}
-                                                {...getInputProps(
-                                                    'tip.lengthMm',
-                                                    compactInputClass
-                                                )}
-                                            />
-                                        </div>
-                                    )}
-
-                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
-                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.coneAngleMode')}>
-                                            <div
-                                                className={
-                                                    isAdaptiveConeAngle
-                                                        ? 'grid grid-cols-[1fr_72px] gap-1 items-center'
-                                                        : 'flex items-center'
-                                                }
-                                            >
-                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Cone control angle</div>
-                                                {isAdaptiveConeAngle && (
-                                                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Offset (deg)</div>
-                                                )}
-                                            </div>
-                                            <div
-                                                className={
-                                                    isAdaptiveConeAngle
-                                                        ? 'grid grid-cols-[1fr_72px] gap-1 items-center'
-                                                        : 'flex items-center gap-1'
-                                                }
-                                            >
-                                                <select
-                                                    value={settings.tip.coneAngleMode ?? 'normal'}
-                                                    onChange={(e) => updateTipProfile({ coneAngleMode: e.target.value as any })}
-                                                    className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 ui-input h-[36px] px-3 py-2 text-base truncate`}
-                                                >
-                                                    <option value="normal">Normal</option>
-                                                    <option value="locked">Locked</option>
-                                                    <option value="adaptive">Adaptive</option>
-                                                </select>
-
-                                                {isAdaptiveConeAngle && (
-                                                    <NumberInput
-                                                        value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
-                                                        onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
-                                                        aria-label="Adaptive offset (deg)"
-                                                        title="Adaptive offset (deg)"
-                                                        className={compactInputClass}
-                                                    />
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {(activeKind === 'trunk' || activeKind === 'branch') && (
-                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
-                                            <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                                                Trunk diameter
-                                            </div>
-                                            <NumberInput
-                                                value={settings.shaft.diameterMm}
-                                                onChange={(val) => updateShaftProfile({ diameterMm: val })}
-                                                {...getInputProps(
-                                                    'shaft.diameterMm',
-                                                    compactInputClass
-                                                )}
-                                            />
-                                        </div>
-                                    )}
-
-                                    {activeKind === 'trunk' && (
+                                    {activeKind === 'raft' ? (
                                         <>
-                                            <div className="pt-1" />
-
-                                            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Roots</div>
-
-                                            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
-                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Roots diameter</div>
-                                                <NumberInput
-                                                    value={settings.roots.diameterMm}
-                                                    onChange={(val) => updateRootsProfile({ diameterMm: val })}
-                                                    className={compactInputClass}
+                                            <Section title="Anatomy preview">
+                                                {renderPreviewBox('h-[220px]')}
+                                            </Section>
+                                            <Section title="Raft settings">
+                                                <RaftSettingsCard
+                                                    settings={raftSettings}
+                                                    onChange={(partial) => updateRaftSettings(partial)}
                                                 />
+                                            </Section>
+                                        </>
+                                    ) : activeKind === 'grid' ? (
+                                        <>
+                                            <Section title="Anatomy preview">
+                                                {renderPreviewBox('h-[220px]')}
+                                            </Section>
+                                            <Section title="Grid settings">
+                                                <GridSettingsCard
+                                                    grid={settings.grid}
+                                                    onChange={(partial) => updateGridSettings(partial)}
+                                                />
+                                            </Section>
+                                        </>
+                                    ) : activeKind === 'stick' ? (
+                                        <>
+                                            <Section title="Anatomy preview">
+                                                {renderPreviewBox('h-[250px]')}
+                                            </Section>
+                                            <Section title="Auto bracing">
+                                                <AutoBracingSettingsCard
+                                                    settings={settings.autoBracing}
+                                                    onChange={(partial) => updateAutoBracingSettings(partial)}
+                                                    onAutoBrace={handleAutoBrace}
+                                                    status={autoBraceStatus}
+                                                />
+                                            </Section>
+                                        </>
+                                    ) : activeKind === 'trunk' ? (
+                                        <>
+                                            <div className="flex gap-2 items-stretch">
+                                                <div className="flex-1 min-w-0 rounded-md border p-2 flex flex-col" style={SECTION_CARD_STYLE}>
+                                                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                                        Anatomy preview
+                                                    </div>
+                                                    {renderPreviewBox('flex-1 min-h-[340px]')}
+                                                </div>
+
+                                                <div className="flex-1 min-w-0 rounded-md border p-2" style={SECTION_CARD_STYLE}>
+                                                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                                        Support geometry
+                                                    </div>
+                                                    {supportGeometryFields}
+                                                </div>
                                             </div>
 
-                                            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
-                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Disk height</div>
-                                                <NumberInput
-                                                    value={settings.roots.diskHeightMm}
-                                                    onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
-                                                    className={compactInputClass}
-                                                />
-                                            </div>
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
+                                                <PresetSelector
+                                                    selectedPresetIdOverride={effectivePresetIdOverride}
+                                                    disableGlobalPresetActivation={Boolean(editableTarget)}
+                                                    onPresetSelected={(presetId) => {
+                                                        const liveSupportState = getSupportSnapshot();
+                                                        const liveTarget = resolveEditableSupportTarget(
+                                                            liveSupportState.selectedId,
+                                                            liveSupportState.selectedCategory ?? undefined,
+                                                        );
 
-                                            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.coneHeightMm')}>
-                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Cone height</div>
-                                                <NumberInput
-                                                    value={settings.roots.coneHeightMm}
-                                                    onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
-                                                    className={compactInputClass}
+                                                        if (liveTarget) {
+                                                            const preset = getPresetById(presetId);
+                                                            if (preset) {
+                                                                const current = getSettings();
+
+                                                                supportEditSessionDirtyRef.current = true;
+                                                                const nextSettings: SupportSettings = {
+                                                                    ...preset.settings,
+                                                                    grid: {
+                                                                        ...current.grid,
+                                                                    },
+                                                                    tip: {
+                                                                        ...preset.settings.tip,
+                                                                        coneAngleMode: current.tip.coneAngleMode,
+                                                                        adaptiveConeAngleOffsetDeg: current.tip.adaptiveConeAngleOffsetDeg,
+                                                                        coneAngleDeg: current.tip.coneAngleDeg,
+                                                                    },
+                                                                    autoBracing: {
+                                                                        ...current.autoBracing,
+                                                                    },
+                                                                };
+                                                                editSessionLatestSettingsRef.current = nextSettings;
+                                                                setSettings(nextSettings);
+                                                                applySettingsToSupportTarget(liveTarget, nextSettings);
+                                                            }
+                                                        }
+
+                                                        if (!liveTarget) return;
+                                                        setOptimisticPresetId(presetId);
+                                                    }}
                                                 />
                                             </div>
                                         </>
+                                    ) : (
+                                        <>
+                                            <Section title="Anatomy preview">
+                                                {renderPreviewBox('h-[250px]')}
+                                            </Section>
+
+                                            <Section title="Support geometry">
+                                                {supportGeometryFields}
+                                            </Section>
+
+                                            {/* Placement notes removed per design request */}
+                                        </>
                                     )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+
+                    {activeKind !== 'trunk' ? (
+                        <Section title="Actions" accent>
+                            {saveStatus !== 'idle' && (
+                                <div
+                                    className="mb-2 text-[10px]"
+                                    style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
+                                >
+                                    {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
                                 </div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-1.5">
+                                <Button
+                                    type="button"
+                                    onClick={handleSave}
+                                    variant="primary"
+                                    size="md"
+                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    <span>Save</span>
+                                </Button>
+
+                                <Button
+                                    type="button"
+                                    onClick={handleRestoreDefaults}
+                                    variant="accent"
+                                    size="md"
+                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
+                                >
+                                    <RotateCcw className="h-4 w-4" />
+                                    <span>Defaults</span>
+                                </Button>
                             </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {activeKind === 'trunk' && (
-                    <div className="w-full overflow-hidden">
-                        <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                            <PresetSelector />
-                        </div>
-                    </div>
-                )}
-
-                {activeKind === 'trunk' && !isCompactLayout && (
-                    <div className="rounded-md p-2 border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                        <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>Placement</div>
-                        <p className="leading-tight">
-                            Click model to place support. Tip aligns to surface, base drops to plate.
-                        </p>
-                    </div>
-                )}
-            </div>
-
-            <div className="px-2 pt-1 pb-2">
-                {saveStatus !== 'idle' && (
-                    <div
-                        className="mb-1 text-[10px]"
-                        style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
-                    >
-                        {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
-                    </div>
-                )}
-                <div className="grid grid-cols-2 gap-1.5">
-                    <Button type="button" onClick={handleSave} variant="primary" size="sm" className="w-full !h-10 !text-[12px] !font-semibold !inline-flex !items-center !justify-center !gap-2">
-                        <Save className="h-3.5 w-3.5" />
-                        <span>Save</span>
-                    </Button>
-                    <Button type="button" onClick={handleRestoreDefaults} variant="accent" size="sm" className="w-full !h-10 !text-[12px] !font-semibold !inline-flex !items-center !justify-center !gap-2">
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        <span>Restore Defaults</span>
-                    </Button>
+                        </Section>
+                    ) : null}
                 </div>
-            </div>
-            </div>
-        </div>
+            )}
+        </Card>
     );
 }

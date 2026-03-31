@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -26,6 +26,9 @@ import {
 } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
+import type { BracePreviewData } from './bracePlacementState';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -60,6 +63,8 @@ export function BracePlacementController() {
 
     const { raycaster, camera, pointer } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
+    const supportEditSuppressedRef = useRef(false);
+    const lastPreviewSignatureRef = useRef<string | null>(null);
 
     const segmentMeta = useMemo(() => {
         const map = new Map<string, { modelId: string; supportKey: string; isBezier: boolean }>();
@@ -188,7 +193,18 @@ export function BracePlacementController() {
         targets.push(...buildLeafConePathSnapTargets(leafMeta));
 
         return targets;
-    }, [altActive, stage, start, supportState, kickstandState, leafMeta]);
+    }, [
+        altActive,
+        stage,
+        start,
+        supportState.trunks,
+        supportState.branches,
+        supportState.braces,
+        supportState.twigs,
+        supportState.sticks,
+        kickstandState.kickstands,
+        leafMeta,
+    ]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -215,6 +231,18 @@ export function BracePlacementController() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    const publishPreview = useCallback((signature: string, preview: BracePreviewData | null) => {
+        if (lastPreviewSignatureRef.current === signature) return;
+        lastPreviewSignatureRef.current = signature;
+        bracePlacementStore.setPreview(preview);
+    }, []);
+
+    useEffect(() => {
+        if (!altActive || stage === 'idle') {
+            lastPreviewSignatureRef.current = null;
+        }
+    }, [altActive, stage]);
 
     useEffect(() => {
         if (altActive) return;
@@ -303,16 +331,33 @@ export function BracePlacementController() {
     }, [hoveredShaftRef, resolveSnapFromClick]);
 
     useFrame(() => {
+        if (isSupportEditInteractionActive()) {
+            if (!supportEditSuppressedRef.current) {
+                supportEditSuppressedRef.current = true;
+                bracePlacementStore.setSnapTarget(null);
+                publishPreview('blocked:support-edit', null);
+                resetSnapping();
+            }
+            return;
+        }
+
+        supportEditSuppressedRef.current = false;
+
         if (!altActive && stage === 'idle') return;
 
-        const resolvedSnap = updateAndGetResolvedSnap();
+        // Fast path: when shaft-hover already provides a concrete segment+point,
+        // skip the heavier global snapping pass for this frame.
+        const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
+        const resolvedSnap = hasHoveredShaftFastPath
+            ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
+            : updateAndGetResolvedSnap();
 
         // Hover preview (before first click): show a knot-sized sphere on the hovered segment.
         if (stage === 'idle') {
             // If Branch is awaiting a base click, avoid showing brace hover previews.
             if (branchPlacementStore.getSnapshot().stage === 'awaitingBase') {
                 bracePlacementStore.setSnapTarget(null);
-                bracePlacementStore.setPreview(null);
+                publishPreview('idle:branch-awaiting-base', null);
                 return;
             }
 
@@ -321,12 +366,19 @@ export function BracePlacementController() {
                 const settings = getSettings();
                 const fallbackDia = settings.shaft.diameterMm;
                 const hostDia = hoveredSnap.hostDiameterMm ?? fallbackDia;
-                bracePlacementStore.setPreview({
+                const preview = {
                     start: hoveredSnap.snappedPos,
                     end: hoveredSnap.snappedPos,
                     startDiameterMm: hostDia,
                     endDiameterMm: hostDia,
-                });
+                };
+                const signature = [
+                    'brace:hovered-snap',
+                    hoveredSnap.segmentId ?? 'none',
+                    previewVecKey(hoveredSnap.snappedPos),
+                    quantizePreviewValue(hostDia),
+                ].join('|');
+                publishPreview(signature, preview);
                 bracePlacementStore.setSnapTarget(null);
                 return;
             }
@@ -338,14 +390,21 @@ export function BracePlacementController() {
                 if (leafMeta.has(resolvedSnap.targetId)) {
                     const resolved = resolveLeafSurface(resolvedSnap.targetId, resolvedSnap.snappedPos, resolvedSnap.t);
                     if (resolved) {
-                        bracePlacementStore.setPreview({
+                        const preview = {
                             start: resolved.pos,
                             end: resolved.pos,
                             startDiameterMm: resolved.diameterMm,
                             endDiameterMm: resolved.diameterMm,
-                        });
+                        };
+                        const signature = [
+                            'brace:leaf-snap',
+                            resolvedSnap.targetId,
+                            previewVecKey(resolved.pos),
+                            quantizePreviewValue(resolved.diameterMm),
+                        ].join('|');
+                        publishPreview(signature, preview);
                     } else {
-                        bracePlacementStore.setPreview(null);
+                        publishPreview('brace:leaf-snap-invalid', null);
                     }
                 } else {
                     const target = resolveNearestPathTarget(resolvedSnap.targetId, resolvedSnap.snappedPos) ?? getTarget(resolvedSnap.targetId);
@@ -361,15 +420,23 @@ export function BracePlacementController() {
                         }
                     }
                     // Zero-length preview: renders as a single sphere with green lights.
-                    bracePlacementStore.setPreview({
+                    const preview = {
                         start: resolvedSnap.snappedPos,
                         end: resolvedSnap.snappedPos,
                         startDiameterMm: hostDia,
                         endDiameterMm: hostDia,
-                    });
+                    };
+                    const signature = [
+                        'brace:locked-snap',
+                        resolvedSnap.targetId,
+                        previewVecKey(resolvedSnap.snappedPos),
+                        quantizePreviewValue(resolvedSnap.t),
+                        quantizePreviewValue(hostDia),
+                    ].join('|');
+                    publishPreview(signature, preview);
                 }
             } else {
-                bracePlacementStore.setPreview(null);
+                publishPreview('brace:idle-clear', null);
             }
 
             bracePlacementStore.setSnapTarget(null);
@@ -508,12 +575,23 @@ export function BracePlacementController() {
             bracePlacementStore.setSnapTarget(null);
         }
 
-        bracePlacementStore.setPreview({
+        const preview = {
             start: start.snappedPos,
             end: endPos,
             startDiameterMm: startDiam,
             endDiameterMm: endDiam,
-        });
+        };
+        const previewSignature = [
+            'brace:active',
+            start.kind,
+            start.segmentId ?? start.leafId ?? 'none',
+            previewVecKey(start.snappedPos),
+            previewVecKey(endPos),
+            quantizePreviewValue(startDiam),
+            quantizePreviewValue(endDiam),
+            previewVecKey(resolvedSnap.state === 'locked' ? resolvedSnap.snappedPos ?? null : null),
+        ].join('|');
+        publishPreview(previewSignature, preview);
     });
 
     useEffect(() => {

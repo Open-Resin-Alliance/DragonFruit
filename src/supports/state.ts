@@ -4,14 +4,38 @@ import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, calculateKnotPosit
 import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
-import { JOINT_DIAMETER_OFFSET_MM } from './constants';
+import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
+import { getJointDiameter, JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, setKickstandSnapshot, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
+import type { SupportSettings } from './Settings/types';
+import { createDefaultSettings } from './Settings/types';
+import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
+
+function isSupportSettingsDebugEnabled(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+        return window.localStorage.getItem('df-debug-support-settings') === '1';
+    } catch {
+        return false;
+    }
+}
+
+function logSupportSettingsDebug(...args: unknown[]): void {
+    if (!isSupportSettingsDebugEnabled()) return;
+    console.log('[SupportSettingsDebug]', ...args);
+}
 
 const listeners = new Set<() => void>();
+
+type SupportSettingsHexCache = {
+    trunk: Record<string, string>;
+    branch: Record<string, string>;
+    leaf: Record<string, string>;
+};
 
 const initialState: SupportState = {
     roots: {},
@@ -30,6 +54,148 @@ const initialState: SupportState = {
 };
 
 let state: SupportState = { ...initialState };
+
+let supportSettingsHexCache: SupportSettingsHexCache = {
+    trunk: {},
+    branch: {},
+    leaf: {},
+};
+
+type SelectionCategory = 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
+
+interface SelectionLookupCache {
+    trunksRef: SupportState['trunks'];
+    branchesRef: SupportState['branches'];
+    leavesRef: SupportState['leaves'];
+    twigsRef: SupportState['twigs'];
+    sticksRef: SupportState['sticks'];
+    kickstandsRef: Record<string, Kickstand>;
+    jointIds: Set<string>;
+    segmentIds: Set<string>;
+    contactDiskIds: Set<string>;
+    kickstandIds: Set<string>;
+}
+
+let selectionLookupCache: SelectionLookupCache | null = null;
+
+function getSelectionLookupCache(): SelectionLookupCache {
+    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstands = kickstandSnapshot.kickstands;
+
+    if (
+        selectionLookupCache
+        && selectionLookupCache.trunksRef === state.trunks
+        && selectionLookupCache.branchesRef === state.branches
+        && selectionLookupCache.leavesRef === state.leaves
+        && selectionLookupCache.twigsRef === state.twigs
+        && selectionLookupCache.sticksRef === state.sticks
+        && selectionLookupCache.kickstandsRef === kickstands
+    ) {
+        return selectionLookupCache;
+    }
+
+    const jointIds = new Set<string>();
+    const segmentIds = new Set<string>();
+    const contactDiskIds = new Set<string>();
+    const kickstandIds = new Set<string>();
+
+    for (const trunk of Object.values(state.trunks)) {
+        for (const segment of trunk.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (trunk.contactCone?.id) {
+            contactDiskIds.add(trunk.contactCone.id);
+        }
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        for (const segment of branch.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (branch.contactCone?.id) {
+            contactDiskIds.add(branch.contactCone.id);
+        }
+    }
+
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.contactCone?.id) {
+            contactDiskIds.add(leaf.contactCone.id);
+        }
+    }
+
+    for (const twig of Object.values(state.twigs)) {
+        for (const segment of twig.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (twig.contactDiskA?.id) contactDiskIds.add(twig.contactDiskA.id);
+        if (twig.contactDiskB?.id) contactDiskIds.add(twig.contactDiskB.id);
+    }
+
+    for (const stick of Object.values(state.sticks)) {
+        for (const segment of stick.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (stick.contactConeA?.id) contactDiskIds.add(stick.contactConeA.id);
+        if (stick.contactConeB?.id) contactDiskIds.add(stick.contactConeB.id);
+    }
+
+    for (const kickstand of Object.values(kickstands)) {
+        kickstandIds.add(kickstand.id);
+        for (const segment of kickstand.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+    }
+
+    selectionLookupCache = {
+        trunksRef: state.trunks,
+        branchesRef: state.branches,
+        leavesRef: state.leaves,
+        twigsRef: state.twigs,
+        sticksRef: state.sticks,
+        kickstandsRef: kickstands,
+        jointIds,
+        segmentIds,
+        contactDiskIds,
+        kickstandIds,
+    };
+
+    return selectionLookupCache;
+}
+
+function resolveSelectionCategory(id: string): SelectionCategory {
+    if (!id) return null;
+    if (id.startsWith('braceSegment:')) return 'segment';
+    if (state.roots[id]) return 'root';
+    if (state.trunks[id]) return 'trunk';
+    if (state.branches[id]) return 'branch';
+    if (state.leaves[id]) return 'leaf';
+    if (state.twigs[id]) return 'twig';
+    if (state.sticks[id]) return 'stick';
+    if (state.braces[id]) return 'brace';
+
+    const lookup = getSelectionLookupCache();
+    if (lookup.kickstandIds.has(id)) return 'brace';
+    if (state.knots[id]) return 'knot';
+    if (lookup.jointIds.has(id)) return 'joint';
+    if (lookup.segmentIds.has(id)) return 'segment';
+    if (lookup.contactDiskIds.has(id)) return 'contactDisk';
+
+    return null;
+}
 
 function deepClone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
@@ -724,6 +890,52 @@ function notify() {
     listeners.forEach((l) => l());
 }
 
+function rebuildSupportSettingsHexCacheFromState() {
+    const next: SupportSettingsHexCache = {
+        trunk: {},
+        branch: {},
+        leaf: {},
+    };
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.settingsCodeHex) next.trunk[trunk.id] = trunk.settingsCodeHex;
+    }
+    for (const branch of Object.values(state.branches)) {
+        if (branch.settingsCodeHex) next.branch[branch.id] = branch.settingsCodeHex;
+    }
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.settingsCodeHex) next.leaf[leaf.id] = leaf.settingsCodeHex;
+    }
+
+    supportSettingsHexCache = next;
+}
+
+function clearSupportSettingsHexCache() {
+    supportSettingsHexCache = {
+        trunk: {},
+        branch: {},
+        leaf: {},
+    };
+}
+
+function getCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string, entityHex?: string): string | null {
+    const cached = supportSettingsHexCache[kind][id];
+    if (cached) return cached;
+    if (entityHex) {
+        supportSettingsHexCache[kind][id] = entityHex;
+        return entityHex;
+    }
+    return null;
+}
+
+function setCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string, hex: string) {
+    supportSettingsHexCache[kind][id] = hex;
+}
+
+function deleteCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string) {
+    delete supportSettingsHexCache[kind][id];
+}
+
 function syncKickstandHostKnotsFromSharedKnots(sharedKnots: Record<string, Knot>) {
     const kickstandState = getKickstandSnapshot();
     let nextKnots = kickstandState.knots;
@@ -866,6 +1078,8 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
 
 export function setSnapshot(next: SupportState) {
     state = next;
+    rebuildSupportSettingsHexCacheFromState();
+    emitSupportInteractionReset('setSnapshot');
     notify();
 }
 
@@ -1774,7 +1988,9 @@ export function toggleSegmentCurve(segmentId: string) {
 
 export function resetStore() {
     state = { ...initialState };
+    clearSupportSettingsHexCache();
     resetKickstandStore();
+    emitSupportInteractionReset('resetStore');
     notify();
 }
 
@@ -1856,6 +2072,8 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
     newState.leaves = normalized.leaves;
 
     state = newState;
+    rebuildSupportSettingsHexCacheFromState();
+    emitSupportInteractionReset('loadFromLychee');
     console.log('[SupportStore] Loaded from Lychee:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
@@ -2171,6 +2389,8 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
     merged.leaves = normalized.leaves;
 
     state = merged;
+    rebuildSupportSettingsHexCacheFromState();
+    emitSupportInteractionReset('mergeFromLychee');
     console.log('[SupportStore] Merged from Lychee:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
@@ -2187,188 +2407,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
 
 export function setSelectedId(id: string | null) {
     if (state.selectedId === id) return;
-
-    let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null = null;
-
-    if (id) {
-        const kickstands = Object.values(getKickstandSnapshot().kickstands);
-
-        if (id.startsWith('braceSegment:')) category = 'segment';
-        if (state.roots[id]) category = 'root';
-        else if (state.trunks[id]) category = 'trunk';
-        else if (state.branches[id]) category = 'branch';
-        else if (state.leaves[id]) category = 'leaf';
-        else if (state.twigs[id]) category = 'twig';
-        else if (state.sticks[id]) category = 'stick';
-        else if (state.braces[id]) category = 'brace';
-        else if (kickstands.some((kickstand) => kickstand.id === id)) category = 'brace';
-        else if (state.knots[id]) category = 'knot';
-        else {
-            // Check for joints inside trunks
-            let foundJoint = false;
-            const trunks = Object.values(state.trunks);
-            for (const t of trunks) {
-                for (const s of t.segments) {
-                    if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                        foundJoint = true;
-                        break;
-                    }
-                }
-                if (foundJoint) break;
-            }
-
-            if (foundJoint) {
-                category = 'joint';
-            } else {
-                // Check for joints inside branches
-                const branches = Object.values(state.branches);
-                for (const b of branches) {
-                    for (const s of b.segments) {
-                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                            foundJoint = true;
-                            break;
-                        }
-                    }
-                    if (foundJoint) break;
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            if (!category) {
-                for (const kickstand of kickstands) {
-                    const hasJoint = kickstand.segments.some(s => s.topJoint?.id === id || s.bottomJoint?.id === id);
-                    if (hasJoint) {
-                        foundJoint = true;
-                        break;
-                    }
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            if (!category) {
-                const twigs = Object.values(state.twigs);
-                for (const t of twigs) {
-                    for (const s of t.segments) {
-                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                            foundJoint = true;
-                            break;
-                        }
-                    }
-                    if (foundJoint) break;
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            if (!category) {
-                const sticks = Object.values(state.sticks);
-                for (const spt of sticks) {
-                    for (const s of spt.segments) {
-                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                            foundJoint = true;
-                            break;
-                        }
-                    }
-                    if (foundJoint) break;
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            // Check for segments
-            if (!category) {
-                const trunks = Object.values(state.trunks);
-                for (const t of trunks) {
-                    if (t.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                const branches = Object.values(state.branches);
-                for (const b of branches) {
-                    if (b.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                const twigs = Object.values(state.twigs);
-                for (const t of twigs) {
-                    if (t.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                const sticks = Object.values(state.sticks);
-                for (const spt of sticks) {
-                    if (spt.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const kickstand of kickstands) {
-                    if (kickstand.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const trunk of Object.values(state.trunks)) {
-                    if (trunk.contactCone?.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const branch of Object.values(state.branches)) {
-                    if (branch.contactCone?.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const leaf of Object.values(state.leaves)) {
-                    if (leaf.contactCone?.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const twig of Object.values(state.twigs)) {
-                    if (twig.contactDiskA.id === id || twig.contactDiskB.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const stick of Object.values(state.sticks)) {
-                    if (stick.contactConeA.id === id || stick.contactConeB.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    const category: SelectionCategory = id ? resolveSelectionCategory(id) : null;
 
     state = { ...state, selectedId: id, selectedCategory: category };
     notify();
@@ -2383,6 +2422,15 @@ export function setHoveredId(id: string | null) {
 export function setHoveredCategory(category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none') {
     if (state.hoveredCategory === category) return;
     state = { ...state, hoveredCategory: category };
+    notify();
+}
+
+export function setHoveredState(
+    category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none',
+    id: string | null,
+) {
+    if (state.hoveredCategory === category && state.hoveredId === id) return;
+    state = { ...state, hoveredCategory: category, hoveredId: id };
     notify();
 }
 
@@ -2401,6 +2449,10 @@ export function addRoot(root: Roots) {
 }
 
 export function addTrunk(trunk: Trunk) {
+    if (trunk.settingsCodeHex) {
+        setCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex);
+    }
+
     state = {
         ...state,
         trunks: { ...state.trunks, [trunk.id]: trunk }
@@ -2411,11 +2463,20 @@ export function addTrunk(trunk: Trunk) {
 export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: boolean }) {
     const skipDependentGeometry = options?.skipDependentGeometry === true;
 
+    const cachedHex = getCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex ?? undefined);
+    const nextTrunk = !trunk.settingsCodeHex && cachedHex
+        ? { ...trunk, settingsCodeHex: cachedHex }
+        : trunk;
+
+    if (nextTrunk.settingsCodeHex) {
+        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunk.settingsCodeHex);
+    }
+
     // Update trunk
-    const nextTrunks = { ...state.trunks, [trunk.id]: trunk };
+    const nextTrunks = { ...state.trunks, [nextTrunk.id]: nextTrunk };
 
     // Update any knots attached to this trunk's segments
-    const root = state.roots[trunk.rootId];
+    const root = state.roots[nextTrunk.rootId];
     let nextKnots = state.knots;
     let nextLeaves = state.leaves;
     let knotsChanged = false;
@@ -2426,11 +2487,11 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
 
         for (const knot of Object.values(state.knots)) {
             // Find if this knot is attached to one of this trunk's segments
-            const segIndex = trunk.segments.findIndex(s => s.id === knot.parentShaftId);
+            const segIndex = nextTrunk.segments.findIndex(s => s.id === knot.parentShaftId);
             if (segIndex === -1) continue;
 
-            const seg = trunk.segments[segIndex];
-            const endpoints = getTrunkSegmentEndpoints(trunk, seg, segIndex, root);
+            const seg = nextTrunk.segments[segIndex];
+            const endpoints = getTrunkSegmentEndpoints(nextTrunk, seg, segIndex, root);
             const nextDiameter = seg.diameter + 0.1;
 
             let nextPos = knot.pos;
@@ -2482,6 +2543,10 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
 }
 
 export function addBranch(branch: Branch) {
+    if (branch.settingsCodeHex) {
+        setCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex);
+    }
+
     state = {
         ...state,
         branches: { ...state.branches, [branch.id]: branch }
@@ -2490,6 +2555,10 @@ export function addBranch(branch: Branch) {
 }
 
 export function addLeaf(leaf: Leaf) {
+    if (leaf.settingsCodeHex) {
+        setCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex);
+    }
+
     state = {
         ...state,
         leaves: { ...state.leaves, [leaf.id]: leaf }
@@ -2500,7 +2569,16 @@ export function addLeaf(leaf: Leaf) {
 export function updateLeaf(leaf: Leaf) {
     if (!state.leaves[leaf.id]) return;
 
-    const nextLeaves = { ...state.leaves, [leaf.id]: leaf };
+    const cachedHex = getCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex ?? undefined);
+    const nextLeaf = !leaf.settingsCodeHex && cachedHex
+        ? { ...leaf, settingsCodeHex: cachedHex }
+        : leaf;
+
+    if (nextLeaf.settingsCodeHex) {
+        setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeaf.settingsCodeHex);
+    }
+
+    const nextLeaves = { ...state.leaves, [nextLeaf.id]: nextLeaf };
     const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, state.knots);
     const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
 
@@ -2993,6 +3071,14 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
     };
+
+    for (const id of branchIdsToRemove) {
+        deleteCachedSupportSettingsHex('branch', id);
+    }
+    for (const id of leafIdsToRemove) {
+        deleteCachedSupportSettingsHex('leaf', id);
+    }
+
     notify();
     return snapshots;
 }
@@ -3002,10 +3088,19 @@ export function updateBranch(branch: Branch, options?: { skipDependentGeometry?:
 
     if (!state.branches[branch.id]) return;
 
-    const nextBranches = { ...state.branches, [branch.id]: branch };
+    const cachedHex = getCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex ?? undefined);
+    const nextBranch = !branch.settingsCodeHex && cachedHex
+        ? { ...branch, settingsCodeHex: cachedHex }
+        : branch;
+
+    if (nextBranch.settingsCodeHex) {
+        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranch.settingsCodeHex);
+    }
+
+    const nextBranches = { ...state.branches, [nextBranch.id]: nextBranch };
 
     // Update any knots attached to this branch's segments
-    const parentKnot = state.knots[branch.parentKnotId];
+    const parentKnot = state.knots[nextBranch.parentKnotId];
     let nextKnots = state.knots;
     let nextLeaves = state.leaves;
 
@@ -3015,11 +3110,11 @@ export function updateBranch(branch: Branch, options?: { skipDependentGeometry?:
         let knotsChanged = false;
 
         for (const knot of Object.values(state.knots)) {
-            const segIndex = branch.segments.findIndex(s => s.id === knot.parentShaftId);
+            const segIndex = nextBranch.segments.findIndex(s => s.id === knot.parentShaftId);
             if (segIndex === -1) continue;
 
-            const seg = branch.segments[segIndex];
-            const endpoints = getBranchSegmentEndpoints(branch, seg, segIndex, parentKnot);
+            const seg = nextBranch.segments[segIndex];
+            const endpoints = getBranchSegmentEndpoints(nextBranch, seg, segIndex, parentKnot);
             if (!endpoints || knot.t === undefined) continue;
 
             const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, knot.t);
@@ -3089,7 +3184,8 @@ export function removeKnotById(knotId: string): Knot | null {
     return deepClone(knot);
 }
 
-export function updateKnot(knot: Knot) {
+export function updateKnot(knot: Knot, options?: { skipDependentGeometry?: boolean }) {
+    const skipDependentGeometry = options?.skipDependentGeometry === true;
     const existing = state.knots[knot.id];
     if (!existing) return;
 
@@ -3107,6 +3203,15 @@ export function updateKnot(knot: Knot) {
 
     const baseKnots = { ...state.knots, [knot.id]: knot };
 
+    if (skipDependentGeometry) {
+        // Drag-time fast path: keep knot + brace-segment knots responsive while
+        // deferring expensive leaf-dependent geometry recomputes until commit.
+        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, baseKnots);
+        state = { ...state, knots: braceSeg.knots };
+        notify();
+        return;
+    }
+
     let nextLeaves = recomputeKnotDependentGeometry(state.leaves, { [knot.id]: knot.pos });
     const leafCone1 = recomputeLeafConeKnotGeometry(nextLeaves, baseKnots);
     const braceSeg1 = recomputeBraceSegmentKnotGeometry(state.braces, leafCone1.knots);
@@ -3122,6 +3227,78 @@ export function updateKnot(knot: Knot) {
     }
 
     state = { ...state, knots: nextKnots, leaves: nextLeaves };
+    notify();
+}
+
+export function applyKnotDragFramePreview(
+    knot: Knot,
+    branchSegmentsById: Record<string, Branch['segments']> = {},
+) {
+    const existing = state.knots[knot.id];
+    if (!existing) return;
+
+    const knotUnchanged = existing.parentShaftId === knot.parentShaftId
+        && existing.t === knot.t
+        && existing.diameter === knot.diameter
+        && existing.pos.x === knot.pos.x
+        && existing.pos.y === knot.pos.y
+        && existing.pos.z === knot.pos.z;
+
+    let nextBranches = state.branches;
+    const branchIds = Object.keys(branchSegmentsById);
+    let branchesChanged = false;
+    if (branchIds.length > 0) {
+        const updatedBranches: Record<string, Branch> = { ...state.branches };
+
+        for (const branchId of branchIds) {
+            const branch = state.branches[branchId];
+            const nextSegments = branchSegmentsById[branchId];
+            if (!branch || !nextSegments) continue;
+            if (branch.segments === nextSegments) continue;
+            updatedBranches[branchId] = { ...branch, segments: nextSegments };
+            branchesChanged = true;
+        }
+
+        if (branchesChanged) {
+            nextBranches = updatedBranches;
+        }
+    }
+
+    if (knotUnchanged && !branchesChanged) {
+        return;
+    }
+
+    if (!knotUnchanged) {
+        const kickstandState = getKickstandSnapshot();
+        const hostKickstand = Object.values(kickstandState.kickstands).find((kickstand) => kickstand.hostKnotId === knot.id);
+        if (hostKickstand) {
+            setKickstandSnapshot({
+                ...kickstandState,
+                knots: {
+                    ...kickstandState.knots,
+                    [knot.id]: knot,
+                },
+            });
+        }
+    }
+
+    let nextKnots = state.knots;
+    if (!knotUnchanged) {
+        const baseKnots = { ...state.knots, [knot.id]: knot };
+        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, baseKnots);
+        nextKnots = braceSeg.knots;
+    }
+
+    state = {
+        ...state,
+        branches: nextBranches,
+        knots: nextKnots,
+    };
+
+    if (!knotUnchanged) {
+        syncKickstandHostKnotsFromSharedKnots(nextKnots);
+    }
+
     notify();
 }
 
@@ -3158,6 +3335,8 @@ export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | 
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
     };
+
+    deleteCachedSupportSettingsHex('leaf', leafId);
 
     notify();
     return snapshots;
@@ -3399,6 +3578,14 @@ export function removeTrunk(
         selectedCategory: nextSelectedCategory,
     };
 
+    deleteCachedSupportSettingsHex('trunk', trunkId);
+    for (const branch of snapshots.branches) {
+        deleteCachedSupportSettingsHex('branch', branch.id);
+    }
+    for (const leaf of snapshots.leaves) {
+        deleteCachedSupportSettingsHex('leaf', leaf.id);
+    }
+
     notify();
     return snapshots;
 }
@@ -3554,4 +3741,484 @@ export function getTwigById(twigId: string) {
 
 export function getStickById(stickId: string) {
     return state.sticks[stickId] ?? null;
+}
+
+export type EditableSupportKind = 'trunk' | 'branch' | 'leaf';
+
+export type EditableSupportTarget = {
+    kind: EditableSupportKind;
+    id: string;
+};
+
+function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettings {
+    const defaults = createDefaultSettings();
+    if (!base) return defaults;
+
+    return {
+        ...defaults,
+        ...base,
+        tip: { ...defaults.tip, ...base.tip },
+        shaft: { ...defaults.shaft, ...base.shaft },
+        roots: { ...defaults.roots, ...base.roots },
+        baseFlare: { ...defaults.baseFlare, ...base.baseFlare },
+        joint: { ...defaults.joint, ...base.joint },
+        grid: { ...defaults.grid, ...base.grid },
+        meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
+        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+    };
+}
+
+function inferSettingsFromTrunk(trunk: Trunk, root: Roots | null, base?: SupportSettings): SupportSettings {
+    const merged = mergeSettingsWithDefaults(base);
+    const coneProfile = trunk.contactCone?.profile;
+    const shaftDiameter = trunk.baseDiameterMm ?? trunk.segments[0]?.diameter ?? merged.shaft.diameterMm;
+
+    return {
+        ...merged,
+        tip: {
+            ...merged.tip,
+            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
+            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
+            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
+            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+        },
+        shaft: {
+            ...merged.shaft,
+            diameterMm: shaftDiameter,
+            secondaryDiameterMm: shaftDiameter,
+        },
+        roots: {
+            ...merged.roots,
+            diameterMm: root?.diameter ?? merged.roots.diameterMm,
+            diskHeightMm: root?.diskHeight ?? merged.roots.diskHeightMm,
+            coneHeightMm: root?.coneHeight ?? merged.roots.coneHeightMm,
+        },
+    };
+}
+
+function inferSettingsFromBranch(branch: Branch, base?: SupportSettings): SupportSettings {
+    const merged = mergeSettingsWithDefaults(base);
+    const coneProfile = branch.contactCone?.profile;
+    const shaftDiameter = branch.segments[0]?.diameter ?? merged.shaft.diameterMm;
+
+    return {
+        ...merged,
+        tip: {
+            ...merged.tip,
+            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
+            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
+            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
+            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+        },
+        shaft: {
+            ...merged.shaft,
+            diameterMm: shaftDiameter,
+            secondaryDiameterMm: shaftDiameter,
+        },
+    };
+}
+
+function inferSettingsFromLeaf(leaf: Leaf, base?: SupportSettings): SupportSettings {
+    const merged = mergeSettingsWithDefaults(base);
+    const coneProfile = leaf.contactCone?.profile;
+
+    return {
+        ...merged,
+        tip: {
+            ...merged.tip,
+            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
+            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
+            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
+            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+        },
+    };
+}
+
+function updateSegmentDiametersAndJoints(
+    segments: Segment[],
+    shaftDiameterMm: number,
+    socketJointId?: string,
+    socketPos?: Vec3,
+): Segment[] {
+    const jointDiameter = getJointDiameter(shaftDiameterMm);
+    return segments.map((segment) => {
+        const nextTopJoint = segment.topJoint
+            ? {
+                ...segment.topJoint,
+                diameter: jointDiameter,
+                pos: socketJointId && socketPos && segment.topJoint.id === socketJointId
+                    ? { ...socketPos }
+                    : segment.topJoint.pos,
+            }
+            : segment.topJoint;
+
+        const nextBottomJoint = segment.bottomJoint
+            ? {
+                ...segment.bottomJoint,
+                diameter: jointDiameter,
+                pos: socketJointId && socketPos && segment.bottomJoint.id === socketJointId
+                    ? { ...socketPos }
+                    : segment.bottomJoint.pos,
+            }
+            : segment.bottomJoint;
+
+        return {
+            ...segment,
+            diameter: shaftDiameterMm,
+            topJoint: nextTopJoint,
+            bottomJoint: nextBottomJoint,
+        };
+    });
+}
+
+export function resolveEditableSupportTarget(selectedId: string | null, selectedCategory: SelectionCategory | undefined): EditableSupportTarget | null {
+    if (!selectedId) return null;
+
+    if (selectedCategory === 'trunk' || selectedCategory === 'branch' || selectedCategory === 'leaf') {
+        return { kind: selectedCategory, id: selectedId };
+    }
+
+    if (selectedCategory === 'root') {
+        const trunk = Object.values(state.trunks).find((candidate) => candidate.rootId === selectedId);
+        if (!trunk) return null;
+        return { kind: 'trunk', id: trunk.id };
+    }
+
+    if (selectedCategory === 'segment' || selectedCategory === 'joint') {
+        for (const trunk of Object.values(state.trunks)) {
+            const owns = trunk.segments.some((segment) => {
+                if (selectedCategory === 'segment') return segment.id === selectedId;
+                return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || trunk.contactCone?.socketJointId === selectedId;
+            });
+            if (owns) return { kind: 'trunk', id: trunk.id };
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            const owns = branch.segments.some((segment) => {
+                if (selectedCategory === 'segment') return segment.id === selectedId;
+                return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || branch.contactCone?.socketJointId === selectedId;
+            });
+            if (owns) return { kind: 'branch', id: branch.id };
+        }
+    }
+
+    if (selectedCategory === 'contactDisk') {
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.contactCone?.id === selectedId) {
+                return { kind: 'trunk', id: trunk.id };
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.contactCone?.id === selectedId) {
+                return { kind: 'branch', id: branch.id };
+            }
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.contactCone?.id === selectedId) {
+                return { kind: 'leaf', id: leaf.id };
+            }
+        }
+    }
+
+    if (selectedCategory === 'knot') {
+        const knot = state.knots[selectedId];
+        if (!knot) return null;
+
+        if (knot.parentShaftId.startsWith('leafCone:')) {
+            const leafId = knot.parentShaftId.slice('leafCone:'.length);
+            if (state.leaves[leafId]) return { kind: 'leaf', id: leafId };
+        }
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.segments.some((segment) => segment.id === knot.parentShaftId)) {
+                return { kind: 'trunk', id: trunk.id };
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.segments.some((segment) => segment.id === knot.parentShaftId) || branch.parentKnotId === selectedId) {
+                return { kind: 'branch', id: branch.id };
+            }
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.parentKnotId === selectedId) {
+                return { kind: 'leaf', id: leaf.id };
+            }
+        }
+    }
+
+    // Fallback: if category-based routing failed, resolve by ownership scans.
+    if (state.trunks[selectedId]) return { kind: 'trunk', id: selectedId };
+    if (state.branches[selectedId]) return { kind: 'branch', id: selectedId };
+    if (state.leaves[selectedId]) return { kind: 'leaf', id: selectedId };
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.rootId === selectedId) return { kind: 'trunk', id: trunk.id };
+        if (trunk.contactCone?.id === selectedId) return { kind: 'trunk', id: trunk.id };
+        if (trunk.contactCone?.socketJointId === selectedId) return { kind: 'trunk', id: trunk.id };
+        if (trunk.segments.some((segment) => segment.id === selectedId || segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)) {
+            return { kind: 'trunk', id: trunk.id };
+        }
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        if (branch.contactCone?.id === selectedId) return { kind: 'branch', id: branch.id };
+        if (branch.contactCone?.socketJointId === selectedId) return { kind: 'branch', id: branch.id };
+        if (branch.segments.some((segment) => segment.id === selectedId || segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)) {
+            return { kind: 'branch', id: branch.id };
+        }
+    }
+
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.contactCone?.id === selectedId) return { kind: 'leaf', id: leaf.id };
+        if (leaf.contactCone?.socketJointId === selectedId) return { kind: 'leaf', id: leaf.id };
+        if (leaf.parentKnotId === selectedId) return { kind: 'leaf', id: leaf.id };
+    }
+
+    if (state.knots[selectedId]) {
+        const knot = state.knots[selectedId];
+        if (knot.parentShaftId.startsWith('leafCone:')) {
+            const leafId = knot.parentShaftId.slice('leafCone:'.length);
+            if (state.leaves[leafId]) return { kind: 'leaf', id: leafId };
+        }
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.segments.some((segment) => segment.id === knot.parentShaftId)) {
+                return { kind: 'trunk', id: trunk.id };
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.segments.some((segment) => segment.id === knot.parentShaftId) || branch.parentKnotId === selectedId) {
+                return { kind: 'branch', id: branch.id };
+            }
+        }
+    }
+
+    return null;
+}
+
+export function getSupportSettingsForTarget(target: EditableSupportTarget, base?: SupportSettings): SupportSettings | null {
+    if (target.kind === 'trunk') {
+        const trunk = state.trunks[target.id];
+        if (!trunk) return null;
+        const root = state.roots[trunk.rootId] ?? null;
+        const encoded = getCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex);
+        const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
+        logSupportSettingsDebug('read target', target, {
+            hasHex: Boolean(encoded),
+            hexPreview: encoded?.slice(0, 18),
+            decodeOk: Boolean(decoded),
+            source: decoded ? 'hex' : 'inferred',
+        });
+        return decoded ?? inferSettingsFromTrunk(trunk, root, base);
+    }
+
+    if (target.kind === 'branch') {
+        const branch = state.branches[target.id];
+        if (!branch) return null;
+        const encoded = getCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex);
+        const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
+        logSupportSettingsDebug('read target', target, {
+            hasHex: Boolean(encoded),
+            hexPreview: encoded?.slice(0, 18),
+            decodeOk: Boolean(decoded),
+            source: decoded ? 'hex' : 'inferred',
+        });
+        return decoded ?? inferSettingsFromBranch(branch, base);
+    }
+
+    const leaf = state.leaves[target.id];
+    if (!leaf) return null;
+    const encoded = getCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex);
+    const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
+    logSupportSettingsDebug('read target', target, {
+        hasHex: Boolean(encoded),
+        hexPreview: encoded?.slice(0, 18),
+        decodeOk: Boolean(decoded),
+        source: decoded ? 'hex' : 'inferred',
+    });
+    return decoded ?? inferSettingsFromLeaf(leaf, base);
+}
+
+export function getSupportSettingsForSelection(
+    selectedId: string | null,
+    selectedCategory: SelectionCategory | undefined,
+    base?: SupportSettings,
+): SupportSettings | null {
+    const target = resolveEditableSupportTarget(selectedId, selectedCategory);
+    if (!target) return null;
+    return getSupportSettingsForTarget(target, base);
+}
+
+export function applySettingsToSupportTarget(target: EditableSupportTarget, settings: SupportSettings): boolean {
+    logSupportSettingsDebug('apply start', target);
+
+    if (target.kind === 'trunk') {
+        const trunk = state.trunks[target.id];
+        if (!trunk) return false;
+
+        const root = state.roots[trunk.rootId];
+        if (!root) return false;
+
+        const nextRoot: Roots = {
+            ...root,
+            diameter: settings.roots.diameterMm,
+            diskHeight: settings.roots.diskHeightMm,
+            coneHeight: settings.roots.coneHeightMm,
+        };
+
+        const nextContactCone = trunk.contactCone
+            ? {
+                ...trunk.contactCone,
+                profile: {
+                    ...trunk.contactCone.profile,
+                    contactDiameterMm: settings.tip.contactDiameterMm,
+                    bodyDiameterMm: settings.tip.bodyDiameterMm,
+                    lengthMm: settings.tip.lengthMm,
+                    penetrationMm: settings.tip.penetrationMm,
+                    diskThicknessMm: settings.tip.diskThicknessMm,
+                    maxStandoffMm: settings.tip.maxStandoffMm,
+                    standoffAngleThreshold: settings.tip.standoffAngleThreshold,
+                },
+            }
+            : trunk.contactCone;
+
+        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
+        const nextSegments = updateSegmentDiametersAndJoints(
+            trunk.segments,
+            settings.shaft.diameterMm,
+            nextContactCone?.socketJointId,
+            socketPos,
+        );
+
+        const nextTrunk: Trunk = {
+            ...trunk,
+            settingsCodeHex: encodeSupportSettingsHex(settings),
+            baseDiameterMm: settings.shaft.diameterMm,
+            segments: nextSegments,
+            contactCone: nextContactCone,
+        };
+
+        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunk.settingsCodeHex);
+
+        logSupportSettingsDebug('apply trunk hex', {
+            target,
+            prevHex: trunk.settingsCodeHex?.slice(0, 18),
+            nextHex: nextTrunk.settingsCodeHex?.slice(0, 18),
+        });
+
+        state = {
+            ...state,
+            roots: {
+                ...state.roots,
+                [nextRoot.id]: nextRoot,
+            },
+        };
+
+        updateTrunk(nextTrunk);
+        logSupportSettingsDebug('apply done', target);
+        return true;
+    }
+
+    if (target.kind === 'branch') {
+        const branch = state.branches[target.id];
+        if (!branch) return false;
+
+        const nextContactCone = branch.contactCone
+            ? {
+                ...branch.contactCone,
+                profile: {
+                    ...branch.contactCone.profile,
+                    contactDiameterMm: settings.tip.contactDiameterMm,
+                    bodyDiameterMm: settings.tip.bodyDiameterMm,
+                    lengthMm: settings.tip.lengthMm,
+                    penetrationMm: settings.tip.penetrationMm,
+                    diskThicknessMm: settings.tip.diskThicknessMm,
+                    maxStandoffMm: settings.tip.maxStandoffMm,
+                    standoffAngleThreshold: settings.tip.standoffAngleThreshold,
+                },
+            }
+            : branch.contactCone;
+
+        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
+        const nextSegments = updateSegmentDiametersAndJoints(
+            branch.segments,
+            settings.shaft.diameterMm,
+            nextContactCone?.socketJointId,
+            socketPos,
+        );
+
+        const nextBranch: Branch = {
+            ...branch,
+            settingsCodeHex: encodeSupportSettingsHex(settings),
+            segments: nextSegments,
+            contactCone: nextContactCone,
+        };
+
+        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranch.settingsCodeHex);
+
+        logSupportSettingsDebug('apply branch hex', {
+            target,
+            prevHex: branch.settingsCodeHex?.slice(0, 18),
+            nextHex: nextBranch.settingsCodeHex?.slice(0, 18),
+        });
+
+        updateBranch(nextBranch);
+        logSupportSettingsDebug('apply done', target);
+        return true;
+    }
+
+    const leaf = state.leaves[target.id];
+    if (!leaf) return false;
+
+    const nextLeaf: Leaf = {
+        ...leaf,
+        settingsCodeHex: encodeSupportSettingsHex(settings),
+        contactCone: {
+            ...leaf.contactCone,
+            profile: {
+                ...leaf.contactCone.profile,
+                contactDiameterMm: settings.tip.contactDiameterMm,
+                penetrationMm: settings.tip.penetrationMm,
+                diskThicknessMm: settings.tip.diskThicknessMm,
+                maxStandoffMm: settings.tip.maxStandoffMm,
+                standoffAngleThreshold: settings.tip.standoffAngleThreshold,
+            },
+        },
+    };
+
+    setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeaf.settingsCodeHex);
+
+    logSupportSettingsDebug('apply leaf hex', {
+        target,
+        prevHex: leaf.settingsCodeHex?.slice(0, 18),
+        nextHex: nextLeaf.settingsCodeHex?.slice(0, 18),
+    });
+
+    updateLeaf(nextLeaf);
+    logSupportSettingsDebug('apply done', target);
+    return true;
+}
+
+export function applySettingsToSupportSelection(
+    selectedId: string | null,
+    selectedCategory: SelectionCategory | undefined,
+    settings: SupportSettings,
+): boolean {
+    const target = resolveEditableSupportTarget(selectedId, selectedCategory);
+    if (!target) return false;
+    return applySettingsToSupportTarget(target, settings);
 }

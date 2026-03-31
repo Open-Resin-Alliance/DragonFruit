@@ -28,7 +28,6 @@ import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings';
-import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
@@ -738,7 +737,6 @@ export default function Home() {
   const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
-  const [supportSettingsExpanded, setSupportSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
@@ -6182,7 +6180,6 @@ export default function Home() {
       return;
     }
 
-    schedulePrintingPreviewSettle();
     pendingPrintingSelectedLayerRef.current = clamped;
 
     if (printingSelectedLayerRafRef.current !== null) return;
@@ -10723,45 +10720,7 @@ export default function Home() {
 
         ) : scene.mode === 'support' ? (
           <>
-            <CurveSettingsCard key="curve-settings" />
-
-            <div
-              key="support-settings"
-              className={`ui-panel rounded-lg border shadow-lg overflow-hidden ${supportSettingsExpanded ? 'h-[calc(100vh-var(--topbar-height)-24px)] flex flex-col' : ''}`}
-              style={{ borderColor: 'var(--border-subtle)' }}
-            >
-              <div
-                className="px-2.5 py-2.5 flex items-center gap-2.5"
-              >
-                <IconButton
-                  onClick={() => setSupportSettingsExpanded((prev) => !prev)}
-                  className="!p-0.5"
-                  title={supportSettingsExpanded ? 'Collapse card' : 'Expand card'}
-                >
-                  <svg
-                    className="w-3 h-3 transform transition-transform"
-                    style={{ color: supportSettingsExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    {supportSettingsExpanded ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    )}
-                  </svg>
-                </IconButton>
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Support Settings
-                </h3>
-              </div>
-              {supportSettingsExpanded && (
-                <div className="flex-1 min-h-0 overflow-hidden">
-                  <SupportSidebar />
-                </div>
-              )}
-            </div>
+            <SupportSidebar key="support-settings" />
           </>
         ) : scene.mode === 'printing' ? (
           <>

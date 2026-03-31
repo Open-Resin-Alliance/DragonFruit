@@ -41,6 +41,16 @@ export function PickingOrbitPauser() {
   const resumeTimeoutRef = React.useRef<number | null>(null);
   const orbitFallbackResumeRef = React.useRef<number | null>(null);
   const isPausedRef = React.useRef(false);
+  const lastRequestedResumeDelayRef = React.useRef(220);
+
+  type SupportGizmoWindowState = Window & {
+    __jointGizmoDragging?: boolean;
+    __knotGizmoDragging?: boolean;
+    __bezierGizmoDragging?: boolean;
+    __jointGizmoGuardUntil?: number;
+    __knotGizmoGuardUntil?: number;
+    __bezierGizmoGuardUntil?: number;
+  };
 
   useEffect(() => {
     const pauseIfNeeded = () => {
@@ -77,6 +87,43 @@ export function PickingOrbitPauser() {
       resume();
     };
 
+    const scheduleResume = (delayMs?: number) => {
+      const delay = Math.max(0, Number(delayMs ?? lastRequestedResumeDelayRef.current ?? 220));
+      lastRequestedResumeDelayRef.current = delay;
+
+      if (resumeTimeoutRef.current !== null) {
+        window.clearTimeout(resumeTimeoutRef.current);
+        resumeTimeoutRef.current = null;
+      }
+
+      resumeTimeoutRef.current = window.setTimeout(() => {
+        resumeTimeoutRef.current = null;
+        resumeIfNeeded();
+      }, delay);
+    };
+
+    const scheduleResumeFromGuard = (guardUntil?: number) => {
+      const guard = Number(guardUntil ?? 0);
+      const delay = Math.max(0, guard - Date.now());
+      scheduleResume(delay);
+    };
+
+    const refreshFromSupportGizmoGlobals = () => {
+      const w = window as SupportGizmoWindowState;
+      const dragging = !!(w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging);
+      if (dragging) {
+        pauseIfNeeded();
+        return;
+      }
+
+      const guardUntil = Math.max(
+        Number(w.__jointGizmoGuardUntil ?? 0),
+        Number(w.__knotGizmoGuardUntil ?? 0),
+        Number(w.__bezierGizmoGuardUntil ?? 0),
+      );
+      scheduleResumeFromGuard(guardUntil);
+    };
+
     const handleOrbitStart = () => {
       pauseIfNeeded();
     };
@@ -84,25 +131,100 @@ export function PickingOrbitPauser() {
     const handleOrbitChange = () => {
       pauseIfNeeded();
     };
-    const handleOrbitEnd = () => {
-      resumeTimeoutRef.current = window.setTimeout(() => {
-        resumeTimeoutRef.current = null;
-        resumeIfNeeded();
-      }, 150);
+    const handleOrbitEnd = (event: Event) => {
+      const delay = (event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs;
+      scheduleResume(delay);
     };
+
+    const handlePanStart = () => {
+      pauseIfNeeded();
+    };
+
+    const handlePanChange = () => {
+      pauseIfNeeded();
+    };
+
+    const handlePanEnd = (event: Event) => {
+      const delay = (event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs;
+      scheduleResume(delay);
+    };
+
+    const handleZoomStart = () => {
+      pauseIfNeeded();
+    };
+
+    const handleZoomChange = () => {
+      pauseIfNeeded();
+    };
+
+    const handleZoomEnd = (event: Event) => {
+      const delay = (event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs;
+      scheduleResume(delay);
+    };
+
+    const handlePointerReleaseFallback = () => {
+      scheduleResume();
+    };
+
+    const handleJointGizmoInteractionLock = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean; guardUntil?: number }>).detail;
+      if (detail?.active) {
+        pauseIfNeeded();
+        return;
+      }
+      scheduleResumeFromGuard(detail?.guardUntil);
+    };
+
+    const handleKnotGizmoInteractionLock = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean; guardUntil?: number }>).detail;
+      if (detail?.active) {
+        pauseIfNeeded();
+        return;
+      }
+      scheduleResumeFromGuard(detail?.guardUntil);
+    };
+
+    const handleBezierGizmoInteractionLock = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean; guardUntil?: number }>).detail;
+      if (detail?.active) {
+        pauseIfNeeded();
+        return;
+      }
+      scheduleResumeFromGuard(detail?.guardUntil);
+    };
+
+    refreshFromSupportGizmoGlobals();
 
     window.addEventListener('picking-orbit-start', handleOrbitStart);
     window.addEventListener('picking-orbit-change', handleOrbitChange);
     window.addEventListener('picking-orbit-end', handleOrbitEnd);
-    window.addEventListener('pointerup', resumeIfNeeded, true);
-    window.addEventListener('pointercancel', resumeIfNeeded, true);
+    window.addEventListener('picking-pan-start', handlePanStart);
+    window.addEventListener('picking-pan-change', handlePanChange);
+    window.addEventListener('picking-pan-end', handlePanEnd);
+    window.addEventListener('picking-zoom-start', handleZoomStart);
+    window.addEventListener('picking-zoom-change', handleZoomChange);
+    window.addEventListener('picking-zoom-end', handleZoomEnd);
+    window.addEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+    window.addEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
+    window.addEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
+    window.addEventListener('pointerup', handlePointerReleaseFallback, true);
+    window.addEventListener('pointercancel', handlePointerReleaseFallback, true);
     window.addEventListener('blur', resumeIfNeeded);
     return () => {
       window.removeEventListener('picking-orbit-start', handleOrbitStart);
       window.removeEventListener('picking-orbit-change', handleOrbitChange);
       window.removeEventListener('picking-orbit-end', handleOrbitEnd);
-      window.removeEventListener('pointerup', resumeIfNeeded, true);
-      window.removeEventListener('pointercancel', resumeIfNeeded, true);
+      window.removeEventListener('picking-pan-start', handlePanStart);
+      window.removeEventListener('picking-pan-change', handlePanChange);
+      window.removeEventListener('picking-pan-end', handlePanEnd);
+      window.removeEventListener('picking-zoom-start', handleZoomStart);
+      window.removeEventListener('picking-zoom-change', handleZoomChange);
+      window.removeEventListener('picking-zoom-end', handleZoomEnd);
+      window.removeEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+      window.removeEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
+      window.removeEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
+      window.removeEventListener('pointerup', handlePointerReleaseFallback, true);
+      window.removeEventListener('pointercancel', handlePointerReleaseFallback, true);
       window.removeEventListener('blur', resumeIfNeeded);
       if (resumeTimeoutRef.current !== null) window.clearTimeout(resumeTimeoutRef.current);
       if (orbitFallbackResumeRef.current !== null) window.clearTimeout(orbitFallbackResumeRef.current);

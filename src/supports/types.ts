@@ -46,6 +46,7 @@ export interface Transform {
 export interface SupportEntity {
     id: string;
     modelId: string; // The model this support belongs to
+    settingsCodeHex?: string;
 }
 
 /**

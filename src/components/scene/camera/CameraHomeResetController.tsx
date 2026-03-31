@@ -14,9 +14,12 @@ type CameraHomeResetControllerProps = {
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
+  enabled?: boolean;
   enableRotate: boolean;
   enablePan: boolean;
   enableZoom: boolean;
+  minPolarAngle?: number;
+  maxPolarAngle?: number;
   enableDamping?: boolean;
   update: () => void;
 };
@@ -56,9 +59,36 @@ export function CameraHomeResetController({
     activeRunIdRef.current = runId;
 
     const startPos = camera.position.clone();
-    const startTarget = controls.target.clone();
     const endPos = new THREE.Vector3(homePosition[0], homePosition[1], homePosition[2]);
     const endTarget = new THREE.Vector3(homeTarget[0], homeTarget[1], homeTarget[2]);
+    const worldUp = new THREE.Vector3(0, 0, 1);
+
+    // Keep reset motion above the plate/horizon to avoid under-plate flips.
+    const minDirectionZ = 0.08;
+    const startOffset = startPos.clone().sub(endTarget);
+    const endOffset = endPos.clone().sub(endTarget);
+    const startDistance = Math.max(0.001, startOffset.length());
+    const endDistance = Math.max(0.001, endOffset.length());
+    const startDirection = (startOffset.lengthSq() > 1e-10
+      ? startOffset.clone().normalize()
+      : new THREE.Vector3(0, -1, 1).normalize());
+    const endDirection = (endOffset.lengthSq() > 1e-10
+      ? endOffset.clone().normalize()
+      : startDirection.clone());
+
+    if (startDirection.z < minDirectionZ) {
+      startDirection.z = minDirectionZ;
+      startDirection.normalize();
+    }
+    if (endDirection.z < minDirectionZ) {
+      endDirection.z = minDirectionZ;
+      endDirection.normalize();
+    }
+
+    const directionArc = new THREE.Quaternion().setFromUnitVectors(startDirection, endDirection);
+    const directionQuat = new THREE.Quaternion();
+    const currentDirection = new THREE.Vector3();
+
     const isOrthographic = camera instanceof THREE.OrthographicCamera;
     const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
     let endZoom = 1;
@@ -73,9 +103,31 @@ export function CameraHomeResetController({
 
     animatingRef.current = true;
     const prevEnableDamping = controls.enableDamping;
+    const prevEnabled = controls.enabled;
+    const prevEnableRotate = controls.enableRotate;
+    const prevEnablePan = controls.enablePan;
+    const prevEnableZoom = controls.enableZoom;
+    const prevMinPolarAngle = controls.minPolarAngle;
+    const prevMaxPolarAngle = controls.maxPolarAngle;
+
     if (typeof prevEnableDamping === 'boolean') {
       controls.enableDamping = false;
     }
+    if (typeof prevEnabled === 'boolean') {
+      controls.enabled = false;
+    }
+
+    controls.enableRotate = false;
+    controls.enablePan = false;
+    controls.enableZoom = false;
+
+    if (typeof controls.minPolarAngle === 'number') {
+      controls.minPolarAngle = 0.0;
+    }
+    if (typeof controls.maxPolarAngle === 'number') {
+      controls.maxPolarAngle = THREE.MathUtils.degToRad(88);
+    }
+
     const duration = 650;
     let startTime: number | null = null;
 
@@ -87,8 +139,19 @@ export function CameraHomeResetController({
       const t = Math.min(elapsed / duration, 1);
       const eased = THREE.MathUtils.smootherstep(t, 0, 1);
 
-      camera.position.lerpVectors(startPos, endPos, eased);
-      controls.target.lerpVectors(startTarget, endTarget, eased);
+      controls.target.copy(endTarget);
+
+      directionQuat.identity().slerp(directionArc, eased);
+      currentDirection.copy(startDirection).applyQuaternion(directionQuat).normalize();
+      if (currentDirection.z < minDirectionZ) {
+        currentDirection.z = minDirectionZ;
+        currentDirection.normalize();
+      }
+
+      const currentDistance = THREE.MathUtils.lerp(startDistance, endDistance, eased);
+      camera.position.copy(endTarget).addScaledVector(currentDirection, currentDistance);
+
+      camera.up.copy(worldUp);
 
       if (isOrthographic) {
         const ortho = camera as THREE.OrthographicCamera;
@@ -108,8 +171,21 @@ export function CameraHomeResetController({
         if (typeof prevEnableDamping === 'boolean') {
           controls.enableDamping = prevEnableDamping;
         }
+        if (typeof prevEnabled === 'boolean') {
+          controls.enabled = prevEnabled;
+        }
+        controls.enableRotate = prevEnableRotate;
+        controls.enablePan = prevEnablePan;
+        controls.enableZoom = prevEnableZoom;
+        if (typeof prevMinPolarAngle === 'number') {
+          controls.minPolarAngle = prevMinPolarAngle;
+        }
+        if (typeof prevMaxPolarAngle === 'number') {
+          controls.maxPolarAngle = prevMaxPolarAngle;
+        }
 
         camera.position.copy(endPos);
+  camera.up.copy(worldUp);
         controls.target.copy(endTarget);
         controls.update();
 
@@ -127,6 +203,18 @@ export function CameraHomeResetController({
       }
       if (typeof prevEnableDamping === 'boolean') {
         controls.enableDamping = prevEnableDamping;
+      }
+      if (typeof prevEnabled === 'boolean') {
+        controls.enabled = prevEnabled;
+      }
+      controls.enableRotate = prevEnableRotate;
+      controls.enablePan = prevEnablePan;
+      controls.enableZoom = prevEnableZoom;
+      if (typeof prevMinPolarAngle === 'number') {
+        controls.minPolarAngle = prevMinPolarAngle;
+      }
+      if (typeof prevMaxPolarAngle === 'number') {
+        controls.maxPolarAngle = prevMaxPolarAngle;
       }
       if (activeRunIdRef.current === runId && completedRunIdRef.current !== runId) {
         activeRunIdRef.current = 0;

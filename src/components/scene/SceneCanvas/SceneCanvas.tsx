@@ -12,7 +12,6 @@ import { MeshClassificationRenderer } from '@/components/scene/MeshClassificatio
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { PickingDebugOverlay } from '@/components/picking';
-import { SATHoverPicker } from '@/components/picking/SATHoverPicker';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -21,7 +20,6 @@ import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/exp
 import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
-import { SupportBuilder } from '@/supports/rendering';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
@@ -39,7 +37,6 @@ import { BranchPlacementController } from '@/supports/SupportTypes/Branch/Branch
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
 import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
-import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
@@ -111,6 +108,7 @@ import {
 } from '@/utils/modelBounds';
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -124,7 +122,7 @@ export function SceneCanvas({
   clipLower,
   clipUpper,
   meshColor, // Global fallback color? Each model has color.
-  meshVisible, // Global fallback visibility?
+  meshVisible,
   shaderType,
   matcapVariant,
   flatUseVertexColors,
@@ -134,7 +132,9 @@ export function SceneCanvas({
   heatmapContrast,
   heatmapColors,
   disableRaycast,
-  hideCrossSectionCap,
+  ambientIntensity,
+  directionalIntensity,
+  headlightIntensity,
   onCameraChange,
   onCameraEnd,
   islandMarkers,
@@ -142,9 +142,6 @@ export function SceneCanvas({
   overlayColor,
   overlayOpacity,
   overlaySelectedIslandId,
-  ambientIntensity,
-  directionalIntensity,
-  headlightIntensity,
   materialRoughness,
   scanResults,
   layerHeightMm,
@@ -743,10 +740,16 @@ export function SceneCanvas({
   const orbitChangeQueuedRef = React.useRef(false);
   const orbitInteractionActiveRef = React.useRef(false);
   const orbitInteractionMovedRef = React.useRef(false);
+  const wheelZoomEndTimeoutRef = React.useRef<number | null>(null);
+  const wheelZoomInteractionActiveRef = React.useRef(false);
+  const navigationResumeDelayRef = React.useRef(0);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
+  const [isWheelZoomInteracting, setIsWheelZoomInteracting] = React.useState(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
+  const [supportGizmoInteractionActive, setSupportGizmoInteractionActive] = React.useState(false);
+  const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
     const isOrbitInRotateState = React.useCallback(() => {
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
@@ -812,6 +815,19 @@ export function SceneCanvas({
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!supportGizmoInteractionActive) return;
+
+    pendingHoverModelIdRef.current = null;
+    if (hoverModelRafRef.current !== null) {
+      cancelAnimationFrame(hoverModelRafRef.current);
+      hoverModelRafRef.current = null;
+    }
+
+    setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+    emitImmediateModelHover(null);
+  }, [supportGizmoInteractionActive]);
+
   const onModelHoverModelChange = React.useCallback((id: string | null) => {
     const nextId = id ?? null;
     pendingHoverModelIdRef.current = nextId;
@@ -865,25 +881,6 @@ export function SceneCanvas({
     };
   }, []);
 
-  // Listen for SAT-based hover changes (when enabled)
-  React.useEffect(() => {
-    if (!activeBuildVolumeSettings.useSATForHoverPicking) return;
-
-    const handleSATHoverModelChanged = (event: Event) => {
-      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
-      const modelId = customEvent.detail?.modelId ?? null;
-      // When SAT picking is active, it replaces GPU picking for hover state
-      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
-      // Clear support/raft hover states when SAT is enabled (they're now included in the hull)
-      setHoveredRaftModelId(null);
-      setHoveredSupportPointerModelId(null);
-    };
-
-    window.addEventListener('sat-hover-model-changed', handleSATHoverModelChanged as EventListener);
-    return () => {
-      window.removeEventListener('sat-hover-model-changed', handleSATHoverModelChanged as EventListener);
-    };
-  }, [activeBuildVolumeSettings.useSATForHoverPicking]);
 
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
     if (mode !== 'prepare') return;
@@ -2509,7 +2506,7 @@ export function SceneCanvas({
     // proper pivot; animating to the build-volume center first causes
     // a jarring double-animation on first open.
     if (activeModelId == null && models.length === 0) {
-      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone());
+      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone(), { animate: false });
     }
   }, [activeModelId, buildVolumeCenterTarget, mode, models.length, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
 
@@ -2705,6 +2702,52 @@ export function SceneCanvas({
   const { isDraggingHandle } = useCurveInteractionState();
   const interactionWarning = useInteractionWarning();
 
+  const trunkPlacementPreviewForRenderer = (
+    trunkPlacementPreview
+    && !suppressSupportPlacementPreviewRendering
+    && !blockSupportPlacement
+    && !isDraggingHandle
+    && !isBranchPlacementActive
+    && !isLeafPlacementActive
+    && !isKickstandPlacementActive
+    && !branchPlacementPreview
+  )
+    ? trunkPlacementPreview
+    : null;
+
+  const branchPlacementPreviewForRenderer = (
+    branchPlacementPreview
+    && isBranchPlacementActive
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? branchPlacementPreview
+    : null;
+
+  const leafPlacementPreviewForRenderer = (
+    leafPlacementPreview
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? leafPlacementPreview
+    : null;
+
+  const bracePlacementPreviewForRenderer = (
+    bracePlacementPreview
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? bracePlacementPreview
+    : null;
+
+  const kickstandPlacementPreviewForRenderer = (
+    kickstandPlacementPreview
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? kickstandPlacementPreview
+    : null;
+
   // Listen for selection events to show/hide gizmo
   React.useEffect(() => {
     const handleModelClicked = () => setIsModelSelected(true);
@@ -2837,7 +2880,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
-  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
+  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -2893,39 +2936,39 @@ export function SceneCanvas({
         accelerationExponent: 0.5,
         rotateBase: 0.72,
         panBase: 0.82,
-        zoomBase: 0.82,
+        zoomBase: 1.25,
         rotateMin: 0.45,
         rotateMax: 1.45,
         panMin: 0.45,
         panMax: 1.9,
-        zoomMin: 0.5,
-        zoomMax: 2.0,
+        zoomMin: 0.75,
+        zoomMax: 2.8,
         responseLerp: 0.14,
       },
       balanced: {
         accelerationExponent: 0.42,
         rotateBase: 0.85,
         panBase: 1.0,
-        zoomBase: 0.95,
+        zoomBase: 1.45,
         rotateMin: 0.6,
         rotateMax: 1.9,
         panMin: 0.65,
         panMax: 2.4,
-        zoomMin: 0.65,
-        zoomMax: 2.6,
+        zoomMin: 0.95,
+        zoomMax: 3.4,
         responseLerp: 0.2,
       },
       fast: {
         accelerationExponent: 0.34,
         rotateBase: 1.03,
         panBase: 1.2,
-        zoomBase: 1.15,
+        zoomBase: 1.75,
         rotateMin: 0.75,
         rotateMax: 2.25,
         panMin: 0.8,
         panMax: 2.8,
-        zoomMin: 0.85,
-        zoomMax: 3.0,
+        zoomMin: 1.2,
+        zoomMax: 4.0,
         responseLerp: 0.26,
       },
     };
@@ -2950,6 +2993,97 @@ export function SceneCanvas({
   React.useEffect(() => {
     updateOrbitControlSpeeds();
   }, [updateOrbitControlSpeeds]);
+
+  const navigationResumeDelayMs = React.useMemo(() => {
+    if (cameraFeelPreset === 'raw') return 0;
+    if (cameraFeelPreset === 'precise') return 320;
+    if (cameraFeelPreset === 'fast') return 150;
+    return 220;
+  }, [cameraFeelPreset]);
+
+  React.useEffect(() => {
+    navigationResumeDelayRef.current = navigationResumeDelayMs;
+  }, [navigationResumeDelayMs]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof window === 'undefined') return;
+
+    const clearPendingZoomEnd = () => {
+      if (wheelZoomEndTimeoutRef.current === null) return;
+      window.clearTimeout(wheelZoomEndTimeoutRef.current);
+      wheelZoomEndTimeoutRef.current = null;
+    };
+
+    const endZoomInteraction = () => {
+      clearPendingZoomEnd();
+      if (!wheelZoomInteractionActiveRef.current) return;
+
+      wheelZoomInteractionActiveRef.current = false;
+      setIsWheelZoomInteracting(false);
+      window.dispatchEvent(new CustomEvent('picking-zoom-end', {
+        detail: { resumeAfterMs: navigationResumeDelayRef.current },
+      }));
+    };
+
+    const beginZoomInteraction = () => {
+      if (wheelZoomInteractionActiveRef.current) return;
+      wheelZoomInteractionActiveRef.current = true;
+      setIsWheelZoomInteracting(true);
+      window.dispatchEvent(new Event('picking-zoom-start'));
+    };
+
+    const scheduleZoomInteractionEnd = () => {
+      clearPendingZoomEnd();
+      wheelZoomEndTimeoutRef.current = window.setTimeout(() => {
+        wheelZoomEndTimeoutRef.current = null;
+        endZoomInteraction();
+      }, 120);
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+
+      beginZoomInteraction();
+
+      window.dispatchEvent(new Event('picking-zoom-change'));
+      scheduleZoomInteractionEnd();
+    };
+
+    const forceZoomInteractionEnd = () => {
+      endZoomInteraction();
+    };
+
+    window.addEventListener('wheel', onWheel, { passive: true });
+    window.addEventListener('pointerup', forceZoomInteractionEnd, true);
+    window.addEventListener('pointercancel', forceZoomInteractionEnd, true);
+    window.addEventListener('mouseup', forceZoomInteractionEnd, true);
+    window.addEventListener('contextmenu', forceZoomInteractionEnd, true);
+    window.addEventListener('blur', forceZoomInteractionEnd);
+    document.addEventListener('visibilitychange', forceZoomInteractionEnd);
+
+    return () => {
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('pointerup', forceZoomInteractionEnd, true);
+      window.removeEventListener('pointercancel', forceZoomInteractionEnd, true);
+      window.removeEventListener('mouseup', forceZoomInteractionEnd, true);
+      window.removeEventListener('contextmenu', forceZoomInteractionEnd, true);
+      window.removeEventListener('blur', forceZoomInteractionEnd);
+      document.removeEventListener('visibilitychange', forceZoomInteractionEnd);
+      endZoomInteraction();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      if (wheelZoomEndTimeoutRef.current !== null) {
+        window.clearTimeout(wheelZoomEndTimeoutRef.current);
+      }
+      wheelZoomEndTimeoutRef.current = null;
+      wheelZoomInteractionActiveRef.current = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     const dispatchProgress = (detail: DiagnosticsBenchmarkProgressDetail) => {
@@ -3217,7 +3351,9 @@ export function SceneCanvas({
         setIsOrbitInteracting(false);
         updateCameraBelowBuildPlate();
         onCameraEnd?.();
-        window.dispatchEvent(new Event('picking-orbit-end'));
+        window.dispatchEvent(new CustomEvent('picking-orbit-end', {
+          detail: { resumeAfterMs: navigationResumeDelayMs },
+        }));
         benchmarkRunIdRef.current = null;
       }
     };
@@ -3237,6 +3373,7 @@ export function SceneCanvas({
     };
   }, [
     cameraFeelPreset,
+    navigationResumeDelayMs,
     cameraProjectionMode,
     modelWorldBounds,
     models,
@@ -3270,9 +3407,18 @@ export function SceneCanvas({
 
       if (orbitActive) {
         window.dispatchEvent(new Event('picking-orbit-change'));
+        if (!isOrbitInRotateState()) {
+          window.dispatchEvent(new Event('picking-pan-change'));
+        }
       }
     });
   }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
+
+  const handleSpaceMouseNavigationFrame = React.useCallback(() => {
+    updateCameraBelowBuildPlate();
+    onCameraChange?.();
+    window.dispatchEvent(new Event('picking-pan-change'));
+  }, [onCameraChange, updateCameraBelowBuildPlate]);
 
   React.useEffect(() => {
     return () => {
@@ -3284,13 +3430,74 @@ export function SceneCanvas({
     };
   }, []);
 
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    type SupportGizmoWindowState = Window & {
+      __jointGizmoDragging?: boolean;
+      __knotGizmoDragging?: boolean;
+      __bezierGizmoDragging?: boolean;
+      __jointGizmoGuardUntil?: number;
+      __knotGizmoGuardUntil?: number;
+      __bezierGizmoGuardUntil?: number;
+    };
+
+    const clearPendingSupportGizmoTimeout = () => {
+      if (supportGizmoInteractionTimeoutRef.current === null) return;
+      window.clearTimeout(supportGizmoInteractionTimeoutRef.current);
+      supportGizmoInteractionTimeoutRef.current = null;
+    };
+
+    const refreshSupportGizmoInteraction = () => {
+      const w = window as SupportGizmoWindowState;
+      const dragging = !!(w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging);
+      const guardUntil = Math.max(
+        Number(w.__jointGizmoGuardUntil ?? 0),
+        Number(w.__knotGizmoGuardUntil ?? 0),
+        Number(w.__bezierGizmoGuardUntil ?? 0),
+      );
+      const now = Date.now();
+      const guardActive = guardUntil > now;
+
+      setSupportGizmoInteractionActive(dragging || guardActive);
+      clearPendingSupportGizmoTimeout();
+
+      if (!dragging && guardActive) {
+        supportGizmoInteractionTimeoutRef.current = window.setTimeout(() => {
+          supportGizmoInteractionTimeoutRef.current = null;
+          refreshSupportGizmoInteraction();
+        }, Math.max(0, guardUntil - now + 1));
+      }
+    };
+
+    const handleSupportGizmoInteractionLock = () => {
+      refreshSupportGizmoInteraction();
+    };
+
+    refreshSupportGizmoInteraction();
+    window.addEventListener('joint-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+    window.addEventListener('knot-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+    window.addEventListener('bezier-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+
+    return () => {
+      window.removeEventListener('joint-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+      window.removeEventListener('knot-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+      window.removeEventListener('bezier-gizmo-interaction-lock', handleSupportGizmoInteractionLock as EventListener);
+      clearPendingSupportGizmoTimeout();
+    };
+  }, []);
+
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
-    setIsOrbitRotating(isOrbitInRotateState());
+    const isRotateInteraction = isOrbitInRotateState();
+    setIsOrbitRotating(isRotateInteraction);
     setIsOrbitInteracting(true);
     setMouseOrbitDragRunId((id) => id + 1);
     window.dispatchEvent(new Event('picking-orbit-start'));
+    if (!isRotateInteraction) {
+      window.dispatchEvent(new Event('picking-pan-start'));
+    }
   }, [isOrbitInRotateState]);
 
   const handleOrbitEnd = React.useCallback(() => {
@@ -3304,8 +3511,24 @@ export function SceneCanvas({
 
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
-    window.dispatchEvent(new Event('picking-orbit-end'));
-  }, [mode, onCameraEnd, updateCameraBelowBuildPlate]);
+    window.dispatchEvent(new CustomEvent('picking-orbit-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+    window.dispatchEvent(new CustomEvent('picking-pan-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+  }, [mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+
+  React.useEffect(() => {
+    if (spaceMouseNavigationActive) {
+      window.dispatchEvent(new Event('picking-pan-start'));
+      return;
+    }
+
+    window.dispatchEvent(new CustomEvent('picking-pan-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+  }, [navigationResumeDelayMs, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,
@@ -3442,34 +3665,6 @@ export function SceneCanvas({
     };
   }, []);
 
-  // Callbacks for SATHoverPicker to access model data
-  const getModelTransformForSAT = React.useCallback((modelId: string) => {
-    const model = models.find((m) => m.id === modelId);
-    if (!model) return null;
-    return {
-      position: model.transform.position.clone(),
-      rotation: model.transform.rotation.clone(),
-      scale: model.transform.scale.clone(),
-    };
-  }, [models]);
-
-  const getModelGeometryForSAT = React.useCallback((modelId: string) => {
-    const model = models.find((m) => m.id === modelId);
-    return model?.geometry?.geometry ?? null;
-  }, [models]);
-
-  const getSupportLocalPointsForSAT = React.useCallback((modelId: string) => {
-    // Collect all support joint vertices for this model's supports
-    // We don't have direct access to support hull points here, so return null
-    // The SAT picker can handle null gracefully
-    return null;
-  }, []);
-
-  const visibleModelIds = React.useMemo(
-    () => models.filter((m) => m.visible).map((m) => m.id),
-    [models],
-  );
-
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -3491,17 +3686,6 @@ export function SceneCanvas({
         <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
         <LoggingHelper mode={mode} />
         
-        {/* SAT-based hover detection (experimental) */}
-        {activeBuildVolumeSettings.useSATForHoverPicking && (
-          <SATHoverPicker
-            enabled={activeBuildVolumeSettings.useSATForHoverPicking}
-            visibleModelIds={visibleModelIds}
-            getModelTransform={getModelTransformForSAT}
-            getModelGeometry={getModelGeometryForSAT}
-            getSupportLocalPoints={getSupportLocalPointsForSAT}
-          />
-        )}
-
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
           directionalIntensity={directionalIntensity ?? 0.3}
@@ -3537,8 +3721,8 @@ export function SceneCanvas({
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || isOrbitInteracting;
-                const interactionLodEnabled = (isOrbitInteracting || spaceMouseNavigationActive) && !isActive;
+                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive;
+                const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
                   hideDuplicateSourceDuringApply
@@ -3560,8 +3744,14 @@ export function SceneCanvas({
                   ?? (isMultiGizmoSelection
                     ? (liveActiveTransformForMultiPreview ?? model.transform)
                     : (transform ?? model.transform));
+                const shouldApplyLiveLiftAlignment =
+                  isGizmoDragging
+                  || isGizmoRetargeting
+                  || isPostGizmoInteractionGuardActive;
                 const activeTransformForRender = isActive
-                  ? (alignLiveTransformToLift(model, rawActiveTransformForRender) ?? rawActiveTransformForRender)
+                  ? (shouldApplyLiveLiftAlignment
+                    ? (alignLiveTransformToLift(model, rawActiveTransformForRender) ?? rawActiveTransformForRender)
+                    : rawActiveTransformForRender)
                   : rawActiveTransformForRender;
                 const transformToUse = isActive
                   ? (duplicateActivePreviewTransform ?? activeTransformForRender)
@@ -3890,7 +4080,7 @@ export function SceneCanvas({
 
               {activeBuildVolumeSettings.showModelBoundingBoxes && !thumbnailCaptureActive
                 ? modelBoundingBoxDebugData.map((entry) => (
-                  <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={8} raycast={() => null}>
+                  <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={30} raycast={() => null}>
                     <bufferGeometry>
                       <bufferAttribute
                         attach="attributes-position"
@@ -3902,7 +4092,7 @@ export function SceneCanvas({
                       transparent
                       opacity={0.9}
                       depthWrite={false}
-                      depthTest={false}
+                      depthTest
                     />
                   </lineSegments>
                 ))
@@ -3915,7 +4105,7 @@ export function SceneCanvas({
                       ref={(node) => {
                         dragCornerCageRefs.current[modelId] = node;
                       }}
-                      renderOrder={11}
+                      renderOrder={31}
                       raycast={() => null}
                     >
                       <bufferGeometry>
@@ -3941,6 +4131,7 @@ export function SceneCanvas({
                 <group
                   ref={buildVolumeBoundsOverlayRef}
                   userData={{ thumbnailHelperType: 'buildVolumeOverlay' }}
+                  renderOrder={28}
                   position={[
                     (buildVolumeBounds!.min.x + buildVolumeBounds!.max.x) * 0.5,
                     (buildVolumeBounds!.min.y + buildVolumeBounds!.max.y) * 0.5,
@@ -3948,7 +4139,7 @@ export function SceneCanvas({
                   ]}
                   raycast={() => null}
                 >
-                  <mesh geometry={buildVolumeBoxGeometry} raycast={() => null} renderOrder={-1}>
+                  <mesh geometry={buildVolumeBoxGeometry} raycast={() => null} renderOrder={27}>
                     <meshBasicMaterial
                       color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#78b7ff'}
                       transparent
@@ -3957,12 +4148,13 @@ export function SceneCanvas({
                       side={THREE.BackSide}
                     />
                   </mesh>
-                  <lineSegments geometry={buildVolumeEdgeGeometry} raycast={() => null}>
+                  <lineSegments geometry={buildVolumeEdgeGeometry} renderOrder={29} raycast={() => null}>
                     <lineBasicMaterial
                       color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#8abfff'}
                       transparent
                       opacity={0.36}
                       depthWrite={false}
+                      depthTest
                     />
                   </lineSegments>
                 </group>
@@ -3995,6 +4187,11 @@ export function SceneCanvas({
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  trunkPlacementPreview={trunkPlacementPreviewForRenderer}
+                  branchPlacementPreview={branchPlacementPreviewForRenderer}
+                  leafPlacementPreview={leafPlacementPreviewForRenderer}
+                  bracePlacementPreview={bracePlacementPreviewForRenderer}
+                  kickstandPlacementPreview={kickstandPlacementPreviewForRenderer}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -4641,18 +4838,6 @@ export function SceneCanvas({
                 />
               )}
 
-              {/* Render V2 Trunk Placement Preview (hide when in branch/leaf mode) */}
-              {trunkPlacementPreview &&
-                !suppressSupportPlacementPreviewRendering &&
-                !blockSupportPlacement &&
-                !isDraggingHandle &&
-                !isBranchPlacementActive &&
-                !isLeafPlacementActive &&
-                !isKickstandPlacementActive &&
-                !branchPlacementPreview && (
-                  <SupportBuilder data={trunkPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
-                )}
-
               {/* Render Branch Hover Preview Dot - shows when Alt is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
               {branchHoverDotVisible && branchHoverPosition && (
@@ -4677,12 +4862,6 @@ export function SceneCanvas({
                 </mesh>
               )}
 
-              {/* Render Branch Placement Preview - ALWAYS show when data exists */}
-              {/* Don't check blockSupportPlacement - branch placement needs to work while hovering supports */}
-              {branchPlacementPreview && isBranchPlacementActive && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
-                <SupportBuilder data={branchPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
-              )}
-
               {/* Render Leaf Hover Preview Dot - shows when Alt+Shift is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
               {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
@@ -4705,24 +4884,6 @@ export function SceneCanvas({
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
                 </mesh>
-              )}
-
-              {/* Render Leaf Placement Preview - ALWAYS show when data exists */}
-              {/* Don't check blockSupportPlacement - leaf placement needs to work while hovering supports */}
-              {leafPlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
-                <SupportBuilder data={leafPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
-              )}
-
-              {/* Render Brace Placement Preview */}
-              {bracePlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && <BracePreviewRenderer preview={bracePlacementPreview} />}
-
-              {/* Render Kickstand Placement Preview */}
-              {kickstandPlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
-                <SupportBuilder
-                  data={kickstandPlacementPreview}
-                  isPreview
-                  hidePlateContactPrimitives={hidePlateContactPrimitives}
-                />
               )}
 
               {/* Render V2 Joint Placement Preview */}
@@ -4776,7 +4937,7 @@ export function SceneCanvas({
           dampingFactor={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
           rotateSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
           panSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
-          zoomSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.15 : 0.95}
+          zoomSpeed={cameraFeelPreset === 'raw' ? 1.6 : cameraFeelPreset === 'precise' ? 1.25 : cameraFeelPreset === 'fast' ? 1.75 : 1.45}
           screenSpacePanning
           zoomToCursor
           enablePan
@@ -4799,8 +4960,19 @@ export function SceneCanvas({
           fallbackPivot={buildVolumeCenterTarget}
           mouseOrbitDragRunId={mouseOrbitDragRunId}
           onNavigationActiveChange={setSpaceMouseNavigationActive}
+          onNavigationFrame={handleSpaceMouseNavigationFrame}
         />
-        <CameraFocusHotkeyController hoverPointRef={lastHoveredModelPointRef} setOrbitTargetFromPoint={setOrbitTargetFromPoint} />
+        <CameraFocusHotkeyController
+          hoverPointRef={lastHoveredModelPointRef}
+          setOrbitTargetFromPoint={setOrbitTargetFromPoint}
+          models={models}
+          activeModelId={activeModelId}
+          selectedModelIds={selectedModelIds ?? []}
+          hoveredModelId={hoveredModelId}
+          orbitTarget={orbitTarget}
+          cameraRef={cameraRef}
+          orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
+        />
         <CameraIntroController
           bounds={introControllerBounds}
           runId={introControllerRunId}

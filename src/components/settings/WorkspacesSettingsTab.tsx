@@ -437,34 +437,6 @@ export function WorkspacesSettingsTab({
           )}
         </div>
 
-        <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-          <div>
-            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Use SAT for hover picking
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Experimental: Replace GPU picking with SAT-based support-inclusive hull detection for unified model+support hover state.
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => patchView3dSettings({ useSATForHoverPicking: !view3dSettings.useSATForHoverPicking })}
-            className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-            style={view3dSettings.useSATForHoverPicking
-              ? {
-                  borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                  color: 'var(--accent-contrast)',
-                }
-              : {
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-          >
-            {view3dSettings.useSATForHoverPicking ? 'ON' : 'OFF'}
-          </button>
-        </div>
       </section>
 
     </div>

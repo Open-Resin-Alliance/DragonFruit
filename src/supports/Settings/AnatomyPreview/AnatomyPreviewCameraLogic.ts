@@ -1,6 +1,10 @@
 import type { SupportKind } from '../supportKindState';
 import type { CameraFocusState } from './AnatomyPreviewCameraTypes';
 import {
+    BRANCH_HOME_FOCUS_STATE,
+    LEAF_HOME_FOCUS_STATE,
+    getBranchTargetFocusState,
+    getLeafTargetFocusState,
     getStickTargetFocusState,
     getSupportTargetFocusState,
     getTwigTargetFocusState,
@@ -20,6 +24,10 @@ export function getTargetFocusState(kind: SupportKind, key: string | null): Came
     if (kind === 'grid') return getGridTargetFocusState(key);
     if (kind === 'stick') return getStickTargetFocusState(key);
     if (kind === 'twig') return getTwigTargetFocusState(key);
+    if (kind === 'branch' && !key) return BRANCH_HOME_FOCUS_STATE;
+    if (kind === 'leaf' && !key) return LEAF_HOME_FOCUS_STATE;
     if (kind === 'trunk' && !key) return TRUNK_HOME_FOCUS_STATE;
+    if (kind === 'branch') return getBranchTargetFocusState(key);
+    if (kind === 'leaf') return getLeafTargetFocusState(key);
     return getSupportTargetFocusState(key);
 }

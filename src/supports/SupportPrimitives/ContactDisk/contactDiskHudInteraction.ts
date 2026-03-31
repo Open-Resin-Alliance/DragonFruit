@@ -1,4 +1,4 @@
-import { setHoveredCategory, setHoveredId } from '../../state';
+import { setHoveredState } from '../../state';
 
 let contactDiskHudHoverActive = false;
 let contactDiskHudDraggingActive = false;
@@ -22,11 +22,9 @@ function emitHudInteractionEvent() {
 export function setContactDiskHudHoverActive(active: boolean) {
     contactDiskHudHoverActive = active;
     if (active && contactDiskHudId) {
-        setHoveredId(contactDiskHudId);
-        setHoveredCategory('contactDisk');
+        setHoveredState('contactDisk', contactDiskHudId);
     } else if (!contactDiskHudDraggingActive) {
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }
     emitHudInteractionEvent();
 }
@@ -38,11 +36,9 @@ export function setContactDiskHudDraggingActive(active: boolean) {
         contactDiskHudPlacementSuppressUntilMs = Date.now() + CONTACT_DISK_HUD_POST_DRAG_SUPPRESS_MS;
     }
     if (active && contactDiskHudId) {
-        setHoveredId(contactDiskHudId);
-        setHoveredCategory('contactDisk');
+        setHoveredState('contactDisk', contactDiskHudId);
     } else if (!contactDiskHudHoverActive) {
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }
     emitHudInteractionEvent();
 }
@@ -50,8 +46,7 @@ export function setContactDiskHudDraggingActive(active: boolean) {
 export function setContactDiskHudInteractionTarget(id: string | null) {
     contactDiskHudId = id;
     if (!id && !contactDiskHudHoverActive && !contactDiskHudDraggingActive && !contactDiskHudPointerCaptureActive) {
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }
 }
 
@@ -70,11 +65,9 @@ export function setContactDiskHudPointerCaptureActive(active: boolean) {
         contactDiskHudPlacementSuppressUntilMs = Date.now() + CONTACT_DISK_HUD_POST_DRAG_SUPPRESS_MS;
     }
     if (active && contactDiskHudId) {
-        setHoveredId(contactDiskHudId);
-        setHoveredCategory('contactDisk');
+        setHoveredState('contactDisk', contactDiskHudId);
     } else if (!contactDiskHudHoverActive && !contactDiskHudDraggingActive) {
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }
     emitHudInteractionEvent();
 }

@@ -24,6 +24,7 @@ interface ShaftRendererProps {
     raycast?: any;
     enablePicking?: boolean;
     isInteractable?: boolean;
+    suppressPlacementInteraction?: boolean;
     isSelected?: boolean;
     isParentSelected?: boolean;
     onClick?: (e: any) => void;
@@ -38,7 +39,7 @@ export function ShaftRenderer({
     diameter, 
     diameterStart,
     diameterEnd,
-    color = '#ff8800', 
+    color = '#c8752a', 
     emissive = '#000000', 
     emissiveIntensity = 0,
     transparent = false,
@@ -46,6 +47,7 @@ export function ShaftRenderer({
     raycast,
     enablePicking = true,
     isInteractable = true,
+    suppressPlacementInteraction = false,
     isSelected,
     isParentSelected,
     onClick,
@@ -62,7 +64,7 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const placementInteractionActive = braceAltActive || kickstandHotkeyActive;
+    const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive);
     const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
@@ -158,9 +160,9 @@ export function ShaftRenderer({
         }
     };
 
-    const finalColor = isSelected ? '#ffffff' : (isHovered ? '#ffffff' : color);
-    const finalEmissive = isSelected ? '#444444' : (isHovered ? '#ffffff' : emissive);
-    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
+    const finalColor = isSelected ? '#f4f4f4' : (isHovered ? '#efd8c2' : color);
+    const finalEmissive = isSelected ? '#3a3a3a' : (isHovered ? '#efd8c2' : emissive);
+    const finalEmissiveIntensity = isSelected ? 0.2 : (isHovered ? 0.18 : emissiveIntensity);
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {

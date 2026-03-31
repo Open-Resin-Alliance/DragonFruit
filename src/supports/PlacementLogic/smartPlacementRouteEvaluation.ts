@@ -28,6 +28,7 @@ export interface EvaluateResolvedRouteArgs {
     warning?: TrunkPlacementResult['warning'];
     angle?: TrunkPlacementResult['angle'];
     coneAxis?: TrunkPlacementResult['coneAxis'];
+    raycaster?: THREE.Raycaster;
     buildNearestCandidateNodeKeys: (preferredKey: string, maxRings: number) => string[];
     withInsertedRootTransition: (args: {
         basePos: Vec3;
@@ -37,6 +38,33 @@ export interface EvaluateResolvedRouteArgs {
     }) => Vec3[] | null;
     segmentCollidesChain: (points: Vec3[], collisionRadius: number, mesh: THREE.Mesh) => boolean;
     totalSegmentLateral: (points: Vec3[]) => number;
+}
+
+const EPS = 0.000001;
+
+function compareFloat(a: number, b: number): number {
+    if (a < b - EPS) return -1;
+    if (a > b + EPS) return 1;
+    return 0;
+}
+
+function isCandidateRouteBetter(candidate: RouteEvaluationMetrics, current: RouteEvaluationMetrics): boolean {
+    const scoreCmp = compareFloat(candidate.score, current.score);
+    if (scoreCmp !== 0) return scoreCmp < 0;
+
+    const dropCmp = compareFloat(candidate.verticalDrop, current.verticalDrop);
+    if (dropCmp !== 0) return dropCmp > 0;
+
+    const snapCmp = compareFloat(candidate.snapDistance, current.snapDistance);
+    if (snapCmp !== 0) return snapCmp < 0;
+
+    const lengthCmp = compareFloat(candidate.totalLength, current.totalLength);
+    if (lengthCmp !== 0) return lengthCmp < 0;
+
+    const lateralCmp = compareFloat(candidate.totalLateral, current.totalLateral);
+    if (lateralCmp !== 0) return lateralCmp < 0;
+
+    return candidate.jointCount < current.jointCount;
 }
 
 export function evaluateResolvedRoute(args: EvaluateResolvedRouteArgs): RouteEvaluation | null {
@@ -53,6 +81,7 @@ export function evaluateResolvedRoute(args: EvaluateResolvedRouteArgs): RouteEva
         warning,
         angle,
         coneAxis,
+        raycaster,
         buildNearestCandidateNodeKeys,
         withInsertedRootTransition,
         segmentCollidesChain,
@@ -100,6 +129,7 @@ export function evaluateResolvedRoute(args: EvaluateResolvedRouteArgs): RouteEva
             collisionRadius,
             mesh,
             maxAngleFromVerticalDeg: 90 - minRoutedTrunkAngleDeg,
+            raycaster,
         });
         const resolvedJoints = [...insertedRootJoints, ...simplifiedRouteJoints];
         const routeJointCount = simplifiedRouteJoints.length;
@@ -143,46 +173,19 @@ export function evaluateResolvedRoute(args: EvaluateResolvedRouteArgs): RouteEva
             coneAxis,
         };
 
-        if (
-            !best ||
-            routeScore < best.score - 0.000001 ||
-            (
-                Math.abs(routeScore - best.score) <= 0.000001 &&
-                (
-                    node.verticalDrop > best.verticalDrop + 0.000001 ||
-                    (
-                        Math.abs(node.verticalDrop - best.verticalDrop) <= 0.000001 &&
-                        (
-                            snapDistance < best.snapDistance - 0.000001 ||
-                            (
-                                Math.abs(snapDistance - best.snapDistance) <= 0.000001 &&
-                                (
-                                    node.totalLength < best.totalLength - 0.000001 ||
-                                    (
-                                        Math.abs(node.totalLength - best.totalLength) <= 0.000001 &&
-                                        (
-                                            totalLateral < best.totalLateral - 0.000001 ||
-                                            (
-                                                Math.abs(totalLateral - best.totalLateral) <= 0.000001 &&
-                                                routeJointCount < best.jointCount
-                                            )
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        ) {
+        const candidateMetrics: RouteEvaluationMetrics = {
+            score: routeScore,
+            jointCount: routeJointCount,
+            snapDistance,
+            totalLateral,
+            totalLength: node.totalLength,
+            verticalDrop: node.verticalDrop,
+        };
+
+        if (!best || isCandidateRouteBetter(candidateMetrics, best)) {
             best = {
                 result,
-                score: routeScore,
-                jointCount: routeJointCount,
-                snapDistance,
-                totalLateral,
-                totalLength: node.totalLength,
-                verticalDrop: node.verticalDrop,
+                ...candidateMetrics,
             };
         }
     }

@@ -39,7 +39,9 @@ import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacement
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -59,6 +61,8 @@ export function BranchPlacementController() {
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const pointerFreshSinceIdleActivationRef = useRef(false);
+    const supportEditSuppressedRef = useRef(false);
+    const lastPreviewSignatureRef = useRef<string | null>(null);
 
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
 
@@ -116,7 +120,10 @@ export function BranchPlacementController() {
         scene.traverse((obj) => {
             const objModelId = obj.userData?.modelId;
             if (!objModelId) return;
-            if (modelId === 'unknown' || objModelId === modelId) meshes.push(obj);
+            if (modelId !== 'unknown' && objModelId !== modelId) return;
+            const mesh = obj as THREE.Mesh;
+            if (!mesh.isMesh || !mesh.geometry) return;
+            meshes.push(mesh);
         });
         modelMeshesRef.current = meshes;
     }, [scene, modelId, altActive, stage]);
@@ -130,7 +137,7 @@ export function BranchPlacementController() {
             includeBranches: true,
             includeBraces: true,
         });
-    }, [stage, supportState]);
+    }, [stage, supportState.trunks, supportState.branches, supportState.braces]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -143,6 +150,18 @@ export function BranchPlacementController() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    const publishPreview = useCallback((signature: string, previewData: SupportData | null) => {
+        if (lastPreviewSignatureRef.current === signature) return;
+        lastPreviewSignatureRef.current = signature;
+        branchPlacementStore.setPreviewData(previewData);
+    }, []);
+
+    useEffect(() => {
+        if (!isActive || stage === 'idle') {
+            lastPreviewSignatureRef.current = null;
+        }
+    }, [isActive, stage]);
 
     // Fallback: pointer events inside the canvas may not reach window listeners.
     // If Alt is released but keyup is missed, pointer events still report modifier state.
@@ -246,49 +265,62 @@ export function BranchPlacementController() {
     useFrame(() => {
         if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
             branchPlacementStore.setHoverPosition(null);
-            branchPlacementStore.setPreviewData(null);
+            publishPreview('blocked:contact-disk', null);
             branchPlacementStore.setSnapTarget(null);
             meshHoverRef.current = null;
             meshKindRef.current = null;
             return;
         }
 
+        if (isSupportEditInteractionActive()) {
+            if (!supportEditSuppressedRef.current) {
+                supportEditSuppressedRef.current = true;
+                branchPlacementStore.setHoverPosition(null);
+                publishPreview('blocked:support-edit', null);
+                branchPlacementStore.setSnapTarget(null);
+                meshHoverRef.current = null;
+                meshKindRef.current = null;
+                resetSnapping();
+            }
+            return;
+        }
+
+        supportEditSuppressedRef.current = false;
+
         if (altActive && stage === 'idle') {
             if (!pointerFreshSinceIdleActivationRef.current) {
                 branchPlacementStore.setHoverPosition(null);
+                publishPreview('idle:waiting-pointer', null);
                 return;
             }
 
             if (isHoveringSupportTarget) {
                 branchPlacementStore.setHoverPosition(null);
+                publishPreview('idle:hovering-support-target', null);
                 return;
             }
 
-            raycaster.setFromCamera(pointer, camera);
-            const modelMeshes = modelMeshesRef.current;
-            if (modelMeshes.length > 0) {
-                const intersects = raycaster.intersectObjects(modelMeshes, true);
-                if (intersects.length > 0) {
-                    const hit = intersects[0];
-                    branchPlacementStore.setHoverPosition({ x: hit.point.x, y: hit.point.y, z: hit.point.z });
-                } else {
-                    branchPlacementStore.setHoverPosition(null);
-                }
-            } else {
-                branchPlacementStore.setHoverPosition(null);
-            }
+            // Hover dot is updated immediately by useBranchPlacement.onModelHover via
+            // support interaction routing. Avoid a redundant per-frame full mesh raycast
+            // here to keep cursor-follow latency low in dense scenes.
+            publishPreview('idle:hover-dot', null);
             return;
         }
 
         if (!isActive || stage !== 'awaitingBase' || !tipPosition || !tipNormal) {
+            publishPreview(`inactive:${stage}:${altActive ? 'alt' : 'none'}`, null);
             return;
         }
 
         // Update raycaster for mouse position
         raycaster.setFromCamera(pointer, camera);
 
-        // Try to snap to a shaft first
-        const resolvedSnap = updateAndGetResolvedSnap();
+        // Fast path: when shaft-hover already provides a concrete segment+point,
+        // skip the heavier global snapping pass for this frame.
+        const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
+        const resolvedSnap = hasHoveredShaftFastPath
+            ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
+            : updateAndGetResolvedSnap();
 
         const settings = getSettings();
         const fallbackHostDiameterMm = settings.shaft.diameterMm;
@@ -338,17 +370,53 @@ export function BranchPlacementController() {
                 hostDiameterMm,
                 hostSegmentId: segmentId,
             });
+
+            const previewSignature = [
+                'branch:snap',
+                modelId,
+                segmentId,
+                previewVecKey(knotPos),
+                quantizePreviewValue(t),
+                quantizePreviewValue(hostDiameterMm ?? fallbackHostDiameterMm),
+                previewVecKey(tipPosition),
+                previewNormalKey(tipNormal),
+            ].join('|');
+
+            const parentKnot: Knot = {
+                id: 'preview-knot',
+                parentShaftId: segmentId,
+                t,
+                pos: knotPos,
+                diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
+            };
+
+            const buildResult = buildBranchData({
+                tipPos: tipPosition,
+                tipNormal: tipNormal,
+                modelId: modelId,
+                parentKnot,
+            });
+
+            publishPreview(previewSignature, {
+                ...buildResult.supportData,
+                startPos: parentKnot.pos,
+            });
+            return;
         } else {
             let hoveredSnapResolved = false;
             const hoveredShaft = hoveredShaftRef.current;
 
-            if (hoveredShaft?.segmentId && hoveredShaft.point) {
+            if (hoveredShaft?.segmentId) {
                 const pathCandidates = allTargets.filter((target) => target.id === hoveredShaft.segmentId && !!target.pathSegment);
-                const hoveredTarget = pathCandidates.length > 1
+                const hoveredTarget = (hoveredShaft.point && pathCandidates.length > 1)
                     ? selectNearestPathTarget(hoveredShaft.point, pathCandidates) ?? pathCandidates[0]
                     : pathCandidates[0] ?? getTarget(hoveredShaft.segmentId);
 
-                const projected = hoveredTarget ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point) : null;
+                const projected = hoveredTarget
+                    ? (hoveredShaft.point
+                        ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point)
+                        : projectRayToSnapTargetPath(raycaster.ray, hoveredTarget))
+                    : null;
 
                 if (hoveredTarget?.pathSegment && projected) {
                     hoveredSnapResolved = true;
@@ -386,6 +454,39 @@ export function BranchPlacementController() {
                         hostDiameterMm,
                         hostSegmentId: segmentId,
                     });
+
+                    const previewSignature = [
+                        'branch:hovered-snap',
+                        modelId,
+                        segmentId,
+                        previewVecKey(knotPos),
+                        quantizePreviewValue(t),
+                        quantizePreviewValue(hostDiameterMm ?? fallbackHostDiameterMm),
+                        previewVecKey(tipPosition),
+                        previewNormalKey(tipNormal),
+                    ].join('|');
+
+                    const parentKnot: Knot = {
+                        id: 'preview-knot',
+                        parentShaftId: segmentId,
+                        t,
+                        pos: knotPos,
+                        diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
+                    };
+
+                    const buildResult = buildBranchData({
+                        tipPos: tipPosition,
+                        tipNormal: tipNormal,
+                        modelId: modelId,
+                        parentKnot,
+                    });
+
+                    publishPreview(previewSignature, {
+                        ...buildResult.supportData,
+                        startPos: parentKnot.pos,
+                    });
+
+                    return;
                 }
             }
 
@@ -397,7 +498,7 @@ export function BranchPlacementController() {
 
                 let meshHit: THREE.Intersection | null = null;
                 if (modelMeshes.length > 0) {
-                    const intersects = raycaster.intersectObjects(modelMeshes, true);
+                    const intersects = raycaster.intersectObjects(modelMeshes, false);
                     if (intersects.length > 0) {
                         meshHit = intersects[0];
                     }
@@ -422,23 +523,43 @@ export function BranchPlacementController() {
                         if (kind === 'twig') {
                             const { twig } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
                             const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                            const previewSignature = [
+                                'branch:twig',
+                                modelId,
+                                bModelId,
+                                previewVecKey(tipPosition),
+                                previewNormalKey(tipNormal),
+                                previewVecKey(bPos),
+                                previewNormalKey(bNormal),
+                                previewVecKey(startPos),
+                            ].join('|');
                             const supportData: SupportData = {
                                 id: 'preview-meshlink',
                                 startPos,
                                 segments: twig.segments,
                                 contactDisks: [twig.contactDiskA, twig.contactDiskB],
                             };
-                            branchPlacementStore.setPreviewData(supportData);
+                            publishPreview(previewSignature, supportData);
                         } else {
                             const { stick } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
                             const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                            const previewSignature = [
+                                'branch:stick',
+                                modelId,
+                                bModelId,
+                                previewVecKey(tipPosition),
+                                previewNormalKey(tipNormal),
+                                previewVecKey(bPos),
+                                previewNormalKey(bNormal),
+                                previewVecKey(startPos),
+                            ].join('|');
                             const supportData: SupportData = {
                                 id: 'preview-meshlink',
                                 startPos,
                                 segments: stick.segments,
                                 contactCones: [stick.contactConeA, stick.contactConeB],
                             };
-                            branchPlacementStore.setPreviewData(supportData);
+                            publishPreview(previewSignature, supportData);
                         }
                         return;
                     }
@@ -446,13 +567,13 @@ export function BranchPlacementController() {
 
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
-                branchPlacementStore.setPreviewData(null);
+                publishPreview('branch:clear-meshlink', null);
                 return;
             }
         }
 
         if (!knotPos) {
-            branchPlacementStore.setPreviewData(null);
+            publishPreview('branch:clear-no-knot', null);
             return;
         }
 
@@ -473,7 +594,17 @@ export function BranchPlacementController() {
             parentKnot,
         });
 
-        branchPlacementStore.setPreviewData({
+        const previewSignature = [
+            'branch:free',
+            modelId,
+            segmentId,
+            previewVecKey(knotPos),
+            quantizePreviewValue(resolvedHostDiameter),
+            previewVecKey(tipPosition),
+            previewNormalKey(tipNormal),
+        ].join('|');
+
+        publishPreview(previewSignature, {
             ...buildResult.supportData,
             startPos: parentKnot.pos,
         });

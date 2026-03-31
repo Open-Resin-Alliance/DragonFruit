@@ -13,7 +13,7 @@ import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDra
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { useJointDragPreview } from '../../interaction/jointDragPreview';
+import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { getSnapshot, updateTrunk } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
@@ -38,12 +38,13 @@ interface TrunkRendererProps {
     onContactDiskHudHoverChange?: (hovered: boolean) => void;
 }
 
-export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd', onContactDiskHudHoverChange }: TrunkRendererProps) {
+export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd', onContactDiskHudHoverChange }: TrunkRendererProps) {
     const { camera, scene, gl } = useThree();
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
-    const previewTrunk = useJointDragPreview<Trunk>('trunk', trunk.id);
+    const previewTrunk = usePartDragUpdate<Trunk>('trunk', baseTrunk.id);
+    const trunk = previewTrunk ?? baseTrunk;
     const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
     const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
     const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);

@@ -170,6 +170,41 @@ export const calculateOptimalResolution = (
     return Math.max(MIN_RES, Math.min(segments, MAX_RES));
 };
 
+function distance3(a: Vec3, b: Vec3): number {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dz = a.z - b.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+export function calculateAdaptiveBezierResolution(
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+    p3: Vec3,
+    options?: {
+        minResolution?: number;
+        maxResolution?: number;
+        targetChordLengthMm?: number;
+        curvatureWeight?: number;
+    },
+): number {
+    const minResolution = Math.max(2, options?.minResolution ?? 4);
+    const maxResolution = Math.max(minResolution, options?.maxResolution ?? 24);
+    const targetChordLengthMm = Math.max(0.25, options?.targetChordLengthMm ?? 2.5);
+    const curvatureWeight = Math.max(0.5, options?.curvatureWeight ?? 2.0);
+
+    const chordLength = distance3(p0, p3);
+    const controlNetLength = distance3(p0, p1) + distance3(p1, p2) + distance3(p2, p3);
+    const curveExcess = Math.max(0, controlNetLength - chordLength);
+
+    const lengthDrivenSegments = Math.ceil(controlNetLength / targetChordLengthMm);
+    const curvatureDrivenSegments = Math.ceil(curveExcess * curvatureWeight);
+    const estimate = Math.max(lengthDrivenSegments, curvatureDrivenSegments + 2);
+
+    return Math.max(minResolution, Math.min(maxResolution, estimate));
+}
+
 /**
  * Result of constraint validation
  */
@@ -311,16 +346,27 @@ export const bezierToLineSegments = (
     p1: Vec3,
     p2: Vec3,
     p3: Vec3,
-    resolution: number
+    resolution?: number
 ): Vec3[] => {
-    const points: Vec3[] = [];
-    const curve = new THREE.CubicBezierCurve3(
-        toVector3(p0),
-        toVector3(p1),
-        toVector3(p2),
-        toVector3(p3)
-    );
-    
-    const threePoints = curve.getPoints(resolution);
-    return threePoints.map(p => toVec3(p));
+    const adaptiveResolution = calculateAdaptiveBezierResolution(p0, p1, p2, p3);
+    const segments = Math.max(2, Math.floor(resolution ?? adaptiveResolution));
+    const points = new Array<Vec3>(segments + 1);
+
+    for (let i = 0; i <= segments; i += 1) {
+        const t = i / segments;
+        const oneMinusT = 1 - t;
+
+        const c0 = oneMinusT * oneMinusT * oneMinusT;
+        const c1 = 3 * oneMinusT * oneMinusT * t;
+        const c2 = 3 * oneMinusT * t * t;
+        const c3 = t * t * t;
+
+        points[i] = {
+            x: p0.x * c0 + p1.x * c1 + p2.x * c2 + p3.x * c3,
+            y: p0.y * c0 + p1.y * c1 + p2.y * c2 + p3.y * c3,
+            z: p0.z * c0 + p1.z * c1 + p2.z * c2 + p3.z * c3,
+        };
+    }
+
+    return points;
 };

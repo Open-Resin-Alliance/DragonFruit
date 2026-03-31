@@ -2,7 +2,6 @@ import React, { useMemo, useEffect, useState, useRef } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
-import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../SupportTypes/Brace/bracePlacementState';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../interaction/pointerOcclusion';
 
@@ -28,6 +27,7 @@ interface BezierRendererProps {
     isSelected?: boolean;
     isParentSelected?: boolean;
     isInteractable?: boolean;
+    suppressPlacementInteraction?: boolean;
     onClick?: (e: any) => void;
 }
 
@@ -41,7 +41,7 @@ export function BezierRenderer({
     diameterStart,
     diameterEnd,
     resolution = 16,
-    color = '#ff8800',
+    color = '#c8752a',
     emissive = '#000000',
     emissiveIntensity = 0,
     transparent = false,
@@ -50,6 +50,7 @@ export function BezierRenderer({
     isSelected,
     isParentSelected,
     isInteractable = true,
+    suppressPlacementInteraction = false,
     onClick
 }: BezierRendererProps) {
     const groupRef = useRef<THREE.Group>(null);
@@ -76,8 +77,10 @@ export function BezierRenderer({
     const visualEndRadius = endRadius * selectedVisualScale;
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
-    const enableSegmentInteraction = !!isInteractable && (isParentSelected || braceAltActive) === true;
+    const enableSegmentInteraction = !!isInteractable && (isParentSelected || (!suppressPlacementInteraction && braceAltActive)) === true;
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
+    const [pointerHoverActive, setPointerHoverActive] = useState(false);
+    const pickRef = useRef<THREE.Mesh>(null);
 
     const geometry = useMemo(() => {
         const tubularSegments = Math.max(2, resolution);
@@ -139,15 +142,9 @@ export function BezierRenderer({
         };
     }, [pickGeometry]);
 
-    const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
-        category: 'segment',
-        objectId: id,
-        enabled: enableSegmentInteraction,
-    });
-
     // Determine Hover State
-    const isTopPickedSegment = enableSegmentInteraction && isPickingHovered;
-    const isHovered = isPickingHovered && !isSelected && isParentSelected;
+    const isTopPickedSegment = enableSegmentInteraction && pointerHoverActive;
+    const isHovered = pointerHoverActive && !isSelected && isParentSelected;
 
     const handleClick = (e: any) => {
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
@@ -222,8 +219,28 @@ export function BezierRenderer({
     };
 
     const handlePointerMove = (e: any) => {
-        const isTopPickedSegmentNow = enableSegmentInteraction && isPickingHovered;
-        if (!isTopPickedSegmentNow) return;
+        if (!enableSegmentInteraction) return;
+
+        const topIntersectionObject = Array.isArray(e?.intersections)
+            ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
+            : null;
+
+        let isTopPointerTargetNow = false;
+        let current = topIntersectionObject;
+        while (current) {
+            if (current === pickRef.current) {
+                isTopPointerTargetNow = true;
+                break;
+            }
+            current = current.parent;
+        }
+
+        if (!isTopPointerTargetNow) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
+        setPointerHoverActive((prev) => (prev ? prev : true));
 
         window.dispatchEvent(new CustomEvent('shaft-hover', {
             detail: {
@@ -231,6 +248,21 @@ export function BezierRenderer({
                 point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
                 intersection: e
             }
+        }));
+    };
+
+    const handlePointerOver = (e: any) => {
+        if (!enableSegmentInteraction) return;
+        e.stopPropagation();
+        setPointerHoverActive((prev) => (prev ? prev : true));
+    };
+
+    const handlePointerOut = (e: any) => {
+        if (!enableSegmentInteraction) return;
+        e.stopPropagation();
+        setPointerHoverActive((prev) => (prev ? false : prev));
+        window.dispatchEvent(new CustomEvent('shaft-leave', {
+            detail: { segmentId: id }
         }));
     };
 
@@ -242,18 +274,20 @@ export function BezierRenderer({
         }));
     };
 
-    const finalColor = isSelected ? '#ff80ff' : (isHovered ? '#ffffff' : color);
-    const finalEmissive = isSelected ? '#440044' : (isHovered ? '#ffffff' : emissive);
-    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
+    const finalColor = isSelected ? '#ff80ff' : (isHovered ? '#efd8c2' : color);
+    const finalEmissive = isSelected ? '#440044' : (isHovered ? '#efd8c2' : emissive);
+    const finalEmissiveIntensity = isSelected ? 0.22 : (isHovered ? 0.18 : emissiveIntensity);
 
     return (
         <group ref={groupRef}>
             {pickGeometry && (
                 <mesh
-                    ref={pickRef as any}
+                    ref={pickRef}
                     raycast={raycast}
                     onClick={handleClick}
+                    onPointerOver={handlePointerOver}
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+                    onPointerOut={handlePointerOut}
                     onPointerLeave={enableSegmentInteraction ? handlePointerLeave : undefined}
                     userData={{ segmentId: id }}
                 >

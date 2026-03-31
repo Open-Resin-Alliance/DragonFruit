@@ -104,15 +104,17 @@ export function resolveHoveredSupportVisualState(
     marqueeHoveredSupportId: string | null,
     hoveredSupportIdFromPicking: string | null,
     sceneHoveredSupportId: string | null,
+    hoveredCategory: string | null | undefined,
     selectedPrimitiveHoverActive: boolean,
     suppressSupportHoverForSelectedKnotSupport: boolean,
     selectedSupportIdSet: ReadonlySet<string>,
     selectedPrimitiveSupportId: string | null = null,
 ) {
     const candidateId = marqueeHoveredSupportId ?? hoveredSupportIdFromPicking ?? sceneHoveredSupportId;
+    const suppressForHoveredPrimitivePriority = hoveredCategory === 'knot' || isJointHoverCategory(hoveredCategory);
     const suppressForSelectedPrimitiveParent = selectedPrimitiveSupportId !== null && candidateId === selectedPrimitiveSupportId;
 
-    const hoveredSupportIdForVisual = (selectedPrimitiveHoverActive || suppressSupportHoverForSelectedKnotSupport || suppressForSelectedPrimitiveParent)
+    const hoveredSupportIdForVisual = (suppressForHoveredPrimitivePriority || selectedPrimitiveHoverActive || suppressSupportHoverForSelectedKnotSupport || suppressForSelectedPrimitiveParent)
         ? null
         : candidateId;
 

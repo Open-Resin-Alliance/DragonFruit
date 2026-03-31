@@ -3,10 +3,12 @@ import * as THREE from 'three';
 import { Joint } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { subscribe, getSnapshot, setHoveredId, setHoveredCategory } from '../../state';
+import { getSelectedId, subscribe } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { useJointDragPosition } from '../../interaction/jointDragPosition';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface JointRendererProps {
     joint: Joint;
@@ -27,7 +29,7 @@ interface JointRendererProps {
 
 export function JointRenderer({ 
     joint, 
-    color: propColor = '#ff8800', 
+    color: propColor = '#c8752a', 
     emissive: propEmissive = '#000000', 
     emissiveIntensity: propEmissiveIntensity = 0,
     selectedColor: _selectedColor,
@@ -46,15 +48,14 @@ export function JointRenderer({
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
-    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     // State Subscription
-    const state = useSyncExternalStore(subscribe, getSnapshot);
-    const isSelected = state.selectedId === joint.id;
+    const selectedId = useSyncExternalStore(subscribe, getSelectedId, getSelectedId);
+    const isSelected = selectedId === joint.id;
 
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
-    const { register, unregister, hit, onDragStart, onDragEnd } = usePicking();
+    const { register, unregister, hit, onDragStart, onDragEnd, isDragging } = usePicking();
 
     // Register with picking system - only when parent is selected
     // When parent is NOT selected, we don't register so picking falls through to the support
@@ -86,16 +87,21 @@ export function JointRenderer({
     // Only show hover if parent is selected (editable mode) AND joint is not already selected
     const isTopPickedJoint = frontBlockingModelId === null
         && isInteractable
+        && !isDragging
+        && !isSupportEditInteractionActive()
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = (isTopPickedJoint || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && !isSupportEditInteractionActive() && isTopPickedJoint && !isSelected;
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
-    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#888888' : propColor));
-    const displayEmissive = isHovered ? '#ffffff' : propEmissive;
-    const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#888888' : propColor));
+    const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
+    const displayEmissiveIntensity = isHovered ? 0.18 : propEmissiveIntensity;
+
+    const jointDragPosition = useJointDragPosition(joint.id);
+    const effectiveJointPos = jointDragPosition ?? joint.pos;
 
     const isPointerOverThisJoint = (e: any): boolean => {
         if (!groupRef.current) return false;
@@ -198,10 +204,14 @@ export function JointRenderer({
     }, [isParentSelected, joint.id, isHovered, state.hoveredCategory, state.hoveredId]);
     
     const handlePointerMove = (e: any) => {
+        if (isDragging || isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            return;
+        }
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -210,26 +220,11 @@ export function JointRenderer({
             setFrontBlockingModelId(null);
         }
         emitImmediateModelHover(null);
-
-        const pointerOverJoint = isPointerOverThisJoint(e);
-        if (!pointerOverJoint || !isParentSelected) {
-            setPointerHoverActive((prev) => (prev ? false : prev));
-            return;
-        }
-
-        if (isParentSelected && isInteractable) {
-            setPointerHoverActive((prev) => (prev ? prev : true));
-        }
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-        }
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
         }
         emitImmediateModelHover(null);
         document.body.style.cursor = '';
@@ -240,7 +235,7 @@ export function JointRenderer({
     return (
         <group 
             ref={groupRef}
-            position={[joint.pos.x, joint.pos.y, joint.pos.z]}
+            position={[effectiveJointPos.x, effectiveJointPos.y, effectiveJointPos.z]}
             userData={{ supportPrimitiveType: 'joint' }}
             onClick={handleClick}
             onPointerDown={handlePointerDown}

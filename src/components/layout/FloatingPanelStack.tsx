@@ -357,14 +357,29 @@ function getAnchoredDesiredPosition(
   const rule = profile.anchors[panelId];
   if (!rule) return null;
 
+  const offsetX = rule.offsetX ?? 0;
+  const offsetY = rule.offsetY ?? 0;
+
+  if (rule.side === 'right-edge') {
+    return {
+      x: bounds.width - panelSize.width - PANEL_MARGIN + offsetX,
+      y: PANEL_MARGIN + offsetY,
+    };
+  }
+
+  if (rule.side === 'left-edge') {
+    return {
+      x: PANEL_MARGIN + offsetX,
+      y: PANEL_MARGIN + offsetY,
+    };
+  }
+
   const anchorTargetId = anchorTargetOverride ?? rule.to;
   const anchorPos = placedPositions[anchorTargetId] ?? previousPositions[anchorTargetId] ?? panelMemory[anchorTargetId];
   if (!anchorPos) return null;
 
   const anchorSize = getPanelSize(anchorTargetId);
   const gap = rule.gap ?? panelGap;
-  const offsetX = rule.offsetX ?? 0;
-  const offsetY = rule.offsetY ?? 0;
 
   if (rule.side === 'below') {
     return {
@@ -384,20 +399,6 @@ function getAnchoredDesiredPosition(
     return {
       x: anchorPos.x + anchorSize.width + gap + offsetX,
       y: anchorPos.y + offsetY,
-    };
-  }
-
-  if (rule.side === 'right-edge') {
-    return {
-      x: bounds.width - panelSize.width - PANEL_MARGIN + offsetX,
-      y: PANEL_MARGIN + offsetY,
-    };
-  }
-
-  if (rule.side === 'left-edge') {
-    return {
-      x: PANEL_MARGIN + offsetX,
-      y: PANEL_MARGIN + offsetY,
     };
   }
 

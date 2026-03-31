@@ -176,6 +176,10 @@ export function CameraModeEntryFramingController({
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
   const savedDampingRef = React.useRef<boolean | null>(null);
+  const savedEnabledRef = React.useRef<boolean | null>(null);
+  const savedEnableRotateRef = React.useRef<boolean | null>(null);
+  const savedEnablePanRef = React.useRef<boolean | null>(null);
+  const savedEnableZoomRef = React.useRef<boolean | null>(null);
   const cameraSnapshotRef = React.useRef<{
     position: THREE.Vector3;
     target: THREE.Vector3;
@@ -219,6 +223,10 @@ export function CameraModeEntryFramingController({
     let startTime: number | null = null;
     const orbit = controls as unknown as {
       target: THREE.Vector3;
+      enabled?: boolean;
+      enableRotate?: boolean;
+      enablePan?: boolean;
+      enableZoom?: boolean;
       enableDamping?: boolean;
       update: () => void;
     };
@@ -226,6 +234,22 @@ export function CameraModeEntryFramingController({
     if (savedDampingRef.current === null && typeof orbit.enableDamping === 'boolean') {
       savedDampingRef.current = orbit.enableDamping;
       orbit.enableDamping = false;
+    }
+    if (savedEnabledRef.current === null && typeof orbit.enabled === 'boolean') {
+      savedEnabledRef.current = orbit.enabled;
+      orbit.enabled = false;
+    }
+    if (savedEnableRotateRef.current === null && typeof orbit.enableRotate === 'boolean') {
+      savedEnableRotateRef.current = orbit.enableRotate;
+      orbit.enableRotate = false;
+    }
+    if (savedEnablePanRef.current === null && typeof orbit.enablePan === 'boolean') {
+      savedEnablePanRef.current = orbit.enablePan;
+      orbit.enablePan = false;
+    }
+    if (savedEnableZoomRef.current === null && typeof orbit.enableZoom === 'boolean') {
+      savedEnableZoomRef.current = orbit.enableZoom;
+      orbit.enableZoom = false;
     }
 
     const tick = (now: number) => {
@@ -254,6 +278,22 @@ export function CameraModeEntryFramingController({
         if (savedDampingRef.current !== null && typeof orbit.enableDamping === 'boolean') {
           orbit.enableDamping = savedDampingRef.current;
           savedDampingRef.current = null;
+        }
+        if (savedEnabledRef.current !== null && typeof orbit.enabled === 'boolean') {
+          orbit.enabled = savedEnabledRef.current;
+          savedEnabledRef.current = null;
+        }
+        if (savedEnableRotateRef.current !== null && typeof orbit.enableRotate === 'boolean') {
+          orbit.enableRotate = savedEnableRotateRef.current;
+          savedEnableRotateRef.current = null;
+        }
+        if (savedEnablePanRef.current !== null && typeof orbit.enablePan === 'boolean') {
+          orbit.enablePan = savedEnablePanRef.current;
+          savedEnablePanRef.current = null;
+        }
+        if (savedEnableZoomRef.current !== null && typeof orbit.enableZoom === 'boolean') {
+          orbit.enableZoom = savedEnableZoomRef.current;
+          savedEnableZoomRef.current = null;
         }
         onComplete?.();
       }
@@ -384,10 +424,32 @@ export function CameraModeEntryFramingController({
   React.useEffect(() => {
     return () => {
       cancelAnimation();
-      const orbit = controls as unknown as { enableDamping?: boolean };
+      const orbit = controls as unknown as {
+        enabled?: boolean;
+        enableRotate?: boolean;
+        enablePan?: boolean;
+        enableZoom?: boolean;
+        enableDamping?: boolean;
+      };
       if (savedDampingRef.current !== null && orbit && typeof orbit.enableDamping === 'boolean') {
         orbit.enableDamping = savedDampingRef.current;
         savedDampingRef.current = null;
+      }
+      if (savedEnabledRef.current !== null && orbit && typeof orbit.enabled === 'boolean') {
+        orbit.enabled = savedEnabledRef.current;
+        savedEnabledRef.current = null;
+      }
+      if (savedEnableRotateRef.current !== null && orbit && typeof orbit.enableRotate === 'boolean') {
+        orbit.enableRotate = savedEnableRotateRef.current;
+        savedEnableRotateRef.current = null;
+      }
+      if (savedEnablePanRef.current !== null && orbit && typeof orbit.enablePan === 'boolean') {
+        orbit.enablePan = savedEnablePanRef.current;
+        savedEnablePanRef.current = null;
+      }
+      if (savedEnableZoomRef.current !== null && orbit && typeof orbit.enableZoom === 'boolean') {
+        orbit.enableZoom = savedEnableZoomRef.current;
+        savedEnableZoomRef.current = null;
       }
     };
   }, [cancelAnimation, controls]);

@@ -3,7 +3,6 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useThree } from '@react-three/fiber';
-import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis as AxisType } from '../types';
 import { usePicking } from '@/components/picking';
@@ -15,9 +14,14 @@ interface GizmoMoveProps {
   isActive?: boolean;
   isDimmed?: boolean;
   isHidden?: boolean;
+  suppressHover?: boolean;
+  opacityScale?: number;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
-  handleScale?: number; // New prop for scaling handles
+  handleScale?: number;
+  moveHandleBidirectional?: boolean;
+  moveHandleLengthScale?: number;
+  moveHandleThicknessScale?: number;
   onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
@@ -34,9 +38,14 @@ export function GizmoMove({
   isActive,
   isDimmed,
   isHidden,
+  suppressHover = false,
+  opacityScale = 1,
   enableLighting = true,
   gizmoPosition,
-  handleScale = 1.0, // Default to 1.0
+  handleScale = 1.0,
+  moveHandleBidirectional = false,
+  moveHandleLengthScale = 1.0,
+  moveHandleThicknessScale = 1.0,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -54,25 +63,22 @@ export function GizmoMove({
   const axisDeltaRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
 
-  // GPU Picking registration
-  const pickMeshRef = useRef<THREE.Mesh>(null);
+  const pickMeshRef = useRef<THREE.Group>(null);
   const pickIdRef = useRef<number | null>(null);
   const { register, unregister, hit } = usePicking();
-  
-  // Map axis to gizmo handle type
+
   const handleType: GizmoHandleType = `move-${axis}` as GizmoHandleType;
-  
-  // Register with picking system
+
   useEffect(() => {
     if (!pickMeshRef.current) return;
-    
+
     pickIdRef.current = register({
       category: 'gizmo',
       objectId: null,
       gizmoHandle: handleType,
       object: pickMeshRef.current,
     });
-    
+
     return () => {
       if (pickIdRef.current !== null) {
         unregister(pickIdRef.current);
@@ -80,34 +86,51 @@ export function GizmoMove({
       }
     };
   }, [register, unregister, handleType]);
-  
-  // Check if this handle is hovered via GPU picking
-  const isPickingHovered = hit.category === 'gizmo' && 
-    'gizmoHandle' in hit && 
-    hit.gizmoHandle === handleType;
 
-  // Get colors for this axis
+  const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 'gizmoHandle' in hit && hit.gizmoHandle === handleType;
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
+
+  const shaftLength = Math.max(0.3, GIZMO_SIZES.arrowShaftLength * moveHandleLengthScale);
+  const shaftRadius = Math.max(0.008, 0.02 * moveHandleThicknessScale);
+  const headRadius = Math.max(0.03, GIZMO_SIZES.arrowHeadRadius * moveHandleThicknessScale);
+  const headLength = Math.max(0.08, GIZMO_SIZES.arrowHeadLength * moveHandleLengthScale);
 
   const shouldFlipX = axis === 'x' && (camera.position.x - gizmoPosition.x > 0);
   const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
   const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
 
-  // Rotation for each axis with camera-relative flipping
   const rotation: [number, number, number] =
     axis === 'x' ? [0, 0, shouldFlipX ? -Math.PI / 2 : Math.PI / 2]
     : axis === 'y' ? [0, 0, shouldFlipY ? 0 : Math.PI]
     : axis === 'z' ? (shouldFlipZ ? [Math.PI / 2, 0, 0] : [-Math.PI / 2, 0, 0])
     : [0, 0, 0];
 
+  const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
+    if (!dragPlaneRef.current) return null;
+
+    const rect = gl.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    const ndc = ndcRef.current;
+    ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+
+    const raycaster = raycasterRef.current;
+    raycaster.setFromCamera(ndc, camera);
+
+    const intersection = intersectionRef.current;
+    const hitPoint = raycaster.ray.intersectPlane(dragPlaneRef.current, intersection);
+    if (!hitPoint) return null;
+    return intersection;
+  }, [camera, gl]);
+
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
-    // Ignore right-click to allow camera orbit controls
-    if (e.button === 2) {
-      return;
-    }
-    
+    if (e.button === 2) return;
+
     e.stopPropagation();
-    (e as any).stopped = true; // Mark event as handled for OrbitControls
+    e.stopped = true;
 
     const cameraDir = new THREE.Vector3();
     camera.getWorldDirection(cameraDir);
@@ -115,11 +138,9 @@ export function GizmoMove({
 
     const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
     if (!initialPoint) return;
-    
+
     const allowed = onDragStart();
-    if (allowed === false) {
-      return;
-    }
+    if (allowed === false) return;
 
     setIsDragging(true);
     if (!lastPointRef.current) {
@@ -145,37 +166,6 @@ export function GizmoMove({
     return new THREE.Vector3(0, 0, 1);
   }, [axis]);
 
-  const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
-    if (!dragPlaneRef.current) return null;
-
-    const rect = gl.domElement.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-
-    const ndc = ndcRef.current;
-    ndc.set(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1,
-    );
-
-    const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(ndc, camera);
-
-    const intersection = intersectionRef.current;
-    const hitPoint = raycaster.ray.intersectPlane(dragPlaneRef.current, intersection);
-    if (!hitPoint) return null;
-    return intersection;
-  }, [camera, gl]);
-
-  const handlePointerUp = () => {
-    if (!isDragging) return;
-
-    setIsDragging(false);
-    lastPointRef.current = null;
-    dragPlaneRef.current = null;
-    onDragEnd();
-  };
-
-  // Global pointer move and up listeners during drag
   useEffect(() => {
     if (!isDragging) return;
 
@@ -203,113 +193,114 @@ export function GizmoMove({
 
     window.addEventListener('pointermove', handleGlobalPointerMove);
     window.addEventListener('pointerup', handleGlobalPointerUp);
-    
+
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
   }, [axisDirection, getWorldPointFromMouse, isDragging, onDrag, onDragEnd]);
 
-  // Use GPU picking hover state OR prop-based hover (fallback)
-  const effectiveHovered = isPickingHovered || isHovered;
-  const isHighlighted = !!(effectiveHovered || isActive);
+  const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
+  const isHighlighted = !!isActive;
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const opacity = baseOpacity * opacityScale;
   const hoverScale = isActive ? 1.18 : effectiveHovered ? 1.1 : 1.0;
-  const dimmedColor = '#cccccc'; // Light grey for dimmed state
-  
-  // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
-  const emissiveIntensity = isDimmed ? 0 : isActive
-    ? GIZMO_LIGHTING.emissiveIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.emissiveIntensity.hovered
-    : GIZMO_LIGHTING.emissiveIntensity.idle;
-
-  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
+  const dimmedColor = '#cccccc';
   const lightIntensity = isActive
     ? GIZMO_LIGHTING.pointLightIntensity.active
     : effectiveHovered
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
-  // Create gradient cylinder geometry with vertex colors
   const gradientGeometry = useMemo(() => {
-    const geometry = new THREE.CylinderGeometry(0.02, 0.02, GIZMO_SIZES.arrowShaftLength, 8, 1);
+    const geometry = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 8, 1);
     const colors = new Float32Array(geometry.attributes.position.count * 3);
-    
-    // Pure colors at center, secondary colors at arrow tip (matching rotation arcs)
+
     const pureCenterColor = axis === 'x' ? '#ff0000' : axis === 'y' ? '#0ce300' : '#0000ff';
     const secondaryColor = axis === 'x' ? '#ff9900' : axis === 'y' ? '#ffcc00' : '#1596ff';
-    
+
     const startColor = new THREE.Color(pureCenterColor);
     const endColor = new THREE.Color(secondaryColor);
-    
-    // Apply gradient based on Y position (cylinder is vertical)
+
     for (let i = 0; i < geometry.attributes.position.count; i++) {
       const y = geometry.attributes.position.getY(i);
-      const normalizedPos = (y + GIZMO_SIZES.arrowShaftLength / 2) / GIZMO_SIZES.arrowShaftLength; // Normalize to 0-1
-      
-      // Keep pure color for first 1/3, then fade to secondary in remaining 2/3
-      const t = Math.max(0, (normalizedPos - 0.33) / 0.67); // 0 for first 1/3, then 0-1 for remaining
+      const normalizedPos = (y + shaftLength / 2) / shaftLength;
+      const t = Math.max(0, (normalizedPos - 0.33) / 0.67);
       const color = new THREE.Color().lerpColors(startColor, endColor, t);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
     }
-    
+
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     return geometry;
-  }, [axis]);
+  }, [axis, shaftLength, shaftRadius]);
 
-  // Arrow tip color - keep axis color always
   const endColorHex = isActive
     ? GIZMO_COLORS.active
     : effectiveHovered
       ? GIZMO_COLORS.hover
       : axisColors.end;
 
-  // Arrow tip position in local Y direction (will be rotated with group)
-  const arrowTipPosition: [number, number, number] = [
-    0,
-    GIZMO_SIZES.arrowShaftLength,
-    0
-  ];
+  const arrowTipPosition: [number, number, number] = [0, shaftLength, 0];
+  const oppositeArrowTipPosition: [number, number, number] = [0, -shaftLength, 0];
 
   return (
     <group rotation={rotation}>
-      {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
-      <mesh 
-        ref={pickMeshRef}
-        position={arrowTipPosition}
-        onPointerDown={handlePointerDown}
-        onPointerEnter={handlePointerEnterLocal}
-        onPointerLeave={handlePointerLeaveLocal}
-        scale={handleScale}
-      >
-        <sphereGeometry args={[Math.max(0.1, GIZMO_SIZES.arrowHeadRadius * 1.6), 12, 12]} />
-        <meshBasicMaterial 
-          visible={false}
-          depthTest={false} 
-        />
-      </mesh>
-      
-      {/* Gradient cylinder shaft - NOT SCALED */}
-      <mesh position={[0, GIZMO_SIZES.arrowShaftLength / 2, 0]} geometry={gradientGeometry} renderOrder={-10}>
-        <meshBasicMaterial 
+      <group ref={pickMeshRef}>
+        <mesh
+          position={arrowTipPosition}
+          onPointerDown={handlePointerDown}
+          onPointerEnter={handlePointerEnterLocal}
+          onPointerLeave={handlePointerLeaveLocal}
+          scale={handleScale}
+        >
+          <sphereGeometry args={[Math.max(0.14, headRadius * 2.35), 12, 12]} />
+          <meshBasicMaterial visible={false} depthTest={false} />
+        </mesh>
+
+        {moveHandleBidirectional && (
+          <mesh
+            position={oppositeArrowTipPosition}
+            onPointerDown={handlePointerDown}
+            onPointerEnter={handlePointerEnterLocal}
+            onPointerLeave={handlePointerLeaveLocal}
+            scale={handleScale}
+          >
+            <sphereGeometry args={[Math.max(0.14, headRadius * 2.35), 12, 12]} />
+            <meshBasicMaterial visible={false} depthTest={false} />
+          </mesh>
+        )}
+      </group>
+
+      <mesh position={[0, shaftLength / 2, 0]} geometry={gradientGeometry} renderOrder={-10}>
+        <meshBasicMaterial
           vertexColors={!isDimmed}
-          color={isDimmed ? dimmedColor : isHighlighted ? '#ffffff' : '#f2f2f2'}
+          color={isDimmed ? dimmedColor : isActive ? '#ffffff' : '#f2f2f2'}
           opacity={opacity}
           transparent
           depthTest={false}
-          toneMapped={false} 
+          toneMapped={false}
         />
       </mesh>
-      
-      {/* Arrow head (cone) with outline - SCALED */}
+
+      {moveHandleBidirectional && (
+        <mesh position={[0, -shaftLength / 2, 0]} geometry={gradientGeometry} rotation={[0, 0, Math.PI]} renderOrder={-10}>
+          <meshBasicMaterial
+            vertexColors={!isDimmed}
+            color={isDimmed ? dimmedColor : isActive ? '#ffffff' : '#f2f2f2'}
+            opacity={opacity}
+            transparent
+            depthTest={false}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
+
       <group position={arrowTipPosition} scale={handleScale * hoverScale}>
-        {/* Outline - slightly larger with darker color */}
         <mesh scale={1.15}>
-          <coneGeometry args={[GIZMO_SIZES.arrowHeadRadius, GIZMO_SIZES.arrowHeadLength, 8]} />
+          <coneGeometry args={[headRadius, headLength, 8]} />
           <meshBasicMaterial
             color={isDimmed ? new THREE.Color(dimmedColor).multiplyScalar(0.7).getHex() : new THREE.Color(endColorHex).multiplyScalar(0.3).getHex()}
             opacity={opacity}
@@ -317,10 +308,9 @@ export function GizmoMove({
             depthTest={false}
           />
         </mesh>
-        
-        {/* Main colored cone */}
+
         <mesh>
-          <coneGeometry args={[GIZMO_SIZES.arrowHeadRadius, GIZMO_SIZES.arrowHeadLength, 8]} />
+          <coneGeometry args={[headRadius, headLength, 8]} />
           <meshBasicMaterial
             color={isDimmed ? dimmedColor : endColorHex}
             opacity={opacity}
@@ -330,10 +320,43 @@ export function GizmoMove({
         </mesh>
       </group>
 
-      {/* Point light at arrow tip to cast colored light on model */}
+      {moveHandleBidirectional && (
+        <group position={oppositeArrowTipPosition} rotation={[Math.PI, 0, 0]} scale={handleScale * hoverScale}>
+          <mesh scale={1.15}>
+            <coneGeometry args={[headRadius, headLength, 8]} />
+            <meshBasicMaterial
+              color={isDimmed ? new THREE.Color(dimmedColor).multiplyScalar(0.7).getHex() : new THREE.Color(endColorHex).multiplyScalar(0.3).getHex()}
+              opacity={opacity}
+              transparent
+              depthTest={false}
+            />
+          </mesh>
+
+          <mesh>
+            <coneGeometry args={[headRadius, headLength, 8]} />
+            <meshBasicMaterial
+              color={isDimmed ? dimmedColor : endColorHex}
+              opacity={opacity}
+              transparent
+              depthTest={false}
+            />
+          </mesh>
+        </group>
+      )}
+
       {enableLighting && !isDimmed && (
         <pointLight
           position={arrowTipPosition}
+          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
+          intensity={lightIntensity}
+          distance={GIZMO_LIGHTING.pointLightDistance}
+          decay={GIZMO_LIGHTING.pointLightDecay}
+        />
+      )}
+
+      {moveHandleBidirectional && enableLighting && !isDimmed && (
+        <pointLight
+          position={oppositeArrowTipPosition}
           color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
           intensity={lightIntensity}
           distance={GIZMO_LIGHTING.pointLightDistance}

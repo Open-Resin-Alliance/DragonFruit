@@ -9,11 +9,12 @@ import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment } from './knotUtils';
 import { getSettings } from '../../Settings';
 import { solveKnotConstraint } from '../../PlacementLogic/JointConstraintSolver';
-import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
+import { ElasticChainInitialState, ElasticChainResult, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
 import { getFinalSocketPosition, getSocketPosition } from '../ContactCone';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { clearKnotDragPreview, emitKnotDragPreview } from '../../interaction/knotDragPreview';
 
 interface ActiveHost {
     segmentId: string;
@@ -36,6 +37,11 @@ interface ActiveHost {
 }
 
 export function useKnotInteraction(enabled: boolean = true) {
+    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm epsilon to drop high-frequency jitter churn
+    const BEZIER_PROJECTION_STEPS = 36;
+    const FAST_KNOT_DRAG_ELASTIC_PREVIEW = true;
+    const DRAG_SNAP_MM = 0.001;
+
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer } = useThree();
 
@@ -48,6 +54,67 @@ export function useKnotInteraction(enabled: boolean = true) {
 
     // Store initial state of all attached branches for elastic drag
     const elasticState = useRef<Record<string, ElasticChainInitialState>>({});
+    const prewarmedKnotIdRef = useRef<string | null>(null);
+    const prewarmedHostRef = useRef<ActiveHost | null>(null);
+    const prewarmedElasticStateRef = useRef<Record<string, ElasticChainInitialState> | null>(null);
+    const lastAppliedKnotPosRef = useRef<THREE.Vector3 | null>(null);
+    const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
+    const previewKnotRef = useRef<Knot | null>(null);
+    const lastEmittedKnotPreviewPosRef = useRef<{ x: number; y: number; z: number } | null>(null);
+    const lastEmittedBranchPreviewRef = useRef<Record<string, Branch['segments']> | null>(null);
+    const knotDragUpdatePendingRef = useRef(false);
+    const knotDragListenersAttachedRef = useRef(false);
+
+    const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        if (typeof window === 'undefined') return;
+
+        const w = window as any;
+        w.__knotGizmoDragging = isDragging;
+        w.__knotGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('knot-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__knotGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            setKnotDragInteractionLock(false, 0);
+            clearKnotDragPreview();
+        };
+    }, [setKnotDragInteractionLock]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const markForceEndDrag = () => {
+            if (!activeKnotId.current) return;
+            forceEndDragRef.current = true;
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                markForceEndDrag();
+            }
+        };
+
+        window.addEventListener('pointerup', markForceEndDrag, true);
+        window.addEventListener('pointercancel', markForceEndDrag, true);
+        window.addEventListener('mouseup', markForceEndDrag, true);
+        window.addEventListener('blur', markForceEndDrag);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener('pointerup', markForceEndDrag, true);
+            window.removeEventListener('pointercancel', markForceEndDrag, true);
+            window.removeEventListener('mouseup', markForceEndDrag, true);
+            window.removeEventListener('blur', markForceEndDrag);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
 
     const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -144,6 +211,18 @@ export function useKnotInteraction(enabled: boolean = true) {
         if (lenSq < 0.000001) return 0;
         const v = new THREE.Vector3(pos.x - host.start.x, pos.y - host.start.y, pos.z - host.start.z);
         return THREE.MathUtils.clamp(v.dot(dir) / lenSq, 0, 1);
+    };
+
+    const markKnotDragUpdatePending = useCallback(() => {
+        if (!activeKnotId.current) return;
+        knotDragUpdatePendingRef.current = true;
+    }, []);
+
+    const snapVec3 = (vec: THREE.Vector3) => {
+        vec.x = Math.round(vec.x / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        vec.y = Math.round(vec.y / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        vec.z = Math.round(vec.z / DRAG_SNAP_MM) * DRAG_SNAP_MM;
+        return vec;
     };
 
     const clampTToLeafAngleConstraints = (
@@ -606,19 +685,15 @@ export function useKnotInteraction(enabled: boolean = true) {
     };
 
     // Capture the initial state of attached branches
-    const captureElasticState = (knotId: string) => {
+    const captureElasticState = (knotId: string): Record<string, ElasticChainInitialState> => {
         const allBranches = getBranches();
         const attached = allBranches.filter(b => b.parentKnotId === knotId);
         const state: Record<string, ElasticChainInitialState> = {};
-
-        console.log('[ElasticChain] Capturing state for knot:', knotId);
-        console.log('[ElasticChain] Attached branches:', attached.length);
 
         for (const b of attached) {
             const joints: { id: string; pos: { x: number, y: number, z: number } }[] = [];
 
             // Traverse segments to collect joints
-            console.log('[ElasticChain] Branch', b.id, 'has', b.segments.length, 'segments');
 
             for (let i = 0; i < b.segments.length; i++) {
                 const seg = b.segments[i];
@@ -631,7 +706,6 @@ export function useKnotInteraction(enabled: boolean = true) {
                 }
 
                 if (joint) {
-                    console.log('[ElasticChain] Found joint:', joint.id, 'at Z:', joint.pos.z);
                     joints.push({
                         id: joint.id,
                         pos: { ...joint.pos }
@@ -640,8 +714,6 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
 
             const knotPos = getKnotById(knotId)?.pos || { x: 0, y: 0, z: 0 };
-            console.log('[ElasticChain] Knot pos:', knotPos);
-            console.log('[ElasticChain] Total joints captured:', joints.length);
 
             state[b.id] = {
                 branchId: b.id,
@@ -654,22 +726,43 @@ export function useKnotInteraction(enabled: boolean = true) {
             };
         }
 
-        elasticState.current = state;
+        return state;
     };
+
+    useEffect(() => {
+        if (!enabled) return;
+        if (isDragging) return;
+        if (hit.category !== 'knot' || !hit.objectId) return;
+
+        const knotId = hit.objectId;
+        if (prewarmedKnotIdRef.current === knotId && prewarmedHostRef.current && prewarmedElasticStateRef.current) {
+            return;
+        }
+
+        const knot = getKnotById(knotId);
+        if (!knot) return;
+
+        const host = findHost(knot);
+        if (!host) return;
+        resolveEndpoints(host);
+
+        prewarmedKnotIdRef.current = knotId;
+        prewarmedHostRef.current = host;
+        prewarmedElasticStateRef.current = captureElasticState(knotId);
+    }, [enabled, isDragging, hit.category, hit.objectId]);
 
     useEffect(() => {
         if (!enabled && !activeKnotId.current) return;
 
         if (enabled && isDragging && hit.category === 'knot' && hit.objectId && !activeKnotId.current) {
-            console.log('[useKnotInteraction] Starting knot drag!');
             const knot = getKnotById(hit.objectId);
             if (!knot) {
-                console.log('[useKnotInteraction] Knot not found for id:', hit.objectId);
                 return;
             }
-            const host = findHost(knot);
+            const host = prewarmedKnotIdRef.current === knot.id && prewarmedHostRef.current
+                ? prewarmedHostRef.current
+                : findHost(knot);
             if (!host) {
-                console.log('[useKnotInteraction] Host not found for knot');
                 return;
             }
             resolveEndpoints(host);
@@ -677,23 +770,155 @@ export function useKnotInteraction(enabled: boolean = true) {
             activeHost.current = host;
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
+            knotDragUpdatePendingRef.current = true;
+            if (!knotDragListenersAttachedRef.current) {
+                window.addEventListener('pointermove', markKnotDragUpdatePending, true);
+                knotDragListenersAttachedRef.current = true;
+            }
+            lastAppliedKnotPosRef.current = null;
+            previewBranchSegmentsByIdRef.current = {};
+            previewKnotRef.current = null;
+            lastEmittedKnotPreviewPosRef.current = null;
+            lastEmittedBranchPreviewRef.current = null;
+            clearKnotDragPreview();
 
-            // Capture State
-            captureElasticState(knot.id);
+            // Capture/restore state
+            elasticState.current = prewarmedKnotIdRef.current === knot.id && prewarmedElasticStateRef.current
+                ? prewarmedElasticStateRef.current
+                : captureElasticState(knot.id);
+
+            prewarmedKnotIdRef.current = null;
+            prewarmedHostRef.current = null;
+            prewarmedElasticStateRef.current = null;
         }
 
         const shouldEndDrag = (!isDragging || forceEndDragRef.current) && !!activeKnotId.current;
 
         if (shouldEndDrag) {
-            console.log('[useKnotInteraction] Drag ended, clearing state');
+            const activeKnotIdAtEnd = activeKnotId.current;
+            const activeHostAtEnd = activeHost.current;
+            const previewBranchSegmentsByIdAtEnd = { ...previewBranchSegmentsByIdRef.current };
+            const previewKnotAtEnd = previewKnotRef.current;
 
-            if (activeHost.current && initialEditSnapshotRef.current) {
+            if (
+                FAST_KNOT_DRAG_ELASTIC_PREVIEW
+                && activeHostAtEnd?.containerType === 'trunk'
+                && previewKnotAtEnd
+                && Object.keys(elasticState.current).length > 0
+            ) {
+                const maxAngleDeg = getSettings().shaft.maxAngleDeg ?? 80;
+                let releaseKnotPos = { ...previewKnotAtEnd.pos };
+
+                let minAllowedZ = Number.POSITIVE_INFINITY;
+                let requiresClamping = false;
+                const firstPassElasticResults: Record<string, ElasticChainResult> = {};
+
+                for (const branchId in elasticState.current) {
+                    const state = elasticState.current[branchId];
+                    const res = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
+                    firstPassElasticResults[branchId] = res;
+
+                    if (res.isLocked) {
+                        requiresClamping = true;
+                        if (res.knotPos.z < minAllowedZ) {
+                            minAllowedZ = res.knotPos.z;
+                        }
+                    }
+                }
+
+                if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY && releaseKnotPos.z > minAllowedZ) {
+                    resolveEndpoints(activeHostAtEnd);
+                    const dir = new THREE.Vector3().subVectors(activeHostAtEnd.end, activeHostAtEnd.start);
+                    if (Math.abs(dir.z) > 0.001) {
+                        const t = (minAllowedZ - activeHostAtEnd.start.z) / dir.z;
+                        const newPos = activeHostAtEnd.start.clone().add(dir.multiplyScalar(t));
+                        releaseKnotPos = { x: newPos.x, y: newPos.y, z: newPos.z };
+                    } else {
+                        releaseKnotPos = { ...releaseKnotPos, z: minAllowedZ };
+                    }
+                }
+
+                const elasticResults: Record<string, ElasticChainResult> = {};
+                if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
+                    for (const branchId in elasticState.current) {
+                        const state = elasticState.current[branchId];
+                        elasticResults[branchId] = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
+                    }
+                } else {
+                    Object.assign(elasticResults, firstPassElasticResults);
+                }
+
+                for (const branchId in elasticState.current) {
+                    const res = elasticResults[branchId];
+                    if (!res) continue;
+
+                    const branch = getBranchById(branchId);
+                    if (!branch) continue;
+
+                    let branchChanged = false;
+                    const newSegments = branch.segments.map(seg => {
+                        let segChanged = false;
+                        let newTopJoint = seg.topJoint;
+                        let newBottomJoint = seg.bottomJoint;
+
+                        if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
+                            const newPos = res.jointPositions[seg.topJoint.id];
+                            if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
+                                newTopJoint = { ...seg.topJoint, pos: newPos };
+                                segChanged = true;
+                            }
+                        }
+
+                        if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
+                            const newPos = res.jointPositions[seg.bottomJoint.id];
+                            if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
+                                newBottomJoint = { ...seg.bottomJoint, pos: newPos };
+                                segChanged = true;
+                            }
+                        }
+
+                        if (segChanged) {
+                            branchChanged = true;
+                            return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
+                        }
+                        return seg;
+                    });
+
+                    if (branchChanged) {
+                        previewBranchSegmentsByIdAtEnd[branch.id] = newSegments;
+                    } else {
+                        delete previewBranchSegmentsByIdAtEnd[branch.id];
+                    }
+                }
+
+                previewKnotRef.current = {
+                    ...previewKnotAtEnd,
+                    pos: releaseKnotPos,
+                };
+            }
+
+            // Reconcile drag-time fast-path edits with an exact pass once on release.
+            for (const [branchId, previewSegments] of Object.entries(previewBranchSegmentsByIdAtEnd)) {
+                const branch = getBranchById(branchId);
+                if (branch) {
+                    updateBranch({ ...branch, segments: previewSegments });
+                }
+            }
+
+            if (previewKnotAtEnd && previewKnotAtEnd.id === activeKnotIdAtEnd) {
+                updateKnot(previewKnotAtEnd);
+            } else if (activeKnotIdAtEnd) {
+                const knotAtEnd = getKnotById(activeKnotIdAtEnd);
+                if (knotAtEnd) updateKnot(knotAtEnd);
+            }
+
+            if (activeHostAtEnd && initialEditSnapshotRef.current) {
                 const description =
-                    activeHost.current.containerType === 'leafCone'
+                    activeHostAtEnd.containerType === 'leafCone'
                         ? 'Move tip knot'
-                        : activeHost.current.containerType === 'brace'
+                        : activeHostAtEnd.containerType === 'brace'
                             ? 'Move brace knot'
-                            : activeHost.current.containerType === 'kickstand'
+                            : activeHostAtEnd.containerType === 'kickstand'
                                 ? 'Move kickstand host knot'
                                 : 'Move support knot';
                 pushSupportEditHistory(description, initialEditSnapshotRef.current, captureSupportEditSnapshot());
@@ -705,17 +930,35 @@ export function useKnotInteraction(enabled: boolean = true) {
             forceEndDragRef.current = false;
             initialEditSnapshotRef.current = null;
             setKnotDragInteractionLock(false);
+            knotDragUpdatePendingRef.current = false;
+            if (knotDragListenersAttachedRef.current) {
+                window.removeEventListener('pointermove', markKnotDragUpdatePending, true);
+                knotDragListenersAttachedRef.current = false;
+            }
 
             if (leafClampWarningTimeout.current) {
                 window.clearTimeout(leafClampWarningTimeout.current);
                 leafClampWarningTimeout.current = null;
             }
             setInteractionWarning(null);
+
+            prewarmedKnotIdRef.current = null;
+            prewarmedHostRef.current = null;
+            prewarmedElasticStateRef.current = null;
+            lastAppliedKnotPosRef.current = null;
+            previewBranchSegmentsByIdRef.current = {};
+            previewKnotRef.current = null;
+            lastEmittedKnotPreviewPosRef.current = null;
+            lastEmittedBranchPreviewRef.current = null;
+            clearKnotDragPreview();
         }
-    }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
+    }, [isDragging, hit, enabled, setKnotDragInteractionLock, markKnotDragUpdatePending]);
 
     useFrame(() => {
+        if (!knotDragUpdatePendingRef.current) return;
         if (!activeKnotId.current || !activeHost.current) return;
+
+        knotDragUpdatePendingRef.current = false;
 
         const knot = getKnotById(activeKnotId.current);
         if (!knot) return;
@@ -738,7 +981,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             const t = THREE.MathUtils.clamp(projected.t, minT, 1);
 
             const lineVec = new THREE.Vector3().subVectors(host.end, host.start);
-            const finalOnLine = host.start.clone().add(lineVec.multiplyScalar(t));
+            const finalOnLine = snapVec3(host.start.clone().add(lineVec.multiplyScalar(t)));
 
             const contactDia = cone.profile?.contactDiameterMm ?? 0.4;
             const bodyDia = cone.profile?.bodyDiameterMm ?? 1.2;
@@ -751,18 +994,45 @@ export function useKnotInteraction(enabled: boolean = true) {
                 diameter: hostDia + 0.1,
             };
 
-            updateKnot(finalKnot);
+            previewKnotRef.current = finalKnot;
+            const prevKnot = lastEmittedKnotPreviewPosRef.current;
+            const nextKnotPos = finalKnot.pos;
+            const sameKnotPos = !!prevKnot
+                && Math.abs(prevKnot.x - nextKnotPos.x) < MIN_DRAG_DELTA_SQ
+                && Math.abs(prevKnot.y - nextKnotPos.y) < MIN_DRAG_DELTA_SQ
+                && Math.abs(prevKnot.z - nextKnotPos.z) < MIN_DRAG_DELTA_SQ;
+            if (!sameKnotPos || lastEmittedBranchPreviewRef.current !== previewBranchSegmentsByIdRef.current) {
+                lastEmittedKnotPreviewPosRef.current = { ...nextKnotPos };
+                lastEmittedBranchPreviewRef.current = previewBranchSegmentsByIdRef.current;
+                emitKnotDragPreview({
+                    knotId: finalKnot.id,
+                    knot: finalKnot,
+                    branchSegmentsById: previewBranchSegmentsByIdRef.current,
+                });
+            }
             return;
         }
 
         raycaster.setFromCamera(pointer, camera);
 
+        const quickProjected = projectOntoSegment(raycaster.ray, host.start, host.end);
+        const quickProjectedVec = snapVec3(new THREE.Vector3(quickProjected.point.x, quickProjected.point.y, quickProjected.point.z));
+        const hasLastApplied = !!lastAppliedKnotPosRef.current;
+        const deltaSq = hasLastApplied
+            ? lastAppliedKnotPosRef.current!.distanceToSquared(quickProjectedVec)
+            : Number.POSITIVE_INFINITY;
+
+        if (hasLastApplied && deltaSq < MIN_DRAG_DELTA_SQ) {
+            return;
+        }
+
         // Allow cross-segment dragging: choose the best segment in this trunk/branch.
         const candidates = getHostCandidates(host);
         let bestSegmentId = host.segmentId;
         let bestDiameter = 1.2;
-        let bestPoint = projectOntoSegment(raycaster.ray, host.start, host.end).point;
-        let bestT = projectOntoSegment(raycaster.ray, host.start, host.end).t;
+        const projectedOnHost = projectOntoSegment(raycaster.ray, host.start, host.end);
+        let bestPoint = projectedOnHost.point;
+        let bestT = projectedOnHost.t;
         let bestDistSq = Number.POSITIVE_INFINITY;
 
         if (host.containerType === 'brace' && host.brace?.curve?.type === 'bezier') {
@@ -798,7 +1068,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             if (candidates.length > 0) {
                 for (const c of candidates) {
                     if (c.bezier) {
-                        const proj = projectOntoBezierCurve(raycaster.ray, c.start, c.end, c.bezier.control1, c.bezier.control2, 60);
+                        const proj = projectOntoBezierCurve(raycaster.ray, c.start, c.end, c.bezier.control1, c.bezier.control2, BEZIER_PROJECTION_STEPS);
                         if (proj.distSq < bestDistSq) {
                             bestDistSq = proj.distSq;
                             bestSegmentId = c.segmentId;
@@ -828,7 +1098,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                 const current = candidates.find(c => c.segmentId === host.segmentId);
                 if (current) {
                     if (current.bezier) {
-                        const proj = projectOntoBezierCurve(raycaster.ray, current.start, current.end, current.bezier.control1, current.bezier.control2, 60);
+                        const proj = projectOntoBezierCurve(raycaster.ray, current.start, current.end, current.bezier.control1, current.bezier.control2, BEZIER_PROJECTION_STEPS);
                         if (proj.distSq <= bestDistSq * 1.05) {
                             bestSegmentId = current.segmentId;
                             bestDiameter = current.diameter;
@@ -893,7 +1163,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         // 1. Initial Constraint (Shaft + Basic Angle)
         // We IGNORE elastic branches here because ElasticChainSolver will handle them properly.
         // Static constraint solver would clamp the Knot based on the OLD joint position, preventing movement.
-        let constrainedPos = solveKnotConstraint(knot, result.point, maxAngleDeg, host.initialTopology, elasticBranchIds);
+        let constrainedPos = solveKnotConstraint(knot, snapVec3(new THREE.Vector3(result.point.x, result.point.y, result.point.z)), maxAngleDeg, host.initialTopology, elasticBranchIds);
 
         // 1b. Leaf Constraint (if this knot owns a Leaf)
         // Prevent dragging past the same 10° from horizontal rule that placement enforces.
@@ -903,7 +1173,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         const leafClamp = clampTToLeafAngleConstraints(tDesired, tCurrent, host, maxAngleDeg);
         if (leafClamp.clamped) {
             const dir = new THREE.Vector3().subVectors(host.end, host.start);
-            const newPos = host.start.clone().add(dir.multiplyScalar(leafClamp.t));
+            const newPos = snapVec3(host.start.clone().add(dir.multiplyScalar(leafClamp.t)));
             constrainedPos = { x: newPos.x, y: newPos.y, z: newPos.z };
 
             const epsilonZ = 0.0001;
@@ -912,106 +1182,105 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
         }
 
+        const branchSegmentsById: Record<string, Branch['segments']> = {};
+
         // 2. Elastic Chain Logic
-        // We run the solver for ALL attached branches.
-        // If any branch is 'locked' (requires clamping), we clamp the Knot position.
+        // Fast trunk-knot preview path: skip heavy per-frame elastic solving and
+        // defer exact solving to release for smoother branch/leaf visual response.
+        const shouldSkipElasticPreview = FAST_KNOT_DRAG_ELASTIC_PREVIEW && host.containerType === 'trunk';
+        let finalKnotPos = constrainedPos;
 
-        let minAllowedZ = Number.POSITIVE_INFINITY;
-        let requiresClamping = false;
-
-        // First Pass: Check constraints
-        for (const branchId in elasticState.current) {
-            const state = elasticState.current[branchId];
-            const res = solveElasticChain(constrainedPos, state, maxAngleDeg);
-
-            if (res.isLocked) {
-                requiresClamping = true;
-                if (res.knotPos.z < minAllowedZ) {
-                    minAllowedZ = res.knotPos.z;
+        if (shouldSkipElasticPreview) {
+            for (const branchId of Object.keys(previewBranchSegmentsByIdRef.current)) {
+                const branch = getBranchById(branchId);
+                if (branch) {
+                    // Explicitly mark previously preview-overridden branches for prune.
+                    branchSegmentsById[branch.id] = branch.segments;
                 }
             }
-        }
+        } else {
+            let minAllowedZ = Number.POSITIVE_INFINITY;
+            let requiresClamping = false;
+            const firstPassElasticResults: Record<string, ElasticChainResult> = {};
 
-        // If we hit a limit, apply it
-        if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
-            // Apply Z Clamp
-            // If dragging UP (usually), we cap the Max Z.
-            // NOTE: solveElasticChain returns the clamped value in res.knotPos.z
-            // If the user drags 'too high', the solver says 'here is the max Z'.
-            // So we take the MINIMUM of all MaxZs (most restrictive limit).
-            // (Assuming dragging UP increases Z. If dragging DOWN, logic might differ but 'pulling down' usually safe)
+            for (const branchId in elasticState.current) {
+                const state = elasticState.current[branchId];
+                const res = solveElasticChain(constrainedPos, state, maxAngleDeg);
+                firstPassElasticResults[branchId] = res;
 
-            if (constrainedPos.z > minAllowedZ) {
-                // We need to move constrainedPos to have Z = minAllowedZ while staying on shaft.
+                if (res.isLocked) {
+                    requiresClamping = true;
+                    if (res.knotPos.z < minAllowedZ) {
+                        minAllowedZ = res.knotPos.z;
+                    }
+                }
+            }
+
+            if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY && constrainedPos.z > minAllowedZ) {
                 const dir = new THREE.Vector3().subVectors(host.end, host.start);
                 if (Math.abs(dir.z) > 0.001) {
                     const t = (minAllowedZ - host.start.z) / dir.z;
-                    const newPos = host.start.clone().add(dir.multiplyScalar(t));
+                    const newPos = snapVec3(host.start.clone().add(dir.multiplyScalar(t)));
                     constrainedPos = { x: newPos.x, y: newPos.y, z: newPos.z };
                 } else {
                     constrainedPos = { ...constrainedPos, z: minAllowedZ };
                 }
-            }
-        }
-
-        // 3. Final Pass: Apply Final Knot Pos to get Joint positions and Update Branches
-        // Use the MOST RESTRICTIVE knotPos from all solvers
-        let finalKnotPos = constrainedPos;
-
-        for (const branchId in elasticState.current) {
-            const state = elasticState.current[branchId];
-            const res = solveElasticChain(finalKnotPos, state, maxAngleDeg);
-
-            // If this solver clamped the knot, use the clamped position
-            if (res.isLocked && res.knotPos.z < finalKnotPos.z) {
-                finalKnotPos = res.knotPos;
+                finalKnotPos = constrainedPos;
             }
 
-            // Update branch joints
-            const branch = getBranchById(branchId);
-            if (!branch) continue;
+            const elasticResults: Record<string, ElasticChainResult> = {};
+            if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
+                for (const branchId in elasticState.current) {
+                    const state = elasticState.current[branchId];
+                    elasticResults[branchId] = solveElasticChain(finalKnotPos, state, maxAngleDeg);
+                }
+            } else {
+                Object.assign(elasticResults, firstPassElasticResults);
+            }
 
-            let branchChanged = false;
+            for (const branchId in elasticState.current) {
+                const res = elasticResults[branchId];
+                if (!res) continue;
 
-            // Map segments to new joint positions
-            const newSegments = branch.segments.map(seg => {
-                let segChanged = false;
-                let newTopJoint = seg.topJoint;
-                let newBottomJoint = seg.bottomJoint;
+                const branch = getBranchById(branchId);
+                if (!branch) continue;
 
-                if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
-                    const newPos = res.jointPositions[seg.topJoint.id];
-                    if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
-                        newTopJoint = { ...seg.topJoint, pos: newPos };
-                        segChanged = true;
+                let branchChanged = false;
+                const newSegments = branch.segments.map(seg => {
+                    let segChanged = false;
+                    let newTopJoint = seg.topJoint;
+                    let newBottomJoint = seg.bottomJoint;
+
+                    if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
+                        const newPos = res.jointPositions[seg.topJoint.id];
+                        if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
+                            newTopJoint = { ...seg.topJoint, pos: newPos };
+                            segChanged = true;
+                        }
                     }
-                }
 
-                if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
-                    const newPos = res.jointPositions[seg.bottomJoint.id];
-                    if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
-                        newBottomJoint = { ...seg.bottomJoint, pos: newPos };
-                        segChanged = true;
+                    if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
+                        const newPos = res.jointPositions[seg.bottomJoint.id];
+                        if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
+                            newBottomJoint = { ...seg.bottomJoint, pos: newPos };
+                            segChanged = true;
+                        }
                     }
-                }
 
-                if (segChanged) {
-                    branchChanged = true;
-                    return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
-                }
-                return seg;
-            });
-
-            if (branchChanged) {
-                console.log('[Elastic] Updating branch joints:', {
-                    branchId: branchId.slice(0, 8),
-                    numSegments: newSegments.length,
-                    jointPositions: Object.keys(res.jointPositions).map(id => ({
-                        id: id.slice(0, 8),
-                        z: res.jointPositions[id].z.toFixed(2)
-                    }))
+                    if (segChanged) {
+                        branchChanged = true;
+                        return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
+                    }
+                    return seg;
                 });
-                updateBranch({ ...branch, segments: newSegments });
+
+                if (branchChanged) {
+                    branchSegmentsById[branch.id] = newSegments;
+                } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
+                    // Branch returned to committed geometry; keep an explicit sync entry so
+                    // we can prune stale preview overrides below.
+                    branchSegmentsById[branch.id] = branch.segments;
+                }
             }
         }
 
@@ -1029,7 +1298,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             t = Math.max(0, Math.min(1, t));
         }
 
-        let finalOnLine = host.start.clone().add(lineVec.clone().multiplyScalar(t));
+        let finalOnLine = snapVec3(host.start.clone().add(lineVec.clone().multiplyScalar(t)));
 
         // For curved braces: keep knot exactly on the curve and derive t from closest sample.
         if (host.containerType === 'brace' && host.brace?.curve?.type === 'bezier') {
@@ -1061,7 +1330,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                 }
 
                 t = bt;
-                finalOnLine = bp;
+                finalOnLine = snapVec3(bp);
 
                 const startDia = Math.max(
                     0.001,
@@ -1085,10 +1354,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                         host.end,
                         seg.controlPoint1,
                         seg.controlPoint2,
-                        60,
+                        BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1102,10 +1371,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                         host.end,
                         seg.controlPoint1,
                         seg.controlPoint2,
-                        60,
+                        BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1119,10 +1388,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                         host.end,
                         seg.controlPoint1,
                         seg.controlPoint2,
-                        60,
+                        BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1136,10 +1405,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                         host.end,
                         seg.controlPoint1,
                         seg.controlPoint2,
-                        60,
+                        BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
                     bestDiameter = seg.diameter;
                 }
             }
@@ -1153,7 +1422,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                         host.end,
                         seg.controlPoint1,
                         seg.controlPoint2,
-                        60,
+                        BEZIER_PROJECTION_STEPS,
                     );
                     t = proj.t;
                     finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
@@ -1175,6 +1444,44 @@ export function useKnotInteraction(enabled: boolean = true) {
             finalKnot.diameter = bestDiameter + 0.1;
         }
 
-        updateKnot(finalKnot);
+        if (!lastAppliedKnotPosRef.current) {
+            lastAppliedKnotPosRef.current = finalOnLine.clone();
+        } else {
+            lastAppliedKnotPosRef.current.copy(finalOnLine);
+        }
+
+        const updatedBranchIds = Object.keys(branchSegmentsById);
+        if (updatedBranchIds.length > 0) {
+            const nextPreviewBranchSegmentsById = { ...previewBranchSegmentsByIdRef.current };
+
+            for (const branchId of updatedBranchIds) {
+                const nextSegments = branchSegmentsById[branchId];
+                const committedBranch = getBranchById(branchId);
+                if (committedBranch && committedBranch.segments === nextSegments) {
+                    delete nextPreviewBranchSegmentsById[branchId];
+                } else {
+                    nextPreviewBranchSegmentsById[branchId] = nextSegments;
+                }
+            }
+
+            previewBranchSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
+        }
+        previewKnotRef.current = finalKnot;
+
+        const prevKnot = lastEmittedKnotPreviewPosRef.current;
+        const nextKnotPos = finalKnot.pos;
+        const sameKnotPos = !!prevKnot
+            && Math.abs(prevKnot.x - nextKnotPos.x) < MIN_DRAG_DELTA_SQ
+            && Math.abs(prevKnot.y - nextKnotPos.y) < MIN_DRAG_DELTA_SQ
+            && Math.abs(prevKnot.z - nextKnotPos.z) < MIN_DRAG_DELTA_SQ;
+        if (!sameKnotPos || lastEmittedBranchPreviewRef.current !== previewBranchSegmentsByIdRef.current) {
+            lastEmittedKnotPreviewPosRef.current = { ...nextKnotPos };
+            lastEmittedBranchPreviewRef.current = previewBranchSegmentsByIdRef.current;
+            emitKnotDragPreview({
+                knotId: finalKnot.id,
+                knot: finalKnot,
+                branchSegmentsById: previewBranchSegmentsByIdRef.current,
+            });
+        }
     });
 }

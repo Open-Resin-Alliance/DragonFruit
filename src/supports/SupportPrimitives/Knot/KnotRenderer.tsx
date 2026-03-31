@@ -3,9 +3,11 @@ import * as THREE from 'three';
 import { Knot } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { getSnapshot, setHoveredCategory, setHoveredId, subscribe } from '../../state';
+import { getSelectedId, subscribe } from '../../state';
 import { handleKnotClick } from '../../interaction/clickHandlers';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface KnotRendererProps {
     knot: Knot;
@@ -25,7 +27,7 @@ interface KnotRendererProps {
 
 export function KnotRenderer({
     knot,
-    color: propColor = '#ff8800',
+    color: propColor = '#c8752a',
     emissive: propEmissive = '#000000',
     emissiveIntensity: propEmissiveIntensity = 0,
     selectedColor: _selectedColor,
@@ -38,19 +40,23 @@ export function KnotRenderer({
     raycast,
     enablePicking = true,
 }: KnotRendererProps) {
+    const SELECTABLE_KNOT_VISUAL_SCALE = 1.15;
+    const SELECTABLE_KNOT_HITBOX_SCALE = 1.15;
+
     const resolvedDiameter = knot.diameter ?? 1.2;
     const blendedDiameter = Math.max(0.001, resolvedDiameter - JOINT_DIAMETER_OFFSET_MM);
-    const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
+    const displayDiameter = isParentSelected
+        ? resolvedDiameter * SELECTABLE_KNOT_VISUAL_SCALE
+        : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
-    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
-    const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-    const isSelected = state.selectedId === knot.id;
+    const selectedId = useSyncExternalStore(subscribe, getSelectedId, getSelectedId);
+    const isSelected = selectedId === knot.id;
 
     const pickIdRef = useRef<number | null>(null);
-    const { register, unregister, hit } = usePicking();
+    const { register, unregister, hit, isDragging } = usePicking();
 
     // Register with picking system - only when parent is selected
     // When parent is NOT selected, we don't register so picking falls through to the support
@@ -80,14 +86,16 @@ export function KnotRenderer({
 
     const isTopPickedKnot = frontBlockingModelId === null
         && isInteractable
+        && !isDragging
+        && !isSupportEditInteractionActive()
         && hit.category === 'knot'
         && hit.objectId === knot.id
         && isParentSelected;
-    const isHovered = (isTopPickedKnot || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && !isSupportEditInteractionActive() && isTopPickedKnot && !isSelected;
 
-    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#00ff00' : propColor));
-    const displayEmissive = isHovered ? '#ffffff' : propEmissive;
-    const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor));
+    const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
+    const displayEmissiveIntensity = isHovered ? 0.18 : propEmissiveIntensity;
 
     const isPointerOverThisKnot = (e: any): boolean => {
         if (!groupRef.current) return false;
@@ -145,18 +153,21 @@ export function KnotRenderer({
         const pointerOverKnot = isPointerOverThisKnot(e);
         if (!isParentSelected || !isInteractable || !pointerOverKnot) return;
 
+        if (!isSelected) {
+            selectPrimitiveById(knot.id);
+        }
+
         e.stopPropagation();
 
-        // Start drag operation
         onDragStart();
         document.body.style.cursor = 'grabbing';
 
-        // Global mouse up to end drag
         const handleMouseUp = () => {
             onDragEnd();
             document.body.style.cursor = 'grab';
             window.removeEventListener('mouseup', handleMouseUp);
         };
+
         window.addEventListener('mouseup', handleMouseUp);
     };
 
@@ -168,29 +179,15 @@ export function KnotRenderer({
         }
     }, [isHovered, isInteractable]);
 
-    React.useEffect(() => {
-        if (isInteractable) return;
-
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
-        }
-    }, [isInteractable, knot.id, state.hoveredCategory, state.hoveredId]);
-
-    React.useEffect(() => {
-        if (!isParentSelected || !pointerHoverActive) return;
-        if (state.hoveredCategory !== 'knot' || state.hoveredId !== knot.id) {
-            setHoveredCategory('knot');
-            setHoveredId(knot.id);
-        }
-    }, [isParentSelected, knot.id, pointerHoverActive, state.hoveredCategory, state.hoveredId]);
-
     const handlePointerMove = (e: any) => {
+        if (isDragging || isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            return;
+        }
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -199,32 +196,17 @@ export function KnotRenderer({
             setFrontBlockingModelId(null);
         }
         emitImmediateModelHover(null);
-
-        const pointerOverKnot = isPointerOverThisKnot(e);
-        if (!pointerOverKnot || !isParentSelected) {
-            setPointerHoverActive((prev) => (prev ? false : prev));
-            return;
-        }
-
-        if (isParentSelected && isInteractable) {
-            setPointerHoverActive((prev) => (prev ? prev : true));
-        }
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
         }
-        setPointerHoverActive((prev) => (prev ? false : prev));
-        if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
-            setHoveredCategory('none');
-            setHoveredId(null);
-        }
         emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
 
-    const hitboxRadius = isParentSelected ? radius * 1.2 : radius;
+    const hitboxRadius = isParentSelected ? radius * SELECTABLE_KNOT_HITBOX_SCALE : radius;
 
     return (
         <group

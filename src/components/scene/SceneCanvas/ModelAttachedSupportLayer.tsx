@@ -4,6 +4,8 @@ import type { SupportMode } from '@/supports/types';
 import { SupportRenderer } from '@/supports/SupportRenderer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
+import type { SupportData } from '@/supports/rendering';
+import type { BracePreviewData } from '@/supports/SupportTypes/Brace/bracePlacementState';
 
 export type ModelAttachedSupportLayerProps = {
   mode?: SupportMode;
@@ -32,6 +34,11 @@ export type ModelAttachedSupportLayerProps = {
   ghostRenderOrder?: number;
   supportRendererRef?: React.Ref<THREE.Group>;
   supportRenderRefreshNonce?: number;
+  trunkPlacementPreview?: SupportData | null;
+  branchPlacementPreview?: SupportData | null;
+  leafPlacementPreview?: SupportData | null;
+  bracePlacementPreview?: BracePreviewData | null;
+  kickstandPlacementPreview?: SupportData | null;
 };
 
 export function ModelAttachedSupportLayer({
@@ -61,6 +68,11 @@ export function ModelAttachedSupportLayer({
   ghostRenderOrder,
   supportRendererRef,
   supportRenderRefreshNonce = 0,
+  trunkPlacementPreview = null,
+  branchPlacementPreview = null,
+  leafPlacementPreview = null,
+  bracePlacementPreview = null,
+  kickstandPlacementPreview = null,
 }: ModelAttachedSupportLayerProps) {
   return (
     <>
@@ -124,6 +136,11 @@ export function ModelAttachedSupportLayer({
         ghostOpacity={ghostOpacity}
         ghostRenderOrder={ghostRenderOrder}
         passive={passive}
+        trunkPlacementPreview={trunkPlacementPreview}
+        branchPlacementPreview={branchPlacementPreview}
+        leafPlacementPreview={leafPlacementPreview}
+        bracePlacementPreview={bracePlacementPreview}
+        kickstandPlacementPreview={kickstandPlacementPreview}
       />
     </>
   );

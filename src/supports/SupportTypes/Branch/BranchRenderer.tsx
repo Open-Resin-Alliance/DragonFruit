@@ -12,9 +12,9 @@ import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDra
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { useJointDragPreview } from '../../interaction/jointDragPreview';
+import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
-import { updateBranch } from '../../state';
+import { getSnapshot, updateBranch } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface BranchRendererProps {
@@ -36,14 +36,14 @@ interface BranchRendererProps {
   onContactDiskHudHoverChange?: (hovered: boolean) => void;
 }
 
-export const BranchRenderer = React.memo(function BranchRenderer({ 
-  branch, 
-  parentKnot, 
-  isSelected, 
-  selectedId, 
+export const BranchRenderer = React.memo(function BranchRenderer({
+  branch: baseBranch,
+  parentKnot,
+  isSelected,
+  selectedId,
   dimNonSelected,
   showKnots,
-  isHovered: propHovered, 
+  isHovered: propHovered,
   suppressHover,
   isInteractable = true,
   deferStraightShaftsToSceneBatch = false,
@@ -58,7 +58,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
-  const previewBranch = useJointDragPreview<Branch>('branch', branch.id);
+  const previewBranch = usePartDragUpdate<Branch>('branch', baseBranch.id);
+  const branch = previewBranch ?? baseBranch;
   const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
   const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
   const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
