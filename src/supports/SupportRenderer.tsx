@@ -560,6 +560,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const kickstandState = useKickstandStoreState();
+    const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
@@ -1459,6 +1460,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return selected;
     }, [singleSelectedSupportId, selectedSupportIdSet, state.sticks, useMultiSelectionDetail]);
+
+    const previewKnotOverrides = useMemo(() => {
+        return buildJointDragPreviewKnots(activeJointDragPreview, {
+            roots: state.roots,
+            knots: state.knots,
+        });
+    }, [activeJointDragPreview, state.roots, state.knots]);
 
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();

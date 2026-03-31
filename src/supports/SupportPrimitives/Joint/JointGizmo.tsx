@@ -272,6 +272,10 @@ export function JointGizmo() {
         if (branch || twig || stick || kickstand) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
         }
+
+        if (branch || twig || stick || kickstand) {
+            initialEditSnapshotRef.current = captureSupportEditSnapshot();
+        }
     };
 
     const applyMoveDelta = useCallback((delta: THREE.Vector3) => {

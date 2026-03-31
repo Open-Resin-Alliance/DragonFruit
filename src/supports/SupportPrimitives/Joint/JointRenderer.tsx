@@ -183,6 +183,25 @@ export function JointRenderer({
             document.body.style.cursor = 'grab';
         }
     }, [isHovered, isInteractable]);
+
+    React.useEffect(() => {
+        if (isInteractable) return;
+
+        setPointerHoverActive((prev) => (prev ? false : prev));
+        if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
+            setHoveredCategory('none');
+            setHoveredId(null);
+        }
+    }, [isInteractable, joint.id, state.hoveredCategory, state.hoveredId]);
+
+    // Sync global hover state so the picking system can resolve the hovered support owner
+    React.useEffect(() => {
+        if (!isParentSelected || !isHovered) return;
+        if (state.hoveredCategory !== 'joint' || state.hoveredId !== joint.id) {
+            setHoveredCategory('joint');
+            setHoveredId(joint.id);
+        }
+    }, [isParentSelected, joint.id, isHovered, state.hoveredCategory, state.hoveredId]);
     
     const handlePointerMove = (e: any) => {
         if (isDragging || isSupportEditInteractionActive()) {
