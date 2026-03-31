@@ -4200,7 +4200,7 @@ export function SceneCanvas({
               {clipUpper != null && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
                   entries={crossSectionCapEntries}
-                  sourceObject={supportDragGroupRef?.current ?? null}
+                  sourceObject={supportsRef?.current ?? null}
                   sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (effectiveHoldSupportDragDelta ? 1 : 0)}
                   y={clipUpper}
                   color="#FFFFFF"

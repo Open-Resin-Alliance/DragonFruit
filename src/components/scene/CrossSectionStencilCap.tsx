@@ -26,6 +26,29 @@ function composeTransformMatrix(transform: ModelTransform): THREE.Matrix4 {
   );
 }
 
+function geometryIntersectsClipPlaneAtZ(geometry: THREE.BufferGeometry, matrixWorld: THREE.Matrix4, clipZ: number): boolean {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!position || position.count < 3) return false;
+
+  const zSlice = clipZ + 1e-5;
+  const EPS = 1e-9;
+
+  for (let i = 0; i < position.count; i += 3) {
+    const v0 = new THREE.Vector3(position.getX(i), position.getY(i), position.getZ(i)).applyMatrix4(matrixWorld);
+    const v1 = new THREE.Vector3(position.getX(i + 1), position.getY(i + 1), position.getZ(i + 1)).applyMatrix4(matrixWorld);
+    const v2 = new THREE.Vector3(position.getX(i + 2), position.getY(i + 2), position.getZ(i + 2)).applyMatrix4(matrixWorld);
+
+    const above = [v0.z >= zSlice + 10 * EPS, v1.z >= zSlice + 10 * EPS, v2.z >= zSlice + 10 * EPS];
+    const below = [v0.z <= zSlice - 10 * EPS, v1.z <= zSlice - 10 * EPS, v2.z <= zSlice - 10 * EPS];
+
+    if (!((above[0] && above[1] && above[2]) || (below[0] && below[1] && below[2]))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function CrossSectionStencilCap({
   entries,
   sourceObject,
@@ -147,6 +170,18 @@ export function CrossSectionStencilCap({
     return results;
   }, [sourceObject, sourceObjectVersion]);
 
+  const visibleEntries = React.useMemo(() => {
+    return entries.filter((entry) => {
+      return geometryIntersectsClipPlaneAtZ(entry.geometry, composeTransformMatrix(entry.transform), y);
+    });
+  }, [entries, y]);
+
+  const visibleStaticSourceMeshes = React.useMemo(() => {
+    return staticSourceMeshes.filter((entry) => {
+      return geometryIntersectsClipPlaneAtZ(entry.geometry, entry.matrixWorld, y);
+    });
+  }, [staticSourceMeshes, y]);
+
   React.useEffect(() => {
     return () => {
       stencilBase.dispose();
@@ -157,11 +192,11 @@ export function CrossSectionStencilCap({
     };
   }, [capPlaneGeometry, capPlaneMaterial, stencilBack, stencilBase, stencilFront]);
 
-  if (!visible || (entries.length === 0 && staticSourceMeshes.length === 0)) return null;
+  if (!visible || (visibleEntries.length === 0 && visibleStaticSourceMeshes.length === 0)) return null;
 
   return (
     <group renderOrder={990}>
-      {entries.map((entry) => {
+      {visibleEntries.map((entry) => {
         const matrix = composeTransformMatrix(entry.transform);
         const offset = new THREE.Vector3(-entry.center.x, -entry.center.y, -entry.center.z);
 
@@ -185,23 +220,11 @@ export function CrossSectionStencilCap({
                 raycast={() => null}
               />
             </group>
-
-            <mesh
-              geometry={capPlaneGeometry}
-              material={capPlaneMaterial}
-              position={[0, 0, y + 1e-4]}
-              renderOrder={990.25}
-              frustumCulled={false}
-              raycast={() => null}
-              onAfterRender={(renderer) => {
-                (renderer as THREE.WebGLRenderer).clearStencil();
-              }}
-            />
           </group>
         );
       })}
 
-      {staticSourceMeshes.map((entry) => (
+      {visibleStaticSourceMeshes.map((entry) => (
         <group key={`stencil-source-pass-${entry.key}`}>
           <group matrix={entry.matrixWorld} matrixAutoUpdate={false}>
             <mesh
@@ -219,20 +242,20 @@ export function CrossSectionStencilCap({
               raycast={() => null}
             />
           </group>
-
-          <mesh
-            geometry={capPlaneGeometry}
-            material={capPlaneMaterial}
-            position={[0, 0, y + 1e-4]}
-            renderOrder={990.45}
-            frustumCulled={false}
-            raycast={() => null}
-            onAfterRender={(renderer) => {
-              (renderer as THREE.WebGLRenderer).clearStencil();
-            }}
-          />
         </group>
       ))}
+
+      <mesh
+        geometry={capPlaneGeometry}
+        material={capPlaneMaterial}
+        position={[0, 0, y + 1e-4]}
+        renderOrder={990.9}
+        frustumCulled={false}
+        raycast={() => null}
+        onAfterRender={(renderer) => {
+          (renderer as THREE.WebGLRenderer).clearStencil();
+        }}
+      />
     </group>
   );
 }
