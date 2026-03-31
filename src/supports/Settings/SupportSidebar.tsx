@@ -561,6 +561,7 @@ export function SupportSidebar() {
                             selectedDisplay={isAdaptiveConeAngle ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
                             hideSelectedText={isAdaptiveConeAngle}
                             selectedDisplayAlignment={isAdaptiveConeAngle ? 'center' : 'left'}
+                            selectedDisplayOffsetX={isAdaptiveConeAngle ? -7 : 0}
                             selectStyle={activeKey === 'tip.coneAngleMode'
                                 ? {
                                     borderColor: 'var(--accent)',

@@ -28,6 +28,7 @@ export type SelectDropdownProps<T extends string | number = string> = {
   selectedDisplay?: React.ReactNode;
   hideSelectedText?: boolean;
   selectedDisplayAlignment?: 'left' | 'center';
+  selectedDisplayOffsetX?: number;
   menuClassName?: string;
   menuAlign?: 'left' | 'right';
   optionClassName?: string;
@@ -58,6 +59,7 @@ export function SelectDropdown<T extends string | number = string>({
   selectedDisplay,
   hideSelectedText = false,
   selectedDisplayAlignment = 'left',
+  selectedDisplayOffsetX = 0,
   menuClassName = '',
   menuAlign = 'left',
   optionClassName = '',
@@ -65,6 +67,7 @@ export function SelectDropdown<T extends string | number = string>({
   onBlur,
 }: SelectDropdownProps<T>) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
   const menuRef = React.useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = React.useState(false);
   const [isFocused, setIsFocused] = React.useState(false);
@@ -75,6 +78,15 @@ export function SelectDropdown<T extends string | number = string>({
     () => options.find((option) => String(option.value) === String(value)) ?? null,
     [options, value],
   );
+
+  const clearActiveFocus = React.useCallback(() => {
+    if (typeof document === 'undefined') return;
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+    triggerRef.current?.blur();
+  }, []);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -201,6 +213,7 @@ export function SelectDropdown<T extends string | number = string>({
         }}
       >
         <button
+          ref={triggerRef}
           type="button"
           id={id}
           title={title}
@@ -235,15 +248,15 @@ export function SelectDropdown<T extends string | number = string>({
               : undefined),
           }}
         >
-          {leadingDisplay && !(hideSelectedText && selectedDisplay && !isFocused) && (
+          {leadingDisplay && !(hideSelectedText && selectedDisplay) && (
             <span className="mr-1.5 inline-flex shrink-0 items-center justify-center">
               {leadingDisplay}
             </span>
           )}
 
           <span
-            className={`min-w-0 flex-1 truncate ${(hideSelectedText && selectedDisplay && !isFocused) ? 'text-transparent' : ''}`}
-            style={hideSelectedText && selectedDisplay && !isFocused
+            className={`min-w-0 flex-1 truncate ${(hideSelectedText && selectedDisplay) ? 'text-transparent' : ''}`}
+            style={hideSelectedText && selectedDisplay
               ? {
                   color: 'transparent',
                   WebkitTextFillColor: 'transparent',
@@ -253,9 +266,10 @@ export function SelectDropdown<T extends string | number = string>({
             {selectedLabel}
           </span>
 
-          {selectedDisplay && hideSelectedText && !isFocused && (
+          {selectedDisplay && hideSelectedText && (
             <span
               className={`pointer-events-none absolute top-1/2 inline-flex -translate-y-1/2 items-center ${selectedDisplayAlignment === 'center' ? 'left-1/2 -translate-x-1/2' : 'left-2.5'}`}
+              style={selectedDisplayOffsetX !== 0 ? { marginLeft: selectedDisplayOffsetX } : undefined}
             >
               {selectedDisplay}
             </span>
@@ -308,6 +322,11 @@ export function SelectDropdown<T extends string | number = string>({
                     if (option.disabled) return;
                     onChange(option.value);
                     setIsOpen(false);
+                    setIsFocused(false);
+                    clearActiveFocus();
+                    window.requestAnimationFrame(() => {
+                      clearActiveFocus();
+                    });
                   }}
                   className={`group w-full px-3 py-2 text-left text-sm transition-colors inline-flex items-center gap-2 border-b last:border-b-0 ${optionClassName}`}
                   style={
