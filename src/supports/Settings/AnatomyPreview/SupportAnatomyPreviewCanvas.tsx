@@ -447,6 +447,7 @@ function PreviewContent({
         // --- Dynamic Zoom Logic for Tip Contact Diameter Only ---
         const isContactDiameterFocus = previewState.activeSettingKey === 'tip.contactDiameterMm';
         const isStickLikeKind = activeKind === 'stick' || activeKind === 'twig';
+        const isTrunkKind = activeKind === 'trunk';
 
         // Strict scope: ONLY 'tip.contactDiameterMm' triggers dynamic zoom
         // Previously we checked startsWith('tip.'), which caused snapback on other tip settings
@@ -475,7 +476,7 @@ function PreviewContent({
                 finalZoom = maxZoom + t * (minZoom - maxZoom);
             }
 
-            if (!isStickLikeKind) {
+            if (isTrunkKind) {
                 const internalAngle = Math.abs(liveConfigRef.current.coneAngleDeg);
                 const angleRad = THREE.MathUtils.degToRad(internalAngle);
 
@@ -518,7 +519,7 @@ function PreviewContent({
         // We clone here because we might modify it
         let finalTarget = [...targetFocus.target] as [number, number, number];
 
-        if (isContactDiameterFocus && !isStickLikeKind) {
+        if (isContactDiameterFocus && isTrunkKind) {
             const dx = finalPosition[0] - targetFocus.position[0];
             finalTarget[0] = targetFocus.target[0] + dx;
         }
@@ -529,8 +530,8 @@ function PreviewContent({
             const maxLen = 4.0;
 
             // Zoom Logic
-            const minZoom = 58; // at 1mm
-            const maxZoom = 24; // at 4mm
+            const minZoom = isTrunkKind ? 58 : 52; // at 1mm
+            const maxZoom = isTrunkKind ? 24 : 28; // at 4mm
 
             // Target X Logic
             const minTargX = 0.53; // default
@@ -538,14 +539,14 @@ function PreviewContent({
 
             if (len <= minLen) {
                 finalZoom = minZoom;
-                finalTarget[0] = minTargX;
+                if (isTrunkKind) finalTarget[0] = minTargX;
             } else if (len >= maxLen) {
                 finalZoom = maxZoom;
-                finalTarget[0] = maxTargX;
+                if (isTrunkKind) finalTarget[0] = maxTargX;
             } else {
                 const t = (len - minLen) / (maxLen - minLen);
                 finalZoom = minZoom + t * (maxZoom - minZoom);
-                finalTarget[0] = minTargX + t * (maxTargX - minTargX);
+                if (isTrunkKind) finalTarget[0] = minTargX + t * (maxTargX - minTargX);
             }
         }
 

@@ -172,6 +172,7 @@ export function SupportSidebar() {
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
+    const useAdaptiveIconCompactDisplay = isAdaptiveConeAngle && activeKind === 'trunk';
     const tabKind = normalizeTabKind(activeKind);
     const activeKindMeta = KIND_META[activeKind];
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
@@ -558,10 +559,10 @@ export function SupportSidebar() {
                             ]}
                             className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 space-y-0`}
                             selectClassName={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate`}
-                            selectedDisplay={isAdaptiveConeAngle ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
-                            hideSelectedText={isAdaptiveConeAngle}
-                            selectedDisplayAlignment={isAdaptiveConeAngle ? 'center' : 'left'}
-                            selectedDisplayOffsetX={isAdaptiveConeAngle ? -12 : 0}
+                            selectedDisplay={useAdaptiveIconCompactDisplay ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
+                            hideSelectedText={useAdaptiveIconCompactDisplay}
+                            selectedDisplayAlignment={useAdaptiveIconCompactDisplay ? 'center' : 'left'}
+                            selectedDisplayOffsetX={useAdaptiveIconCompactDisplay ? -7 : 0}
                             selectStyle={activeKey === 'tip.coneAngleMode'
                                 ? {
                                     borderColor: 'var(--accent)',
