@@ -2194,6 +2194,7 @@ export function useSceneCollectionManager() {
       id,
       first.transform,
       pastedModel.transform,
+      { recordHistory: false },
     );
 
     const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
@@ -2568,6 +2569,7 @@ export function useSceneCollectionManager() {
         pastedModel.id,
         sourceEntry.transform,
         pastedModel.transform,
+        { recordHistory: false },
       );
     });
 
@@ -2658,6 +2660,7 @@ export function useSceneCollectionManager() {
         model.id,
         originalSourceTransform,
         model.transform,
+        { recordHistory: false },
       );
     });
 

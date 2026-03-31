@@ -89,7 +89,43 @@ function mergeGeometryParts(parts: Array<THREE.BufferGeometry | null | undefined
   if (valid.length === 0) return null;
   if (valid.length === 1) return valid[0].clone();
 
-  const clones = valid.map((geometry) => geometry.clone());
+  const clones = valid.map((geometry) => {
+    const cloned = geometry.clone();
+    const nonIndexed = cloned.index ? (cloned.toNonIndexed() ?? cloned) : cloned;
+    if (nonIndexed !== cloned) cloned.dispose();
+
+    if (!nonIndexed.getAttribute('normal')) {
+      nonIndexed.computeVertexNormals();
+    }
+
+    // Keep only the attributes shared by every geometry so mergeGeometries
+    // does not fail on mixed attribute layouts (e.g., uv present on some parts only).
+    return nonIndexed;
+  });
+
+  const sharedAttributeNames = new Set<string>(Object.keys(clones[0].attributes));
+  for (let i = 1; i < clones.length; i += 1) {
+    const names = new Set<string>(Object.keys(clones[i].attributes));
+    for (const name of Array.from(sharedAttributeNames)) {
+      if (!names.has(name)) sharedAttributeNames.delete(name);
+    }
+  }
+
+  if (!sharedAttributeNames.has('position')) {
+    const fallback = clones[0];
+    for (let i = 1; i < clones.length; i += 1) clones[i].dispose();
+    return fallback;
+  }
+
+  for (const clone of clones) {
+    const names = Object.keys(clone.attributes);
+    for (const name of names) {
+      if (!sharedAttributeNames.has(name)) {
+        clone.deleteAttribute(name);
+      }
+    }
+  }
+
   const merged = mergeGeometries(clones, false);
 
   if (merged) {

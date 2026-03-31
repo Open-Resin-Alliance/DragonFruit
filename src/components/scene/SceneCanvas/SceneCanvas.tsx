@@ -1217,11 +1217,8 @@ export function SceneCanvas({
   }, [colorActiveModelId, committedActiveModelId, meshColor, models]);
 
   const supportHoverTintColor = React.useMemo(() => {
-    const blend = (baseHex: string, tintHex: string, strength: number) =>
-      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
-
-    if (committedActiveModelId) return '#3b82f6';
-    if (hoveredModelId) return blend('#a3a3a3', '#3b82f6', 0.5);
+    if (committedActiveModelId) return '#c8752a';
+    if (hoveredModelId) return '#c8752a';
     return '#a3a3a3';
   }, [committedActiveModelId, hoveredModelId]);
 

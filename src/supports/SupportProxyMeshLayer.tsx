@@ -89,7 +89,6 @@ export function SupportProxyMeshLayer({
   mode,
   clipLower,
   clipUpper,
-  supportColorsByModelId,
   activeModelId = null,
   selectedModelIds = [],
   hoverModelId = null,
@@ -585,15 +584,7 @@ export function SupportProxyMeshLayer({
 
   const effectiveHoverModelId = hoverModelId;
 
-  const hoveredOverlayColor = React.useMemo(() => {
-    const hoveredBaseColor = effectiveHoverModelId
-      ? (supportColorsByModelId?.[effectiveHoverModelId] ?? DEFAULT_SUPPORT_COLOR)
-      : DEFAULT_SUPPORT_COLOR;
-    const base = new THREE.Color(hoveredBaseColor);
-    const tint = new THREE.Color(hoverTintColor);
-    const strength = Math.max(0, Math.min(1, hoverTintStrength));
-    return base.lerp(tint, strength).getStyle();
-  }, [effectiveHoverModelId, hoverTintColor, hoverTintStrength, supportColorsByModelId]);
+  const hoveredOverlayColor = ACTIVE_SUPPORT_COLOR;
 
   const flattenedGeometry = React.useMemo(() => {
     const createEmpty = (): FlatProxyGeometry => ({ shafts: [], roots: [], joints: [], cones: [] });
@@ -662,6 +653,11 @@ export function SupportProxyMeshLayer({
 
   const proxyOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const proxyTransparent = proxyOpacity < 0.999;
+  const hoverOverlayOpacity = React.useMemo(() => {
+    const hoverAlpha = Math.max(0.05, Math.min(1, hoverTintStrength));
+    return Math.max(0.05, Math.min(1, proxyOpacity * hoverAlpha));
+  }, [hoverTintStrength, proxyOpacity]);
+  const hoverOverlayTransparent = hoverOverlayOpacity < 0.999;
 
   const pointerHoverEnabled = enablePointerSelection && mode === 'prepare';
   const pointerSelectionEnabled = enablePointerSelection && mode === 'prepare' && !!onModelPointerSelect;
@@ -918,8 +914,8 @@ export function SupportProxyMeshLayer({
               color={hoveredOverlayColor}
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
-              transparent={proxyTransparent}
-              opacity={proxyOpacity}
+              transparent={hoverOverlayTransparent}
+              opacity={hoverOverlayOpacity}
               radialSegments={10}
               clippingPlanes={clippingPlanes}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
@@ -934,8 +930,8 @@ export function SupportProxyMeshLayer({
               color={hoveredOverlayColor}
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
-              transparent={proxyTransparent}
-              opacity={proxyOpacity}
+              transparent={hoverOverlayTransparent}
+              opacity={hoverOverlayOpacity}
               clippingPlanes={clippingPlanes}
               onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
               onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
@@ -949,8 +945,8 @@ export function SupportProxyMeshLayer({
               color={hoveredOverlayColor}
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
-              transparent={proxyTransparent}
-              opacity={proxyOpacity}
+              transparent={hoverOverlayTransparent}
+              opacity={hoverOverlayOpacity}
               clippingPlanes={clippingPlanes}
               onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
               onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
@@ -964,8 +960,8 @@ export function SupportProxyMeshLayer({
               color={hoveredOverlayColor}
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
-              transparent={proxyTransparent}
-              opacity={proxyOpacity}
+              transparent={hoverOverlayTransparent}
+              opacity={hoverOverlayOpacity}
               clippingPlanes={clippingPlanes}
               onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
               onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
