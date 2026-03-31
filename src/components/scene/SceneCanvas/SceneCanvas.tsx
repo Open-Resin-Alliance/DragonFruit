@@ -463,6 +463,22 @@ export function SceneCanvas({
     return map;
   }, [models]);
 
+  React.useEffect(() => {
+    const modelIdSet = new Set(models.map((model) => model.id));
+    for (const id of Object.keys(meshGroupRefCallbacks.current)) {
+      if (!modelIdSet.has(id)) {
+        delete meshGroupRefCallbacks.current[id];
+        delete meshRefs.current[id];
+      }
+    }
+    for (const id of Object.keys(actualMeshRefCallbacks.current)) {
+      if (!modelIdSet.has(id)) {
+        delete actualMeshRefCallbacks.current[id];
+        delete actualMeshRefs.current[id];
+      }
+    }
+  }, [models]);
+
   const alignLiveTransformToLift = React.useCallback((model: LoadedModel | null | undefined, candidate: ModelTransform | null) => {
     if (!model || !candidate) return candidate;
     if (!autoSnapEnabled) return candidate;
@@ -520,6 +536,8 @@ export function SceneCanvas({
 
   const meshRefs = React.useRef<Record<string, THREE.Group | null>>({});
   const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
+  const meshGroupRefCallbacks = React.useRef<Record<string, (node: THREE.Group | null) => void>>({});
+  const actualMeshRefCallbacks = React.useRef<Record<string, (node: THREE.Mesh | null) => void>>({});
 
   const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
   const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
@@ -853,11 +871,7 @@ export function SceneCanvas({
     const handleModelPointerHoverImmediate = (event: Event) => {
       const customEvent = event as CustomEvent<{ modelId?: string | null }>;
       const modelId = customEvent.detail?.modelId ?? null;
-      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
-      if (modelId) {
-        setHoveredRaftModelId((prev) => (prev === null ? prev : null));
-        setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
-      }
+      onModelHoverModelChange(modelId);
     };
 
     const handleSupportRaftModelPointerHover = (event: Event) => {
@@ -908,7 +922,7 @@ export function SceneCanvas({
       window.removeEventListener('model-pointer-hover-immediate', handleModelPointerHoverImmediate as EventListener);
       window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
     };
-  }, []);
+  }, [onModelHoverModelChange]);
 
 
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
@@ -1217,10 +1231,10 @@ export function SceneCanvas({
   }, [colorActiveModelId, committedActiveModelId, meshColor, models]);
 
   const supportHoverTintColor = React.useMemo(() => {
-    if (committedActiveModelId) return '#c8752a';
+    if (activeModelId) return '#c8752a';
     if (hoveredModelId) return '#c8752a';
     return '#a3a3a3';
-  }, [committedActiveModelId, hoveredModelId]);
+  }, [activeModelId, hoveredModelId]);
 
   const supportCreationModeActive = Boolean(
     isBranchPlacementActive
@@ -1595,6 +1609,7 @@ export function SceneCanvas({
 
   const emptySelectedModelIds = React.useMemo<string[]>(() => [], []);
   const emptyModelDropOffsets = React.useMemo<Record<string, number>>(() => ({}), []);
+  const emptyHeatmapColors = React.useMemo<string[]>(() => [], []);
 
   const selectedTransformableModelIds = React.useMemo(() => {
     const allIds = selectedModelIds ?? [];
@@ -3746,6 +3761,22 @@ export function SceneCanvas({
 
             <React.Suspense fallback={null}>
               {models.map((model) => {
+                const meshGroupRefCallback = meshGroupRefCallbacks.current[model.id]
+                  ?? ((node: THREE.Group | null) => {
+                    meshRefs.current[model.id] = node;
+                  });
+                if (!meshGroupRefCallbacks.current[model.id]) {
+                  meshGroupRefCallbacks.current[model.id] = meshGroupRefCallback;
+                }
+
+                const actualMeshRefCallback = actualMeshRefCallbacks.current[model.id]
+                  ?? ((node: THREE.Mesh | null) => {
+                    actualMeshRefs.current[model.id] = node;
+                  });
+                if (!actualMeshRefCallbacks.current[model.id]) {
+                  actualMeshRefCallbacks.current[model.id] = actualMeshRefCallback;
+                }
+
                 const isCaptureTintModel = thumbnailCaptureActive && model.visible;
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
@@ -3808,12 +3839,8 @@ export function SceneCanvas({
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       meshColor={model.color || meshColor} // Use model color
-                      meshRef={(el: THREE.Group | null) => {
-                        meshRefs.current[model.id] = el;
-                      }}
-                      actualMeshRef={(el: THREE.Mesh | null) => {
-                        actualMeshRefs.current[model.id] = el;
-                      }}
+                      meshRef={meshGroupRefCallback}
+                      actualMeshRef={actualMeshRefCallback}
                       materialRoughness={materialRoughness}
                       shaderType={shaderType ?? 'soft_clay'}
                       matcapVariant={matcapVariant}
@@ -3822,7 +3849,7 @@ export function SceneCanvas({
                       xrayOpacity={xrayOpacity}
                       heatmapBlend={heatmapBlend}
                       heatmapContrast={heatmapContrast}
-                      heatmapColors={heatmapColors ?? []}
+                      heatmapColors={heatmapColors ?? emptyHeatmapColors}
                       transform={animatedTransform}
                       mode={mode}
                       transformMode={transformMode}
@@ -3857,7 +3884,7 @@ export function SceneCanvas({
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
                       suppressModelInteraction={suppressModelInteraction}
-                      externalHoveredModelId={hoveredModelId}
+                      isExternallyHovered={hoveredModelId === model.id}
                       deferExternalTransformUpdates={
                         isActive
                         && mode === 'prepare'
@@ -3882,7 +3909,7 @@ export function SceneCanvas({
                             hoverTintColor={supportHoverTintColor}
                             hoverTintStrength={hoverTintStrength}
                             selectedTintStrength={selectedTintStrength}
-                            activeModelId={committedActiveModelId}
+                            activeModelId={activeModelId}
                             selectedModelIds={selectedModelIds}
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
@@ -4205,7 +4232,7 @@ export function SceneCanvas({
                   hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
-                  activeModelId={committedActiveModelId}
+                  activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
@@ -4247,7 +4274,7 @@ export function SceneCanvas({
                 <FootprintBorderRenderer
                   modelGeometry={activeModel ? activeModel.geometry : null}
                   modelTransform={activeModelTransform}
-                  modelId={committedActiveModelId ?? hoveredModelId ?? null}
+                  modelId={activeModelId ?? hoveredModelId ?? null}
                   color={supportHoverTintColor}
                 />
               )}
@@ -4279,7 +4306,7 @@ export function SceneCanvas({
                   hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
-                  activeModelId={committedActiveModelId}
+                  activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
@@ -4314,7 +4341,7 @@ export function SceneCanvas({
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
-                        activeModelId={committedActiveModelId}
+                        activeModelId={activeModelId}
                         selectedModelIds={selectedModelIds}
                         hoverModelId={hoveredModelId}
                         modelDropOffsetsById={entryDropOffsets}

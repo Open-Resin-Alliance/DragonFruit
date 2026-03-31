@@ -22,7 +22,7 @@ import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
-export function StlMesh({
+function StlMeshComponent({
   geometry,
   clipLower,
   clipUpper,
@@ -69,7 +69,7 @@ export function StlMesh({
   outOfBoundsMax,
   outOfBoundsStripeColor,
   suppressModelInteraction,
-  externalHoveredModelId,
+  isExternallyHovered,
   deferExternalTransformUpdates,
   children,
 }: {
@@ -126,7 +126,7 @@ export function StlMesh({
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
   suppressModelInteraction?: boolean;
-  externalHoveredModelId?: string | null;
+  isExternallyHovered?: boolean;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
   deferExternalTransformUpdates?: boolean;
   children?: React.ReactNode;
@@ -355,10 +355,8 @@ export function StlMesh({
     || event?.nativeEvent?.shiftKey
     || event?.sourceEvent?.shiftKey
   );
-  const hasExternalHoverSource = externalHoveredModelId !== undefined;
-  const isExternallyHoveredModel = !shouldSuppressModelInteraction
-    && !!externalHoveredModelId
-    && externalHoveredModelId === modelId;
+  const hasExternalHoverSource = isExternallyHovered !== undefined;
+  const isExternallyHoveredModel = !shouldSuppressModelInteraction && !!isExternallyHovered;
   const isHoveredModelFromPicking = !shouldSuppressModelInteraction && (
     hasGpuModelHoverId
       ? hit.objectId === modelId
@@ -559,7 +557,7 @@ export function StlMesh({
         }}
         onPointerMove={(e) => {
           if (isSupportShiftGesture(e)) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
             emitImmediateModelHover(null);
@@ -570,7 +568,7 @@ export function StlMesh({
           }
 
           if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
             emitImmediateModelHover(null);
@@ -579,13 +577,13 @@ export function StlMesh({
 
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             return;
           }
 
           e.stopPropagation();
 
-          schedulePointerHover(true);
+          if (!hasExternalHoverSource) schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
           emitImmediateModelHover(modelId);
@@ -640,7 +638,7 @@ export function StlMesh({
             return;
           }
 
-          schedulePointerHover(false);
+          if (!hasExternalHoverSource) schedulePointerHover(false);
           onModelHoverPointChange?.(null);
           onModelHoverModelChange?.(null);
           emitImmediateModelHover(null);
@@ -780,3 +778,6 @@ export function StlMesh({
     </group>
   );
 }
+
+export const StlMesh = React.memo(StlMeshComponent);
+StlMesh.displayName = 'StlMesh';

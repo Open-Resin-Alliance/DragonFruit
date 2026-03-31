@@ -213,9 +213,8 @@ export function RaftProxyMeshLayer({
   }, [clipLower, clipUpper]);
 
   const effectiveHoverModelId = passive ? null : hoverModelId;
-  const effectiveVisualActiveModelId = activeModelId;
 
-  const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
+  const hasSelectedModels = selectedModelIdSet.size > 0;
   const raftSignature = React.useMemo(() => buildRaftSignature(raft), [raft]);
 
   const geometriesByModel = React.useMemo(() => {
@@ -299,7 +298,7 @@ export function RaftProxyMeshLayer({
     const resolveTintStrength = (modelId: string | null) => {
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
-      if (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -339,7 +338,6 @@ export function RaftProxyMeshLayer({
   }, [
     colorized,
     effectiveHoverModelId,
-    effectiveVisualActiveModelId,
     excludeModelId,
     excludedModelIdSet,
     geometriesByModel,

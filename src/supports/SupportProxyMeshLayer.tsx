@@ -577,10 +577,9 @@ export function SupportProxyMeshLayer({
 
   const highlightedModelIdSet = React.useMemo(() => {
     const ids = new Set<string>();
-    if (activeModelId) ids.add(activeModelId);
     for (const id of selectedModelIds) ids.add(id);
     return ids;
-  }, [activeModelId, selectedModelIds]);
+  }, [selectedModelIds]);
 
   const effectiveHoverModelId = hoverModelId;
 

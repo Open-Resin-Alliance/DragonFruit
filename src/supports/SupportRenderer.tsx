@@ -614,6 +614,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const suppressHover = supportSelectionAndHoverSuppressed || isJointCreationActive || !isInteractable || braceAltActive;
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
     const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
+    const lastSyncedPrepareActiveModelIdRef = React.useRef<string | null>(activeModelId ?? null);
     const sceneHoveredSupportId = useSceneHoveredSupportId();
     const setSceneHoveredSupportId = setSharedSceneHoveredSupportId;
     const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
@@ -1060,6 +1061,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [mode]);
 
     useEffect(() => {
+        const next = (mode === 'prepare' && !passive) ? (activeModelId ?? null) : null;
+        if (lastSyncedPrepareActiveModelIdRef.current === next) return;
+        lastSyncedPrepareActiveModelIdRef.current = next;
+        setImmediatePrepareActiveModelId((prev) => (prev === next ? prev : next));
+    }, [activeModelId, mode, passive]);
+
+    useEffect(() => {
+        if (mode !== 'prepare') return;
+        if (!immediatePrepareActiveModelId) return;
+        if (selectedModelIdSet.has(immediatePrepareActiveModelId)) return;
+        setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+    }, [immediatePrepareActiveModelId, mode, selectedModelIdSet]);
+
+    useEffect(() => {
         if (typeof window === 'undefined') return;
 
         const w = window as any;
@@ -1202,7 +1217,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.35).getStyle();
 
         return (modelId?: string) => {
-            const isSelectedModelSupport = !!modelId && (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId));
+            const isSelectedModelSupport = !!modelId && selectedModelIdSet.has(modelId);
             if (isSelectedModelSupport) return selectedHex;
 
             const isHoveredModelSupport = !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
@@ -1210,7 +1225,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             return baseHex;
         };
-    }, [effectiveHoverModelId, effectiveVisualActiveModelId, selectedModelIdSet]);
+    }, [effectiveHoverModelId, selectedModelIdSet]);
 
     const resolveSceneSupportColor = React.useCallback((modelId: string | undefined, supportId: string) => {
         if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
