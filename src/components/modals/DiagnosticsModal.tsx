@@ -472,7 +472,7 @@ export function DiagnosticsModal({
           </button>
         </div>
 
-        <div className="max-h-[calc(88vh-58px)] overflow-y-auto p-4 space-y-4">
+        <div className="max-h-[calc(88vh-58px)] overflow-y-auto custom-scrollbar p-4 space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>FPS</div>

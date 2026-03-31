@@ -86,7 +86,7 @@ export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, 
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-3">
+        <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-3">
           {tree.length === 0 ? (
             <p className="text-center py-10 text-sm" style={{ color: 'var(--text-muted)' }}>No islands found.</p>
           ) : (

@@ -505,7 +505,7 @@ export function SupportSidebar() {
         </div>
     );
 
-    const sectionScrollClass = 'max-h-[calc(100vh-var(--topbar-height)-190px)] overflow-y-auto pr-1';
+    const sectionScrollClass = 'max-h-[calc(100vh-var(--topbar-height)-190px)] overflow-y-auto custom-scrollbar pr-1';
     const compactFieldLabelClass = 'text-[11px] font-medium leading-tight';
     const supportGeometryFields = (
         <div className="space-y-2.5">
@@ -561,7 +561,7 @@ export function SupportSidebar() {
                             selectedDisplay={isAdaptiveConeAngle ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
                             hideSelectedText={isAdaptiveConeAngle}
                             selectedDisplayAlignment={isAdaptiveConeAngle ? 'center' : 'left'}
-                            selectedDisplayOffsetX={isAdaptiveConeAngle ? -7 : 0}
+                            selectedDisplayOffsetX={isAdaptiveConeAngle ? -12 : 0}
                             selectStyle={activeKey === 'tip.coneAngleMode'
                                 ? {
                                     borderColor: 'var(--accent)',

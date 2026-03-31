@@ -219,7 +219,7 @@ export function TransformControls({
       />
 
       {expanded ? (
-        <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5 max-h-[calc(100vh-180px)] overflow-y-auto">
+        <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5 max-h-[calc(100vh-180px)] overflow-y-auto custom-scrollbar">
 
           {/* MOVE SECTION */}
           <div className="rounded-md border p-2" style={moveCardStyle}>
