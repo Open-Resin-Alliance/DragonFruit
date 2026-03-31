@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { SupportMode } from '@/supports/types';
 import { SupportRenderer } from '@/supports/SupportRenderer';
 import { SupportProxyMeshLayer } from '@/supports/SupportProxyMeshLayer';
+import { RaftProxyMeshLayer } from '@/supports/RaftProxyMeshLayer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import type { SupportData } from '@/supports/rendering';
@@ -79,7 +80,28 @@ export function ModelAttachedSupportLayer({
 
   return (
     <>
-      {!hideRaftPrimitives && (
+      {!hideRaftPrimitives && useUltraLazyPrepareSupports && (
+        <RaftProxyMeshLayer
+          clipLower={clipLower}
+          clipUpper={clipUpper}
+          activeModelId={activeModelId}
+          selectedModelIds={selectedModelIds}
+          hoverModelId={hoverModelId}
+          modelFilterId={modelFilterId}
+          excludeModelId={excludeModelId}
+          excludeModelIds={excludeModelIds}
+          ghostOpacity={ghostOpacity}
+          ghostRenderOrder={ghostRenderOrder}
+          onModelPointerSelect={onModelPointerSelect}
+          enablePointerSelection={!navigationLodActive && !disableSelectionAndHover && !passive}
+          colorized={raftColorized}
+          hoverized={raftHoverized}
+          navigationLodActive={navigationLodActive}
+          passive={passive}
+        />
+      )}
+
+      {!hideRaftPrimitives && !useUltraLazyPrepareSupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}
@@ -124,6 +146,9 @@ export function ModelAttachedSupportLayer({
           supportColorsByModelId={supportColorsByModelId}
           activeModelId={activeModelId}
           selectedModelIds={selectedModelIds}
+          hoverModelId={hoverModelId}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
           modelFilterId={modelFilterId}
           excludeModelId={excludeModelId}
           excludeModelIds={excludeModelIds}

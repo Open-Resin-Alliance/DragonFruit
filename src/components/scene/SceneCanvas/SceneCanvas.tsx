@@ -1568,6 +1568,9 @@ export function SceneCanvas({
     return new Set(selectedModelIds ?? []);
   }, [selectedModelIds]);
 
+  const emptySelectedModelIds = React.useMemo<string[]>(() => [], []);
+  const emptyModelDropOffsets = React.useMemo<Record<string, number>>(() => ({}), []);
+
   const selectedTransformableModelIds = React.useMemo(() => {
     const allIds = selectedModelIds ?? [];
     const existingIds = allIds.filter((id) => models.some((model) => model.id === id));
@@ -3923,9 +3926,9 @@ export function SceneCanvas({
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
-                        selectedModelIds={[]}
+                        selectedModelIds={emptySelectedModelIds}
                         hoverModelId={null}
-                        modelDropOffsetsById={{}}
+                        modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={duplicatePreviewModel.id}
                         ghostOpacity={0.3}
                         ghostRenderOrder={2}
@@ -4027,9 +4030,9 @@ export function SceneCanvas({
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
-                        selectedModelIds={[]}
+                        selectedModelIds={emptySelectedModelIds}
                         hoverModelId={null}
-                        modelDropOffsetsById={{}}
+                        modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={duplicatePreviewModel.id}
                         ghostOpacity={0.3}
                         ghostRenderOrder={2}
@@ -4063,9 +4066,9 @@ export function SceneCanvas({
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
-                        selectedModelIds={[]}
+                        selectedModelIds={emptySelectedModelIds}
                         hoverModelId={null}
-                        modelDropOffsetsById={{}}
+                        modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={modelId}
                         ghostOpacity={0.3}
                         ghostRenderOrder={2}

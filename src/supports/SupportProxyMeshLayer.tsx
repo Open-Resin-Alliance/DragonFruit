@@ -9,6 +9,7 @@ import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Jo
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import { emitSupportModelPointerHover } from './interaction/clickHandlers';
 import type { ContactDisk, Vec3 } from './types';
 
 interface SupportProxyMeshLayerProps {
@@ -18,6 +19,9 @@ interface SupportProxyMeshLayerProps {
   supportColorsByModelId?: Record<string, string>;
   activeModelId?: string | null;
   selectedModelIds?: string[];
+  hoverModelId?: string | null;
+  hoverTintColor?: string;
+  hoverTintStrength?: number;
   modelFilterId?: string | null;
   excludeModelId?: string | null;
   excludeModelIds?: string[];
@@ -88,6 +92,9 @@ export function SupportProxyMeshLayer({
   supportColorsByModelId,
   activeModelId = null,
   selectedModelIds = [],
+  hoverModelId = null,
+  hoverTintColor = '#d18a4a',
+  hoverTintStrength = 0.35,
   modelFilterId = null,
   excludeModelId = null,
   excludeModelIds = [],
@@ -105,6 +112,9 @@ export function SupportProxyMeshLayer({
     () => new Set(excludeModelIds.filter((id): id is string => Boolean(id))),
     [excludeModelIds],
   );
+  const lastSupportHoverModelIdRef = React.useRef<string | null>(null);
+  const hoverClearRafRef = React.useRef<number | null>(null);
+  const [immediateSupportHoverModelId, setImmediateSupportHoverModelId] = React.useState<string | null>(null);
 
   const resolveModelVisible = React.useCallback((modelId?: string) => {
     if (modelFilterId && modelId !== modelFilterId) return false;
@@ -575,6 +585,18 @@ export function SupportProxyMeshLayer({
     return ids;
   }, [activeModelId, selectedModelIds]);
 
+  const effectiveHoverModelId = React.useMemo(
+    () => immediateSupportHoverModelId ?? hoverModelId,
+    [hoverModelId, immediateSupportHoverModelId],
+  );
+
+  const hoveredOverlayColor = React.useMemo(() => {
+    const base = new THREE.Color(DEFAULT_SUPPORT_COLOR);
+    const tint = new THREE.Color(hoverTintColor);
+    const strength = Math.max(0, Math.min(1, hoverTintStrength));
+    return base.lerp(tint, strength).getStyle();
+  }, [hoverTintColor, hoverTintStrength]);
+
   const flattenedGeometry = React.useMemo(() => {
     const createEmpty = (): FlatProxyGeometry => ({ shafts: [], roots: [], joints: [], cones: [] });
     const base = createEmpty();
@@ -643,7 +665,61 @@ export function SupportProxyMeshLayer({
   const proxyOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const proxyTransparent = proxyOpacity < 0.999;
 
+  const pointerHoverEnabled = enablePointerSelection && mode === 'prepare';
   const pointerSelectionEnabled = enablePointerSelection && mode === 'prepare' && !!onModelPointerSelect;
+
+  const setSupportHoverModel = React.useCallback((nextModelId: string | null) => {
+    if (hoverClearRafRef.current !== null) {
+      cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+
+    if (lastSupportHoverModelIdRef.current === nextModelId) {
+      return;
+    }
+
+    lastSupportHoverModelIdRef.current = nextModelId;
+    setImmediateSupportHoverModelId((prev) => (prev === nextModelId ? prev : nextModelId));
+    emitSupportModelPointerHover(nextModelId);
+  }, []);
+
+  const scheduleSupportHoverClear = React.useCallback(() => {
+    if (hoverClearRafRef.current !== null) return;
+
+    hoverClearRafRef.current = requestAnimationFrame(() => {
+      hoverClearRafRef.current = null;
+      if (lastSupportHoverModelIdRef.current === null) return;
+      lastSupportHoverModelIdRef.current = null;
+      setImmediateSupportHoverModelId((prev) => (prev === null ? prev : null));
+      emitSupportModelPointerHover(null);
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverClearRafRef.current !== null) {
+        cancelAnimationFrame(hoverClearRafRef.current);
+        hoverClearRafRef.current = null;
+      }
+      if (lastSupportHoverModelIdRef.current !== null) {
+        lastSupportHoverModelIdRef.current = null;
+        emitSupportModelPointerHover(null);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (pointerHoverEnabled) return;
+    if (hoverClearRafRef.current !== null) {
+      cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+    if (lastSupportHoverModelIdRef.current !== null) {
+      lastSupportHoverModelIdRef.current = null;
+      setImmediateSupportHoverModelId((prev) => (prev === null ? prev : null));
+      emitSupportModelPointerHover(null);
+    }
+  }, [pointerHoverEnabled]);
 
   const handleProxyShaftClick = React.useCallback((shaft: InstancedShaft) => {
     if (!pointerSelectionEnabled) return;
@@ -651,11 +727,21 @@ export function SupportProxyMeshLayer({
     onModelPointerSelect?.(shaft.modelId);
   }, [onModelPointerSelect, pointerSelectionEnabled]);
 
+  const handleProxyShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
+    if (!pointerHoverEnabled) return;
+    setSupportHoverModel(shaft.modelId ?? null);
+  }, [pointerHoverEnabled, setSupportHoverModel]);
+
   const handleProxyRootClick = React.useCallback((root: InstancedRoot) => {
     if (!pointerSelectionEnabled) return;
     if (!root.modelId) return;
     onModelPointerSelect?.(root.modelId);
   }, [onModelPointerSelect, pointerSelectionEnabled]);
+
+  const handleProxyRootPointerMove = React.useCallback((root: InstancedRoot) => {
+    if (!pointerHoverEnabled) return;
+    setSupportHoverModel(root.modelId ?? null);
+  }, [pointerHoverEnabled, setSupportHoverModel]);
 
   const handleProxyJointClick = React.useCallback((joint: InstancedJoint) => {
     if (!pointerSelectionEnabled) return;
@@ -663,11 +749,49 @@ export function SupportProxyMeshLayer({
     onModelPointerSelect?.(joint.modelId);
   }, [onModelPointerSelect, pointerSelectionEnabled]);
 
+  const handleProxyJointPointerMove = React.useCallback((joint: InstancedJoint) => {
+    if (!pointerHoverEnabled) return;
+    setSupportHoverModel(joint.modelId ?? null);
+  }, [pointerHoverEnabled, setSupportHoverModel]);
+
   const handleProxyConeClick = React.useCallback((cone: InstancedContactCone) => {
     if (!pointerSelectionEnabled) return;
     if (!cone.modelId) return;
     onModelPointerSelect?.(cone.modelId);
   }, [onModelPointerSelect, pointerSelectionEnabled]);
+
+  const handleProxyConePointerMove = React.useCallback((cone: InstancedContactCone) => {
+    if (!pointerHoverEnabled) return;
+    setSupportHoverModel(cone.modelId ?? null);
+  }, [pointerHoverEnabled, setSupportHoverModel]);
+
+  const handleProxyPointerOut = React.useCallback(() => {
+    if (!pointerHoverEnabled) return;
+    scheduleSupportHoverClear();
+  }, [pointerHoverEnabled, scheduleSupportHoverClear]);
+
+  const hoveredOverlayEntry = React.useMemo(() => {
+    if (!effectiveHoverModelId) return null;
+    if (highlightedModelIdSet.has(effectiveHoverModelId)) return null;
+    if (!resolveModelVisible(effectiveHoverModelId)) return null;
+
+    const modelKey = toModelKey(effectiveHoverModelId);
+    const geometry = baseProxyByModel.get(modelKey);
+    if (!geometry) return null;
+
+    return {
+      modelId: effectiveHoverModelId,
+      modelKey,
+      zOffset: modelDropOffsetsById?.[effectiveHoverModelId] ?? 0,
+      geometry,
+    };
+  }, [
+    effectiveHoverModelId,
+    highlightedModelIdSet,
+    resolveModelVisible,
+    baseProxyByModel,
+    modelDropOffsetsById,
+  ]);
 
   if (visibleModelEntries.length === 0) {
     return null;
@@ -694,6 +818,8 @@ export function SupportProxyMeshLayer({
               radialSegments={10}
               clippingPlanes={clippingPlanes}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
           {flattenedGeometry.base.roots.length > 0 && (
@@ -704,6 +830,8 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
               onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
+              onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
+              onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
           {includeDetailedPrimitives && flattenedGeometry.base.joints.length > 0 && (
@@ -714,6 +842,8 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
               onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
+              onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
+              onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
           {includeDetailedPrimitives && flattenedGeometry.base.cones.length > 0 && (
@@ -724,6 +854,8 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
               onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
+              onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
+              onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
         </group>
@@ -740,6 +872,8 @@ export function SupportProxyMeshLayer({
               radialSegments={10}
               clippingPlanes={clippingPlanes}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
           {flattenedGeometry.highlighted.roots.length > 0 && (
@@ -750,6 +884,8 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
               onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
+              onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
+              onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
           {includeDetailedPrimitives && flattenedGeometry.highlighted.joints.length > 0 && (
@@ -760,6 +896,8 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
               onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
+              onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
+              onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
           {includeDetailedPrimitives && flattenedGeometry.highlighted.cones.length > 0 && (
@@ -770,6 +908,73 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
               onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
+              onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
+              onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+        </group>
+      )}
+
+      {hoveredOverlayEntry && (
+        <group key={`proxy-hover:${hoveredOverlayEntry.modelKey}`} position={hoveredOverlayEntry.zOffset !== 0 ? [0, 0, hoveredOverlayEntry.zOffset] : undefined}>
+          {hoveredOverlayEntry.geometry.shafts.length > 0 && (
+            <InstancedShaftGroup
+              shafts={hoveredOverlayEntry.geometry.shafts}
+              color={hoveredOverlayColor}
+              emissive={hoveredOverlayColor}
+              emissiveIntensity={0.1}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              radialSegments={10}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+
+          {hoveredOverlayEntry.geometry.roots.length > 0 && (
+            <InstancedRootsGroup
+              roots={hoveredOverlayEntry.geometry.roots}
+              color={hoveredOverlayColor}
+              emissive={hoveredOverlayColor}
+              emissiveIntensity={0.1}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
+              onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
+              onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+
+          {includeDetailedPrimitives && hoveredOverlayEntry.geometry.joints.length > 0 && (
+            <InstancedJointGroup
+              joints={hoveredOverlayEntry.geometry.joints}
+              color={hoveredOverlayColor}
+              emissive={hoveredOverlayColor}
+              emissiveIntensity={0.1}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
+              onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
+              onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+
+          {includeDetailedPrimitives && hoveredOverlayEntry.geometry.cones.length > 0 && (
+            <InstancedContactConeGroup
+              cones={hoveredOverlayEntry.geometry.cones}
+              color={hoveredOverlayColor}
+              emissive={hoveredOverlayColor}
+              emissiveIntensity={0.1}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
+              onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
+              onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
         </group>

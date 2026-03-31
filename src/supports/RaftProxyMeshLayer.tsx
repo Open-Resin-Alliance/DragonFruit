@@ -1,6 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { subscribe, getSnapshot } from './state';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import type { RaftSettings, SupportBaseCircle } from './Rafts/Crenelated/RaftTypes';
@@ -12,6 +13,7 @@ interface RaftProxyMeshLayerProps {
   clipUpper?: number | null;
   activeModelId?: string | null;
   selectedModelIds?: string[];
+  hoverModelId?: string | null;
   modelFilterId?: string | null;
   excludeModelId?: string | null;
   excludeModelIds?: string[];
@@ -19,22 +21,27 @@ interface RaftProxyMeshLayerProps {
   ghostRenderOrder?: number;
   onModelPointerSelect?: (modelId: string) => void;
   enablePointerSelection?: boolean;
+  colorized?: boolean;
+  hoverized?: boolean;
+  navigationLodActive?: boolean;
+  passive?: boolean;
 }
 
-type CachedSolidRaftGeometry = {
-  kind: 'solid';
-  baseGeometry: THREE.BufferGeometry;
+type CachedRaftGeometry = {
+  kind: 'solid' | 'line';
+  bottomGeometry: THREE.BufferGeometry | null;
   wallGeometry: THREE.BufferGeometry | null;
 };
 
-type CachedLineRaftGeometry = {
-  kind: 'line';
-  beamGeometries: THREE.BufferGeometry[];
-  borderGeometry: THREE.BufferGeometry | null;
+type VisibleRaftEntry = {
+  modelKey: string;
+  modelId?: string;
+  kind: 'solid' | 'line';
+  bottomGeometry: THREE.BufferGeometry | null;
   wallGeometry: THREE.BufferGeometry | null;
+  bottomColor: string;
+  wallColor: string;
 };
-
-type CachedRaftGeometry = CachedSolidRaftGeometry | CachedLineRaftGeometry;
 
 type RaftProxyCacheEntry = {
   supportStateRef: unknown;
@@ -45,8 +52,10 @@ type RaftProxyCacheEntry = {
 let raftProxyCache: RaftProxyCacheEntry | null = null;
 
 const MODEL_NONE_KEY = '__none__';
-const DEFAULT_RAFT_COLOR = '#a3a3a3';
-const ACTIVE_RAFT_COLOR = '#c8752a';
+const RAFT_BASE_COLOR = '#a3a3a3';
+const SOLID_BOTTOM_TINT_COLOR = '#3b82f6';
+const LINE_BOTTOM_TINT_COLOR = '#f97316';
+const WALL_TINT_COLOR = '#22c55e';
 
 function toModelKey(modelId?: string): string {
   return modelId ?? MODEL_NONE_KEY;
@@ -71,20 +80,47 @@ function buildRaftSignature(raft: RaftSettings): string {
   ].join('|');
 }
 
-function disposeGeneratedMaterials(meshes: THREE.Mesh[]) {
-  const seen = new Set<THREE.Material>();
+function blendColor(baseHex: string, tintHex: string, strength: number): string {
+  return new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
+}
+
+function mergeGeometryParts(parts: Array<THREE.BufferGeometry | null | undefined>): THREE.BufferGeometry | null {
+  const valid = parts.filter((geometry): geometry is THREE.BufferGeometry => !!geometry);
+  if (valid.length === 0) return null;
+  if (valid.length === 1) return valid[0].clone();
+
+  const clones = valid.map((geometry) => geometry.clone());
+  const merged = mergeGeometries(clones, false);
+
+  if (merged) {
+    for (const clone of clones) clone.dispose();
+    return merged;
+  }
+
+  const fallback = clones[0];
+  for (let i = 1; i < clones.length; i += 1) clones[i].dispose();
+  return fallback;
+}
+
+function disposeGeneratedMeshes(meshes: Array<THREE.Mesh | null | undefined>) {
+  const seenMaterials = new Set<THREE.Material>();
+
   for (const mesh of meshes) {
+    if (!mesh) continue;
+    mesh.geometry?.dispose?.();
+
     const material = mesh.material;
     if (Array.isArray(material)) {
-      for (const m of material) {
-        if (seen.has(m)) continue;
-        seen.add(m);
-        m.dispose();
+      for (const item of material) {
+        if (seenMaterials.has(item)) continue;
+        seenMaterials.add(item);
+        item.dispose();
       }
       continue;
     }
-    if (!material || seen.has(material)) continue;
-    seen.add(material);
+
+    if (!material || seenMaterials.has(material)) continue;
+    seenMaterials.add(material);
     material.dispose();
   }
 }
@@ -111,6 +147,7 @@ export function RaftProxyMeshLayer({
   clipUpper,
   activeModelId = null,
   selectedModelIds = [],
+  hoverModelId = null,
   modelFilterId = null,
   excludeModelId = null,
   excludeModelIds = [],
@@ -118,9 +155,58 @@ export function RaftProxyMeshLayer({
   ghostRenderOrder = 0,
   onModelPointerSelect,
   enablePointerSelection = true,
+  colorized = true,
+  hoverized = false,
+  navigationLodActive = false,
+  passive = false,
 }: RaftProxyMeshLayerProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+
+  const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+  const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (passive) {
+      setImmediateModelHoverId((prev) => (prev === null ? prev : null));
+      return;
+    }
+
+    const handleImmediateModelHover = (event: Event) => {
+      if (navigationLodActive) return;
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
+    };
+
+    window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    return () => {
+      window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    };
+  }, [navigationLodActive, passive]);
+
+  React.useEffect(() => {
+    if (passive) {
+      setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+      return;
+    }
+
+    const handleModelClicked = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      const modelId = customEvent.detail?.modelId ?? null;
+      setImmediatePrepareActiveModelId((prev) => (prev === modelId ? prev : modelId));
+    };
+
+    const handleModelDeselected = () => {
+      setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+    };
+
+    window.addEventListener('model-clicked', handleModelClicked as EventListener);
+    window.addEventListener('model-deselected', handleModelDeselected);
+    return () => {
+      window.removeEventListener('model-clicked', handleModelClicked as EventListener);
+      window.removeEventListener('model-deselected', handleModelDeselected);
+    };
+  }, [passive]);
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(
@@ -135,6 +221,12 @@ export function RaftProxyMeshLayer({
     return planes.length > 0 ? planes : null;
   }, [clipLower, clipUpper]);
 
+  const effectiveHoverModelId = passive ? null : (immediateModelHoverId ?? hoverModelId);
+  const effectiveVisualActiveModelId = passive
+    ? activeModelId
+    : (immediatePrepareActiveModelId ?? activeModelId);
+
+  const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
   const raftSignature = React.useMemo(() => buildRaftSignature(raft), [raft]);
 
   const geometriesByModel = React.useMemo(() => {
@@ -154,18 +246,18 @@ export function RaftProxyMeshLayer({
         const solid = buildSolidRaftPreviewMeshes({
           circles,
           raftSettings: raft,
-          baseColor: DEFAULT_RAFT_COLOR,
-          wallColor: DEFAULT_RAFT_COLOR,
+          baseColor: RAFT_BASE_COLOR,
+          wallColor: RAFT_BASE_COLOR,
         });
         if (!solid) continue;
 
         next.set(modelKey, {
           kind: 'solid',
-          baseGeometry: solid.baseMesh.geometry as THREE.BufferGeometry,
-          wallGeometry: solid.wallMesh ? (solid.wallMesh.geometry as THREE.BufferGeometry) : null,
+          bottomGeometry: (solid.baseMesh.geometry as THREE.BufferGeometry).clone(),
+          wallGeometry: solid.wallMesh ? (solid.wallMesh.geometry as THREE.BufferGeometry).clone() : null,
         });
 
-        disposeGeneratedMaterials([
+        disposeGeneratedMeshes([
           solid.baseMesh,
           ...(solid.wallMesh ? [solid.wallMesh] : []),
         ]);
@@ -175,22 +267,30 @@ export function RaftProxyMeshLayer({
         const line = buildLineRaftPreviewMeshes({
           circles,
           raftSettings: raft,
-          beamColor: DEFAULT_RAFT_COLOR,
-          wallColor: DEFAULT_RAFT_COLOR,
+          beamColor: RAFT_BASE_COLOR,
+          wallColor: RAFT_BASE_COLOR,
         });
         if (!line) continue;
 
+        const bottomGeometry = mergeGeometryParts([
+          ...line.beamMeshes.map((mesh) => mesh.geometry as THREE.BufferGeometry),
+          line.borderMesh ? (line.borderMesh.geometry as THREE.BufferGeometry) : null,
+        ]);
+
+        const wallGeometry = line.wallMesh
+          ? (line.wallMesh.geometry as THREE.BufferGeometry).clone()
+          : null;
+
         next.set(modelKey, {
           kind: 'line',
-          beamGeometries: line.beamMeshes.map((mesh) => mesh.geometry as THREE.BufferGeometry),
-          borderGeometry: line.borderMesh ? (line.borderMesh.geometry as THREE.BufferGeometry) : null,
-          wallGeometry: line.wallMesh ? (line.wallMesh.geometry as THREE.BufferGeometry) : null,
+          bottomGeometry,
+          wallGeometry,
         });
 
-        disposeGeneratedMaterials([
+        disposeGeneratedMeshes([
           ...line.beamMeshes,
-          ...(line.borderMesh ? [line.borderMesh] : []),
-          ...(line.wallMesh ? [line.wallMesh] : []),
+          line.borderMesh,
+          line.wallMesh,
         ]);
       }
     }
@@ -202,40 +302,146 @@ export function RaftProxyMeshLayer({
     };
 
     return next;
-  }, [raft, raft.bottomMode, raftSignature, supportState]);
+  }, [raft, raftSignature, supportState]);
 
-  const visibleEntries = React.useMemo(() => {
-    const entries: Array<{ modelId?: string; modelKey: string; color: string; geometry: CachedRaftGeometry }> = [];
+  const visibleEntries = React.useMemo<VisibleRaftEntry[]>(() => {
+    const entries: VisibleRaftEntry[] = [];
 
-    const requestedFilterKey = modelFilterId ? toModelKey(modelFilterId) : null;
+    const resolveTintStrength = (modelId: string | null) => {
+      if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
+      if (!colorized) return 0;
+      if (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      if (hasSelectedModels) return 0;
+      return hoverized ? 0.5 : 1;
+    };
+
+    const pushIfVisible = (modelKey: string, geometry: CachedRaftGeometry | undefined) => {
+      if (!geometry) return;
+      const modelId = fromModelKey(modelKey);
+      if (excludeModelId && modelId === excludeModelId) return;
+      if (modelId && excludedModelIdSet.has(modelId)) return;
+
+      const tintStrength = resolveTintStrength(modelId ?? null);
+      const bottomTintColor = geometry.kind === 'line' ? LINE_BOTTOM_TINT_COLOR : SOLID_BOTTOM_TINT_COLOR;
+
+      entries.push({
+        modelKey,
+        modelId,
+        kind: geometry.kind,
+        bottomGeometry: geometry.bottomGeometry,
+        wallGeometry: geometry.wallGeometry,
+        bottomColor: blendColor(RAFT_BASE_COLOR, bottomTintColor, tintStrength),
+        wallColor: blendColor(RAFT_BASE_COLOR, WALL_TINT_COLOR, tintStrength),
+      });
+    };
+
+    if (modelFilterId) {
+      const modelKey = toModelKey(modelFilterId);
+      pushIfVisible(modelKey, geometriesByModel.get(modelKey));
+      return entries;
+    }
 
     for (const [modelKey, geometry] of geometriesByModel.entries()) {
-      if (requestedFilterKey && modelKey !== requestedFilterKey) continue;
-
-      const modelId = fromModelKey(modelKey);
-      if (excludeModelId && modelId === excludeModelId) continue;
-      if (modelId && excludedModelIdSet.has(modelId)) continue;
-
-      const highlighted = !!modelId && (modelId === activeModelId || selectedModelIdSet.has(modelId));
-      entries.push({
-        modelId,
-        modelKey,
-        geometry,
-        color: highlighted ? ACTIVE_RAFT_COLOR : DEFAULT_RAFT_COLOR,
-      });
+      pushIfVisible(modelKey, geometry);
     }
 
     return entries;
-  }, [activeModelId, excludeModelId, excludedModelIdSet, geometriesByModel, modelFilterId, selectedModelIdSet]);
+  }, [
+    colorized,
+    effectiveHoverModelId,
+    effectiveVisualActiveModelId,
+    excludeModelId,
+    excludedModelIdSet,
+    geometriesByModel,
+    hasSelectedModels,
+    hoverized,
+    modelFilterId,
+    selectedModelIdSet,
+  ]);
 
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
+  const pointerEnabled = enablePointerSelection && !passive && !navigationLodActive;
 
-  const handleClick = React.useCallback((modelId?: string) => {
-    if (!enablePointerSelection) return;
-    if (!modelId) return;
-    onModelPointerSelect?.(modelId);
-  }, [enablePointerSelection, onModelPointerSelect]);
+  const lastHoverModelRef = React.useRef<string | null>(null);
+  const hoverClearRafRef = React.useRef<number | null>(null);
+
+  const dispatchRaftHover = React.useCallback((modelId: string | null) => {
+    if (typeof window === 'undefined') return;
+    if (lastHoverModelRef.current === modelId) return;
+    lastHoverModelRef.current = modelId;
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: {
+        modelId,
+        category: 'raft',
+      },
+    }));
+  }, []);
+
+  const scheduleHoverClear = React.useCallback(() => {
+    if (hoverClearRafRef.current !== null) return;
+
+    hoverClearRafRef.current = requestAnimationFrame(() => {
+      hoverClearRafRef.current = null;
+      dispatchRaftHover(null);
+    });
+  }, [dispatchRaftHover]);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverClearRafRef.current !== null) {
+        cancelAnimationFrame(hoverClearRafRef.current);
+        hoverClearRafRef.current = null;
+      }
+      if (lastHoverModelRef.current !== null) {
+        lastHoverModelRef.current = null;
+        dispatchRaftHover(null);
+      }
+    };
+  }, [dispatchRaftHover]);
+
+  React.useEffect(() => {
+    if (pointerEnabled) return;
+    if (hoverClearRafRef.current !== null) {
+      cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+    if (lastHoverModelRef.current !== null) {
+      lastHoverModelRef.current = null;
+      dispatchRaftHover(null);
+    }
+  }, [dispatchRaftHover, pointerEnabled]);
+
+  const handleClick = React.useCallback((event: any, modelId?: string) => {
+    if (!pointerEnabled) return;
+    if (!modelId || !onModelPointerSelect) return;
+
+    event.stopPropagation();
+    if (event.nativeEvent) {
+      event.nativeEvent.stopPropagation();
+      event.nativeEvent.stopImmediatePropagation?.();
+    }
+
+    onModelPointerSelect(modelId);
+  }, [onModelPointerSelect, pointerEnabled]);
+
+  const handlePointerMove = React.useCallback((event: any, modelId?: string) => {
+    if (!pointerEnabled) return;
+    event.stopPropagation();
+
+    if (hoverClearRafRef.current !== null) {
+      cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+    dispatchRaftHover(modelId ?? null);
+  }, [dispatchRaftHover, pointerEnabled]);
+
+  const handlePointerOut = React.useCallback((event: any) => {
+    if (!pointerEnabled) return;
+    event.stopPropagation();
+    scheduleHoverClear();
+  }, [pointerEnabled, scheduleHoverClear]);
 
   if (raft.bottomMode === 'off' || visibleEntries.length === 0) {
     return null;
@@ -243,108 +449,50 @@ export function RaftProxyMeshLayer({
 
   return (
     <group>
-      {visibleEntries.map((entry) => {
-        if (entry.geometry.kind === 'solid') {
-          return (
-            <group key={`raft-solid:${entry.modelKey}`}>
-              <mesh
-                geometry={entry.geometry.baseGeometry}
-                renderOrder={ghostRenderOrder}
-                onClick={enablePointerSelection ? () => handleClick(entry.modelId) : undefined}
-              >
-                <meshStandardMaterial
-                  color={entry.color}
-                  roughness={0.9}
-                  metalness={0.0}
-                  transparent={raftTransparent}
-                  opacity={raftOpacity}
-                  depthWrite={!raftTransparent}
-                  clippingPlanes={clippingPlanes ?? undefined}
-                />
-              </mesh>
+      {visibleEntries.map((entry) => (
+        <group key={`raft-proxy:${entry.modelKey}`}>
+          {entry.bottomGeometry && (
+            <mesh
+              geometry={entry.bottomGeometry}
+              renderOrder={ghostRenderOrder}
+              onClick={pointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
+              onPointerMove={pointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
+              onPointerOut={pointerEnabled ? handlePointerOut : undefined}
+            >
+              <meshStandardMaterial
+                color={entry.bottomColor}
+                roughness={0.9}
+                metalness={0.0}
+                side={entry.kind === 'line' ? THREE.DoubleSide : THREE.FrontSide}
+                transparent={raftTransparent}
+                opacity={raftOpacity}
+                depthWrite={!raftTransparent}
+                clippingPlanes={clippingPlanes ?? undefined}
+              />
+            </mesh>
+          )}
 
-              {entry.geometry.wallGeometry && (
-                <mesh
-                  geometry={entry.geometry.wallGeometry}
-                  renderOrder={ghostRenderOrder}
-                  onClick={enablePointerSelection ? () => handleClick(entry.modelId) : undefined}
-                >
-                  <meshStandardMaterial
-                    color={entry.color}
-                    roughness={0.9}
-                    metalness={0.0}
-                    transparent={raftTransparent}
-                    opacity={raftOpacity}
-                    depthWrite={!raftTransparent}
-                    clippingPlanes={clippingPlanes ?? undefined}
-                  />
-                </mesh>
-              )}
-            </group>
-          );
-        }
-
-        return (
-          <group key={`raft-line:${entry.modelKey}`}>
-            {entry.geometry.beamGeometries.map((geometry, index) => (
-              <mesh
-                key={`beam:${entry.modelKey}:${index}`}
-                geometry={geometry}
-                renderOrder={ghostRenderOrder}
-                onClick={enablePointerSelection ? () => handleClick(entry.modelId) : undefined}
-              >
-                <meshStandardMaterial
-                  color={entry.color}
-                  roughness={0.9}
-                  metalness={0.0}
-                  transparent={raftTransparent}
-                  opacity={raftOpacity}
-                  depthWrite={!raftTransparent}
-                  clippingPlanes={clippingPlanes ?? undefined}
-                  side={THREE.DoubleSide}
-                />
-              </mesh>
-            ))}
-
-            {entry.geometry.borderGeometry && (
-              <mesh
-                geometry={entry.geometry.borderGeometry}
-                renderOrder={ghostRenderOrder}
-                onClick={enablePointerSelection ? () => handleClick(entry.modelId) : undefined}
-              >
-                <meshStandardMaterial
-                  color={entry.color}
-                  roughness={0.9}
-                  metalness={0.0}
-                  transparent={raftTransparent}
-                  opacity={raftOpacity}
-                  depthWrite={!raftTransparent}
-                  clippingPlanes={clippingPlanes ?? undefined}
-                  side={THREE.DoubleSide}
-                />
-              </mesh>
-            )}
-
-            {entry.geometry.wallGeometry && (
-              <mesh
-                geometry={entry.geometry.wallGeometry}
-                renderOrder={ghostRenderOrder}
-                onClick={enablePointerSelection ? () => handleClick(entry.modelId) : undefined}
-              >
-                <meshStandardMaterial
-                  color={entry.color}
-                  roughness={0.9}
-                  metalness={0.0}
-                  transparent={raftTransparent}
-                  opacity={raftOpacity}
-                  depthWrite={!raftTransparent}
-                  clippingPlanes={clippingPlanes ?? undefined}
-                />
-              </mesh>
-            )}
-          </group>
-        );
-      })}
+          {entry.wallGeometry && (
+            <mesh
+              geometry={entry.wallGeometry}
+              renderOrder={ghostRenderOrder}
+              onClick={pointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
+              onPointerMove={pointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
+              onPointerOut={pointerEnabled ? handlePointerOut : undefined}
+            >
+              <meshStandardMaterial
+                color={entry.wallColor}
+                roughness={0.9}
+                metalness={0.0}
+                transparent={raftTransparent}
+                opacity={raftOpacity}
+                depthWrite={!raftTransparent}
+                clippingPlanes={clippingPlanes ?? undefined}
+              />
+            </mesh>
+          )}
+        </group>
+      ))}
     </group>
   );
 }
