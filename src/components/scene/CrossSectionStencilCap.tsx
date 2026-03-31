@@ -19,6 +19,12 @@ type StaticStencilMeshEntry = {
   matrixWorld: THREE.Matrix4;
 };
 
+type StencilZBoundsEntry<T> = {
+  item: T;
+  minZ: number;
+  maxZ: number;
+};
+
 function materialContributesToStencil(material: THREE.Material): boolean {
   const mat = material as THREE.Material & {
     opacity?: number;
@@ -114,6 +120,10 @@ function getGeometryCenter(geometry: THREE.BufferGeometry): THREE.Vector3 {
 function intersectsClipPlaneAtZ(bounds: { min: number; max: number } | null, clipZ: number): boolean {
   if (!bounds) return false;
   return clipZ >= bounds.min - 1e-4 && clipZ <= bounds.max + 1e-4;
+}
+
+function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
+  return clipZ >= minZ - 1e-4 && clipZ <= maxZ + 1e-4;
 }
 
 export function CrossSectionStencilCap({
@@ -241,23 +251,45 @@ export function CrossSectionStencilCap({
     return results;
   }, [sourceObject, sourceObjectVersion]);
 
-  const visibleEntries = React.useMemo(() => {
-    return entries.filter((entry) => {
+  const entryBounds = React.useMemo(() => {
+    return entries.map<StencilZBoundsEntry<CrossSectionStencilCapEntry> | null>((entry) => {
       const worldMatrix = composeCenteredGeometryMatrix(composeTransformMatrix(entry.transform), entry.center);
       const bounds = getGeometryWorldZBounds(entry.geometry, worldMatrix);
-      return intersectsClipPlaneAtZ(bounds, y);
-    });
-  }, [entries, y]);
+      if (!bounds) return null;
+      return {
+        item: entry,
+        minZ: bounds.min,
+        maxZ: bounds.max,
+      };
+    }).filter((entry): entry is StencilZBoundsEntry<CrossSectionStencilCapEntry> => entry !== null);
+  }, [entries]);
 
-  const visibleStaticSourceMeshes = React.useMemo(() => {
-    return staticSourceMeshes.filter((entry) => {
+  const visibleEntries = React.useMemo(() => {
+    return entryBounds
+      .filter((entry) => intersectsMinMaxZ(entry.minZ, entry.maxZ, y))
+      .map((entry) => entry.item);
+  }, [entryBounds, y]);
+
+  const staticSourceBounds = React.useMemo(() => {
+    return staticSourceMeshes.map<StencilZBoundsEntry<StaticStencilMeshEntry> | null>((entry) => {
       const bounds = getGeometryWorldZBounds(
         entry.geometry,
         composeCenteredGeometryMatrix(entry.matrixWorld, entry.center),
       );
-      return intersectsClipPlaneAtZ(bounds, y);
-    });
-  }, [staticSourceMeshes, y]);
+      if (!bounds) return null;
+      return {
+        item: entry,
+        minZ: bounds.min,
+        maxZ: bounds.max,
+      };
+    }).filter((entry): entry is StencilZBoundsEntry<StaticStencilMeshEntry> => entry !== null);
+  }, [staticSourceMeshes]);
+
+  const visibleStaticSourceMeshes = React.useMemo(() => {
+    return staticSourceBounds
+      .filter((entry) => intersectsMinMaxZ(entry.minZ, entry.maxZ, y))
+      .map((entry) => entry.item);
+  }, [staticSourceBounds, y]);
 
   React.useEffect(() => {
     return () => {
