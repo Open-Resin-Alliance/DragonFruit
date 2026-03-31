@@ -17,6 +17,10 @@ type CameraIntroControllerProps = {
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
+  enabled?: boolean;
+  enableRotate?: boolean;
+  enablePan?: boolean;
+  enableZoom?: boolean;
   enableDamping?: boolean;
   update: () => void;
 };
@@ -143,9 +147,27 @@ export function CameraIntroController({
 
     animatingRef.current = true;
     const prevEnableDamping = orbitControls.enableDamping;
+    const prevEnabled = orbitControls.enabled;
+    const prevEnableRotate = orbitControls.enableRotate;
+    const prevEnablePan = orbitControls.enablePan;
+    const prevEnableZoom = orbitControls.enableZoom;
+
     if (typeof prevEnableDamping === 'boolean') {
       orbitControls.enableDamping = false;
     }
+    if (typeof prevEnabled === 'boolean') {
+      orbitControls.enabled = false;
+    }
+    if (typeof prevEnableRotate === 'boolean') {
+      orbitControls.enableRotate = false;
+    }
+    if (typeof prevEnablePan === 'boolean') {
+      orbitControls.enablePan = false;
+    }
+    if (typeof prevEnableZoom === 'boolean') {
+      orbitControls.enableZoom = false;
+    }
+
     const duration = 1000;
     let startTime: number | null = null;
 
@@ -183,6 +205,18 @@ export function CameraIntroController({
         if (typeof prevEnableDamping === 'boolean') {
           orbitControls.enableDamping = prevEnableDamping;
         }
+        if (typeof prevEnabled === 'boolean') {
+          orbitControls.enabled = prevEnabled;
+        }
+        if (typeof prevEnableRotate === 'boolean') {
+          orbitControls.enableRotate = prevEnableRotate;
+        }
+        if (typeof prevEnablePan === 'boolean') {
+          orbitControls.enablePan = prevEnablePan;
+        }
+        if (typeof prevEnableZoom === 'boolean') {
+          orbitControls.enableZoom = prevEnableZoom;
+        }
 
         camera.position.copy(endPos);
         orbitControls.target.copy(endTarget);
@@ -202,6 +236,18 @@ export function CameraIntroController({
       }
       if (typeof prevEnableDamping === 'boolean') {
         orbitControls.enableDamping = prevEnableDamping;
+      }
+      if (typeof prevEnabled === 'boolean') {
+        orbitControls.enabled = prevEnabled;
+      }
+      if (typeof prevEnableRotate === 'boolean') {
+        orbitControls.enableRotate = prevEnableRotate;
+      }
+      if (typeof prevEnablePan === 'boolean') {
+        orbitControls.enablePan = prevEnablePan;
+      }
+      if (typeof prevEnableZoom === 'boolean') {
+        orbitControls.enableZoom = prevEnableZoom;
       }
       if (activeRunIdRef.current === runId && completedRunIdRef.current !== runId) {
         activeRunIdRef.current = 0;

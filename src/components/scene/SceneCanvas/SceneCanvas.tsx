@@ -2506,7 +2506,7 @@ export function SceneCanvas({
     // proper pivot; animating to the build-volume center first causes
     // a jarring double-animation on first open.
     if (activeModelId == null && models.length === 0) {
-      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone());
+      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone(), { animate: false });
     }
   }, [activeModelId, buildVolumeCenterTarget, mode, models.length, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
 
