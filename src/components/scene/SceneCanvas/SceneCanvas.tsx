@@ -194,6 +194,7 @@ export function SceneCanvas({
   isLeafPlacementActive,
   isBracePlacementActive,
   isKickstandPlacementActive,
+  hideCrossSectionCap = false,
   branchTipPosition,
   branchHoverPosition,
   leafTipPosition,
