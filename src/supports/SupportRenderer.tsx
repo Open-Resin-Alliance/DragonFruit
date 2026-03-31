@@ -622,7 +622,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportId = supportSelectionAndHoverSuppressed ? null : marqueeHover.supportId;
     const marqueeHoveredSupportIds = supportSelectionAndHoverSuppressed ? EMPTY_SUPPORT_ID_LIST : marqueeHover.supportIds;
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
-    const activeJointDragPreview = useActiveJointDragPreview();
     const activeKnotDragPreview = useActiveKnotDragPreview();
     const supportRenderLookupInput = useMemo(() => ({
         state: {
@@ -1460,13 +1459,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return selected;
     }, [singleSelectedSupportId, selectedSupportIdSet, state.sticks, useMultiSelectionDetail]);
-
-    const previewKnotOverrides = useMemo(() => {
-        return buildJointDragPreviewKnots(activeJointDragPreview, {
-            roots: state.roots,
-            knots: state.knots,
-        });
-    }, [activeJointDragPreview, state.roots, state.knots]);
 
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
