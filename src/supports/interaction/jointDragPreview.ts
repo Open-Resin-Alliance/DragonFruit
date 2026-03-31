@@ -1,11 +1,12 @@
 import React from 'react';
-import type { Knot, Roots } from '../types';
+import type { Branch, Knot, Roots, Trunk } from '../types';
 import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type JointDragPreviewContext, type JointDragPreviewKind, type JointDragPreviewPayload, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
 import type { PartDragPreviewPayload } from './partDragPreview';
 import { subscribeSupportInteractionReset } from './supportInteractionReset';
 import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
 import { isSupportWorkerSafetyModeEnabled } from './supportWorkerSafetyMode';
 import { SupportComputeRuntime } from './supportComputeRuntime';
+import type { Kickstand } from '../SupportTypes/Kickstand/types';
 import type {
   JointDragPreviewInputDelta,
   JointDragPreviewWorkerCollectionsRef,
@@ -144,7 +145,7 @@ function buildPreviewSnapshotKey(preview: JointDragPreviewSnapshot | null) {
     parts.push(
       's',
       segment.id,
-      segment.type,
+      segment.type ?? 'straight',
       String(quantizePreviewValue(segment.diameter)),
       segment.topJoint?.id ?? 'tj:n',
       segment.bottomJoint?.id ?? 'bj:n',
@@ -152,8 +153,8 @@ function buildPreviewSnapshotKey(preview: JointDragPreviewSnapshot | null) {
 
     appendPreviewPos(parts, segment.topJoint?.pos);
     appendPreviewPos(parts, segment.bottomJoint?.pos);
-    appendPreviewPos(parts, segment.controlPoint1);
-    appendPreviewPos(parts, segment.controlPoint2);
+    appendPreviewPos(parts, segment.type === 'bezier' ? segment.controlPoint1 : undefined);
+    appendPreviewPos(parts, segment.type === 'bezier' ? segment.controlPoint2 : undefined);
   }
 
   return parts.join('|');
@@ -332,14 +333,24 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
   }, []);
 
   const resolvePreviewContext = React.useCallback((activePreview: JointDragPreviewSnapshot): JointDragPreviewContext => {
-    return activePreview.kind === 'trunk'
-      ? { root: roots[activePreview.support.rootId] ?? null }
-      : activePreview.kind === 'kickstand'
-        ? {
-          root: roots[activePreview.support.rootId] ?? null,
-          hostKnot: kickstandKnots?.[activePreview.support.hostKnotId] ?? knots[activePreview.support.hostKnotId] ?? null,
-        }
-        : { parentKnot: knots[activePreview.support.parentKnotId] ?? null };
+    const support = activePreview.support;
+    if (!support) return {};
+
+    if (activePreview.kind === 'trunk') {
+      const trunkSupport = support as Trunk;
+      return { root: roots[trunkSupport.rootId] ?? null };
+    }
+
+    if (activePreview.kind === 'kickstand') {
+      const kickstandSupport = support as Kickstand;
+      return {
+        root: roots[kickstandSupport.rootId] ?? null,
+        hostKnot: kickstandKnots?.[kickstandSupport.hostKnotId] ?? knots[kickstandSupport.hostKnotId] ?? null,
+      };
+    }
+
+    const branchSupport = support as Branch;
+    return { parentKnot: knots[branchSupport.parentKnotId] ?? null };
   }, [roots, kickstandKnots, knots]);
 
   const computeSync = React.useCallback((activePreview: JointDragPreviewSnapshot) => {

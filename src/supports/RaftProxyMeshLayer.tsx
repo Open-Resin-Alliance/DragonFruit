@@ -163,51 +163,6 @@ export function RaftProxyMeshLayer({
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
-  const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
-  const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (passive) {
-      setImmediateModelHoverId((prev) => (prev === null ? prev : null));
-      return;
-    }
-
-    const handleImmediateModelHover = (event: Event) => {
-      if (navigationLodActive) return;
-      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
-      setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
-    };
-
-    window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
-    return () => {
-      window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
-    };
-  }, [navigationLodActive, passive]);
-
-  React.useEffect(() => {
-    if (passive) {
-      setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
-      return;
-    }
-
-    const handleModelClicked = (event: Event) => {
-      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
-      const modelId = customEvent.detail?.modelId ?? null;
-      setImmediatePrepareActiveModelId((prev) => (prev === modelId ? prev : modelId));
-    };
-
-    const handleModelDeselected = () => {
-      setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
-    };
-
-    window.addEventListener('model-clicked', handleModelClicked as EventListener);
-    window.addEventListener('model-deselected', handleModelDeselected);
-    return () => {
-      window.removeEventListener('model-clicked', handleModelClicked as EventListener);
-      window.removeEventListener('model-deselected', handleModelDeselected);
-    };
-  }, [passive]);
-
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(
     () => new Set(excludeModelIds.filter((id): id is string => Boolean(id))),
@@ -221,10 +176,8 @@ export function RaftProxyMeshLayer({
     return planes.length > 0 ? planes : null;
   }, [clipLower, clipUpper]);
 
-  const effectiveHoverModelId = passive ? null : (immediateModelHoverId ?? hoverModelId);
-  const effectiveVisualActiveModelId = passive
-    ? activeModelId
-    : (immediatePrepareActiveModelId ?? activeModelId);
+  const effectiveHoverModelId = passive ? null : hoverModelId;
+  const effectiveVisualActiveModelId = activeModelId;
 
   const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
   const raftSignature = React.useMemo(() => buildRaftSignature(raft), [raft]);

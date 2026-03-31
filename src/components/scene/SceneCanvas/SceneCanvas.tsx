@@ -826,6 +826,8 @@ export function SceneCanvas({
     }
 
     setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+    setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+    setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
     emitImmediateModelHover(null);
   }, [supportGizmoInteractionActive]);
 
@@ -840,6 +842,10 @@ export function SceneCanvas({
       pendingHoverModelIdRef.current = null;
       if (pending === hoveredMeshModelIdRef.current) return;
       setHoveredMeshModelId((prev) => (prev === pending ? prev : pending));
+      if (pending) {
+        setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+        setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+      }
     });
   }, []);
 
@@ -848,6 +854,10 @@ export function SceneCanvas({
       const customEvent = event as CustomEvent<{ modelId?: string | null }>;
       const modelId = customEvent.detail?.modelId ?? null;
       setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
+      if (modelId) {
+        setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+        setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+      }
     };
 
     const handleSupportRaftModelPointerHover = (event: Event) => {
@@ -855,6 +865,15 @@ export function SceneCanvas({
       const category = customEvent.detail?.category;
       if (category === 'raft') {
         const modelId = customEvent.detail?.modelId ?? null;
+        if (modelId) {
+          pendingHoverModelIdRef.current = null;
+          if (hoverModelRafRef.current !== null) {
+            cancelAnimationFrame(hoverModelRafRef.current);
+            hoverModelRafRef.current = null;
+          }
+          setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+          setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+        }
         if (modelId) {
           setHoveredRaftModelId((prev) => (prev === modelId ? prev : modelId));
         } else {
@@ -865,6 +884,15 @@ export function SceneCanvas({
 
       if (category === 'support') {
         const modelId = customEvent.detail?.modelId ?? null;
+        if (modelId) {
+          pendingHoverModelIdRef.current = null;
+          if (hoverModelRafRef.current !== null) {
+            cancelAnimationFrame(hoverModelRafRef.current);
+            hoverModelRafRef.current = null;
+          }
+          setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+          setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+        }
         if (modelId) {
           setHoveredSupportPointerModelId((prev) => (prev === modelId ? prev : modelId));
         } else {
@@ -3854,7 +3882,7 @@ export function SceneCanvas({
                             clipLower={clipLower}
                             clipUpper={clipUpper}
                             supportColorsByModelId={supportColorsByModelId}
-                            hoverTintColor={hoverTintColor}
+                            hoverTintColor={supportHoverTintColor}
                             hoverTintStrength={hoverTintStrength}
                             selectedTintStrength={selectedTintStrength}
                             activeModelId={committedActiveModelId}
@@ -3922,7 +3950,7 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
@@ -4026,7 +4054,7 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
@@ -4062,7 +4090,7 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
@@ -4177,7 +4205,7 @@ export function SceneCanvas({
                   clipLower={clipLower}
                   clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
-                  hoverTintColor={hoverTintColor}
+                  hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={committedActiveModelId}
@@ -4251,7 +4279,7 @@ export function SceneCanvas({
                   clipLower={clipLower}
                   clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
-                  hoverTintColor={hoverTintColor}
+                  hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={committedActiveModelId}
@@ -4286,7 +4314,7 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={committedActiveModelId}

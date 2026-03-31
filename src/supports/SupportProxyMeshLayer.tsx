@@ -107,14 +107,12 @@ export function SupportProxyMeshLayer({
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const kickstandState = useKickstandStoreState();
 
-  const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(
     () => new Set(excludeModelIds.filter((id): id is string => Boolean(id))),
     [excludeModelIds],
   );
   const lastSupportHoverModelIdRef = React.useRef<string | null>(null);
   const hoverClearRafRef = React.useRef<number | null>(null);
-  const [immediateSupportHoverModelId, setImmediateSupportHoverModelId] = React.useState<string | null>(null);
 
   const resolveModelVisible = React.useCallback((modelId?: string) => {
     if (modelFilterId && modelId !== modelFilterId) return false;
@@ -585,17 +583,17 @@ export function SupportProxyMeshLayer({
     return ids;
   }, [activeModelId, selectedModelIds]);
 
-  const effectiveHoverModelId = React.useMemo(
-    () => immediateSupportHoverModelId ?? hoverModelId,
-    [hoverModelId, immediateSupportHoverModelId],
-  );
+  const effectiveHoverModelId = hoverModelId;
 
   const hoveredOverlayColor = React.useMemo(() => {
-    const base = new THREE.Color(DEFAULT_SUPPORT_COLOR);
+    const hoveredBaseColor = effectiveHoverModelId
+      ? (supportColorsByModelId?.[effectiveHoverModelId] ?? DEFAULT_SUPPORT_COLOR)
+      : DEFAULT_SUPPORT_COLOR;
+    const base = new THREE.Color(hoveredBaseColor);
     const tint = new THREE.Color(hoverTintColor);
     const strength = Math.max(0, Math.min(1, hoverTintStrength));
     return base.lerp(tint, strength).getStyle();
-  }, [hoverTintColor, hoverTintStrength]);
+  }, [effectiveHoverModelId, hoverTintColor, hoverTintStrength, supportColorsByModelId]);
 
   const flattenedGeometry = React.useMemo(() => {
     const createEmpty = (): FlatProxyGeometry => ({ shafts: [], roots: [], joints: [], cones: [] });
@@ -679,7 +677,6 @@ export function SupportProxyMeshLayer({
     }
 
     lastSupportHoverModelIdRef.current = nextModelId;
-    setImmediateSupportHoverModelId((prev) => (prev === nextModelId ? prev : nextModelId));
     emitSupportModelPointerHover(nextModelId);
   }, []);
 
@@ -690,7 +687,6 @@ export function SupportProxyMeshLayer({
       hoverClearRafRef.current = null;
       if (lastSupportHoverModelIdRef.current === null) return;
       lastSupportHoverModelIdRef.current = null;
-      setImmediateSupportHoverModelId((prev) => (prev === null ? prev : null));
       emitSupportModelPointerHover(null);
     });
   }, []);
@@ -716,7 +712,6 @@ export function SupportProxyMeshLayer({
     }
     if (lastSupportHoverModelIdRef.current !== null) {
       lastSupportHoverModelIdRef.current = null;
-      setImmediateSupportHoverModelId((prev) => (prev === null ? prev : null));
       emitSupportModelPointerHover(null);
     }
   }, [pointerHoverEnabled]);

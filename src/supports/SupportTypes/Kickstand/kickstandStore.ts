@@ -3,6 +3,8 @@ import type { KickstandBuildResult, KickstandState } from './types';
 import * as THREE from 'three';
 import type { Vec3, Segment, BezierSegment } from '../../types';
 
+export type { KickstandState } from './types';
+
 const listeners = new Set<() => void>();
 
 const initialState: KickstandState = {

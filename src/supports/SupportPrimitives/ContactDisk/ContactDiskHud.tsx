@@ -17,6 +17,12 @@ interface ContactDiskHudProps {
     onDragStateChange?: (dragging: boolean) => void;
 }
 
+type PointerCaptureTarget = EventTarget & {
+    setPointerCapture?: (pointerId: number) => void;
+    hasPointerCapture?: (pointerId: number) => boolean;
+    releasePointerCapture?: (pointerId: number) => void;
+};
+
 export function ContactDiskHud({
     radius,
     gap = 0.18,
@@ -49,7 +55,7 @@ export function ContactDiskHud({
         if (onDragStateChange) onDragStateChange(dragging);
     }, [onDragStateChange]);
 
-    const stopPointerEvent = React.useCallback((e: ThreeEvent<PointerEvent> | null) => {
+    const stopPointerEvent = React.useCallback((e: ThreeEvent<Event> | null) => {
         if (e?.stopPropagation) e.stopPropagation();
         if (e?.nativeEvent) {
             e.nativeEvent.stopPropagation?.();
@@ -80,7 +86,8 @@ export function ContactDiskHud({
         if (typeof e?.pointerId === 'number') {
             activePointerIdRef.current = e.pointerId;
             try {
-                e.currentTarget?.setPointerCapture?.(e.pointerId);
+                const target = (e.currentTarget as PointerCaptureTarget | null);
+                target?.setPointerCapture?.(e.pointerId);
             } catch {
             }
         }
@@ -94,8 +101,9 @@ export function ContactDiskHud({
         const pointerId = typeof e?.pointerId === 'number' ? e.pointerId : activePointerIdRef.current;
         if (pointerId !== null) {
             try {
-                if (e?.currentTarget?.hasPointerCapture?.(pointerId)) {
-                    e.currentTarget.releasePointerCapture(pointerId);
+                const target = (e.currentTarget as PointerCaptureTarget | null);
+                if (target?.hasPointerCapture?.(pointerId)) {
+                    target.releasePointerCapture?.(pointerId);
                 }
             } catch {
             }
