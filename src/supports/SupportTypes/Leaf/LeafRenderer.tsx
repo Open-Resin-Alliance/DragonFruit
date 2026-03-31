@@ -1,7 +1,7 @@
-import React, { useSyncExternalStore } from 'react';
+import React from 'react';
 import { useThree } from '@react-three/fiber';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { getSnapshot, subscribe, updateLeaf } from '../../state';
+import { updateLeaf } from '../../state';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
@@ -11,10 +11,12 @@ import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByM
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface LeafRendererProps {
     leaf: Leaf;
     parentKnot: Knot;
+    selectedId?: string | null;
     isSelected?: boolean;
     dimNonSelected?: boolean;
     showKnots?: boolean;
@@ -53,6 +55,7 @@ interface LeafRendererPointerEvent {
 export const LeafRenderer = React.memo(function LeafRenderer({
     leaf,
     parentKnot,
+    selectedId,
     isSelected,
     dimNonSelected,
     showKnots,
@@ -68,12 +71,12 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     const { camera, scene, gl } = useThree();
     const { getHotkey } = useHotkeyConfig();
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
-    const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
     const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
     const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
     const { pickRef, visuals } = useHighlight({
@@ -117,6 +120,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
 
         const socketAnchor = getFinalSocketPosition(leaf.contactCone);
 
+        beforeHistoryRef.current = captureSupportEditSnapshot();
+
         dragSessionRef.current?.stop();
         dragSessionRef.current = startContactDiskDragSession({
             camera,
@@ -133,10 +138,16 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             onEnd: () => {
                 if (liveDragConeRef.current) {
                     const latest = getSnapshot().leaves[leaf.id];
-                    if (latest) updateLeaf({ ...latest, contactCone: liveDragConeRef.current });
+                    if (latest) {
+                        updateLeaf({ ...latest, contactCone: liveDragConeRef.current });
+                        if (beforeHistoryRef.current) {
+                            pushSupportEditHistory('Move leaf tip', beforeHistoryRef.current, captureSupportEditSnapshot());
+                        }
+                    }
                 }
                 liveDragConeRef.current = null;
                 dragSessionRef.current = null;
+                beforeHistoryRef.current = null;
             },
         });
     }, [camera, gl.domElement, isSelected, leaf.id, leaf.contactCone, leaf.modelId, scene]);
@@ -151,7 +162,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
                 {(() => {
                     const effectiveCone = liveDragConeRef.current ?? leaf.contactCone;
                     if (!effectiveCone || deferContactConesToSceneBatch) return null;
-                    const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
+                    const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
                     return (
                         <ContactConeRenderer
                             contactDiskId={effectiveCone.id}

@@ -135,6 +135,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
+          isInteractable={isInteractable}
           isSelected={isSegSelected}
           onClick={() => selectPrimitiveById(seg.id)}
         />
@@ -154,6 +155,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
+          isInteractable={isInteractable}
           isSelected={isSegSelected}
           onClick={() => selectPrimitiveById(seg.id)}
         />

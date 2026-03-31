@@ -5,11 +5,13 @@ import { moveJoint } from './jointUtils';
 import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
 import { useKickstandStoreState, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
+import { clearJointDragPreview, emitJointDragPreview } from '../../interaction/jointDragPreview';
 
 export function JointGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -17,9 +19,12 @@ export function JointGizmo() {
     const selectedId = state.selectedId;
     const initialTrunkRef = useRef<Trunk | null>(null);
     const initialBranchRef = useRef<Branch | null>(null);
+    const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const dragPosRef = useRef<THREE.Vector3 | null>(null);
     const selectedJointParentRef = useRef<{ selectedId: string; kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand'; supportId: string } | null>(null);
     const { isActive: isCurveMode } = useCurveInteractionState();
+    const liveTrunkPreviewRef = useRef<Trunk | null>(null);
+    const liveBranchPreviewRef = useRef<Branch | null>(null);
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
 
@@ -245,6 +250,10 @@ export function JointGizmo() {
         if (joint) {
             dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
         }
+
+        if (branch || twig || stick || kickstand) {
+            initialEditSnapshotRef.current = captureSupportEditSnapshot();
+        }
     };
 
     const handleMove = (delta: THREE.Vector3) => {
@@ -267,14 +276,16 @@ export function JointGizmo() {
                 initialTrunkRef.current = cloneObj(trunk);
             }
             const newTrunk = moveJoint(trunk, joint.id, newPos, undefined, isCurveMode, state.roots[trunk.rootId]);
-            updateTrunk(newTrunk);
+            liveTrunkPreviewRef.current = newTrunk;
+            emitJointDragPreview({ kind: 'trunk', supportId: newTrunk.id, support: newTrunk });
         } else if (branch) {
             if (!initialBranchRef.current) {
                 initialBranchRef.current = cloneObj(branch);
             }
             // moveJoint works on any object with segments array
             const newBranch = moveJoint(branch as any, joint.id, newPos, undefined, false) as unknown as Branch;
-            updateBranch(newBranch);
+            liveBranchPreviewRef.current = newBranch;
+            emitJointDragPreview({ kind: 'branch', supportId: newBranch.id, support: newBranch });
         } else if (twig) {
             const newTwig: Twig = {
                 ...twig,
@@ -329,6 +340,7 @@ export function JointGizmo() {
         if (initialTrunkRef.current && trunk) {
             const latestTrunk = selectedId ? getTrunkById(trunk.id) : null;
             if (latestTrunk) {
+                clearJointDragPreview('trunk', trunk.id);
                 pushHistory({
                     type: SUPPORT_UPDATE_TRUNK,
                     payload: {
@@ -339,8 +351,24 @@ export function JointGizmo() {
             }
             initialTrunkRef.current = null;
         }
-        // Note: Branch history not implemented yet
+
+        if (initialEditSnapshotRef.current) {
+            if (branch) {
+                clearJointDragPreview('branch', branch.id);
+                pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (twig) {
+                pushSupportEditHistory('Move twig joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (stick) {
+                pushSupportEditHistory('Move stick joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (kickstand) {
+                pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            }
+            initialEditSnapshotRef.current = null;
+        }
+
         initialBranchRef.current = null;
+        liveTrunkPreviewRef.current = null;
+        liveBranchPreviewRef.current = null;
     };
 
     return (

@@ -1,6 +1,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot, updateTrunk } from '../state';
 import { updateCurveTension, removeCurveAtJoint, updateSegmentTension, removeSegmentCurve, updateSegmentBias } from './curveUtils';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../history/supportEditHistory';
 
 export function CurveSettingsCard() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -53,6 +54,7 @@ export function CurveSettingsCard() {
     const handleTensionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseFloat(e.target.value);
         if (selectedTrunk) {
+            const before = captureSupportEditSnapshot();
             const root = state.roots[selectedTrunk.rootId];
             if (!root) return;
             
@@ -63,12 +65,14 @@ export function CurveSettingsCard() {
                 newTrunk = updateCurveTension(selectedTrunk, selectedId!, val, root);
             }
             updateTrunk(newTrunk);
+            pushSupportEditHistory('Adjust curve tension', before, captureSupportEditSnapshot());
         }
     };
 
     const handleBiasChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseFloat(e.target.value);
         if (selectedTrunk) {
+            const before = captureSupportEditSnapshot();
             const root = state.roots[selectedTrunk.rootId];
             if (!root) return;
             
@@ -85,11 +89,13 @@ export function CurveSettingsCard() {
                 }
             }
             updateTrunk(newTrunk);
+            pushSupportEditHistory('Adjust curve bias', before, captureSupportEditSnapshot());
         }
     };
 
     const handleRemoveCurve = () => {
         if (selectedTrunk) {
+            const before = captureSupportEditSnapshot();
             let newTrunk;
             if (category === 'segment' && selectedSegmentId) {
                 newTrunk = removeSegmentCurve(selectedTrunk, selectedSegmentId);
@@ -97,6 +103,7 @@ export function CurveSettingsCard() {
                 newTrunk = removeCurveAtJoint(selectedTrunk, selectedId!);
             }
             updateTrunk(newTrunk);
+            pushSupportEditHistory('Remove curve', before, captureSupportEditSnapshot());
         }
     };
 

@@ -5,7 +5,7 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
+import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, setKickstandSnapshot, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -722,6 +722,44 @@ export function removeJointById(jointId: string): RemoveJointByIdResult | null {
 
 function notify() {
     listeners.forEach((l) => l());
+}
+
+function syncKickstandHostKnotsFromSharedKnots(sharedKnots: Record<string, Knot>) {
+    const kickstandState = getKickstandSnapshot();
+    let nextKnots = kickstandState.knots;
+    let changed = false;
+
+    for (const kickstand of Object.values(kickstandState.kickstands)) {
+        const hostKnot = sharedKnots[kickstand.hostKnotId];
+        if (!hostKnot) continue;
+
+        const existing = nextKnots[hostKnot.id];
+        if (
+            existing
+            && existing.pos.x === hostKnot.pos.x
+            && existing.pos.y === hostKnot.pos.y
+            && existing.pos.z === hostKnot.pos.z
+            && existing.t === hostKnot.t
+            && existing.diameter === hostKnot.diameter
+            && existing.parentShaftId === hostKnot.parentShaftId
+        ) {
+            continue;
+        }
+
+        if (!changed) {
+            nextKnots = { ...kickstandState.knots };
+            changed = true;
+        }
+
+        nextKnots[hostKnot.id] = { ...hostKnot };
+    }
+
+    if (!changed) return;
+
+    setKickstandSnapshot({
+        ...kickstandState,
+        knots: nextKnots,
+    });
 }
 
 export function subscribe(listener: () => void) {
@@ -2370,7 +2408,9 @@ export function addTrunk(trunk: Trunk) {
     notify();
 }
 
-export function updateTrunk(trunk: Trunk) {
+export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: boolean }) {
+    const skipDependentGeometry = options?.skipDependentGeometry === true;
+
     // Update trunk
     const nextTrunks = { ...state.trunks, [trunk.id]: trunk };
 
@@ -2414,10 +2454,18 @@ export function updateTrunk(trunk: Trunk) {
         }
 
         if (knotsChanged) {
-            nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-            const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-            const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-            nextKnots = braceSeg.knots;
+            if (skipDependentGeometry) {
+                // Drag-time fast path: keep knot positions responsive, defer expensive
+                // leaf dependent recomputations until drag commit, but keep braces in sync
+                // so they don't visually snap after trunk/branch moves.
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, updatedKnots);
+                nextKnots = braceSeg.knots;
+            } else {
+                nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+                const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+                nextKnots = braceSeg.knots;
+            }
         }
     }
 
@@ -2427,6 +2475,8 @@ export function updateTrunk(trunk: Trunk) {
         knots: nextKnots,
         leaves: nextLeaves,
     };
+
+    syncKickstandHostKnotsFromSharedKnots(nextKnots);
 
     notify();
 }
@@ -2947,7 +2997,9 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
     return snapshots;
 }
 
-export function updateBranch(branch: Branch) {
+export function updateBranch(branch: Branch, options?: { skipDependentGeometry?: boolean }) {
+    const skipDependentGeometry = options?.skipDependentGeometry === true;
+
     if (!state.branches[branch.id]) return;
 
     const nextBranches = { ...state.branches, [branch.id]: branch };
@@ -2979,10 +3031,17 @@ export function updateBranch(branch: Branch) {
         }
 
         if (knotsChanged) {
-            nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-            const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-            const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-            nextKnots = braceSeg.knots;
+            if (skipDependentGeometry) {
+                // Drag-time fast path: defer expensive leaf dependent recomputations until commit,
+                // but keep brace geometry current so it stays anchored to the moving branch.
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, updatedKnots);
+                nextKnots = braceSeg.knots;
+            } else {
+                nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+                const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+                nextKnots = braceSeg.knots;
+            }
         }
     }
 
@@ -2992,6 +3051,9 @@ export function updateBranch(branch: Branch) {
         knots: nextKnots,
         leaves: nextLeaves,
     };
+
+    syncKickstandHostKnotsFromSharedKnots(nextKnots);
+
     notify();
 }
 
@@ -3030,6 +3092,18 @@ export function removeKnotById(knotId: string): Knot | null {
 export function updateKnot(knot: Knot) {
     const existing = state.knots[knot.id];
     if (!existing) return;
+
+    const kickstandState = getKickstandSnapshot();
+    const hostKickstand = Object.values(kickstandState.kickstands).find((kickstand) => kickstand.hostKnotId === knot.id);
+    if (hostKickstand) {
+        setKickstandSnapshot({
+            ...kickstandState,
+            knots: {
+                ...kickstandState.knots,
+                [knot.id]: knot,
+            },
+        });
+    }
 
     const baseKnots = { ...state.knots, [knot.id]: knot };
 

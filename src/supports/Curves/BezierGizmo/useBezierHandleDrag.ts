@@ -4,6 +4,7 @@ import { useThree, ThreeEvent } from '@react-three/fiber';
 
 interface UseBezierHandleDragProps {
     jointPosition: THREE.Vector3;
+    handlePosition: THREE.Vector3;
     onDragStart?: () => void;
     onDrag: (newPosition: THREE.Vector3) => void;
     onDragEnd?: () => void;
@@ -15,7 +16,8 @@ interface UseBezierHandleDragProps {
  * Projects mouse movement onto a plane perpendicular to the camera, passing through the joint.
  */
 export function useBezierHandleDrag({
-    jointPosition,
+    jointPosition: _jointPosition,
+    handlePosition,
     onDragStart,
     onDrag,
     onDragEnd,
@@ -26,6 +28,9 @@ export function useBezierHandleDrag({
     
     // Refs for drag state
     const dragPlane = useRef<THREE.Plane | null>(null);
+    const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
+    const raycasterRef = useRef(new THREE.Raycaster());
+    const pointerNdcRef = useRef(new THREE.Vector2());
     const rafId = useRef<number | null>(null);
     const isDraggingRef = useRef(false);
 
@@ -48,12 +53,11 @@ export function useBezierHandleDrag({
         const x = ((clientX - rect.left) / rect.width) * 2 - 1;
         const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-        const ray = new THREE.Ray();
-        ray.origin.setFromMatrixPosition(camera.matrixWorld);
-        ray.direction.set(x, y, 0.5).unproject(camera).sub(ray.origin).normalize();
+        pointerNdcRef.current.set(x, y);
+        raycasterRef.current.setFromCamera(pointerNdcRef.current, camera);
 
         const target = new THREE.Vector3();
-        return ray.intersectPlane(dragPlane.current, target);
+        return raycasterRef.current.ray.intersectPlane(dragPlane.current, target);
     }, [camera, gl]);
 
     const handlePointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
@@ -64,18 +68,26 @@ export function useBezierHandleDrag({
         e.stopPropagation();
         (e as any).stopped = true; 
 
-        // Create a plane passing through the joint, facing the camera
+        // Create a plane passing through the handle, facing the camera.
+        // Using handle depth keeps drag movement aligned to pointer motion.
         const planeNormal = new THREE.Vector3();
         camera.getWorldDirection(planeNormal);
         
         dragPlane.current = new THREE.Plane();
-        dragPlane.current.setFromNormalAndCoplanarPoint(planeNormal, jointPosition);
+        dragPlane.current.setFromNormalAndCoplanarPoint(planeNormal, handlePosition);
+
+        const startPoint = getRayPlaneIntersection(e.clientX, e.clientY);
+        if (startPoint) {
+            dragOffset.current.copy(handlePosition).sub(startPoint);
+        } else {
+            dragOffset.current.set(0, 0, 0);
+        }
 
         isDraggingRef.current = true;
         setIsDragging(true);
         
         if (onDragStartRef.current) onDragStartRef.current();
-    }, [enabled, camera, jointPosition]);
+    }, [enabled, camera, handlePosition, getRayPlaneIntersection]);
 
     // Global pointer move handler
     useEffect(() => {
@@ -88,7 +100,7 @@ export function useBezierHandleDrag({
             rafId.current = requestAnimationFrame(() => {
                 const point = getRayPlaneIntersection(e.clientX, e.clientY);
                 if (point && onDragRef.current) {
-                    onDragRef.current(point);
+                    onDragRef.current(point.clone().add(dragOffset.current));
                 }
                 rafId.current = null;
             });

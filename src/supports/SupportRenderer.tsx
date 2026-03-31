@@ -16,8 +16,10 @@ import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roo
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore';
+import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
+import { buildJointDragPreviewKnots, useActiveJointDragPreview } from './interaction/jointDragPreview';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
@@ -118,8 +120,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const kickstandState = useKickstandStoreState();
+    const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
+    const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
 
     const selectionEnabled = mode === 'support';
     const effectiveSelectedSupportIds = selectionEnabled ? resolvedSelection.selectedIds : [];
@@ -345,10 +349,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const w = window as any;
             const knotDragging = !!w.__knotGizmoDragging;
             const jointDragging = !!w.__jointGizmoDragging;
-            const dragging = knotDragging || jointDragging;
+            const bezierDragging = !!w.__bezierGizmoDragging;
+            const dragging = knotDragging || jointDragging || bezierDragging;
             const knotGuardUntil = typeof w.__knotGizmoGuardUntil === 'number' ? w.__knotGizmoGuardUntil : 0;
             const jointGuardUntil = typeof w.__jointGizmoGuardUntil === 'number' ? w.__jointGizmoGuardUntil : 0;
-            const guardUntil = Math.max(knotGuardUntil, jointGuardUntil);
+            const bezierGuardUntil = typeof w.__bezierGizmoGuardUntil === 'number' ? w.__bezierGizmoGuardUntil : 0;
+            const guardUntil = Math.max(knotGuardUntil, jointGuardUntil, bezierGuardUntil);
             const now = Date.now();
             const guardActive = guardUntil > now;
             const nextActive = dragging || guardActive;
@@ -410,12 +416,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             refreshFromGlobals();
         };
 
+        const handleBezierGizmoInteractionLock = (event: Event) => {
+            const detail = (event as CustomEvent<{ active?: boolean; guardUntil?: number }>).detail;
+            if (typeof detail?.active !== 'boolean') {
+                refreshFromGlobals();
+                return;
+            }
+
+            const w = window as any;
+            if (typeof detail.active === 'boolean') {
+                w.__bezierGizmoDragging = detail.active;
+            }
+            if (typeof detail.guardUntil === 'number') {
+                w.__bezierGizmoGuardUntil = detail.guardUntil;
+            }
+
+            refreshFromGlobals();
+        };
+
         refreshFromGlobals();
         window.addEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
         window.addEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+        window.addEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
         return () => {
             window.removeEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
             window.removeEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+            window.removeEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
             if (knotGizmoInteractionLockTimeoutRef.current != null) {
                 window.clearTimeout(knotGizmoInteractionLockTimeoutRef.current);
                 knotGizmoInteractionLockTimeoutRef.current = null;
@@ -480,10 +506,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         );
     }, [hoveredCategoryForVisual, hoveredIdForVisual, supportIdBySegmentId, supportIdByJointId, supportIdByKnotId, supportIdByContactDiskId]);
 
+    const selectedPrimitiveSupportId = useMemo(() => {
+        if (!selectedId) return null;
+        if (selectedCategory === 'joint') return supportIdByJointId.get(selectedId) ?? null;
+        if (selectedCategory === 'segment') return supportIdBySegmentId.get(selectedId) ?? null;
+        if (selectedCategory === 'contactDisk') return supportIdByContactDiskId.get(selectedId) ?? null;
+        if (selectedCategory === 'knot') return supportIdByKnotId.get(selectedId) ?? null;
+        return null;
+    }, [selectedCategory, selectedId, supportIdByContactDiskId, supportIdByJointId, supportIdByKnotId, supportIdBySegmentId]);
+
     const {
         primitiveHoverOnSelectedSupport,
         selectedPrimitiveHoverActive,
         suppressSupportHoverForSelectedKnotSupport,
+        suppressSupportHoverForSelectedJointSupport,
     } = resolveSelectedPrimitiveHoverSuppression(
         hoveredSupportIdFromPicking,
         hoveredCategoryForVisual,
@@ -491,6 +527,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedId,
         selectedCategory,
         selectedSupportIdSet,
+        selectedPrimitiveSupportId,
     );
 
     const {
@@ -503,6 +540,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedPrimitiveHoverActive,
         suppressSupportHoverForSelectedKnotSupport,
         selectedSupportIdSet,
+        selectedPrimitiveSupportId,
     );
     const previousSelectionKeyRef = React.useRef<string>('');
 
@@ -524,7 +562,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [sceneHoveredSupportId, selectedId, effectiveSelectedSupportIds]);
 
     useEffect(() => {
-        if (!shouldClearSceneHoverForSelectedPrimitiveSuppression(selectedPrimitiveHoverActive, suppressSupportHoverForSelectedKnotSupport)) return;
+        const clearForJointParent = selectedPrimitiveSupportId !== null
+            && sceneHoveredSupportId !== null
+            && sceneHoveredSupportId === selectedPrimitiveSupportId;
+
+        if (!shouldClearSceneHoverForSelectedPrimitiveSuppression(
+            selectedPrimitiveHoverActive,
+            suppressSupportHoverForSelectedKnotSupport,
+            suppressSupportHoverForSelectedJointSupport,
+        ) && !clearForJointParent) return;
 
         cancelPendingSceneHoverClearFrame(pendingSceneHoverClearFrameRef);
         applySceneHoverWriteDecision(
@@ -533,7 +579,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [selectedPrimitiveHoverActive, suppressSupportHoverForSelectedKnotSupport]);
+    }, [selectedPrimitiveHoverActive, suppressSupportHoverForSelectedKnotSupport, suppressSupportHoverForSelectedJointSupport, selectedPrimitiveSupportId, sceneHoveredSupportId]);
 
     useEffect(() => {
         if (mode !== 'prepare') {
@@ -566,7 +612,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const w = window as any;
         const knotGuardUntil = typeof w.__knotGizmoGuardUntil === 'number' ? w.__knotGizmoGuardUntil : 0;
         const jointGuardUntil = typeof w.__jointGizmoGuardUntil === 'number' ? w.__jointGizmoGuardUntil : 0;
-        const guardUntil = Math.max(knotGuardUntil, jointGuardUntil);
+        const bezierGuardUntil = typeof w.__bezierGizmoGuardUntil === 'number' ? w.__bezierGizmoGuardUntil : 0;
+        const guardUntil = Math.max(knotGuardUntil, jointGuardUntil, bezierGuardUntil);
         w.__supportRendererDebug = {
             supportInteractionSuppressed,
             supportSelectionAndHoverSuppressed,
@@ -575,9 +622,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             jointCategoryHoverSuppressed,
             knotGizmoDragging: !!w.__knotGizmoDragging,
             jointGizmoDragging: !!w.__jointGizmoDragging,
+            bezierGizmoDragging: !!w.__bezierGizmoDragging,
             knotGizmoGuardUntil: guardUntil,
             knotOnlyGuardUntil: knotGuardUntil,
             jointOnlyGuardUntil: jointGuardUntil,
+            bezierOnlyGuardUntil: bezierGuardUntil,
             immediateModelHoverId,
             externalHoverModelId: hoverModelId,
             effectiveHoverModelId,
@@ -859,6 +908,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return selected;
     }, [state.sticks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
+    const previewKnotOverrides = useMemo(() => {
+        return buildJointDragPreviewKnots(activeJointDragPreview, {
+            roots: state.roots,
+            knots: state.knots,
+        });
+    }, [activeJointDragPreview, state.roots, state.knots]);
+
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
         const hasSingleSelection = !!selectedId;
@@ -972,7 +1028,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         for (const branch of Object.values(state.branches)) {
             if (!isModelVisible(branch.modelId, branch.id)) continue;
-            const parentKnot = state.knots[branch.parentKnotId];
+            const parentKnot = previewKnotOverrides[branch.parentKnotId] ?? state.knots[branch.parentKnotId];
             if (!parentKnot) continue;
 
             const shafts: InstancedShaft[] = [];
@@ -1017,7 +1073,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.branches, state.knots, isModelVisible]);
+    }, [state.branches, state.knots, previewKnotOverrides, isModelVisible]);
 
     const braceShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1026,8 +1082,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(brace.modelId, brace.id)) continue;
             if (brace.curve?.type === 'bezier') continue;
 
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
+            const startKnot = previewKnotOverrides[brace.startKnotId] ?? state.knots[brace.startKnotId];
+            const endKnot = previewKnotOverrides[brace.endKnotId] ?? state.knots[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
             const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
@@ -1046,7 +1102,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.braces, state.knots, isModelVisible]);
+    }, [state.braces, state.knots, previewKnotOverrides, isModelVisible]);
 
     const twigShaftsBySupport = useMemo(() => {
         if (!enableTwigSceneBatching) {
@@ -1181,7 +1237,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
 
             const root = kickstandState.roots[kickstand.rootId];
-            const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+            const hostKnot = previewKnotOverrides[kickstand.hostKnotId] ?? kickstandState.knots[kickstand.hostKnotId];
             if (!root || !hostKnot) continue;
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -1234,7 +1290,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
+    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, previewKnotOverrides, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
 
     const segmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
@@ -2372,7 +2428,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return;
         }
 
-        if (supportSelectionAndHoverSuppressed) {
+        if (supportSelectionAndHoverSuppressed || braceAltActive || kickstandHotkeyActive) {
             const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
             const point = e.point
                 ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
@@ -2390,11 +2446,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, kickstandHotkeyActive]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft, event: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+
+        const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
+        const allowSuppressedShaftHoverForPlacementPreview = (braceAltActive || kickstandHotkeyActive) && mode === 'support' && !jointDragInteractionActive;
 
         const sceneHoverWriteDecision = resolveSceneBatchedShaftHoverWriteDecision({
             supportId: shaft.supportId,
@@ -2405,15 +2464,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             selectedSupportIdSet,
             hoverSuppressed: supportSelectionAndHoverSuppressed,
             primitiveHoverSuppressesSceneShaftHover,
+            selectedPrimitiveSupportId,
         });
         const point = event?.point
             ? { x: (event.point as any).x, y: (event.point as any).y, z: (event.point as any).z }
             : null;
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason !== 'interaction-suppressed') {
-            window.dispatchEvent(new CustomEvent('shaft-leave', {
-                detail: { segmentId: shaft.id },
-            }));
+            // When placement hotkeys are active, always emit shaft-hover so previews can track
+            // unselected shafts even when hover suppression logic would otherwise clear it.
+            if (allowSuppressedShaftHoverForPlacementPreview) {
+                window.dispatchEvent(new CustomEvent('shaft-hover', {
+                    detail: { segmentId: shaft.id, point, intersection: event },
+                }));
+            } else {
+                window.dispatchEvent(new CustomEvent('shaft-leave', {
+                    detail: { segmentId: shaft.id },
+                }));
+            }
             applySceneHoverWriteDecision(
                 sceneHoverWriteDecision,
                 pendingSceneHoverClearFrameRef,
@@ -2424,13 +2492,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason === 'interaction-suppressed') {
-            window.dispatchEvent(new CustomEvent('shaft-hover', {
-                detail: {
-                    segmentId: shaft.id,
-                    point,
-                    intersection: event,
-                },
-            }));
+            if (allowSuppressedShaftHoverForPlacementPreview) {
+                window.dispatchEvent(new CustomEvent('shaft-hover', {
+                    detail: {
+                        segmentId: shaft.id,
+                        point,
+                        intersection: event,
+                    },
+                }));
+            } else {
+                window.dispatchEvent(new CustomEvent('shaft-leave', {
+                    detail: { segmentId: shaft.id },
+                }));
+            }
             applySceneHoverWriteDecision(
                 sceneHoverWriteDecision,
                 pendingSceneHoverClearFrameRef,
@@ -2456,7 +2530,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, mode, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, mode, braceAltActive, kickstandHotkeyActive, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback((entity: { id: string } | null) => {
         if (!isPointerInteractable) return;
@@ -2507,12 +2581,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 primitiveHoverOnSelectedSupport,
                 selectedSupportIdSet,
                 hoverSuppressed: supportSelectionAndHoverSuppressed,
+                selectedPrimitiveSupportId,
             }),
             pendingSceneHoverClearFrameRef,
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -2538,12 +2613,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 primitiveHoverOnSelectedSupport,
                 selectedSupportIdSet,
                 hoverSuppressed: supportSelectionAndHoverSuppressed,
+                selectedPrimitiveSupportId,
             }),
             pendingSceneHoverClearFrameRef,
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -2569,12 +2645,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 primitiveHoverOnSelectedSupport,
                 selectedSupportIdSet,
                 hoverSuppressed: supportInteractionSuppressed,
+                selectedPrimitiveSupportId,
             }),
             pendingSceneHoverClearFrameRef,
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveHoverActive, selectedSupportIdSet, supportInteractionSuppressed]);
+    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportInteractionSuppressed]);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -2904,7 +2981,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {Object.values(state.branches).map(branch => {
                 if (!isModelVisible(branch.modelId, branch.id)) return null;
-                const knot = state.knots[branch.parentKnotId];
+                const knot = previewKnotOverrides[branch.parentKnotId] ?? state.knots[branch.parentKnotId];
                 if (!knot) return null;
 
                 const effectiveSelected = selectedBranchIds.has(branch.id);
@@ -2942,7 +3019,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Leaves */}
             {Object.values(state.leaves).map(leaf => {
                 if (!isModelVisible(leaf.modelId, leaf.id)) return null;
-                const knot = state.knots[leaf.parentKnotId];
+                const knot = previewKnotOverrides[leaf.parentKnotId] ?? state.knots[leaf.parentKnotId];
                 if (!knot) return null;
 
                 const effectiveSelected = selectedLeafIds.has(leaf.id);
@@ -2955,6 +3032,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={leaf.id}
                         leaf={leaf}
                         parentKnot={knot}
+                        selectedId={selectedId}
                         isSelected={effectiveSelected}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(leaf.modelId)}
@@ -3078,8 +3156,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {Object.values(state.braces).map(brace => {
                 if (!isModelVisible(brace.modelId, brace.id)) return null;
-                const startKnot = state.knots[brace.startKnotId];
-                const endKnot = state.knots[brace.endKnotId];
+                const startKnot = previewKnotOverrides[brace.startKnotId] ?? state.knots[brace.startKnotId];
+                const endKnot = previewKnotOverrides[brace.endKnotId] ?? state.knots[brace.endKnotId];
                 if (!startKnot || !endKnot) return null;
 
                 const effectiveSelected = selectedBraceIds.has(brace.id);
@@ -3118,7 +3196,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {Object.values(kickstandState.kickstands).map((kickstand) => {
                 if (!isModelVisible(kickstand.modelId, kickstand.id)) return null;
                 const root = kickstandState.roots[kickstand.rootId];
-                const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+                const hostKnot = previewKnotOverrides[kickstand.hostKnotId] ?? kickstandState.knots[kickstand.hostKnotId];
                 if (!root || !hostKnot) return null;
 
                 const effectiveSelected = selectedKickstandIds.has(kickstand.id);

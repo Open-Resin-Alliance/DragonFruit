@@ -18,6 +18,7 @@ import {
   SUPPORT_ADD_KICKSTAND,
   SUPPORT_REMOVE_KICKSTAND,
   SUPPORT_REPLACE_TRUNK,
+  SUPPORT_EDIT_REPLACE,
   SUPPORT_AUTO_BRACE_REPLACE,
   SupportLeafPayload,
   SupportBranchPayload,
@@ -35,6 +36,22 @@ import {
 } from './actionTypes';
 import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKickstandCascade, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
 import { addKickstand, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
+import { clearSupportSelection } from '../interaction/shared/selection/selectionController';
+
+function applySnapshotHistory(payload: SupportReplaceStatePayload, direction: 'undo' | 'redo') {
+  clearSupportSelection();
+  if (direction === 'undo') {
+    setSnapshot(payload.before);
+    if (payload.kickstandBefore) {
+      setKickstandSnapshot(payload.kickstandBefore);
+    }
+  } else {
+    setSnapshot(payload.after);
+    if (payload.kickstandAfter) {
+      setKickstandSnapshot(payload.kickstandAfter);
+    }
+  }
+}
 
 export function useSupportHistoryHandlers(enabled = true) {
   useEffect(() => {
@@ -248,6 +265,7 @@ export function useSupportHistoryHandlers(enabled = true) {
       registerHistoryHandler(SUPPORT_UPDATE_TRUNK, (action, direction) => {
         const payload = action.payload as SupportTrunkUpdatePayload | undefined;
         if (!payload?.before || !payload?.after) return false;
+        clearSupportSelection();
         if (direction === 'undo') {
           updateTrunk(payload.before);
         } else {
@@ -258,6 +276,7 @@ export function useSupportHistoryHandlers(enabled = true) {
       registerHistoryHandler(SUPPORT_UPDATE_BRANCH, (action, direction) => {
         const payload = action.payload as SupportBranchUpdatePayload | undefined;
         if (!payload?.before || !payload?.after) return false;
+        clearSupportSelection();
         if (direction === 'undo') {
           updateBranch(payload.before);
         } else {
@@ -268,6 +287,7 @@ export function useSupportHistoryHandlers(enabled = true) {
       registerHistoryHandler(SUPPORT_REPLACE_TRUNK, (action, direction) => {
         const payload = action.payload as SupportReplaceTrunkPayload | undefined;
         if (!payload?.before || !payload?.after) return false;
+        clearSupportSelection();
         if (direction === 'undo') {
           setSnapshot(payload.before);
         } else {
@@ -275,20 +295,16 @@ export function useSupportHistoryHandlers(enabled = true) {
         }
         return true;
       }),
+      registerHistoryHandler(SUPPORT_EDIT_REPLACE, (action, direction) => {
+        const payload = action.payload as SupportReplaceStatePayload | undefined;
+        if (!payload?.before || !payload?.after) return false;
+        applySnapshotHistory(payload, direction);
+        return true;
+      }),
       registerHistoryHandler(SUPPORT_AUTO_BRACE_REPLACE, (action, direction) => {
         const payload = action.payload as SupportReplaceStatePayload | undefined;
         if (!payload?.before || !payload?.after) return false;
-        if (direction === 'undo') {
-          setSnapshot(payload.before);
-          if (payload.kickstandBefore) {
-            setKickstandSnapshot(payload.kickstandBefore);
-          }
-        } else {
-          setSnapshot(payload.after);
-          if (payload.kickstandAfter) {
-            setKickstandSnapshot(payload.kickstandAfter);
-          }
-        }
+        applySnapshotHistory(payload, direction);
         return true;
       }),
     ];

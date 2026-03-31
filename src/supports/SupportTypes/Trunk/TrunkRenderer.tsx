@@ -1,7 +1,6 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { useSyncExternalStore } from 'react';
 import { Trunk, Roots } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
@@ -14,8 +13,10 @@ import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDra
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { getSnapshot, subscribe, updateTrunk } from '../../state';
+import { useJointDragPreview } from '../../interaction/jointDragPreview';
+import { getSnapshot, updateTrunk } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface TrunkRendererProps {
     trunk: Trunk;
@@ -39,12 +40,13 @@ interface TrunkRendererProps {
 
 export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd', onContactDiskHudHoverChange }: TrunkRendererProps) {
     const { camera, scene, gl } = useThree();
-    const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
+    const previewTrunk = useJointDragPreview<Trunk>('trunk', trunk.id);
     const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
     const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
     // Use universal highlight hook
@@ -77,6 +79,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         if (!isPrimaryPointerPress(e)) return;
 
         const socketAnchor = getFinalSocketPosition(trunk.contactCone);
+        beforeHistoryRef.current = captureSupportEditSnapshot();
 
         dragSessionRef.current?.stop();
         dragSessionRef.current = startContactDiskDragSession({
@@ -95,9 +98,13 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                 if (liveDragConeRef.current) {
                     const latest = getSnapshot().trunks[trunk.id];
                     if (latest) updateTrunk({ ...latest, contactCone: liveDragConeRef.current });
+                    if (beforeHistoryRef.current) {
+                        pushSupportEditHistory('Move trunk tip', beforeHistoryRef.current, captureSupportEditSnapshot());
+                    }
                 }
                 liveDragConeRef.current = null;
                 dragSessionRef.current = null;
+                beforeHistoryRef.current = null;
             },
         });
     }, [camera, gl.domElement, isSelected, scene, trunk.id, trunk.contactCone, trunk.modelId]);
@@ -139,7 +146,9 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
-    trunk.segments.forEach((seg, index) => {
+    const effectiveTrunk = previewTrunk ?? trunk;
+
+    effectiveTrunk.segments.forEach((seg, index) => {
         if (seg.bottomJoint) {
             currentStart = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
         }
@@ -148,9 +157,9 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         
         if (seg.topJoint) {
             endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-        } else if (trunk.contactCone) {
+        } else if (effectiveTrunk.contactCone) {
             // Shaft ends at the cone's socket position
-            const socketPos = getFinalSocketPosition(trunk.contactCone);
+            const socketPos = getFinalSocketPosition(effectiveTrunk.contactCone);
             endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
         } else {
             endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
@@ -190,6 +199,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={isSegSelected}
                     onClick={() => selectPrimitiveById(seg.id)}
                 />
@@ -207,6 +217,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={isSegSelected}
                     onClick={() => selectPrimitiveById(seg.id)}
                 />
@@ -235,10 +246,10 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     });
 
     // --- Render Contact Cone ---
-    const effectiveCone = liveDragConeRef.current ?? trunk.contactCone;
+    const effectiveCone = liveDragConeRef.current ?? effectiveTrunk.contactCone;
     let coneRender = null;
     if (effectiveCone && !deferContactConesToSceneBatch) {
-        const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
+        const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
         coneRender = (
             <ContactConeRenderer
                 contactDiskId={effectiveCone.id}

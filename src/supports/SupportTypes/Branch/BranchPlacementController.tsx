@@ -531,7 +531,6 @@ export function BranchPlacementController() {
                 }
 
                 branchPlacementStore.finalize();
-                branchPlacementStore.reset();
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
                 resetSnapping();
@@ -575,10 +574,10 @@ export function BranchPlacementController() {
                 },
             });
 
-            // Use finalize() to set justFinalized flag and clear preview
-            // This prevents useFrame from re-setting preview before React re-renders
+            // finalize() resets to idle + sets justFinalized to block stale useFrame
+            // from re-setting previewData before React re-renders
             branchPlacementStore.finalize();
-            branchPlacementStore.reset();
+            resetSnapping();
             clearSupportSelection();
         };
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { usePickingSubscription } from '@/components/picking';
@@ -23,6 +23,7 @@ interface ShaftRendererProps {
     opacity?: number;
     raycast?: any;
     enablePicking?: boolean;
+    isInteractable?: boolean;
     isSelected?: boolean;
     isParentSelected?: boolean;
     onClick?: (e: any) => void;
@@ -44,6 +45,7 @@ export function ShaftRenderer({
     opacity = 1,
     raycast,
     enablePicking = true,
+    isInteractable = true,
     isSelected,
     isParentSelected,
     onClick,
@@ -60,7 +62,8 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const enableSegmentInteraction = (isParentSelected || braceAltActive || kickstandHotkeyActive) === true;
+    const placementInteractionActive = braceAltActive || kickstandHotkeyActive;
+    const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
         category: 'segment',
@@ -68,6 +71,12 @@ export function ShaftRenderer({
         enabled: !!enablePicking && enableSegmentInteraction,
     });
     const [pointerHoverActive, setPointerHoverActive] = useState(false);
+
+    useEffect(() => {
+        if (!enableSegmentInteraction) {
+            setPointerHoverActive(false);
+        }
+    }, [enableSegmentInteraction]);
 
     // Determine Hover State
     const isTopPickedSegment = enableSegmentInteraction && isPickingHovered;

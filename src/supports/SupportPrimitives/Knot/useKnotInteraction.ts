@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
@@ -13,6 +13,7 @@ import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogi
 import { getFinalSocketPosition, getSocketPosition } from '../ContactCone';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface ActiveHost {
     segmentId: string;
@@ -40,11 +41,63 @@ export function useKnotInteraction(enabled: boolean = true) {
 
     const activeKnotId = useRef<string | null>(null);
     const activeHost = useRef<ActiveHost | null>(null);
+    const forceEndDragRef = useRef(false);
+    const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
 
     const leafClampWarningTimeout = useRef<number | null>(null);
 
     // Store initial state of all attached branches for elastic drag
     const elasticState = useRef<Record<string, ElasticChainInitialState>>({});
+
+    const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        if (typeof window === 'undefined') return;
+
+        const w = window as any;
+        w.__knotGizmoDragging = isDragging;
+        w.__knotGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('knot-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__knotGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            setKnotDragInteractionLock(false, 0);
+        };
+    }, [setKnotDragInteractionLock]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const markForceEndDrag = () => {
+            if (!activeKnotId.current) return;
+            forceEndDragRef.current = true;
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                markForceEndDrag();
+            }
+        };
+
+        window.addEventListener('pointerup', markForceEndDrag, true);
+        window.addEventListener('pointercancel', markForceEndDrag, true);
+        window.addEventListener('mouseup', markForceEndDrag, true);
+        window.addEventListener('blur', markForceEndDrag);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener('pointerup', markForceEndDrag, true);
+            window.removeEventListener('pointercancel', markForceEndDrag, true);
+            window.removeEventListener('mouseup', markForceEndDrag, true);
+            window.removeEventListener('blur', markForceEndDrag);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
 
     // Segment→host lookup cache: rebuilt whenever support state changes
     type SegmentHostEntry = { containerType: 'trunk'; entityId: string } | { containerType: 'branch'; entityId: string } | { containerType: 'kickstand'; entityId: string } | { containerType: 'twig'; entityId: string } | { containerType: 'stick'; entityId: string };
@@ -605,9 +658,9 @@ export function useKnotInteraction(enabled: boolean = true) {
     };
 
     useEffect(() => {
-        if (!enabled) return;
+        if (!enabled && !activeKnotId.current) return;
 
-        if (isDragging && hit.category === 'knot' && hit.objectId && !activeKnotId.current) {
+        if (enabled && isDragging && hit.category === 'knot' && hit.objectId && !activeKnotId.current) {
             console.log('[useKnotInteraction] Starting knot drag!');
             const knot = getKnotById(hit.objectId);
             if (!knot) {
@@ -622,16 +675,36 @@ export function useKnotInteraction(enabled: boolean = true) {
             resolveEndpoints(host);
             activeKnotId.current = knot.id;
             activeHost.current = host;
+            initialEditSnapshotRef.current = captureSupportEditSnapshot();
+            setKnotDragInteractionLock(true);
 
             // Capture State
             captureElasticState(knot.id);
         }
 
-        if (!isDragging && activeKnotId.current) {
+        const shouldEndDrag = (!isDragging || forceEndDragRef.current) && !!activeKnotId.current;
+
+        if (shouldEndDrag) {
             console.log('[useKnotInteraction] Drag ended, clearing state');
+
+            if (activeHost.current && initialEditSnapshotRef.current) {
+                const description =
+                    activeHost.current.containerType === 'leafCone'
+                        ? 'Move tip knot'
+                        : activeHost.current.containerType === 'brace'
+                            ? 'Move brace knot'
+                            : activeHost.current.containerType === 'kickstand'
+                                ? 'Move kickstand host knot'
+                                : 'Move support knot';
+                pushSupportEditHistory(description, initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            }
+
             activeKnotId.current = null;
             activeHost.current = null;
             elasticState.current = {};
+            forceEndDragRef.current = false;
+            initialEditSnapshotRef.current = null;
+            setKnotDragInteractionLock(false);
 
             if (leafClampWarningTimeout.current) {
                 window.clearTimeout(leafClampWarningTimeout.current);
@@ -639,7 +712,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
             setInteractionWarning(null);
         }
-    }, [isDragging, hit, enabled]);
+    }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
 
     useFrame(() => {
         if (!activeKnotId.current || !activeHost.current) return;

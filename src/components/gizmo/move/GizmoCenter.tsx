@@ -37,10 +37,14 @@ export function GizmoCenter({
   onPointerEnter,
   onPointerLeave,
 }: GizmoCenterProps) {
+  const MIN_DRAG_DELTA_SQ = 1e-12;
   const [isDragging, setIsDragging] = useState(false);
   const lastPointRef = useRef<THREE.Vector3 | null>(null);
   const dragPlane = useRef<THREE.Plane | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
+  const ndcRef = useRef(new THREE.Vector2());
+  const intersectionRef = useRef(new THREE.Vector3());
+  const deltaRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -97,7 +101,11 @@ export function GizmoCenter({
     }
 
     setIsDragging(true);
-    lastPointRef.current = initialPoint;
+    if (!lastPointRef.current) {
+      lastPointRef.current = new THREE.Vector3(initialPoint.x, initialPoint.y, initialPoint.z);
+    } else {
+      lastPointRef.current.copy(initialPoint);
+    }
   };
 
   const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
@@ -105,14 +113,17 @@ export function GizmoCenter({
     
     const rect = gl.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    const x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    const ndc = ndcRef.current;
+    ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
 
     const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+    raycaster.setFromCamera(ndc, camera);
     
     // Intersect with drag plane
-    const intersection = new THREE.Vector3();
+    const intersection = intersectionRef.current;
     const hit = raycaster.ray.intersectPlane(dragPlane.current, intersection);
     if (!hit) return null;
     
@@ -148,18 +159,19 @@ export function GizmoCenter({
       const worldPoint = getWorldPointFromMouse(e.clientX, e.clientY);
       if (!worldPoint || !lastPointRef.current) return;
 
-      const delta = worldPoint.clone().sub(lastPointRef.current);
+      const delta = deltaRef.current.copy(worldPoint).sub(lastPointRef.current);
       // Restrict movement to XY plane only (zero out Z component)
       delta.z = 0;
-      if (delta.lengthSq() < 1e-12) return;
+      if (delta.lengthSq() < MIN_DRAG_DELTA_SQ) return;
 
       onDrag(delta);
-      lastPointRef.current = worldPoint;
+      lastPointRef.current.copy(worldPoint);
     };
 
     const handleGlobalPointerUp = () => {
       setIsDragging(false);
       lastPointRef.current = null;
+      dragPlane.current = null;
       onDragEnd();
     };
 

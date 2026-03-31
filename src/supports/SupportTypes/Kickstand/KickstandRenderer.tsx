@@ -123,6 +123,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={segmentSelected}
                     onClick={() => selectPrimitiveById(segment.id)}
                 />,
@@ -142,6 +143,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={segmentSelected}
                     onClick={() => selectPrimitiveById(segment.id)}
                 />,
@@ -153,6 +155,21 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                 <JointRenderer
                     key={`joint-${segment.topJoint.id}`}
                     joint={segment.topJoint}
+                    color={visuals.color}
+                    emissive={visuals.emissive}
+                    emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
+                    isInteractable={isInteractable}
+                    isParentSelected={isSelected}
+                />,
+            );
+        }
+
+        if (isSelected && index === 0 && segment.bottomJoint) {
+            joints.push(
+                <JointRenderer
+                    key={`joint-${segment.bottomJoint.id}`}
+                    joint={segment.bottomJoint}
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}

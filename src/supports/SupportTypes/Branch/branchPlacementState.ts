@@ -140,10 +140,9 @@ export const branchPlacementStore = {
     /** Call this when a branch is successfully created to prevent ghost preview */
     finalize() {
         state = {
-            ...state,
-            previewData: null,
-            snapTarget: null,
-            justFinalized: true
+            ...initialState,
+            altActive: state.altActive,
+            justFinalized: true,
         };
         notify();
     },

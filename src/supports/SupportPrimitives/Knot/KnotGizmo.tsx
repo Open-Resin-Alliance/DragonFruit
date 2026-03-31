@@ -8,6 +8,7 @@ import { usePicking } from '@/components/picking';
 import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
 import { getSettings } from '../../Settings';
 import { getSocketPosition } from '../ContactCone';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 /**
  * KnotGizmo - A gizmo for moving knots along their parent shaft
@@ -31,6 +32,7 @@ export function KnotGizmo() {
         supportId: string;
         segmentIndex: number;
     } | null>(null);
+    const beforeHistoryRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
 
     // Elastic chain state - captured at drag start
     const elasticStateRef = useRef<Record<string, ElasticChainInitialState>>({});
@@ -366,6 +368,19 @@ export function KnotGizmo() {
                 }, 100);
                 // Reset cursor
                 document.body.style.cursor = '';
+
+                if (beforeHistoryRef.current) {
+                    const description =
+                        selectedKnotParentRef.current?.kind === 'branch'
+                            ? 'Move branch knot'
+                            : selectedKnotParentRef.current?.kind === 'twig'
+                                ? 'Move twig knot'
+                                : selectedKnotParentRef.current?.kind === 'stick'
+                                    ? 'Move stick knot'
+                                    : 'Move support knot';
+                    pushSupportEditHistory(description, beforeHistoryRef.current, captureSupportEditSnapshot());
+                }
+                beforeHistoryRef.current = null;
             }
         };
         window.addEventListener('mouseup', handleGlobalMouseUp);
@@ -403,6 +418,7 @@ export function KnotGizmo() {
         setKnotGizmoInteractionFlags(true);
         (window as any).__gizmoDragEndedThisFrame = false;
         document.body.style.cursor = 'grabbing';
+        beforeHistoryRef.current = captureSupportEditSnapshot();
 
         // Capture elastic state for attached branches
         if (result) {

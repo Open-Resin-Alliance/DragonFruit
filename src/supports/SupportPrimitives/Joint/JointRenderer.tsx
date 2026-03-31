@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Joint } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { subscribe, getSnapshot } from '../../state';
+import { subscribe, getSnapshot, setHoveredId, setHoveredCategory } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
@@ -85,6 +85,7 @@ export function JointRenderer({
     // Determine Hover State
     // Only show hover if parent is selected (editable mode) AND joint is not already selected
     const isTopPickedJoint = frontBlockingModelId === null
+        && isInteractable
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
@@ -176,6 +177,25 @@ export function JointRenderer({
             document.body.style.cursor = 'grab';
         }
     }, [isHovered, isInteractable]);
+
+    React.useEffect(() => {
+        if (isInteractable) return;
+
+        setPointerHoverActive((prev) => (prev ? false : prev));
+        if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
+            setHoveredCategory('none');
+            setHoveredId(null);
+        }
+    }, [isInteractable, joint.id, state.hoveredCategory, state.hoveredId]);
+
+    // Sync global hover state so the picking system can resolve the hovered support owner
+    React.useEffect(() => {
+        if (!isParentSelected || !isHovered) return;
+        if (state.hoveredCategory !== 'joint' || state.hoveredId !== joint.id) {
+            setHoveredCategory('joint');
+            setHoveredId(joint.id);
+        }
+    }, [isParentSelected, joint.id, isHovered, state.hoveredCategory, state.hoveredId]);
     
     const handlePointerMove = (e: any) => {
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
@@ -207,6 +227,10 @@ export function JointRenderer({
             setFrontBlockingModelId(null);
         }
         setPointerHoverActive((prev) => (prev ? false : prev));
+        if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
+            setHoveredCategory('none');
+            setHoveredId(null);
+        }
         emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };

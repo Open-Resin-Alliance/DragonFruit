@@ -28,6 +28,7 @@ interface SceneBatchedSupportHoverDecisionInput {
     primitiveHoverOnSelectedSupport: boolean;
     selectedSupportIdSet: ReadonlySet<string>;
     hoverSuppressed: boolean;
+    selectedPrimitiveSupportId?: string | null;
 }
 
 interface SceneBatchedShaftHoverDecisionInput extends SceneBatchedSupportHoverDecisionInput {
@@ -37,7 +38,7 @@ interface SceneBatchedShaftHoverDecisionInput extends SceneBatchedSupportHoverDe
 function shouldClearSceneBatchedHoverForOtherSupport(
     input: Pick<
         SceneBatchedSupportHoverDecisionInput,
-        'supportId' | 'selectedCategory' | 'selectedPrimitiveHoverActive' | 'primitiveHoverOnSelectedSupport' | 'selectedSupportIdSet'
+        'supportId' | 'selectedCategory' | 'selectedPrimitiveHoverActive' | 'primitiveHoverOnSelectedSupport' | 'selectedSupportIdSet' | 'selectedPrimitiveSupportId'
     >,
 ) {
     return shouldSuppressSceneBatchedSupportHover(
@@ -46,6 +47,7 @@ function shouldClearSceneBatchedHoverForOtherSupport(
         input.selectedPrimitiveHoverActive,
         input.primitiveHoverOnSelectedSupport,
         input.selectedSupportIdSet,
+        input.selectedPrimitiveSupportId ?? null,
     );
 }
 
@@ -111,8 +113,9 @@ export function shouldClearSceneHoverForSelectionChange(
 export function shouldClearSceneHoverForSelectedPrimitiveSuppression(
     selectedPrimitiveHoverActive: boolean,
     suppressSupportHoverForSelectedKnotSupport: boolean,
+    suppressSupportHoverForSelectedJointSupport: boolean = false,
 ) {
-    return selectedPrimitiveHoverActive || suppressSupportHoverForSelectedKnotSupport;
+    return selectedPrimitiveHoverActive || suppressSupportHoverForSelectedKnotSupport || suppressSupportHoverForSelectedJointSupport;
 }
 
 export function applySceneHoverWriteDecision(

@@ -170,6 +170,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             emissiveIntensity={visuals.emissiveIntensity}
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
+                            isInteractable={isInteractable}
                             isSelected={false}
                             onClick={() => selectPrimitiveById(segmentId)}
                         />
@@ -186,6 +187,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             emissiveIntensity={visuals.emissiveIntensity}
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
+                            isInteractable={isInteractable}
                             isSelected={false}
                             onClick={() => selectPrimitiveById(segmentId)}
                         />

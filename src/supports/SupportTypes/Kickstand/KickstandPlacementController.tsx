@@ -416,6 +416,7 @@ export function KickstandPlacementController() {
                 snapT = projected.t;
                 snapPos = projected.pos;
             }
+
         }
 
         if (!meta || snapT === null || !snapPos) {
