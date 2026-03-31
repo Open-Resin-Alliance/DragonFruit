@@ -4996,26 +4996,19 @@ function PluginLocalMaterialSettingsSections({
 
                         if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
                           return (
-                            <label key={field.key} className="space-y-1 block">
-                              <span className="ui-label font-medium inline-flex items-center">{field.label}</span>
-                              <div className="relative">
-                                <select
-                                  value={String(fieldValue)}
-                                  onChange={(event) => setFieldValue(field.key, event.target.value)}
-                                  className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
-                                >
-                                  {field.options.map((option) => (
-                                    <option key={option.value} value={option.value}>
-                                      {option.label}
-                                    </option>
-                                  ))}
-                                </select>
-                                <ChevronDown
-                                  className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-                                  style={{ color: 'var(--text-muted)' }}
-                                />
-                              </div>
-                            </label>
+                            <SelectDropdown
+                              key={field.key}
+                              label={field.label}
+                              value={String(fieldValue)}
+                              onChange={(nextValue) => setFieldValue(field.key, nextValue)}
+                              options={field.options.map((option) => ({
+                                value: option.value,
+                                label: option.label,
+                              }))}
+                              className="space-y-1 block"
+                              labelClassName="font-medium"
+                              selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+                            />
                           );
                         }
 
@@ -5448,36 +5441,23 @@ type LabeledSelectInputProps = {
 
 function LabeledSelectInput({ label, value, options, onChange, disabled = false }: LabeledSelectInputProps) {
   return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center">
-        {label}
-      </span>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(event) => onChange(event.target.value as PrinterOutputFormat)}
-          disabled={disabled}
-          className={`ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
-          style={disabled
-            ? {
-                borderColor: 'var(--border-subtle)',
-                background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-                color: 'var(--text-muted)',
-              }
-            : undefined}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-          style={{ color: 'var(--text-muted)' }}
-        />
-      </div>
-    </label>
+    <SelectDropdown
+      label={label}
+      value={value}
+      onChange={(nextValue) => onChange(nextValue as PrinterOutputFormat)}
+      disabled={disabled}
+      options={options}
+      className="space-y-1 block"
+      labelClassName="font-medium"
+      selectClassName={`w-full h-[36px] px-2.5 pr-10 leading-tight text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+      selectStyle={disabled
+        ? {
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+            color: 'var(--text-muted)',
+          }
+        : undefined}
+    />
   );
 }
 
@@ -5545,28 +5525,15 @@ type LabeledResinFamilySelectProps = {
 
 function LabeledResinFamilySelect({ label, value, options, onChange }: LabeledResinFamilySelectProps) {
   return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center">
-        {label}
-      </span>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(event) => onChange(event.target.value as MaterialProfile['resinFamily'])}
-          className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-          style={{ color: 'var(--text-muted)' }}
-        />
-      </div>
-    </label>
+    <SelectDropdown
+      label={label}
+      value={value}
+      onChange={(nextValue) => onChange(nextValue as MaterialProfile['resinFamily'])}
+      options={options}
+      className="space-y-1 block"
+      labelClassName="font-medium"
+      selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+    />
   );
 }
 
@@ -5729,28 +5696,15 @@ type LabeledCurrencySelectProps = {
 
 function LabeledCurrencySelect({ label, value, options, onChange }: LabeledCurrencySelectProps) {
   return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center">
-        {label}
-      </span>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
-        >
-          {options.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-          style={{ color: 'var(--text-muted)' }}
-        />
-      </div>
-    </label>
+    <SelectDropdown
+      label={label}
+      value={value}
+      onChange={(nextValue) => onChange(String(nextValue))}
+      options={options.map((option) => ({ value: option, label: option }))}
+      className="space-y-1 block"
+      labelClassName="font-medium"
+      selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+    />
   );
 }
 

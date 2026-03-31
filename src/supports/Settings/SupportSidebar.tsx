@@ -558,8 +558,9 @@ export function SupportSidebar() {
                             ]}
                             className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 space-y-0`}
                             selectClassName={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate`}
-                            selectedDisplay={isAdaptiveConeAngle ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} aria-label="Adaptive mode" /> : undefined}
+                            selectedDisplay={isAdaptiveConeAngle ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
                             hideSelectedText={isAdaptiveConeAngle}
+                            selectedDisplayAlignment={isAdaptiveConeAngle ? 'center' : 'left'}
                             selectStyle={activeKey === 'tip.coneAngleMode'
                                 ? {
                                     borderColor: 'var(--accent)',
