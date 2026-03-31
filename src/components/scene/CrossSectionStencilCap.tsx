@@ -15,8 +15,33 @@ export type CrossSectionStencilCapEntry = {
 type StaticStencilMeshEntry = {
   key: string;
   geometry: THREE.BufferGeometry;
+  center: THREE.Vector3;
   matrixWorld: THREE.Matrix4;
 };
+
+function materialContributesToStencil(material: THREE.Material): boolean {
+  const mat = material as THREE.Material & {
+    opacity?: number;
+    transparent?: boolean;
+    visible?: boolean;
+  };
+
+  if (mat.visible === false) return false;
+  if (typeof mat.opacity === 'number' && mat.opacity <= 1e-3) return false;
+  return true;
+}
+
+function meshContributesToStencil(mesh: THREE.Mesh): boolean {
+  if (!mesh.visible) return false;
+
+  const material = mesh.material;
+  if (Array.isArray(material)) {
+    return material.some((mat) => materialContributesToStencil(mat));
+  }
+
+  if (!material) return false;
+  return materialContributesToStencil(material);
+}
 
 function composeTransformMatrix(transform: ModelTransform): THREE.Matrix4 {
   return new THREE.Matrix4().compose(
@@ -26,27 +51,69 @@ function composeTransformMatrix(transform: ModelTransform): THREE.Matrix4 {
   );
 }
 
-function geometryIntersectsClipPlaneAtZ(geometry: THREE.BufferGeometry, matrixWorld: THREE.Matrix4, clipZ: number): boolean {
-  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-  if (!position || position.count < 3) return false;
-
-  const zSlice = clipZ + 1e-5;
-  const EPS = 1e-9;
-
-  for (let i = 0; i < position.count; i += 3) {
-    const v0 = new THREE.Vector3(position.getX(i), position.getY(i), position.getZ(i)).applyMatrix4(matrixWorld);
-    const v1 = new THREE.Vector3(position.getX(i + 1), position.getY(i + 1), position.getZ(i + 1)).applyMatrix4(matrixWorld);
-    const v2 = new THREE.Vector3(position.getX(i + 2), position.getY(i + 2), position.getZ(i + 2)).applyMatrix4(matrixWorld);
-
-    const above = [v0.z >= zSlice + 10 * EPS, v1.z >= zSlice + 10 * EPS, v2.z >= zSlice + 10 * EPS];
-    const below = [v0.z <= zSlice - 10 * EPS, v1.z <= zSlice - 10 * EPS, v2.z <= zSlice - 10 * EPS];
-
-    if (!((above[0] && above[1] && above[2]) || (below[0] && below[1] && below[2]))) {
-      return true;
-    }
+function getGeometryWorldZBounds(geometry: THREE.BufferGeometry, matrixWorld: THREE.Matrix4): { min: number; max: number } | null {
+  let boundingBox = geometry.boundingBox;
+  if (!boundingBox) {
+    geometry.computeBoundingBox();
+    boundingBox = geometry.boundingBox;
   }
 
-  return false;
+  if (!boundingBox) return null;
+
+  const corners = [
+    new THREE.Vector3(boundingBox.min.x, boundingBox.min.y, boundingBox.min.z),
+    new THREE.Vector3(boundingBox.min.x, boundingBox.min.y, boundingBox.max.z),
+    new THREE.Vector3(boundingBox.min.x, boundingBox.max.y, boundingBox.min.z),
+    new THREE.Vector3(boundingBox.min.x, boundingBox.max.y, boundingBox.max.z),
+    new THREE.Vector3(boundingBox.max.x, boundingBox.min.y, boundingBox.min.z),
+    new THREE.Vector3(boundingBox.max.x, boundingBox.min.y, boundingBox.max.z),
+    new THREE.Vector3(boundingBox.max.x, boundingBox.max.y, boundingBox.min.z),
+    new THREE.Vector3(boundingBox.max.x, boundingBox.max.y, boundingBox.max.z),
+  ];
+
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const corner of corners) {
+    corner.applyMatrix4(matrixWorld);
+    min = Math.min(min, corner.z);
+    max = Math.max(max, corner.z);
+  }
+
+  return { min, max };
+}
+
+function composeCenteredGeometryMatrix(matrix: THREE.Matrix4, center: THREE.Vector3): THREE.Matrix4 {
+  const centerOffset = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+  return new THREE.Matrix4().multiplyMatrices(matrix, centerOffset);
+}
+
+function getGeometryCenter(geometry: THREE.BufferGeometry): THREE.Vector3 {
+  let boundingSphere = geometry.boundingSphere;
+  if (!boundingSphere) {
+    geometry.computeBoundingSphere();
+    boundingSphere = geometry.boundingSphere;
+  }
+
+  if (boundingSphere) {
+    return boundingSphere.center.clone();
+  }
+
+  let boundingBox = geometry.boundingBox;
+  if (!boundingBox) {
+    geometry.computeBoundingBox();
+    boundingBox = geometry.boundingBox;
+  }
+
+  if (boundingBox) {
+    return boundingBox.getCenter(new THREE.Vector3());
+  }
+
+  return new THREE.Vector3();
+}
+
+function intersectsClipPlaneAtZ(bounds: { min: number; max: number } | null, clipZ: number): boolean {
+  if (!bounds) return false;
+  return clipZ >= bounds.min - 1e-4 && clipZ <= bounds.max + 1e-4;
 }
 
 export function CrossSectionStencilCap({
@@ -143,17 +210,20 @@ export function CrossSectionStencilCap({
     sourceObject.traverse((node) => {
       const mesh = node as THREE.Mesh;
       if (!mesh?.isMesh) return;
+      if (!meshContributesToStencil(mesh)) return;
       const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
       if (!geometry || !geometry.getAttribute('position')) return;
 
       const maybeInstancedMesh = mesh as THREE.InstancedMesh;
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
+        const center = getGeometryCenter(geometry);
         for (let i = 0; i < maybeInstancedMesh.count; i += 1) {
           maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
           worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
           results.push({
             key: `${mesh.uuid}:inst:${i}`,
             geometry,
+            center,
             matrixWorld: worldInstanceMatrix.clone(),
           });
         }
@@ -163,6 +233,7 @@ export function CrossSectionStencilCap({
       results.push({
         key: mesh.uuid,
         geometry,
+        center: getGeometryCenter(geometry),
         matrixWorld: mesh.matrixWorld.clone(),
       });
     });
@@ -172,13 +243,19 @@ export function CrossSectionStencilCap({
 
   const visibleEntries = React.useMemo(() => {
     return entries.filter((entry) => {
-      return geometryIntersectsClipPlaneAtZ(entry.geometry, composeTransformMatrix(entry.transform), y);
+      const worldMatrix = composeCenteredGeometryMatrix(composeTransformMatrix(entry.transform), entry.center);
+      const bounds = getGeometryWorldZBounds(entry.geometry, worldMatrix);
+      return intersectsClipPlaneAtZ(bounds, y);
     });
   }, [entries, y]);
 
   const visibleStaticSourceMeshes = React.useMemo(() => {
     return staticSourceMeshes.filter((entry) => {
-      return geometryIntersectsClipPlaneAtZ(entry.geometry, entry.matrixWorld, y);
+      const bounds = getGeometryWorldZBounds(
+        entry.geometry,
+        composeCenteredGeometryMatrix(entry.matrixWorld, entry.center),
+      );
+      return intersectsClipPlaneAtZ(bounds, y);
     });
   }, [staticSourceMeshes, y]);
 
@@ -220,13 +297,25 @@ export function CrossSectionStencilCap({
                 raycast={() => null}
               />
             </group>
+
+            <mesh
+              geometry={capPlaneGeometry}
+              material={capPlaneMaterial}
+              position={[0, 0, y + 1e-4]}
+              renderOrder={990.25}
+              frustumCulled={false}
+              raycast={() => null}
+              onAfterRender={(renderer) => {
+                (renderer as THREE.WebGLRenderer).clearStencil();
+              }}
+            />
           </group>
         );
       })}
 
       {visibleStaticSourceMeshes.map((entry) => (
         <group key={`stencil-source-pass-${entry.key}`}>
-          <group matrix={entry.matrixWorld} matrixAutoUpdate={false}>
+          <group matrix={composeCenteredGeometryMatrix(entry.matrixWorld, entry.center)} matrixAutoUpdate={false}>
             <mesh
               geometry={entry.geometry}
               material={stencilBack}
@@ -242,20 +331,20 @@ export function CrossSectionStencilCap({
               raycast={() => null}
             />
           </group>
+
+          <mesh
+            geometry={capPlaneGeometry}
+            material={capPlaneMaterial}
+            position={[0, 0, y + 1e-4]}
+            renderOrder={990.45}
+            frustumCulled={false}
+            raycast={() => null}
+            onAfterRender={(renderer) => {
+              (renderer as THREE.WebGLRenderer).clearStencil();
+            }}
+          />
         </group>
       ))}
-
-      <mesh
-        geometry={capPlaneGeometry}
-        material={capPlaneMaterial}
-        position={[0, 0, y + 1e-4]}
-        renderOrder={990.9}
-        frustumCulled={false}
-        raycast={() => null}
-        onAfterRender={(renderer) => {
-          (renderer as THREE.WebGLRenderer).clearStencil();
-        }}
-      />
     </group>
   );
 }
