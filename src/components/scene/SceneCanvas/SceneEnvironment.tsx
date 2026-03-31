@@ -379,7 +379,7 @@ export function Helpers({
       {/* Primitive mock build plate under grid */}
       <mesh
         position={[buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ]}
-        renderOrder={10}
+        renderOrder={-10}
         raycast={nullRaycast}
         visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
         userData={{ thumbnailHelperType: 'buildPlate' }}

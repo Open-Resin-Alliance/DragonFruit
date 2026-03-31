@@ -3414,6 +3414,12 @@ export function SceneCanvas({
     });
   }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
 
+  const handleSpaceMouseNavigationFrame = React.useCallback(() => {
+    updateCameraBelowBuildPlate();
+    onCameraChange?.();
+    window.dispatchEvent(new Event('picking-pan-change'));
+  }, [onCameraChange, updateCameraBelowBuildPlate]);
+
   React.useEffect(() => {
     return () => {
       if (orbitChangeRafRef.current !== null) {
@@ -4954,6 +4960,7 @@ export function SceneCanvas({
           fallbackPivot={buildVolumeCenterTarget}
           mouseOrbitDragRunId={mouseOrbitDragRunId}
           onNavigationActiveChange={setSpaceMouseNavigationActive}
+          onNavigationFrame={handleSpaceMouseNavigationFrame}
         />
         <CameraFocusHotkeyController
           hoverPointRef={lastHoveredModelPointRef}
