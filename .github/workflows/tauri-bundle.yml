@@ -37,7 +37,7 @@ jobs:
     steps:
 
       - name: Add SSH private keys for submodule repositories
-        uses: webfactory/ssh-agent@0.10.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: |
             ${{ secrets.CTB_DEPLOY }}
