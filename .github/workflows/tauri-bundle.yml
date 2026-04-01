@@ -35,9 +35,15 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout parent
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
+          persist-credentials: false
+
+      - name: Checkout submodule
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --depth=1 --recursive
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
