@@ -43,7 +43,7 @@ jobs:
       - name: Checkout submodule
         run: |
           git submodule sync --recursive
-          git submodule update --init --force --depth=1 --recursive
+          git -c protocol.version=2  submodule update --init --force --depth=1 --recursive
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
