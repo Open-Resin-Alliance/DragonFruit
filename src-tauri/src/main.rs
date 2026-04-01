@@ -156,6 +156,39 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
     }
 }
 
+fn bytes_into_f32_vec(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
+    if bytes.len() % 4 != 0 {
+        return Err(format!(
+            "Mesh binary length {} is not a multiple of 4 (f32 size)",
+            bytes.len()
+        ));
+    }
+
+    #[cfg(target_endian = "little")]
+    {
+        let ptr_addr = bytes.as_ptr() as usize;
+        let aligned_for_f32 = ptr_addr % std::mem::align_of::<f32>() == 0;
+        let capacity_bytes = bytes.capacity();
+
+        // Reinterpret in-place only when alignment and capacity permit exact Vec layout conversion.
+        if aligned_for_f32 && (capacity_bytes % 4 == 0) {
+            let mut bytes = std::mem::ManuallyDrop::new(bytes);
+            let ptr = bytes.as_mut_ptr() as *mut f32;
+            let len_f32 = bytes.len() / 4;
+            let cap_f32 = bytes.capacity() / 4;
+            let floats = unsafe { Vec::from_raw_parts(ptr, len_f32, cap_f32) };
+            return Ok(floats);
+        }
+
+        return bytes_to_f32_vec(&bytes);
+    }
+
+    #[cfg(not(target_endian = "little"))]
+    {
+        bytes_to_f32_vec(&bytes)
+    }
+}
+
 /// Metadata-only slice job (no inline triangles — those come from staged binary).
 #[derive(Deserialize)]
 struct SliceJobMetadata {
@@ -303,21 +336,36 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
     Ok(Response::new(bytes))
 }
 
-/// Receive raw mesh bytes from the frontend via efficient binary IPC.
-/// The bytes are stored in memory and consumed by the next `slice_solid_native_to_temp_path` call.
+/// Receive raw mesh bytes from the frontend via efficient binary IPC in chunks.
+/// The bytes are stored in a pre-allocated memory vector and consumed by the next `slice_solid_native_to_temp_path` call.
 #[tauri::command]
-async fn stage_mesh_binary(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
-    let bytes = match request.body() {
-        InvokeBody::Raw(bytes) => bytes.clone(),
-        InvokeBody::Json(_) => {
-            return Err("stage_mesh_binary expects raw binary body, got JSON".into())
-        }
-    };
-    let len = bytes.len() as u64;
+async fn stage_mesh_binary_start(total_bytes: usize) -> Result<(), String> {
     *staged_mesh()
         .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(bytes);
-    Ok(len)
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? =
+        Some(Vec::with_capacity(total_bytes));
+    Ok(())
+}
+
+#[tauri::command]
+async fn stage_mesh_binary_chunk(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => {
+            return Err("stage_mesh_binary_chunk expects raw binary body, got JSON".into())
+        }
+    };
+
+    let mut lock = staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?;
+
+    let vec = lock
+        .as_mut()
+        .ok_or("Staged mesh not started. Call stage_mesh_binary_start first")?;
+    vec.extend_from_slice(bytes);
+
+    Ok(vec.len() as u64)
 }
 
 #[tauri::command]
@@ -340,7 +388,7 @@ async fn slice_solid_native_to_temp_path(
         let meta: SliceJobMetadata = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
 
-        let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
+        let triangles_xyz = bytes_into_f32_vec(mesh_bytes)?;
 
         let job = dragonfruit_slicer_v3::SliceJobV3 {
             output_format: meta.output_format,
@@ -1202,7 +1250,8 @@ fn main() {
         }))
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
-            stage_mesh_binary,
+            stage_mesh_binary_start,
+            stage_mesh_binary_chunk,
             slice_solid_native_to_temp_path,
             cancel_slicing,
             run_island_scan_native,

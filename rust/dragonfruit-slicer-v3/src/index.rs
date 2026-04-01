@@ -4,6 +4,58 @@
 //! slicing plane, reducing per-layer raster work.
 
 use crate::geometry::Triangle;
+use rayon::prelude::*;
+use std::mem::size_of;
+
+const DEFAULT_LAYER_INDEX_BUDGET_MB: u64 = 768; // Increased budget since IPC chunking prevents peak RAM spike
+const MIN_LAYER_INDEX_BUDGET_MB: u64 = 32;
+const MAX_BAND_SIZE_LAYERS: u32 = 1024;
+
+#[derive(Debug, Clone)]
+pub enum LayerIndex {
+    Dense(Vec<Vec<usize>>),
+    Banded {
+        band_size_layers: u32,
+        bands: Vec<Vec<usize>>,
+    },
+}
+
+impl LayerIndex {
+    #[inline]
+    pub fn candidates_for_layer(&self, layer: u32) -> &[usize] {
+        match self {
+            LayerIndex::Dense(buckets) => buckets
+                .get(layer as usize)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            LayerIndex::Banded {
+                band_size_layers,
+                bands,
+            } => {
+                let band = (layer / *band_size_layers) as usize;
+                bands.get(band).map(Vec::as_slice).unwrap_or(&[])
+            }
+        }
+    }
+}
+
+fn resolve_layer_index_budget_bytes() -> u64 {
+    let mb = std::env::var("DF_V3_LAYER_INDEX_BUDGET_MB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v >= MIN_LAYER_INDEX_BUDGET_MB)
+        .unwrap_or(DEFAULT_LAYER_INDEX_BUDGET_MB);
+
+    mb.saturating_mul(1024 * 1024)
+}
+
+#[inline]
+fn round_up_pow2_u32(value: u32) -> u32 {
+    if value <= 1 {
+        return 1;
+    }
+    value.next_power_of_two()
+}
 
 #[inline]
 fn layer_range_for_triangle(
@@ -34,14 +86,119 @@ pub fn build_layer_index(
     triangles: &[Triangle],
     total_layers: u32,
     layer_height_mm: f32,
-) -> Vec<Vec<usize>> {
-    let mut buckets = vec![Vec::<usize>::new(); total_layers as usize];
-    for (idx, tri) in triangles.iter().enumerate() {
-        if let Some((start, end)) = layer_range_for_triangle(tri, layer_height_mm, total_layers) {
-            for l in start..=end {
-                buckets[l as usize].push(idx);
+) -> LayerIndex {
+    let ranges: Vec<Option<(u32, u32)>> = triangles
+        .par_iter()
+        .map(|tri| layer_range_for_triangle(tri, layer_height_mm, total_layers))
+        .collect();
+
+    let estimated_dense_entries: u64 = ranges
+        .par_iter()
+        .filter_map(|r| *r)
+        .map(|(start, end)| (end.saturating_sub(start).saturating_add(1)) as u64)
+        .sum();
+
+    let budget_bytes = resolve_layer_index_budget_bytes();
+    let bytes_per_entry = (size_of::<usize>() as u64).max(1);
+    let max_dense_entries = (budget_bytes / bytes_per_entry).max(1);
+
+    if estimated_dense_entries <= max_dense_entries {
+        let bucket_sizes = ranges
+            .par_iter()
+            .fold(
+                || vec![0usize; total_layers as usize],
+                |mut acc, range| {
+                    if let Some((start, end)) = range {
+                        for l in *start..=*end {
+                            acc[l as usize] += 1;
+                        }
+                    }
+                    acc
+                },
+            )
+            .reduce(
+                || vec![0usize; total_layers as usize],
+                |mut acc, sizes| {
+                    for (i, &size) in sizes.iter().enumerate() {
+                        acc[i] += size;
+                    }
+                    acc
+                },
+            );
+
+        let mut buckets: Vec<Vec<usize>> = bucket_sizes
+            .into_iter()
+            .map(|sz| Vec::with_capacity(sz))
+            .collect();
+
+        for (idx, range) in ranges.iter().enumerate() {
+            if let Some((start, end)) = range {
+                for l in *start..=*end {
+                    buckets[l as usize].push(idx);
+                }
+            }
+        }
+
+        return LayerIndex::Dense(buckets);
+    }
+
+    let required_factor = ((estimated_dense_entries + max_dense_entries - 1) / max_dense_entries)
+        .clamp(1, total_layers.max(1) as u64);
+    let mut band_size_layers = round_up_pow2_u32(required_factor as u32);
+    band_size_layers = band_size_layers.clamp(1, MAX_BAND_SIZE_LAYERS.min(total_layers.max(1)));
+
+    let band_count = ((total_layers + band_size_layers - 1) / band_size_layers) as usize;
+
+    let band_sizes = ranges
+        .par_iter()
+        .fold(
+            || vec![0usize; band_count],
+            |mut acc, range| {
+                if let Some((start, end)) = range {
+                    let band_start = (*start / band_size_layers) as usize;
+                    let band_end = (*end / band_size_layers) as usize;
+                    for band in band_start..=band_end {
+                        acc[band] += 1;
+                    }
+                }
+                acc
+            },
+        )
+        .reduce(
+            || vec![0usize; band_count],
+            |mut acc, sizes| {
+                for (i, &size) in sizes.iter().enumerate() {
+                    acc[i] += size;
+                }
+                acc
+            },
+        );
+
+    let mut bands: Vec<Vec<usize>> = band_sizes
+        .into_iter()
+        .map(|sz| Vec::with_capacity(sz))
+        .collect();
+
+    for (idx, range) in ranges.iter().enumerate() {
+        if let Some((start, end)) = range {
+            let band_start = (*start / band_size_layers) as usize;
+            let band_end = (*end / band_size_layers) as usize;
+            for band in band_start..=band_end {
+                bands[band].push(idx);
             }
         }
     }
-    buckets
+
+    eprintln!(
+        "[SlicerV3] Layer index switched to banded mode: estimated_dense_entries={} max_dense_entries={} band_size_layers={} bands={}",
+        estimated_dense_entries,
+        max_dense_entries,
+        band_size_layers,
+        band_count,
+    );
+
+    LayerIndex::Banded {
+        band_size_layers,
+        bands,
+    }
 }
