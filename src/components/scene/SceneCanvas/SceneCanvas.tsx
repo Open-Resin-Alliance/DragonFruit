@@ -2323,6 +2323,22 @@ export function SceneCanvas({
     return Array.from(groups.values());
   }, [arrangeArrayPreviewItems]);
 
+  const hideFootprintOutlineForPreview = React.useMemo(() => {
+    if (mode !== 'prepare' || transformMode !== 'arrange') return false;
+
+    const hasArrangePreview = arrangeGhostPreviewGroups.length > 0 || arrangeSupportPreviewDeltas.length > 0;
+    const hasDuplicatePreview = effectiveDuplicatePreviewTransforms.length > 0 || !!duplicateActivePreviewTransform;
+
+    return hasArrangePreview || hasDuplicatePreview;
+  }, [
+    arrangeGhostPreviewGroups.length,
+    arrangeSupportPreviewDeltas.length,
+    duplicateActivePreviewTransform,
+    effectiveDuplicatePreviewTransforms.length,
+    mode,
+    transformMode,
+  ]);
+
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
     if (transform && activeModelId === activeModel.id) return transform;
@@ -4438,6 +4454,7 @@ export function SceneCanvas({
                 && !thumbnailCaptureActive
                 && !isGizmoDragging
                 && !isGizmoRetargeting
+                && !hideFootprintOutlineForPreview
                 && !(transformMode === 'placeOnFace' && disableRaycast)
                 && (
                 <FootprintBorderRenderer
