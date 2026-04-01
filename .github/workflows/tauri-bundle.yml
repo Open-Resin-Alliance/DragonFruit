@@ -35,15 +35,19 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
+
+      - name: Add SSH private keys for submodule repositories
+        uses: webfactory/ssh-agent@0.10.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.CTB_DEPLOY }}
+            ${{ secrets.ELEGOO_DEPLOY }}
+            ${{ secrets.SDCP_V3_DEPLOY }}
+
       - name: Checkout parent
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
-
-      - name: Checkout submodule
-        run: |
-          git submodule sync --recursive
-          git -c protocol.version=2  submodule update --init --force --depth=1 --recursive
+          submodules: recursive
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
