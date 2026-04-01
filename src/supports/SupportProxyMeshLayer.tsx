@@ -2,6 +2,8 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from './state';
+import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
+import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
@@ -34,6 +36,8 @@ interface SupportProxyMeshLayerProps {
 
 const DEFAULT_SUPPORT_COLOR = '#9a9a9a';
 const ACTIVE_SUPPORT_COLOR = '#c8752a';
+const PROXY_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
+const PROXY_KNOT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM;
 
 type ProxyModelGeometry = {
   modelId?: string;
@@ -104,7 +108,10 @@ export function SupportProxyMeshLayer({
   includeDetailedPrimitives = true,
 }: SupportProxyMeshLayerProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const kickstandState = useKickstandStoreState();
+  const hasSolidBottom = raftSettings.bottomMode === 'solid';
+  const raftThickness = raftSettings.thickness ?? 0;
 
   const excludedModelIdSet = React.useMemo(
     () => new Set(excludeModelIds.filter((id): id is string => Boolean(id))),
@@ -184,15 +191,33 @@ export function SupportProxyMeshLayer({
     };
 
     const pushRoot = (root: InstancedRoot) => {
-      ensureModel(root.modelId).roots.push(root);
+      const effectiveDiskHeight = hasSolidBottom
+        ? 0.05
+        : Math.max(0.001, root.effectiveDiskHeight);
+      const verticalOffset = hasSolidBottom
+        ? Math.max(raftThickness - effectiveDiskHeight, 0)
+        : 0;
+
+      ensureModel(root.modelId).roots.push({
+        ...root,
+        basePos: {
+          x: root.basePos.x,
+          y: root.basePos.y,
+          z: root.basePos.z + verticalOffset,
+        },
+        effectiveDiskHeight,
+      });
     };
 
-    const pushJoint = (joint: InstancedJoint, dedupeKey?: string) => {
+    const pushJoint = (joint: InstancedJoint, dedupeKey?: string, diameterBlendMm: number = PROXY_JOINT_DIAMETER_BLEND_MM) => {
       const seen = ensureJointSeenSet(joint.modelId);
       const key = dedupeKey ?? joint.id;
       if (seen.has(key)) return;
       seen.add(key);
-      ensureModel(joint.modelId).joints.push(joint);
+      ensureModel(joint.modelId).joints.push({
+        ...joint,
+        diameter: Math.max(0.001, joint.diameter - diameterBlendMm),
+      });
     };
 
     const pushCone = (cone: InstancedContactCone, dedupeKey?: string) => {
@@ -437,6 +462,7 @@ export function SupportProxyMeshLayer({
       for (const knot of Object.values(supportState.knots)) {
         let modelId = segmentModelIdById.get(knot.parentShaftId);
         let supportId = segmentSupportIdById.get(knot.parentShaftId);
+        const resolvedKnotDiameter = knot.diameter ?? 1.2;
 
         if (!modelId && knot.parentShaftId.startsWith('leafCone:')) {
           const leafId = knot.parentShaftId.slice('leafCone:'.length);
@@ -447,10 +473,10 @@ export function SupportProxyMeshLayer({
         pushJoint({
           id: `knot:${knot.id}`,
           pos: knot.pos,
-          diameter: Math.max(0.2, knot.diameter ?? 1),
+          diameter: Math.max(0.001, resolvedKnotDiameter),
           supportId,
           modelId,
-        }, `knot:${knot.id}`);
+        }, `knot:${knot.id}`, PROXY_KNOT_DIAMETER_BLEND_MM);
       }
     }
 
@@ -515,14 +541,15 @@ export function SupportProxyMeshLayer({
       for (const knot of Object.values(kickstandState.knots)) {
         const modelId = segmentModelIdById.get(knot.parentShaftId);
         const supportId = segmentSupportIdById.get(knot.parentShaftId);
+        const resolvedKnotDiameter = knot.diameter ?? 1.2;
 
         pushJoint({
           id: `kickstand-knot:${knot.id}`,
           pos: knot.pos,
-          diameter: Math.max(0.2, knot.diameter ?? 1),
+          diameter: Math.max(0.001, resolvedKnotDiameter),
           supportId,
           modelId,
-        }, `kickstand-knot:${knot.id}`);
+        }, `kickstand-knot:${knot.id}`, PROXY_KNOT_DIAMETER_BLEND_MM);
       }
     }
 
@@ -547,6 +574,8 @@ export function SupportProxyMeshLayer({
     kickstandState.kickstands,
     kickstandState.roots,
     kickstandState.knots,
+    hasSolidBottom,
+    raftThickness,
     includeDetailedPrimitives,
   ]);
 

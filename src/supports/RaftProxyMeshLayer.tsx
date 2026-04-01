@@ -453,7 +453,8 @@ export function RaftProxyMeshLayer({
                 side={entry.kind === 'line' ? THREE.DoubleSide : THREE.FrontSide}
                 transparent={raftTransparent}
                 opacity={raftOpacity}
-                depthWrite={!raftTransparent}
+                depthWrite
+                depthTest
                 clippingPlanes={clippingPlanes ?? undefined}
               />
             </mesh>
@@ -473,7 +474,8 @@ export function RaftProxyMeshLayer({
                 metalness={0.0}
                 transparent={raftTransparent}
                 opacity={raftOpacity}
-                depthWrite={!raftTransparent}
+                depthWrite
+                depthTest
                 clippingPlanes={clippingPlanes ?? undefined}
               />
             </mesh>

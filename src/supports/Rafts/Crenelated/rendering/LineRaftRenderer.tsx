@@ -373,7 +373,7 @@ export default function LineRaftRenderer({
       borderProfile: null,
     });
     unionMesh.renderOrder = ghostRenderOrder;
-    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
     unionMesh.userData.modelId = modelId;
@@ -392,7 +392,7 @@ export default function LineRaftRenderer({
           chamferAngleDeg: 90,
         });
         mesh.renderOrder = ghostRenderOrder;
-        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
         mesh.userData.modelId = modelId;
@@ -431,7 +431,7 @@ export default function LineRaftRenderer({
               thickness: beamHeight,
             });
 
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
   wallMesh.renderOrder = ghostRenderOrder;
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
@@ -533,11 +533,15 @@ export default function LineRaftRenderer({
         material.needsUpdate = true;
       }
 
+      if (!material.depthTest) {
+        material.depthTest = true;
+      }
+
       if (Math.abs(material.opacity - raftOpacity) > 1e-4) {
         material.opacity = raftOpacity;
       }
 
-      const nextDepthWrite = !raftTransparent;
+      const nextDepthWrite = true;
       if (material.depthWrite !== nextDepthWrite) {
         material.depthWrite = nextDepthWrite;
       }
