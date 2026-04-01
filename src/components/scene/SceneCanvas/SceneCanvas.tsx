@@ -1557,6 +1557,20 @@ export function SceneCanvas({
   const useActiveModelAttachedSupportProxy = React.useMemo(() => {
     if (mode !== 'prepare' || !activeModelId || !activeModelVisualSupportTransform) return false;
 
+    // During live gizmo interaction, force active-model support attachment so
+    // global support batching doesn't get dragged as a single cloud.
+    if (
+      transformMode === 'transform'
+      && (
+        isGizmoDragging
+        || isGizmoRetargeting
+        || isPostGizmoInteractionGuardActive
+        || effectiveHoldSupportDragDelta
+      )
+    ) {
+      return true;
+    }
+
     const committedTransform = modelById.get(activeModelId)?.transform;
     if (!committedTransform) return false;
 
@@ -1569,7 +1583,17 @@ export function SceneCanvas({
       || Math.abs(committedTransform.rotation.z - activeModelVisualSupportTransform.rotation.z) > EPSILON;
 
     return posChanged || scaleChanged || rotChanged;
-  }, [activeModelId, activeModelVisualSupportTransform, mode, modelById]);
+  }, [
+    activeModelId,
+    activeModelVisualSupportTransform,
+    effectiveHoldSupportDragDelta,
+    isGizmoDragging,
+    isGizmoRetargeting,
+    isPostGizmoInteractionGuardActive,
+    mode,
+    modelById,
+    transformMode,
+  ]);
 
   const activeModelAttachedSupportLocalMatrix = React.useMemo(() => {
     if (!useActiveModelAttachedSupportProxy || !activeModelId) return null;
