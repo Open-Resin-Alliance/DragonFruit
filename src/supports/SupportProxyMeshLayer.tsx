@@ -62,8 +62,19 @@ type FlatProxyGeometry = {
 };
 
 type SharedProxyCacheEntry = {
-  supportStateRef: unknown;
-  kickstandStateRef: unknown;
+  supportTrunksRef: ReturnType<typeof getSnapshot>['trunks'];
+  supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
+  supportKnotsRef: ReturnType<typeof getSnapshot>['knots'];
+  supportBranchesRef: ReturnType<typeof getSnapshot>['branches'];
+  supportLeavesRef: ReturnType<typeof getSnapshot>['leaves'];
+  supportTwigsRef: ReturnType<typeof getSnapshot>['twigs'];
+  supportSticksRef: ReturnType<typeof getSnapshot>['sticks'];
+  supportBracesRef: ReturnType<typeof getSnapshot>['braces'];
+  kickstandKickstandsRef: ReturnType<typeof useKickstandStoreState>['kickstands'];
+  kickstandRootsRef: ReturnType<typeof useKickstandStoreState>['roots'];
+  kickstandKnotsRef: ReturnType<typeof useKickstandStoreState>['knots'];
+  hasSolidBottom: boolean;
+  raftThickness: number;
   includeDetailedPrimitives: boolean;
   baseProxyByModel: Map<string, ProxyModelGeometry>;
 };
@@ -110,6 +121,17 @@ export function SupportProxyMeshLayer({
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const kickstandState = useKickstandStoreState();
+  const supportTrunks = supportState.trunks;
+  const supportRoots = supportState.roots;
+  const supportKnots = supportState.knots;
+  const supportBranches = supportState.branches;
+  const supportLeaves = supportState.leaves;
+  const supportTwigs = supportState.twigs;
+  const supportSticks = supportState.sticks;
+  const supportBraces = supportState.braces;
+  const kickstandKickstands = kickstandState.kickstands;
+  const kickstandRoots = kickstandState.roots;
+  const kickstandKnots = kickstandState.knots;
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
   const raftThickness = raftSettings.thickness ?? 0;
 
@@ -137,8 +159,19 @@ export function SupportProxyMeshLayer({
   const baseProxyByModel = React.useMemo(() => {
     if (
       sharedProxyCache
-      && sharedProxyCache.supportStateRef === supportState
-      && sharedProxyCache.kickstandStateRef === kickstandState
+      && sharedProxyCache.supportTrunksRef === supportTrunks
+      && sharedProxyCache.supportRootsRef === supportRoots
+      && sharedProxyCache.supportKnotsRef === supportKnots
+      && sharedProxyCache.supportBranchesRef === supportBranches
+      && sharedProxyCache.supportLeavesRef === supportLeaves
+      && sharedProxyCache.supportTwigsRef === supportTwigs
+      && sharedProxyCache.supportSticksRef === supportSticks
+      && sharedProxyCache.supportBracesRef === supportBraces
+      && sharedProxyCache.kickstandKickstandsRef === kickstandKickstands
+      && sharedProxyCache.kickstandRootsRef === kickstandRoots
+      && sharedProxyCache.kickstandKnotsRef === kickstandKnots
+      && sharedProxyCache.hasSolidBottom === hasSolidBottom
+      && sharedProxyCache.raftThickness === raftThickness
       && sharedProxyCache.includeDetailedPrimitives === includeDetailedPrimitives
     ) {
       return sharedProxyCache.baseProxyByModel;
@@ -228,8 +261,8 @@ export function SupportProxyMeshLayer({
       ensureModel(cone.modelId).cones.push(cone);
     };
 
-    for (const trunk of Object.values(supportState.trunks)) {
-      const root = supportState.roots[trunk.rootId];
+    for (const trunk of Object.values(supportTrunks)) {
+      const root = supportRoots[trunk.rootId];
       if (!root) continue;
 
       if (includeDetailedPrimitives && trunk.contactCone) {
@@ -295,8 +328,8 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    for (const branch of Object.values(supportState.branches)) {
-      const parentKnot = supportState.knots[branch.parentKnotId];
+    for (const branch of Object.values(supportBranches)) {
+      const parentKnot = supportKnots[branch.parentKnotId];
       if (!parentKnot) continue;
 
       if (includeDetailedPrimitives && branch.contactCone) {
@@ -347,7 +380,7 @@ export function SupportProxyMeshLayer({
     }
 
     if (includeDetailedPrimitives) {
-      for (const leaf of Object.values(supportState.leaves)) {
+      for (const leaf of Object.values(supportLeaves)) {
         leafModelIdById.set(leaf.id, leaf.modelId);
         leafSupportIdById.set(leaf.id, leaf.id);
         pushCone({
@@ -358,7 +391,7 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    for (const twig of Object.values(supportState.twigs)) {
+    for (const twig of Object.values(supportTwigs)) {
       for (const segment of twig.segments) {
         if (includeDetailedPrimitives && segment.bottomJoint) {
           pushJoint({
@@ -394,7 +427,7 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    for (const stick of Object.values(supportState.sticks)) {
+    for (const stick of Object.values(supportSticks)) {
       if (includeDetailedPrimitives) {
         pushCone({
           ...stick.contactConeA,
@@ -443,9 +476,9 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    for (const brace of Object.values(supportState.braces)) {
-      const startKnot = supportState.knots[brace.startKnotId];
-      const endKnot = supportState.knots[brace.endKnotId];
+    for (const brace of Object.values(supportBraces)) {
+      const startKnot = supportKnots[brace.startKnotId];
+      const endKnot = supportKnots[brace.endKnotId];
       if (!startKnot || !endKnot) continue;
 
       pushShaft({
@@ -459,7 +492,7 @@ export function SupportProxyMeshLayer({
     }
 
     if (includeDetailedPrimitives) {
-      for (const knot of Object.values(supportState.knots)) {
+      for (const knot of Object.values(supportKnots)) {
         let modelId = segmentModelIdById.get(knot.parentShaftId);
         let supportId = segmentSupportIdById.get(knot.parentShaftId);
         const resolvedKnotDiameter = knot.diameter ?? 1.2;
@@ -480,9 +513,9 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    for (const kickstand of Object.values(kickstandState.kickstands)) {
-      const root = kickstandState.roots[kickstand.rootId];
-      const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+    for (const kickstand of Object.values(kickstandKickstands)) {
+      const root = kickstandRoots[kickstand.rootId];
+      const hostKnot = kickstandKnots[kickstand.hostKnotId];
       if (!root || !hostKnot) continue;
 
       pushRoot({
@@ -538,7 +571,7 @@ export function SupportProxyMeshLayer({
     }
 
     if (includeDetailedPrimitives) {
-      for (const knot of Object.values(kickstandState.knots)) {
+      for (const knot of Object.values(kickstandKnots)) {
         const modelId = segmentModelIdById.get(knot.parentShaftId);
         const supportId = segmentSupportIdById.get(knot.parentShaftId);
         const resolvedKnotDiameter = knot.diameter ?? 1.2;
@@ -554,26 +587,36 @@ export function SupportProxyMeshLayer({
     }
 
     sharedProxyCache = {
-      supportStateRef: supportState,
-      kickstandStateRef: kickstandState,
+      supportTrunksRef: supportTrunks,
+      supportRootsRef: supportRoots,
+      supportKnotsRef: supportKnots,
+      supportBranchesRef: supportBranches,
+      supportLeavesRef: supportLeaves,
+      supportTwigsRef: supportTwigs,
+      supportSticksRef: supportSticks,
+      supportBracesRef: supportBraces,
+      kickstandKickstandsRef: kickstandKickstands,
+      kickstandRootsRef: kickstandRoots,
+      kickstandKnotsRef: kickstandKnots,
+      hasSolidBottom,
+      raftThickness,
       includeDetailedPrimitives,
       baseProxyByModel: byModel,
     };
 
     return byModel;
   }, [
-    supportState,
-    supportState.trunks,
-    supportState.roots,
-    supportState.knots,
-    supportState.branches,
-    supportState.leaves,
-    supportState.twigs,
-    supportState.sticks,
-    supportState.braces,
-    kickstandState.kickstands,
-    kickstandState.roots,
-    kickstandState.knots,
+    supportTrunks,
+    supportRoots,
+    supportKnots,
+    supportBranches,
+    supportLeaves,
+    supportTwigs,
+    supportSticks,
+    supportBraces,
+    kickstandKickstands,
+    kickstandRoots,
+    kickstandKnots,
     hasSolidBottom,
     raftThickness,
     includeDetailedPrimitives,

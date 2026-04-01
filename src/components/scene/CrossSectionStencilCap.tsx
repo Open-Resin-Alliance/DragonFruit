@@ -36,9 +36,10 @@ type StaticStencilInstancedEntry = {
   kind: 'instanced';
   key: string;
   geometry: THREE.BufferGeometry;
-  matrices: THREE.Matrix4[];
-  minZByInstance: number[];
-  maxZByInstance: number[];
+  count: number;
+  matrixElements: Float32Array;
+  minZByInstance: Float32Array;
+  maxZByInstance: Float32Array;
   minZ: number;
   maxZ: number;
 };
@@ -49,7 +50,8 @@ type VisibleStaticStencilInstancedEntry = {
   key: string;
   geometry: THREE.BufferGeometry;
   capacity: number;
-  matrices: THREE.Matrix4[];
+  matrixElements: Float32Array;
+  visibleIndices: Uint32Array;
 };
 
 type StencilZBoundsEntry<T> = {
@@ -70,7 +72,8 @@ type ModelStencilPassEntry = {
 function StaticInstancedStencilPass({
   geometry,
   capacity,
-  matrices,
+  matrixElements,
+  visibleIndices,
   backMaterial,
   frontMaterial,
   backRenderOrder,
@@ -78,7 +81,8 @@ function StaticInstancedStencilPass({
 }: {
   geometry: THREE.BufferGeometry;
   capacity: number;
-  matrices: THREE.Matrix4[];
+  matrixElements: Float32Array;
+  visibleIndices: Uint32Array;
   backMaterial: THREE.Material;
   frontMaterial: THREE.Material;
   backRenderOrder: number;
@@ -92,21 +96,24 @@ function StaticInstancedStencilPass({
     const front = frontRef.current;
     if (!back || !front) return;
 
-    for (let i = 0; i < matrices.length; i += 1) {
-      const matrix = matrices[i];
-      back.setMatrixAt(i, matrix);
-      front.setMatrixAt(i, matrix);
+    const tempMatrix = new THREE.Matrix4();
+
+    for (let i = 0; i < visibleIndices.length; i += 1) {
+      const sourceIndex = visibleIndices[i];
+      tempMatrix.fromArray(matrixElements, sourceIndex * 16);
+      back.setMatrixAt(i, tempMatrix);
+      front.setMatrixAt(i, tempMatrix);
     }
 
-    back.count = matrices.length;
-    front.count = matrices.length;
+    back.count = visibleIndices.length;
+    front.count = visibleIndices.length;
     back.instanceMatrix.needsUpdate = true;
     front.instanceMatrix.needsUpdate = true;
     (back as THREE.InstancedMesh & { computeBoundingSphere?: () => void }).computeBoundingSphere?.();
     (front as THREE.InstancedMesh & { computeBoundingSphere?: () => void }).computeBoundingSphere?.();
-  }, [matrices]);
+  }, [matrixElements, visibleIndices]);
 
-  if (matrices.length === 0) return null;
+  if (visibleIndices.length === 0) return null;
 
   return (
     <>
@@ -319,35 +326,51 @@ function CrossSectionStencilCapInner({
 
       const maybeInstancedMesh = mesh as THREE.InstancedMesh;
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
-        const matrices: THREE.Matrix4[] = [];
-        const minZByInstance: number[] = [];
-        const maxZByInstance: number[] = [];
+        const centerOffsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+        const centeredMatrix = new THREE.Matrix4();
+        const initialCount = maybeInstancedMesh.count;
+        const matrixElements = new Float32Array(initialCount * 16);
+        const minZByInstance = new Float32Array(initialCount);
+        const maxZByInstance = new Float32Array(initialCount);
         let minZ = Number.POSITIVE_INFINITY;
         let maxZ = Number.NEGATIVE_INFINITY;
+        let acceptedCount = 0;
 
-        for (let i = 0; i < maybeInstancedMesh.count; i += 1) {
+        for (let i = 0; i < initialCount; i += 1) {
           maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
           worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
-          const centeredMatrix = composeCenteredGeometryMatrix(worldInstanceMatrix, center);
+          centeredMatrix.multiplyMatrices(worldInstanceMatrix, centerOffsetMatrix);
           const bounds = getGeometryWorldZBounds(geometry, centeredMatrix);
           if (!bounds) continue;
 
-          matrices.push(centeredMatrix);
-          minZByInstance.push(bounds.min);
-          maxZByInstance.push(bounds.max);
+          centeredMatrix.toArray(matrixElements, acceptedCount * 16);
+          minZByInstance[acceptedCount] = bounds.min;
+          maxZByInstance[acceptedCount] = bounds.max;
           minZ = Math.min(minZ, bounds.min);
           maxZ = Math.max(maxZ, bounds.max);
+          acceptedCount += 1;
         }
 
-        if (matrices.length === 0) return;
+        if (acceptedCount === 0) return;
+
+        const compactMatrixElements = acceptedCount === initialCount
+          ? matrixElements
+          : matrixElements.slice(0, acceptedCount * 16);
+        const compactMinZ = acceptedCount === initialCount
+          ? minZByInstance
+          : minZByInstance.slice(0, acceptedCount);
+        const compactMaxZ = acceptedCount === initialCount
+          ? maxZByInstance
+          : maxZByInstance.slice(0, acceptedCount);
 
         results.push({
           kind: 'instanced',
           key: `${mesh.uuid}:instanced`,
           geometry,
-          matrices,
-          minZByInstance,
-          maxZByInstance,
+          count: acceptedCount,
+          matrixElements: compactMatrixElements,
+          minZByInstance: compactMinZ,
+          maxZByInstance: compactMaxZ,
           minZ,
           maxZ,
         });
@@ -409,19 +432,20 @@ function CrossSectionStencilCapInner({
       if (entry.kind !== 'instanced') continue;
       if (!intersectsMinMaxZ(entry.minZ, entry.maxZ, y)) continue;
 
-      const matrices: THREE.Matrix4[] = [];
-      for (let i = 0; i < entry.matrices.length; i += 1) {
+      const visibleIndices: number[] = [];
+      for (let i = 0; i < entry.count; i += 1) {
         if (!intersectsMinMaxZ(entry.minZByInstance[i], entry.maxZByInstance[i], y)) continue;
-        matrices.push(entry.matrices[i]);
+        visibleIndices.push(i);
       }
 
-      if (matrices.length === 0) continue;
+      if (visibleIndices.length === 0) continue;
 
       visibleInstanced.push({
         key: entry.key,
         geometry: entry.geometry,
-        capacity: entry.matrices.length,
-        matrices,
+        capacity: entry.count,
+        matrixElements: entry.matrixElements,
+        visibleIndices: Uint32Array.from(visibleIndices),
       });
     }
 
@@ -494,7 +518,8 @@ function CrossSectionStencilCapInner({
         key={`stencil-source-instanced-pass-${entry.key}`}
         geometry={entry.geometry}
         capacity={entry.capacity}
-        matrices={entry.matrices}
+        matrixElements={entry.matrixElements}
+        visibleIndices={entry.visibleIndices}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
         backRenderOrder={990.3}

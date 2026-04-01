@@ -44,7 +44,7 @@ type VisibleRaftEntry = {
 };
 
 type RaftProxyCacheEntry = {
-  supportStateRef: unknown;
+  supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
   raftSignature: string;
   geometriesByModel: Map<string, CachedRaftGeometry>;
 };
@@ -161,10 +161,10 @@ function disposeGeneratedMeshes(meshes: Array<THREE.Mesh | null | undefined>) {
   }
 }
 
-function collectRootCirclesByModel(supportState: ReturnType<typeof getSnapshot>): Map<string, SupportBaseCircle[]> {
+function collectRootCirclesByModel(roots: ReturnType<typeof getSnapshot>['roots']): Map<string, SupportBaseCircle[]> {
   const byModel = new Map<string, SupportBaseCircle[]>();
 
-  for (const root of Object.values(supportState.roots)) {
+  for (const root of Object.values(roots)) {
     const modelKey = toModelKey(root.modelId);
     const circles = byModel.get(modelKey) ?? [];
     circles.push({
@@ -197,6 +197,7 @@ export function RaftProxyMeshLayer({
   passive = false,
 }: RaftProxyMeshLayerProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const supportRoots = supportState.roots;
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
@@ -220,13 +221,13 @@ export function RaftProxyMeshLayer({
   const geometriesByModel = React.useMemo(() => {
     if (
       raftProxyCache
-      && raftProxyCache.supportStateRef === supportState
+      && raftProxyCache.supportRootsRef === supportRoots
       && raftProxyCache.raftSignature === raftSignature
     ) {
       return raftProxyCache.geometriesByModel;
     }
 
-    const rootCirclesByModel = collectRootCirclesByModel(supportState);
+    const rootCirclesByModel = collectRootCirclesByModel(supportRoots);
     const next = new Map<string, CachedRaftGeometry>();
 
     if (raft.bottomMode === 'solid') {
@@ -284,13 +285,13 @@ export function RaftProxyMeshLayer({
     }
 
     raftProxyCache = {
-      supportStateRef: supportState,
+      supportRootsRef: supportRoots,
       raftSignature,
       geometriesByModel: next,
     };
 
     return next;
-  }, [raft, raftSignature, supportState]);
+  }, [raft, raftSignature, supportRoots]);
 
   const visibleEntries = React.useMemo<VisibleRaftEntry[]>(() => {
     const entries: VisibleRaftEntry[] = [];
