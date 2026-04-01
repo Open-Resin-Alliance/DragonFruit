@@ -12,6 +12,17 @@ export type CrossSectionStencilCapEntry = {
   transform: ModelTransform;
 };
 
+type CrossSectionStencilCapProps = {
+  entries: CrossSectionStencilCapEntry[];
+  sourceObject?: THREE.Object3D | null;
+  sourceObjectVersion?: number;
+  y: number;
+  color?: string;
+  planeWidthMm: number;
+  planeHeightMm: number;
+  visible?: boolean;
+};
+
 type StaticStencilMeshEntry = {
   kind: 'single';
   key: string;
@@ -43,6 +54,15 @@ type VisibleStaticStencilInstancedEntry = {
 
 type StencilZBoundsEntry<T> = {
   item: T;
+  minZ: number;
+  maxZ: number;
+};
+
+type ModelStencilPassEntry = {
+  id: string;
+  geometry: THREE.BufferGeometry;
+  matrix: THREE.Matrix4;
+  offset: THREE.Vector3;
   minZ: number;
   maxZ: number;
 };
@@ -82,6 +102,8 @@ function StaticInstancedStencilPass({
     front.count = matrices.length;
     back.instanceMatrix.needsUpdate = true;
     front.instanceMatrix.needsUpdate = true;
+    (back as THREE.InstancedMesh & { computeBoundingSphere?: () => void }).computeBoundingSphere?.();
+    (front as THREE.InstancedMesh & { computeBoundingSphere?: () => void }).computeBoundingSphere?.();
   }, [matrices]);
 
   if (matrices.length === 0) return null;
@@ -93,7 +115,7 @@ function StaticInstancedStencilPass({
         args={[geometry, undefined, capacity]}
         material={backMaterial}
         renderOrder={backRenderOrder}
-        frustumCulled={false}
+        frustumCulled
         raycast={() => null}
       />
       <instancedMesh
@@ -101,7 +123,7 @@ function StaticInstancedStencilPass({
         args={[geometry, undefined, capacity]}
         material={frontMaterial}
         renderOrder={frontRenderOrder}
-        frustumCulled={false}
+        frustumCulled
         raycast={() => null}
       />
     </>
@@ -204,7 +226,7 @@ function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
   return clipZ >= minZ - 1e-4 && clipZ <= maxZ + 1e-4;
 }
 
-export function CrossSectionStencilCap({
+function CrossSectionStencilCapInner({
   entries,
   sourceObject,
   sourceObjectVersion,
@@ -213,16 +235,7 @@ export function CrossSectionStencilCap({
   planeWidthMm,
   planeHeightMm,
   visible = true,
-}: {
-  entries: CrossSectionStencilCapEntry[];
-  sourceObject?: THREE.Object3D | null;
-  sourceObjectVersion?: number;
-  y: number;
-  color?: string;
-  planeWidthMm: number;
-  planeHeightMm: number;
-  visible?: boolean;
-}) {
+}: CrossSectionStencilCapProps) {
   const clipPlaneRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 0, -1), y));
   
   React.useEffect(() => {
@@ -358,24 +371,26 @@ export function CrossSectionStencilCap({
     return results;
   }, [sourceObject, sourceObjectVersion]);
 
-  const entryBounds = React.useMemo(() => {
-    return entries.map<StencilZBoundsEntry<CrossSectionStencilCapEntry> | null>((entry) => {
-      const worldMatrix = composeCenteredGeometryMatrix(composeTransformMatrix(entry.transform), entry.center);
+  const modelStencilEntries = React.useMemo(() => {
+    return entries.map<ModelStencilPassEntry | null>((entry) => {
+      const matrix = composeTransformMatrix(entry.transform);
+      const worldMatrix = composeCenteredGeometryMatrix(matrix, entry.center);
       const bounds = getGeometryWorldZBounds(entry.geometry, worldMatrix);
       if (!bounds) return null;
       return {
-        item: entry,
+        id: entry.id,
+        geometry: entry.geometry,
+        matrix,
+        offset: new THREE.Vector3(-entry.center.x, -entry.center.y, -entry.center.z),
         minZ: bounds.min,
         maxZ: bounds.max,
       };
-    }).filter((entry): entry is StencilZBoundsEntry<CrossSectionStencilCapEntry> => entry !== null);
+    }).filter((entry): entry is ModelStencilPassEntry => entry !== null);
   }, [entries]);
 
-  const visibleEntries = React.useMemo(() => {
-    return entryBounds
-      .filter((entry) => intersectsMinMaxZ(entry.minZ, entry.maxZ, y))
-      .map((entry) => entry.item);
-  }, [entryBounds, y]);
+  const visibleModelStencilEntries = React.useMemo(() => {
+    return modelStencilEntries.filter((entry) => intersectsMinMaxZ(entry.minZ, entry.maxZ, y));
+  }, [modelStencilEntries, y]);
 
   const visibleStaticSingleEntries = React.useMemo(() => {
     const visibleSingles: StaticStencilMeshEntry[] = [];
@@ -425,78 +440,85 @@ export function CrossSectionStencilCap({
     };
   }, [capPlaneGeometry, capPlaneMaterial, stencilBack, stencilBase, stencilFront]);
 
-  if (!visible || (visibleEntries.length === 0 && !hasVisibleStaticSource)) return null;
+  const modelStencilPassNodes = React.useMemo(() => {
+    return visibleModelStencilEntries.map((entry) => (
+      <group key={`stencil-cap-${entry.id}`}>
+        <group matrix={entry.matrix} matrixAutoUpdate={false}>
+          <mesh
+            geometry={entry.geometry}
+            position={entry.offset}
+            material={stencilBack}
+            renderOrder={990.1}
+            frustumCulled
+            raycast={() => null}
+          />
+          <mesh
+            geometry={entry.geometry}
+            position={entry.offset}
+            material={stencilFront}
+            renderOrder={990.2}
+            frustumCulled
+            raycast={() => null}
+          />
+        </group>
+      </group>
+    ));
+  }, [stencilBack, stencilFront, visibleModelStencilEntries]);
+
+  const staticSingleStencilPassNodes = React.useMemo(() => {
+    return visibleStaticSingleEntries.map((entry) => (
+      <group key={`stencil-source-pass-${entry.key}`}>
+        <group matrix={entry.matrix} matrixAutoUpdate={false}>
+          <mesh
+            geometry={entry.geometry}
+            material={stencilBack}
+            renderOrder={990.3}
+            frustumCulled
+            raycast={() => null}
+          />
+          <mesh
+            geometry={entry.geometry}
+            material={stencilFront}
+            renderOrder={990.4}
+            frustumCulled
+            raycast={() => null}
+          />
+        </group>
+      </group>
+    ));
+  }, [stencilBack, stencilFront, visibleStaticSingleEntries]);
+
+  const staticInstancedStencilPassNodes = React.useMemo(() => {
+    return visibleStaticInstancedEntries.map((entry) => (
+      <StaticInstancedStencilPass
+        key={`stencil-source-instanced-pass-${entry.key}`}
+        geometry={entry.geometry}
+        capacity={entry.capacity}
+        matrices={entry.matrices}
+        backMaterial={stencilBack}
+        frontMaterial={stencilFront}
+        backRenderOrder={990.3}
+        frontRenderOrder={990.4}
+      />
+    ));
+  }, [stencilBack, stencilFront, visibleStaticInstancedEntries]);
+
+  if (!visible || (visibleModelStencilEntries.length === 0 && !hasVisibleStaticSource)) return null;
 
   return (
     <group renderOrder={990}>
-      {visibleEntries.map((entry) => {
-        const matrix = composeTransformMatrix(entry.transform);
-        const offset = new THREE.Vector3(-entry.center.x, -entry.center.y, -entry.center.z);
+      {modelStencilPassNodes}
 
-        return (
-          <group key={`stencil-cap-${entry.id}`}>
-            <group matrix={matrix} matrixAutoUpdate={false}>
-              <mesh
-                geometry={entry.geometry}
-                position={offset}
-                material={stencilBack}
-                renderOrder={990.1}
-                frustumCulled={false}
-                raycast={() => null}
-              />
-              <mesh
-                geometry={entry.geometry}
-                position={offset}
-                material={stencilFront}
-                renderOrder={990.2}
-                frustumCulled={false}
-                raycast={() => null}
-              />
-            </group>
-          </group>
-        );
-      })}
+      {staticSingleStencilPassNodes}
 
-      {visibleStaticSingleEntries.map((entry) => (
-        <group key={`stencil-source-pass-${entry.key}`}>
-          <group matrix={entry.matrix} matrixAutoUpdate={false}>
-            <mesh
-              geometry={entry.geometry}
-              material={stencilBack}
-              renderOrder={990.3}
-              frustumCulled={false}
-              raycast={() => null}
-            />
-            <mesh
-              geometry={entry.geometry}
-              material={stencilFront}
-              renderOrder={990.4}
-              frustumCulled={false}
-              raycast={() => null}
-            />
-          </group>
-        </group>
-      ))}
-
-      {visibleStaticInstancedEntries.map((entry) => (
-        <StaticInstancedStencilPass
-          key={`stencil-source-instanced-pass-${entry.key}`}
-          geometry={entry.geometry}
-          capacity={entry.capacity}
-          matrices={entry.matrices}
-          backMaterial={stencilBack}
-          frontMaterial={stencilFront}
-          backRenderOrder={990.3}
-          frontRenderOrder={990.4}
-        />
-      ))}
+      {staticInstancedStencilPassNodes}
 
       <mesh
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
         position={[0, 0, y + 1e-4]}
         renderOrder={990.45}
-        frustumCulled={false}
+        frustumCulled
         raycast={() => null}
         onAfterRender={(renderer) => {
           (renderer as THREE.WebGLRenderer).clearStencil();
@@ -504,4 +526,27 @@ export function CrossSectionStencilCap({
       />
     </group>
   );
+}
+
+const areCrossSectionStencilCapPropsEqual = (
+  prev: Readonly<CrossSectionStencilCapProps>,
+  next: Readonly<CrossSectionStencilCapProps>,
+) => {
+  return (
+    prev.entries === next.entries
+    && prev.sourceObject === next.sourceObject
+    && prev.sourceObjectVersion === next.sourceObjectVersion
+    && prev.y === next.y
+    && prev.color === next.color
+    && prev.planeWidthMm === next.planeWidthMm
+    && prev.planeHeightMm === next.planeHeightMm
+    && prev.visible === next.visible
+  );
+};
+
+const CrossSectionStencilCapMemo = React.memo(CrossSectionStencilCapInner, areCrossSectionStencilCapPropsEqual);
+CrossSectionStencilCapMemo.displayName = 'CrossSectionStencilCapMemo';
+
+export function CrossSectionStencilCap(props: CrossSectionStencilCapProps) {
+  return <CrossSectionStencilCapMemo {...props} />;
 }
