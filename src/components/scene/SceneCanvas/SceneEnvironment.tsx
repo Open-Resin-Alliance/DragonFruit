@@ -300,7 +300,6 @@ export function Helpers({
     texture.magFilter = THREE.LinearFilter;
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.needsUpdate = true;
     return texture;
   }, []);
 

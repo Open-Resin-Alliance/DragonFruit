@@ -369,26 +369,55 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
   try {
     // --- Step 1: Stage raw mesh bytes via binary IPC ---
     const payloadBuildStart = performance.now();
-    // Zero-copy Uint8Array view of the underlying Float32Array buffer
-    const meshBytes = new Uint8Array(
-      job.trianglesXYZ.buffer,
-      job.trianglesXYZ.byteOffset,
-      job.trianglesXYZ.byteLength,
-    );
-    const meshBytesLen = meshBytes.byteLength;
     const metadataJson = JSON.stringify(toNativeMetadataPayload(job));
+
+    let meshBytesLen = 0;
+    let stageMeshMs = 0;
+
+    {
+      // Zero-copy Uint8Array view of the underlying Float32Array buffer
+      const meshBytes = new Uint8Array(
+        job.trianglesXYZ.buffer,
+        job.trianglesXYZ.byteOffset,
+        job.trianglesXYZ.byteLength,
+      );
+      meshBytesLen = meshBytes.byteLength;
+
+      if (abortSignal?.aborted) {
+        cleanup();
+        throw createAbortError();
+      }
+
+      const stageStart = performance.now();
+      await core.invoke('stage_mesh_binary_start', { totalBytes: meshBytes.byteLength });
+
+      const CHUNK_SIZE = 48 * 1024 * 1024; // 48 MB chunks (fewer round trips)
+      for (let i = 0; i < meshBytes.byteLength; i += CHUNK_SIZE) {
+        if (abortSignal?.aborted) {
+          cleanup();
+          throw createAbortError();
+        }
+        
+        const chunk = meshBytes.subarray(i, i + CHUNK_SIZE);
+        await core.invoke<number>('stage_mesh_binary_chunk', chunk, {
+          headers: { 'Content-Type': 'application/octet-stream' },
+        });
+      }
+      
+      stageMeshMs = performance.now() - stageStart;
+    }
+
+    // Release the giant JS-side triangle buffer as early as possible.
+    // Rust now owns the staged mesh bytes, so keeping this alive only increases
+    // peak renderer memory usage while slicing is in progress.
+    job.trianglesXYZ = new Float32Array(0);
+
     const payloadBuildMs = performance.now() - payloadBuildStart;
 
     if (abortSignal?.aborted) {
       cleanup();
       throw createAbortError();
     }
-
-    const stageStart = performance.now();
-    await core.invoke<number>('stage_mesh_binary', meshBytes, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
-    const stageMeshMs = performance.now() - stageStart;
 
     // --- Step 2: Send tiny metadata JSON to kick off slicing ---
 

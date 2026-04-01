@@ -272,6 +272,18 @@ function mergeMetadataOverridesIntoMetadata(
 export async function runSliceExportOrchestrator(options: SliceExportOrchestratorOptions): Promise<SliceExportResult> {
   throwIfAborted(options.abortSignal);
   const orchestratorStartMs = performance.now();
+  const emitDiagnosticProgress = (phase: string, done: number, total: number, extra?: Record<string, unknown>) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('dragonfruit:slicing-progress', {
+      detail: {
+        phase,
+        done,
+        total,
+        ...extra,
+      },
+    }));
+  };
+
   const format = resolveSlicingFormatDefinition({
     printerProfile: options.printerProfile,
     materialProfile: options.materialProfile,
@@ -292,6 +304,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   }
 
   options.onProgress?.(0, 1, 'Preparing');
+  emitDiagnosticProgress('Preparing mesh', 0, 1, {
+    format: format.outputFormat,
+    modelCount: options.models.length,
+  });
   const meshPrepStartMs = performance.now();
   const solidMesh = buildSolidSliceMeshForWasm({
     models: options.models,
@@ -307,6 +323,11 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     packingMode: solidMesh.xPackingMode,
     totalLayers: solidMesh.totalLayers,
     meshPrepMs,
+  });
+  emitDiagnosticProgress('Preparing mesh complete', 1, 1, {
+    meshPrepMs,
+    triangleFloatCount: solidMesh.trianglesXYZ.length,
+    totalLayers: solidMesh.totalLayers,
   });
 
   options.onProgress?.(0, solidMesh.totalLayers, 'Staging');

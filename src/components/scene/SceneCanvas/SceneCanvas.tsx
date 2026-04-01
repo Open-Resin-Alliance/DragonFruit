@@ -834,9 +834,11 @@ export function SceneCanvas({
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
   const [isWheelZoomInteracting, setIsWheelZoomInteracting] = React.useState(false);
+  const [canvasRecoveryNonce, setCanvasRecoveryNonce] = React.useState(0);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
   const [supportGizmoInteractionActive, setSupportGizmoInteractionActive] = React.useState(false);
   const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
+  const webGlRecoveryTimeoutRef = React.useRef<number | null>(null);
     const isOrbitInRotateState = React.useCallback(() => {
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
@@ -3291,6 +3293,23 @@ export function SceneCanvas({
     navigationResumeDelayRef.current = navigationResumeDelayMs;
   }, [navigationResumeDelayMs]);
 
+  const forceEndWheelZoomInteraction = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (wheelZoomEndTimeoutRef.current !== null) {
+      window.clearTimeout(wheelZoomEndTimeoutRef.current);
+      wheelZoomEndTimeoutRef.current = null;
+    }
+
+    if (!wheelZoomInteractionActiveRef.current) return;
+
+    wheelZoomInteractionActiveRef.current = false;
+    setIsWheelZoomInteracting(false);
+    window.dispatchEvent(new CustomEvent('picking-zoom-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
+  }, [navigationResumeDelayMs]);
+
   React.useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof window === 'undefined') return;
@@ -3805,6 +3824,44 @@ export function SceneCanvas({
     }));
   }, [mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
 
+  const handleWebGlContextLost = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    handleOrbitEnd();
+    forceEndWheelZoomInteraction();
+
+    if (webGlRecoveryTimeoutRef.current !== null) return;
+
+    webGlRecoveryTimeoutRef.current = window.setTimeout(() => {
+      webGlRecoveryTimeoutRef.current = null;
+      console.warn('[SceneCanvas] WebGL context restore timeout reached; remounting canvas.');
+      setCanvasRecoveryNonce((value) => value + 1);
+    }, 1800);
+  }, [forceEndWheelZoomInteraction, handleOrbitEnd]);
+
+  const handleWebGlContextRestored = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (webGlRecoveryTimeoutRef.current !== null) {
+      window.clearTimeout(webGlRecoveryTimeoutRef.current);
+      webGlRecoveryTimeoutRef.current = null;
+    }
+
+    orbitControlsRef.current?.update();
+    updateCameraBelowBuildPlate();
+    onCameraChange?.();
+  }, [onCameraChange, updateCameraBelowBuildPlate]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      if (webGlRecoveryTimeoutRef.current !== null) {
+        window.clearTimeout(webGlRecoveryTimeoutRef.current);
+        webGlRecoveryTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   React.useEffect(() => {
     if (spaceMouseNavigationActive) {
       window.dispatchEvent(new Event('picking-pan-start'));
@@ -3962,6 +4019,7 @@ export function SceneCanvas({
       ref={containerRef}
     >
       <Canvas
+        key={`scene-canvas-${canvasRecoveryNonce}`}
         style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
         camera={defaultCamera}
         shadows
@@ -3969,7 +4027,12 @@ export function SceneCanvas({
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}
       >
-        <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
+        <SceneRenderBindings
+          rendererRef={rendererRef}
+          sceneRef={sceneRef}
+          onWebGlContextLost={handleWebGlContextLost}
+          onWebGlContextRestored={handleWebGlContextRestored}
+        />
         <LoggingHelper mode={mode} />
         
         <Lights

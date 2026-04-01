@@ -691,6 +691,16 @@ export function SlicingPanel({
           setProgressDone(safeDone);
           setProgressTotal(safeTotal);
 
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('dragonfruit:slicing-progress', {
+              detail: {
+                phase,
+                done: safeDone,
+                total: safeTotal,
+              },
+            }));
+          }
+
           const nowMs = performance.now();
 
           if (isSlicingPhase) {
