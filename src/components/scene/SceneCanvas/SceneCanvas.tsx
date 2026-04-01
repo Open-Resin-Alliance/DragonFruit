@@ -112,6 +112,74 @@ import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
+type GhostPreviewTransform = {
+  position: THREE.Vector3;
+  rotation: THREE.Euler;
+  scale: THREE.Vector3;
+};
+
+function GhostPreviewInstances({
+  geometry,
+  center,
+  color,
+  transforms,
+  opacity = 0.22,
+  renderOrder = 2,
+}: {
+  geometry: THREE.BufferGeometry;
+  center: THREE.Vector3;
+  color: string;
+  transforms: GhostPreviewTransform[];
+  opacity?: number;
+  renderOrder?: number;
+}) {
+  const instancedRef = React.useRef<THREE.InstancedMesh>(null);
+  const workMatrixRef = React.useRef(new THREE.Matrix4());
+  const workQuaternionRef = React.useRef(new THREE.Quaternion());
+  const workOffsetMatrixRef = React.useRef(new THREE.Matrix4());
+
+  React.useLayoutEffect(() => {
+    const instanced = instancedRef.current;
+    if (!instanced) return;
+
+    const workMatrix = workMatrixRef.current;
+    const workQuaternion = workQuaternionRef.current;
+    const offsetMatrix = workOffsetMatrixRef.current.makeTranslation(-center.x, -center.y, -center.z);
+
+    for (let i = 0; i < transforms.length; i += 1) {
+      const transform = transforms[i];
+      workQuaternion.setFromEuler(transform.rotation);
+      workMatrix.compose(transform.position, workQuaternion, transform.scale);
+      workMatrix.multiply(offsetMatrix);
+      instanced.setMatrixAt(i, workMatrix);
+    }
+
+    instanced.count = transforms.length;
+    instanced.instanceMatrix.needsUpdate = true;
+    instanced.computeBoundingSphere();
+  }, [center.x, center.y, center.z, transforms]);
+
+  if (transforms.length === 0) return null;
+
+  return (
+    <instancedMesh
+      ref={instancedRef}
+      args={[geometry, undefined, transforms.length]}
+      renderOrder={renderOrder}
+      raycast={() => null}
+      frustumCulled={false}
+    >
+      <meshBasicMaterial
+        color={color}
+        transparent
+        opacity={opacity}
+        depthWrite={false}
+        toneMapped={false}
+      />
+    </instancedMesh>
+  );
+}
+
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
@@ -1464,10 +1532,44 @@ export function SceneCanvas({
   const isActiveGizmoZMove = activeGizmoDragDescriptor?.operation === 'move'
     && activeGizmoDragDescriptor.axis === 'z';
 
-  const useActiveModelAttachedSupportProxy = mode === 'prepare'
-    && transformMode === 'transform'
-    && (isGizmoDragging || effectiveHoldSupportDragDelta)
-    && !!activeModelId;
+  const activeModelVisualSupportTransform = React.useMemo(() => {
+    if (!activeModelId) return null;
+    if (duplicateActivePreviewTransform) return duplicateActivePreviewTransform;
+
+    if (transformMode === 'transform' && (isGizmoDragging || effectiveHoldSupportDragDelta) && transform) {
+      return transform;
+    }
+
+    if (transformMode === 'arrange' && transform) {
+      return transform;
+    }
+
+    return null;
+  }, [
+    activeModelId,
+    duplicateActivePreviewTransform,
+    effectiveHoldSupportDragDelta,
+    isGizmoDragging,
+    transform,
+    transformMode,
+  ]);
+
+  const useActiveModelAttachedSupportProxy = React.useMemo(() => {
+    if (mode !== 'prepare' || !activeModelId || !activeModelVisualSupportTransform) return false;
+
+    const committedTransform = modelById.get(activeModelId)?.transform;
+    if (!committedTransform) return false;
+
+    const EPSILON = 1e-6;
+    const posChanged = committedTransform.position.distanceToSquared(activeModelVisualSupportTransform.position) > EPSILON;
+    const scaleChanged = committedTransform.scale.distanceToSquared(activeModelVisualSupportTransform.scale) > EPSILON;
+    const rotChanged =
+      Math.abs(committedTransform.rotation.x - activeModelVisualSupportTransform.rotation.x) > EPSILON
+      || Math.abs(committedTransform.rotation.y - activeModelVisualSupportTransform.rotation.y) > EPSILON
+      || Math.abs(committedTransform.rotation.z - activeModelVisualSupportTransform.rotation.z) > EPSILON;
+
+    return posChanged || scaleChanged || rotChanged;
+  }, [activeModelId, activeModelVisualSupportTransform, mode, modelById]);
 
   const activeModelAttachedSupportLocalMatrix = React.useMemo(() => {
     if (!useActiveModelAttachedSupportProxy || !activeModelId) return null;
@@ -2070,31 +2172,67 @@ export function SceneCanvas({
   const duplicateActiveSupportPreviewDelta = React.useMemo(() => {
     if (!duplicatePreviewModel || !duplicateActivePreviewTransform) return null;
 
+    const oldSourceTransform = duplicatePreviewModel.transform;
+    const targetSourceTransform = duplicateActivePreviewTransform;
+
+    let sourceSupportAnchor: THREE.Vector3 | null = null;
+    let sourceSupportAnchorCount = 0;
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      if (root.modelId !== duplicatePreviewModel.id) continue;
+      if (!sourceSupportAnchor) sourceSupportAnchor = new THREE.Vector3();
+      sourceSupportAnchor.add(root.transform.pos);
+      sourceSupportAnchorCount += 1;
+    }
+
+    for (const root of Object.values(kickstandStateForBounds.roots)) {
+      if (root.modelId !== duplicatePreviewModel.id) continue;
+      if (!sourceSupportAnchor) sourceSupportAnchor = new THREE.Vector3();
+      sourceSupportAnchor.add(root.transform.pos);
+      sourceSupportAnchorCount += 1;
+    }
+
+    if (sourceSupportAnchor && sourceSupportAnchorCount > 0) {
+      sourceSupportAnchor.multiplyScalar(1 / sourceSupportAnchorCount);
+    }
+
+    const sourceToTarget = targetSourceTransform.position.clone().sub(oldSourceTransform.position);
+    const sourceToTargetLenSq = sourceToTarget.lengthSq();
+
+    let supportBasisTransform = oldSourceTransform;
+    if (sourceSupportAnchor && sourceToTargetLenSq > 1e-8) {
+      const anchorProgress = sourceSupportAnchor.clone().sub(oldSourceTransform.position).dot(sourceToTarget) / sourceToTargetLenSq;
+      // If source supports are already at least halfway to the target slot,
+      // treat them as committed and avoid applying the offset twice.
+      if (anchorProgress >= 0.5) {
+        supportBasisTransform = targetSourceTransform;
+      }
+    } else {
+      const sourceModelFromStore = modelById.get(duplicatePreviewModel.id);
+      if (sourceModelFromStore?.transform) {
+        supportBasisTransform = sourceModelFromStore.transform;
+      }
+    }
+
     const sourceMatrix = new THREE.Matrix4().compose(
-      duplicatePreviewModel.transform.position,
-      quaternionFromGlobalEuler(duplicatePreviewModel.transform.rotation),
-      duplicatePreviewModel.transform.scale,
+      supportBasisTransform.position,
+      quaternionFromGlobalEuler(supportBasisTransform.rotation),
+      supportBasisTransform.scale,
     );
     const targetMatrix = new THREE.Matrix4().compose(
-      duplicateActivePreviewTransform.position,
-      quaternionFromGlobalEuler(duplicateActivePreviewTransform.rotation),
-      duplicateActivePreviewTransform.scale,
+      targetSourceTransform.position,
+      quaternionFromGlobalEuler(targetSourceTransform.rotation),
+      targetSourceTransform.scale,
     );
 
     return targetMatrix.multiply(sourceMatrix.clone().invert());
-  }, [duplicateActivePreviewTransform, duplicatePreviewModel]);
+  }, [duplicateActivePreviewTransform, duplicatePreviewModel, kickstandStateForBounds.roots, modelById, supportStateForBounds.roots]);
 
   const duplicateSourceSupportPreviewModelId = React.useMemo(() => {
+    if (!hideDuplicateSourceDuringApply) return null;
     if (!duplicatePreviewModel || !duplicateActiveSupportPreviewDelta) return null;
     return duplicatePreviewModel.id;
-  }, [duplicateActiveSupportPreviewDelta, duplicatePreviewModel]);
-
-  const supportBaseExcludeModelIds = React.useMemo(() => {
-    const ids = [...multiGizmoSupportPreviewIds];
-    if (duplicateSourceSupportPreviewModelId) ids.push(duplicateSourceSupportPreviewModelId);
-    if (useActiveModelAttachedSupportProxy && activeModelId) ids.push(activeModelId);
-    return Array.from(new Set(ids));
-  }, [activeModelId, duplicateSourceSupportPreviewModelId, multiGizmoSupportPreviewIds, useActiveModelAttachedSupportProxy]);
+  }, [duplicateActiveSupportPreviewDelta, duplicatePreviewModel, hideDuplicateSourceDuringApply]);
 
   const arrangeSupportPreviewDeltas = React.useMemo(() => {
     if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
@@ -2102,10 +2240,18 @@ export function SceneCanvas({
     }
 
     return arrangeArrayPreviewItems.map((item) => {
+      const sourceTransform = (
+        activeModelId
+        && transform
+        && item.model.id === activeModelId
+      )
+        ? transform
+        : item.model.transform;
+
       const sourceMatrix = new THREE.Matrix4().compose(
-        item.model.transform.position,
-        quaternionFromGlobalEuler(item.model.transform.rotation),
-        item.model.transform.scale,
+        sourceTransform.position,
+        quaternionFromGlobalEuler(sourceTransform.rotation),
+        sourceTransform.scale,
       );
 
       const targetMatrix = new THREE.Matrix4().compose(
@@ -2118,7 +2264,63 @@ export function SceneCanvas({
         modelId: item.model.id,
         delta: targetMatrix.multiply(sourceMatrix.clone().invert()),
       };
-    });
+    }).filter(({ modelId }) => !(useActiveModelAttachedSupportProxy && !!activeModelId && modelId === activeModelId));
+  }, [activeModelId, arrangeArrayPreviewItems, transform, useActiveModelAttachedSupportProxy]);
+
+  const SUPPORT_GHOST_PROXY_SIMPLIFY_THRESHOLD = 6;
+
+  const supportGhostPreviewLayerCount = React.useMemo(() => {
+    return duplicateSupportPreviewDeltas.length + arrangeSupportPreviewDeltas.length + (duplicateSourceSupportPreviewModelId ? 1 : 0);
+  }, [arrangeSupportPreviewDeltas.length, duplicateSourceSupportPreviewModelId, duplicateSupportPreviewDeltas.length]);
+
+  const renderSupportGhostPreviews = supportGhostPreviewLayerCount > 0;
+  const useSimplifiedSupportGhostProxy = supportGhostPreviewLayerCount > SUPPORT_GHOST_PROXY_SIMPLIFY_THRESHOLD;
+
+  const renderDuplicateSourceSupportGhostPreview = !!duplicateSourceSupportPreviewModelId && !!duplicateActiveSupportPreviewDelta;
+
+  const arrangeSupportPreviewModelIds = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) return [] as string[];
+    return Array.from(new Set(arrangeArrayPreviewItems.map((item) => item.model.id)));
+  }, [arrangeArrayPreviewItems]);
+
+  const supportBaseExcludeModelIds = React.useMemo(() => {
+    const ids = [...multiGizmoSupportPreviewIds];
+    if (arrangeSupportPreviewModelIds.length > 0) {
+      ids.push(...arrangeSupportPreviewModelIds);
+    }
+    if (renderDuplicateSourceSupportGhostPreview && duplicateSourceSupportPreviewModelId) {
+      ids.push(duplicateSourceSupportPreviewModelId);
+    }
+    if (useActiveModelAttachedSupportProxy && activeModelId) ids.push(activeModelId);
+    return Array.from(new Set(ids));
+  }, [
+    activeModelId,
+    arrangeSupportPreviewModelIds,
+    duplicateSourceSupportPreviewModelId,
+    multiGizmoSupportPreviewIds,
+    renderDuplicateSourceSupportGhostPreview,
+    useActiveModelAttachedSupportProxy,
+  ]);
+
+  const arrangeGhostPreviewGroups = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
+      return [] as Array<{ model: LoadedModel; transforms: GhostPreviewTransform[] }>;
+    }
+
+    const groups = new Map<string, { model: LoadedModel; transforms: GhostPreviewTransform[] }>();
+    for (const item of arrangeArrayPreviewItems) {
+      const existing = groups.get(item.model.id);
+      if (existing) {
+        existing.transforms.push(item.transform);
+      } else {
+        groups.set(item.model.id, {
+          model: item.model,
+          transforms: [item.transform],
+        });
+      }
+    }
+
+    return Array.from(groups.values());
   }, [arrangeArrayPreviewItems]);
 
   const activeModelTransform = React.useMemo(() => {
@@ -3929,35 +4131,21 @@ export function SceneCanvas({
               })}
 
               {duplicatePreviewModel
-                && duplicatePreviewMeshOffset
                 && effectiveDuplicatePreviewTransforms.length > 0
-                ? effectiveDuplicatePreviewTransforms.map((previewTransform, index) => (
-                    <group
-                      key={`duplicate-preview-${index}`}
-                      position={previewTransform.position}
-                      quaternion={quaternionFromGlobalEuler(previewTransform.rotation)}
-                      scale={previewTransform.scale}
-                    >
-                      <mesh
-                        geometry={duplicatePreviewModel.geometry.geometry}
-                        position={duplicatePreviewMeshOffset}
-                      raycast={() => null}
-                      renderOrder={2}
-                      >
-                      <meshStandardMaterial
-                        color={duplicatePreviewModel.color ?? '#a3a3a3'}
-                        transparent
-                        opacity={0.22}
-                        roughness={0.5}
-                        metalness={0.02}
-                        depthWrite={false}
-                      />
-                    </mesh>
-                  </group>
-                ))
+                ? (
+                  <GhostPreviewInstances
+                    geometry={duplicatePreviewModel.geometry.geometry}
+                    center={duplicatePreviewModel.geometry.center}
+                    color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                    transforms={effectiveDuplicatePreviewTransforms}
+                    opacity={0.22}
+                    renderOrder={2}
+                  />
+                )
                 : null}
 
-              {duplicatePreviewModel
+              {renderSupportGhostPreviews
+                && duplicatePreviewModel
                 && duplicateSupportPreviewDeltas.length > 0
                 ? duplicateSupportPreviewDeltas.map((deltaMatrix, index) => (
                     <group
@@ -3988,6 +4176,7 @@ export function SceneCanvas({
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportProxyIncludeDetailedPrimitives={!useSimplifiedSupportGhostProxy}
                         supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
@@ -4012,56 +4201,34 @@ export function SceneCanvas({
                       raycast={() => null}
                       renderOrder={2}
                     >
-                      <meshStandardMaterial
+                      <meshBasicMaterial
                         color={duplicatePreviewModel.color ?? '#a3a3a3'}
                         transparent
                         opacity={0.22}
-                        roughness={0.5}
-                        metalness={0.02}
                         depthWrite={false}
+                        toneMapped={false}
                       />
                     </mesh>
                   </group>
                 )
                 : null}
 
-              {arrangeArrayPreviewItems && arrangeArrayPreviewItems.length > 0
-                ? arrangeArrayPreviewItems.map((item) => {
-                  const offset = new THREE.Vector3(
-                    -item.model.geometry.center.x,
-                    -item.model.geometry.center.y,
-                    -item.model.geometry.center.z,
-                  );
-
-                  return (
-                    <group
-                      key={`arrange-array-preview-${item.model.id}`}
-                      position={item.transform.position}
-                      quaternion={quaternionFromGlobalEuler(item.transform.rotation)}
-                      scale={item.transform.scale}
-                      raycast={() => null}
-                    >
-                      <mesh
-                        geometry={item.model.geometry.geometry}
-                        position={offset}
-                        raycast={() => null}
-                        renderOrder={2}
-                      >
-                        <meshStandardMaterial
-                          color={item.model.color ?? '#a3a3a3'}
-                          transparent
-                          opacity={0.22}
-                          roughness={0.5}
-                          metalness={0.02}
-                          depthWrite={false}
-                        />
-                      </mesh>
-                    </group>
-                  );
-                })
+              {arrangeGhostPreviewGroups.length > 0
+                ? arrangeGhostPreviewGroups.map((group) => (
+                  <GhostPreviewInstances
+                    key={`arrange-array-preview-${group.model.id}`}
+                    geometry={group.model.geometry.geometry}
+                    center={group.model.geometry.center}
+                    color={group.model.color ?? '#a3a3a3'}
+                    transforms={group.transforms}
+                    opacity={0.22}
+                    renderOrder={2}
+                  />
+                ))
                 : null}
 
-              {duplicatePreviewModel
+              {renderDuplicateSourceSupportGhostPreview
+                && duplicatePreviewModel
                 && duplicateActiveSupportPreviewDelta
                 ? (
                     <group
@@ -4092,13 +4259,14 @@ export function SceneCanvas({
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportProxyIncludeDetailedPrimitives={!useSimplifiedSupportGhostProxy}
                         supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
                   )
                 : null}
 
-              {arrangeSupportPreviewDeltas.length > 0
+              {renderSupportGhostPreviews && arrangeSupportPreviewDeltas.length > 0
                 ? arrangeSupportPreviewDeltas.map(({ modelId, delta }) => (
                     <group
                       key={`arrange-support-preview-${modelId}`}
@@ -4122,12 +4290,13 @@ export function SceneCanvas({
                         hoverModelId={null}
                         modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={modelId}
-                        ghostOpacity={0.3}
+                        ghostOpacity={0.45}
                         ghostRenderOrder={2}
                         disableSelectionAndHover
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportProxyIncludeDetailedPrimitives={!useSimplifiedSupportGhostProxy}
                         supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>

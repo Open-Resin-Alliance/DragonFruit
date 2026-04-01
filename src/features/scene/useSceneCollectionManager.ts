@@ -2622,6 +2622,18 @@ export function useSceneCollectionManager() {
       };
     });
 
+    const originalSourceTransform = {
+      position: source.transform.position.clone(),
+      rotation: source.transform.rotation.clone(),
+      scale: source.transform.scale.clone(),
+    };
+
+    // Apply source-support transform before model commit so support state can
+    // never visually lag behind the moved source model during duplicate apply.
+    if (sourceTransform && !transformsEqual(source.transform, sourceTransform)) {
+      transformSupportsForModel(sourceId, source.transform, sourceTransform);
+    }
+
     const withSourceGroup = models.map((model) => {
       if (model.id !== sourceId) return model;
       const shouldUpdateGroup = model.groupId !== resolvedGroupId || model.groupName !== resolvedGroupName;
@@ -2643,16 +2655,6 @@ export function useSceneCollectionManager() {
 
     const nextModels = [...withSourceGroup, ...newModels];
     setModels(nextModels);
-
-    const originalSourceTransform = {
-      position: source.transform.position.clone(),
-      rotation: source.transform.rotation.clone(),
-      scale: source.transform.scale.clone(),
-    };
-
-    if (sourceTransform && !transformsEqual(source.transform, sourceTransform)) {
-      transformSupportsForModel(sourceId, source.transform, sourceTransform);
-    }
 
     newModels.forEach((model) => {
       pasteModelSupportsFromClipboard(

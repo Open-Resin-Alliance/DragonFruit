@@ -36,6 +36,7 @@ export type ModelAttachedSupportLayerProps = {
   ghostRenderOrder?: number;
   supportRendererRef?: React.Ref<THREE.Group>;
   supportRenderRefreshNonce?: number;
+  supportProxyIncludeDetailedPrimitives?: boolean;
   trunkPlacementPreview?: SupportData | null;
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
@@ -70,6 +71,7 @@ export function ModelAttachedSupportLayer({
   ghostRenderOrder,
   supportRendererRef,
   supportRenderRefreshNonce = 0,
+  supportProxyIncludeDetailedPrimitives = true,
   trunkPlacementPreview = null,
   branchPlacementPreview = null,
   leafPlacementPreview = null,
@@ -156,7 +158,7 @@ export function ModelAttachedSupportLayer({
           ghostOpacity={ghostOpacity}
           onModelPointerSelect={onModelPointerSelect}
           enablePointerSelection={!navigationLodActive && !disableSelectionAndHover && !passive}
-          includeDetailedPrimitives
+          includeDetailedPrimitives={supportProxyIncludeDetailedPrimitives}
         />
       ) : (
         <SupportRenderer
