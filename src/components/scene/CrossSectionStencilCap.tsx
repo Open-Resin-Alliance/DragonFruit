@@ -13,10 +13,32 @@ export type CrossSectionStencilCapEntry = {
 };
 
 type StaticStencilMeshEntry = {
+  kind: 'single';
   key: string;
   geometry: THREE.BufferGeometry;
-  center: THREE.Vector3;
-  matrixWorld: THREE.Matrix4;
+  matrix: THREE.Matrix4;
+  minZ: number;
+  maxZ: number;
+};
+
+type StaticStencilInstancedEntry = {
+  kind: 'instanced';
+  key: string;
+  geometry: THREE.BufferGeometry;
+  matrices: THREE.Matrix4[];
+  minZByInstance: number[];
+  maxZByInstance: number[];
+  minZ: number;
+  maxZ: number;
+};
+
+type StaticStencilEntry = StaticStencilMeshEntry | StaticStencilInstancedEntry;
+
+type VisibleStaticStencilInstancedEntry = {
+  key: string;
+  geometry: THREE.BufferGeometry;
+  capacity: number;
+  matrices: THREE.Matrix4[];
 };
 
 type StencilZBoundsEntry<T> = {
@@ -24,6 +46,67 @@ type StencilZBoundsEntry<T> = {
   minZ: number;
   maxZ: number;
 };
+
+function StaticInstancedStencilPass({
+  geometry,
+  capacity,
+  matrices,
+  backMaterial,
+  frontMaterial,
+  backRenderOrder,
+  frontRenderOrder,
+}: {
+  geometry: THREE.BufferGeometry;
+  capacity: number;
+  matrices: THREE.Matrix4[];
+  backMaterial: THREE.Material;
+  frontMaterial: THREE.Material;
+  backRenderOrder: number;
+  frontRenderOrder: number;
+}) {
+  const backRef = React.useRef<THREE.InstancedMesh>(null);
+  const frontRef = React.useRef<THREE.InstancedMesh>(null);
+
+  React.useLayoutEffect(() => {
+    const back = backRef.current;
+    const front = frontRef.current;
+    if (!back || !front) return;
+
+    for (let i = 0; i < matrices.length; i += 1) {
+      const matrix = matrices[i];
+      back.setMatrixAt(i, matrix);
+      front.setMatrixAt(i, matrix);
+    }
+
+    back.count = matrices.length;
+    front.count = matrices.length;
+    back.instanceMatrix.needsUpdate = true;
+    front.instanceMatrix.needsUpdate = true;
+  }, [matrices]);
+
+  if (matrices.length === 0) return null;
+
+  return (
+    <>
+      <instancedMesh
+        ref={backRef}
+        args={[geometry, undefined, capacity]}
+        material={backMaterial}
+        renderOrder={backRenderOrder}
+        frustumCulled={false}
+        raycast={() => null}
+      />
+      <instancedMesh
+        ref={frontRef}
+        args={[geometry, undefined, capacity]}
+        material={frontMaterial}
+        renderOrder={frontRenderOrder}
+        frustumCulled={false}
+        raycast={() => null}
+      />
+    </>
+  );
+}
 
 function materialContributesToStencil(material: THREE.Material): boolean {
   const mat = material as THREE.Material & {
@@ -117,11 +200,6 @@ function getGeometryCenter(geometry: THREE.BufferGeometry): THREE.Vector3 {
   return new THREE.Vector3();
 }
 
-function intersectsClipPlaneAtZ(bounds: { min: number; max: number } | null, clipZ: number): boolean {
-  if (!bounds) return false;
-  return clipZ >= bounds.min - 1e-4 && clipZ <= bounds.max + 1e-4;
-}
-
 function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
   return clipZ >= minZ - 1e-4 && clipZ <= maxZ + 1e-4;
 }
@@ -209,10 +287,10 @@ export function CrossSectionStencilCap({
     return material;
   }, [color]);
 
-  const staticSourceMeshes = React.useMemo<StaticStencilMeshEntry[]>(() => {
+  const staticSourceEntries = React.useMemo<StaticStencilEntry[]>(() => {
     if (!sourceObject) return [];
 
-    const results: StaticStencilMeshEntry[] = [];
+    const results: StaticStencilEntry[] = [];
     const instanceMatrix = new THREE.Matrix4();
     const worldInstanceMatrix = new THREE.Matrix4();
 
@@ -224,27 +302,56 @@ export function CrossSectionStencilCap({
       const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
       if (!geometry || !geometry.getAttribute('position')) return;
 
+      const center = getGeometryCenter(geometry);
+
       const maybeInstancedMesh = mesh as THREE.InstancedMesh;
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
-        const center = getGeometryCenter(geometry);
+        const matrices: THREE.Matrix4[] = [];
+        const minZByInstance: number[] = [];
+        const maxZByInstance: number[] = [];
+        let minZ = Number.POSITIVE_INFINITY;
+        let maxZ = Number.NEGATIVE_INFINITY;
+
         for (let i = 0; i < maybeInstancedMesh.count; i += 1) {
           maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
           worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
-          results.push({
-            key: `${mesh.uuid}:inst:${i}`,
-            geometry,
-            center,
-            matrixWorld: worldInstanceMatrix.clone(),
-          });
+          const centeredMatrix = composeCenteredGeometryMatrix(worldInstanceMatrix, center);
+          const bounds = getGeometryWorldZBounds(geometry, centeredMatrix);
+          if (!bounds) continue;
+
+          matrices.push(centeredMatrix);
+          minZByInstance.push(bounds.min);
+          maxZByInstance.push(bounds.max);
+          minZ = Math.min(minZ, bounds.min);
+          maxZ = Math.max(maxZ, bounds.max);
         }
+
+        if (matrices.length === 0) return;
+
+        results.push({
+          kind: 'instanced',
+          key: `${mesh.uuid}:instanced`,
+          geometry,
+          matrices,
+          minZByInstance,
+          maxZByInstance,
+          minZ,
+          maxZ,
+        });
         return;
       }
 
+      const centeredMatrix = composeCenteredGeometryMatrix(mesh.matrixWorld, center);
+      const bounds = getGeometryWorldZBounds(geometry, centeredMatrix);
+      if (!bounds) return;
+
       results.push({
+        kind: 'single',
         key: mesh.uuid,
         geometry,
-        center: getGeometryCenter(geometry),
-        matrixWorld: mesh.matrixWorld.clone(),
+        matrix: centeredMatrix,
+        minZ: bounds.min,
+        maxZ: bounds.max,
       });
     });
 
@@ -270,26 +377,43 @@ export function CrossSectionStencilCap({
       .map((entry) => entry.item);
   }, [entryBounds, y]);
 
-  const staticSourceBounds = React.useMemo(() => {
-    return staticSourceMeshes.map<StencilZBoundsEntry<StaticStencilMeshEntry> | null>((entry) => {
-      const bounds = getGeometryWorldZBounds(
-        entry.geometry,
-        composeCenteredGeometryMatrix(entry.matrixWorld, entry.center),
-      );
-      if (!bounds) return null;
-      return {
-        item: entry,
-        minZ: bounds.min,
-        maxZ: bounds.max,
-      };
-    }).filter((entry): entry is StencilZBoundsEntry<StaticStencilMeshEntry> => entry !== null);
-  }, [staticSourceMeshes]);
+  const visibleStaticSingleEntries = React.useMemo(() => {
+    const visibleSingles: StaticStencilMeshEntry[] = [];
+    for (const entry of staticSourceEntries) {
+      if (entry.kind !== 'single') continue;
+      if (!intersectsMinMaxZ(entry.minZ, entry.maxZ, y)) continue;
+      visibleSingles.push(entry);
+    }
+    return visibleSingles;
+  }, [staticSourceEntries, y]);
 
-  const visibleStaticSourceMeshes = React.useMemo(() => {
-    return staticSourceBounds
-      .filter((entry) => intersectsMinMaxZ(entry.minZ, entry.maxZ, y))
-      .map((entry) => entry.item);
-  }, [staticSourceBounds, y]);
+  const visibleStaticInstancedEntries = React.useMemo<VisibleStaticStencilInstancedEntry[]>(() => {
+    const visibleInstanced: VisibleStaticStencilInstancedEntry[] = [];
+
+    for (const entry of staticSourceEntries) {
+      if (entry.kind !== 'instanced') continue;
+      if (!intersectsMinMaxZ(entry.minZ, entry.maxZ, y)) continue;
+
+      const matrices: THREE.Matrix4[] = [];
+      for (let i = 0; i < entry.matrices.length; i += 1) {
+        if (!intersectsMinMaxZ(entry.minZByInstance[i], entry.maxZByInstance[i], y)) continue;
+        matrices.push(entry.matrices[i]);
+      }
+
+      if (matrices.length === 0) continue;
+
+      visibleInstanced.push({
+        key: entry.key,
+        geometry: entry.geometry,
+        capacity: entry.matrices.length,
+        matrices,
+      });
+    }
+
+    return visibleInstanced;
+  }, [staticSourceEntries, y]);
+
+  const hasVisibleStaticSource = visibleStaticSingleEntries.length > 0 || visibleStaticInstancedEntries.length > 0;
 
   React.useEffect(() => {
     return () => {
@@ -301,7 +425,7 @@ export function CrossSectionStencilCap({
     };
   }, [capPlaneGeometry, capPlaneMaterial, stencilBack, stencilBase, stencilFront]);
 
-  if (!visible || (visibleEntries.length === 0 && visibleStaticSourceMeshes.length === 0)) return null;
+  if (!visible || (visibleEntries.length === 0 && !hasVisibleStaticSource)) return null;
 
   return (
     <group renderOrder={990}>
@@ -329,25 +453,13 @@ export function CrossSectionStencilCap({
                 raycast={() => null}
               />
             </group>
-
-            <mesh
-              geometry={capPlaneGeometry}
-              material={capPlaneMaterial}
-              position={[0, 0, y + 1e-4]}
-              renderOrder={990.25}
-              frustumCulled={false}
-              raycast={() => null}
-              onAfterRender={(renderer) => {
-                (renderer as THREE.WebGLRenderer).clearStencil();
-              }}
-            />
           </group>
         );
       })}
 
-      {visibleStaticSourceMeshes.map((entry) => (
+      {visibleStaticSingleEntries.map((entry) => (
         <group key={`stencil-source-pass-${entry.key}`}>
-          <group matrix={composeCenteredGeometryMatrix(entry.matrixWorld, entry.center)} matrixAutoUpdate={false}>
+          <group matrix={entry.matrix} matrixAutoUpdate={false}>
             <mesh
               geometry={entry.geometry}
               material={stencilBack}
@@ -363,20 +475,33 @@ export function CrossSectionStencilCap({
               raycast={() => null}
             />
           </group>
-
-          <mesh
-            geometry={capPlaneGeometry}
-            material={capPlaneMaterial}
-            position={[0, 0, y + 1e-4]}
-            renderOrder={990.45}
-            frustumCulled={false}
-            raycast={() => null}
-            onAfterRender={(renderer) => {
-              (renderer as THREE.WebGLRenderer).clearStencil();
-            }}
-          />
         </group>
       ))}
+
+      {visibleStaticInstancedEntries.map((entry) => (
+        <StaticInstancedStencilPass
+          key={`stencil-source-instanced-pass-${entry.key}`}
+          geometry={entry.geometry}
+          capacity={entry.capacity}
+          matrices={entry.matrices}
+          backMaterial={stencilBack}
+          frontMaterial={stencilFront}
+          backRenderOrder={990.3}
+          frontRenderOrder={990.4}
+        />
+      ))}
+
+      <mesh
+        geometry={capPlaneGeometry}
+        material={capPlaneMaterial}
+        position={[0, 0, y + 1e-4]}
+        renderOrder={990.45}
+        frustumCulled={false}
+        raycast={() => null}
+        onAfterRender={(renderer) => {
+          (renderer as THREE.WebGLRenderer).clearStencil();
+        }}
+      />
     </group>
   );
 }

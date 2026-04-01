@@ -79,6 +79,7 @@ export function ModelAttachedSupportLayer({
   kickstandPlacementPreview = null,
 }: ModelAttachedSupportLayerProps) {
   const useUltraLazyPrepareSupports = mode === 'prepare';
+  const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
 
   return (
     <>
@@ -158,7 +159,7 @@ export function ModelAttachedSupportLayer({
           ghostOpacity={ghostOpacity}
           onModelPointerSelect={onModelPointerSelect}
           enablePointerSelection={!navigationLodActive && !disableSelectionAndHover && !passive}
-          includeDetailedPrimitives={supportProxyIncludeDetailedPrimitives}
+          includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
         />
       ) : (
         <SupportRenderer
