@@ -367,49 +367,14 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
   };
 
   try {
-    // --- Step 1: Stage raw mesh bytes via binary IPC ---
+    // --- Step 1: Compute Payload Stats ---
     const payloadBuildStart = performance.now();
     const metadataJson = JSON.stringify(toNativeMetadataPayload(job));
 
-    let meshBytesLen = 0;
-    let stageMeshMs = 0;
+    let meshBytesLen = job.trianglesXYZ.byteLength;
+    let stageMeshMs = 0; // Handled concurrently by Orchestrator now!
 
-    {
-      // Zero-copy Uint8Array view of the underlying Float32Array buffer
-      const meshBytes = new Uint8Array(
-        job.trianglesXYZ.buffer,
-        job.trianglesXYZ.byteOffset,
-        job.trianglesXYZ.byteLength,
-      );
-      meshBytesLen = meshBytes.byteLength;
-
-      if (abortSignal?.aborted) {
-        cleanup();
-        throw createAbortError();
-      }
-
-      const stageStart = performance.now();
-      await core.invoke('stage_mesh_binary_start', { totalBytes: meshBytes.byteLength });
-
-      const CHUNK_SIZE = 48 * 1024 * 1024; // 48 MB chunks (fewer round trips)
-      for (let i = 0; i < meshBytes.byteLength; i += CHUNK_SIZE) {
-        if (abortSignal?.aborted) {
-          cleanup();
-          throw createAbortError();
-        }
-        
-        const chunk = meshBytes.subarray(i, i + CHUNK_SIZE);
-        await core.invoke<number>('stage_mesh_binary_chunk', chunk, {
-          headers: { 'Content-Type': 'application/octet-stream' },
-        });
-      }
-      
-      stageMeshMs = performance.now() - stageStart;
-    }
-
-    // Release the giant JS-side triangle buffer as early as possible.
-    // Rust now owns the staged mesh bytes, so keeping this alive only increases
-    // peak renderer memory usage while slicing is in progress.
+    // Release the JS-side empty array 
     job.trianglesXYZ = new Float32Array(0);
 
     const payloadBuildMs = performance.now() - payloadBuildStart;

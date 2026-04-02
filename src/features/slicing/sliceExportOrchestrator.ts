@@ -9,6 +9,7 @@ import {
   type NativeSlicerPerfMetrics,
   type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
+import { invoke } from '@tauri-apps/api/core';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 
 function resolvePngCompressionStrategy(
@@ -308,12 +309,28 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     format: format.outputFormat,
     modelCount: options.models.length,
   });
+
+  // Tell Rust to get ready. The bytes length is not needed upfront anymore!
+  await invoke('stage_mesh_binary_start', { totalBytes: 0 });
+
+  let cumulativeBytesStage = 0;
+  const handleMeshChunk = async (chunk: Uint8Array) => {
+    throwIfAborted(options.abortSignal);
+    cumulativeBytesStage += chunk.byteLength;
+    const mb = Math.round(cumulativeBytesStage / (1024 * 1024));
+    options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
+    await invoke('stage_mesh_binary_chunk', chunk, {
+      headers: { 'Content-Type': 'application/octet-stream' },
+    });
+  };
+
   const meshPrepStartMs = performance.now();
-  const solidMesh = buildSolidSliceMeshForWasm({
+  const solidMesh = await buildSolidSliceMeshForWasm({
     models: options.models,
     printerProfile: options.printerProfile,
     materialProfile: options.materialProfile,
     filenameBase: options.filenameBase,
+    flushBinaryMeshChunk: handleMeshChunk,
   });
   const meshPrepMs = performance.now() - meshPrepStartMs;
 

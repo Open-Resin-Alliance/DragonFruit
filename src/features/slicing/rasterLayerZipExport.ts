@@ -31,6 +31,7 @@ export type RasterLayerZipExportOptions = {
   outputMode?: 'download' | 'return';
   abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
+  flushBinaryMeshChunk?: (chunk: Uint8Array) => Promise<void>;
 };
 
 function createAbortError(message = 'Slicing canceled by user.'): Error {
@@ -348,10 +349,20 @@ class TriangleFloatCollector {
   private triangleCountValue = 0;
 
   private maxZValue = -Infinity;
+  
+  private flushCallback?: (chunk: Uint8Array) => Promise<void>;
+  
+  private flushChain: Promise<void> = Promise.resolve();
+  
+  private chunkElementLimit = 0;
 
-  constructor(initialTriangleCapacity: number) {
+  constructor(initialTriangleCapacity: number, flushCallback?: (chunk: Uint8Array) => Promise<void>) {
     const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
     this.data = new Float32Array(safeTriangleCapacity * 9);
+    this.flushCallback = flushCallback;
+    
+    // If flushing is enabled, cap the local array at 6M floats (~24MB per chunk)
+    this.chunkElementLimit = flushCallback ? 6_000_000 : Infinity;
   }
 
   get triangleCount(): number {
@@ -410,7 +421,17 @@ class TriangleFloatCollector {
     }
   }
 
-  finalize(): Float32Array {
+  async finalize(): Promise<Float32Array> {
+    if (this.flushCallback) {
+      if (this.cursor > 0) {
+        const remaining = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
+        this.flushChain = this.flushChain.then(() => this.flushCallback!(remaining));
+        this.cursor = 0;
+      }
+      await this.flushChain;
+      return new Float32Array(0); // Sent gradually!
+    }
+
     if (this.cursor === this.data.length) {
       return this.data;
     }
@@ -419,6 +440,16 @@ class TriangleFloatCollector {
 
   private ensureCapacity(additionalFloats: number): void {
     const required = this.cursor + additionalFloats;
+
+    if (this.flushCallback && required >= this.chunkElementLimit) {
+      const chunk = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
+      this.flushChain = this.flushChain.then(() => this.flushCallback!(chunk));
+      
+      this.data = new Float32Array(this.chunkElementLimit);
+      this.cursor = 0;
+      return;
+    }
+
     if (required <= this.data.length) return;
 
     let nextLength = Math.max(this.data.length * 2, 9);
@@ -1951,7 +1982,7 @@ export async function rasterizeLayersForWasm(options: RasterLayerZipExportOption
   };
 }
 
-export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions): SolidSliceMeshForWasm {
+export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions): Promise<SolidSliceMeshForWasm> {
   const visibleModels = options.models.filter((model) => model.visible);
   if (visibleModels.length === 0) {
     throw new Error('No visible models available for slicing.');
@@ -1964,7 +1995,7 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
   const settings = resolveEffectiveSettings(options);
   const perfSettings = getSavedSlicingPerformanceSettings();
   const modelTriangleCount = countModelWorldTriangles(visibleModels);
-  const collector = new TriangleFloatCollector(modelTriangleCount + 4096);
+  const collector = new TriangleFloatCollector(modelTriangleCount + 4096, options.flushBinaryMeshChunk);
 
   appendModelWorldTrianglesToCollector(visibleModels, collector);
   emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
@@ -1991,7 +2022,7 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
   const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
   const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
 
-  const trianglesXYZ = collector.finalize();
+  const trianglesXYZ = await collector.finalize();
   emitMeshPrepDiagnostic('Mesh prep: finalize', 3, 4, {
     triangleFloatCount: trianglesXYZ.length,
     triangleBytes: trianglesXYZ.byteLength,

@@ -4,7 +4,6 @@
 //! slicing plane, reducing per-layer raster work.
 
 use crate::geometry::Triangle;
-use rayon::prelude::*;
 use std::mem::size_of;
 
 const DEFAULT_LAYER_INDEX_BUDGET_MB: u64 = 768; // Increased budget since IPC chunking prevents peak RAM spike
@@ -87,44 +86,32 @@ pub fn build_layer_index(
     total_layers: u32,
     layer_height_mm: f32,
 ) -> LayerIndex {
-    let ranges: Vec<Option<(u32, u32)>> = triangles
-        .par_iter()
-        .map(|tri| layer_range_for_triangle(tri, layer_height_mm, total_layers))
-        .collect();
+    let mut ranges = Vec::<Option<(u32, u32)>>::with_capacity(triangles.len());
+    let mut estimated_dense_entries = 0u64;
 
-    let estimated_dense_entries: u64 = ranges
-        .par_iter()
-        .filter_map(|r| *r)
-        .map(|(start, end)| (end.saturating_sub(start).saturating_add(1)) as u64)
-        .sum();
+    for tri in triangles {
+        if let Some((start, end)) = layer_range_for_triangle(tri, layer_height_mm, total_layers) {
+            estimated_dense_entries = estimated_dense_entries
+                .saturating_add((end.saturating_sub(start).saturating_add(1)) as u64);
+            ranges.push(Some((start, end)));
+        } else {
+            ranges.push(None);
+        }
+    }
 
     let budget_bytes = resolve_layer_index_budget_bytes();
     let bytes_per_entry = (size_of::<usize>() as u64).max(1);
     let max_dense_entries = (budget_bytes / bytes_per_entry).max(1);
 
     if estimated_dense_entries <= max_dense_entries {
-        let bucket_sizes = ranges
-            .par_iter()
-            .fold(
-                || vec![0usize; total_layers as usize],
-                |mut acc, range| {
-                    if let Some((start, end)) = range {
-                        for l in *start..=*end {
-                            acc[l as usize] += 1;
-                        }
-                    }
-                    acc
-                },
-            )
-            .reduce(
-                || vec![0usize; total_layers as usize],
-                |mut acc, sizes| {
-                    for (i, &size) in sizes.iter().enumerate() {
-                        acc[i] += size;
-                    }
-                    acc
-                },
-            );
+        let mut bucket_sizes = vec![0usize; total_layers as usize];
+        for range in &ranges {
+            if let Some((start, end)) = range {
+                for l in *start..=*end {
+                    bucket_sizes[l as usize] += 1;
+                }
+            }
+        }
 
         let mut buckets: Vec<Vec<usize>> = bucket_sizes
             .into_iter()
@@ -149,30 +136,16 @@ pub fn build_layer_index(
 
     let band_count = ((total_layers + band_size_layers - 1) / band_size_layers) as usize;
 
-    let band_sizes = ranges
-        .par_iter()
-        .fold(
-            || vec![0usize; band_count],
-            |mut acc, range| {
-                if let Some((start, end)) = range {
-                    let band_start = (*start / band_size_layers) as usize;
-                    let band_end = (*end / band_size_layers) as usize;
-                    for band in band_start..=band_end {
-                        acc[band] += 1;
-                    }
-                }
-                acc
-            },
-        )
-        .reduce(
-            || vec![0usize; band_count],
-            |mut acc, sizes| {
-                for (i, &size) in sizes.iter().enumerate() {
-                    acc[i] += size;
-                }
-                acc
-            },
-        );
+    let mut band_sizes = vec![0usize; band_count];
+    for range in &ranges {
+        if let Some((start, end)) = range {
+            let band_start = (*start / band_size_layers) as usize;
+            let band_end = (*end / band_size_layers) as usize;
+            for band in band_start..=band_end {
+                band_sizes[band] += 1;
+            }
+        }
+    }
 
     let mut bands: Vec<Vec<usize>> = band_sizes
         .into_iter()
