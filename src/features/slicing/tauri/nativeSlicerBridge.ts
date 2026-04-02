@@ -371,8 +371,8 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     const payloadBuildStart = performance.now();
     const metadataJson = JSON.stringify(toNativeMetadataPayload(job));
 
-    let meshBytesLen = job.trianglesXYZ.byteLength;
-    let stageMeshMs = 0; // Handled concurrently by Orchestrator now!
+    const meshBytesLen = job.trianglesXYZ.byteLength;
+    const stageMeshMs = 0; // Handled concurrently by Orchestrator now!
 
     // Release the JS-side empty array 
     job.trianglesXYZ = new Float32Array(0);
@@ -547,6 +547,23 @@ export async function writeBytesToNativePath(
   }
 
   return core.invoke<string>('write_bytes_to_path', {
+    args: {
+      destinationPath,
+      bytes: Uint8Array.from(bytes),
+    },
+  });
+}
+
+export async function appendBytesToNativePath(
+  destinationPath: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native file writing is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('append_bytes_to_path', {
     args: {
       destinationPath,
       bytes: Uint8Array.from(bytes),

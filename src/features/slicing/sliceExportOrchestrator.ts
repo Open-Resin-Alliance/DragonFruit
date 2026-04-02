@@ -45,10 +45,64 @@ function resolveContainerCompressionLevel(strategy: 'fastest' | 'balanced' | 'sm
 }
 
 const DEBUG_PREFIX = '[SlicingDebug]';
+const BYTES_PER_TRIANGLE_XYZ = Float32Array.BYTES_PER_ELEMENT * 9;
+const STAGING_PREALLOC_MIN_BYTES = 16 * 1024 * 1024;
+const STAGING_PREALLOC_MAX_BYTES = 1024 * 1024 * 1024;
+const STAGING_PREALLOC_HEADROOM = 1.35;
+const STAGING_CHUNK_TARGET_MIN_BYTES = 16 * 1024 * 1024;
+const STAGING_CHUNK_TARGET_MAX_BYTES = 128 * 1024 * 1024;
+const STAGING_CHUNK_TARGET_DIVISOR = 6;
+const STAGE_MESH_SINGLE_SHOT_MAX_BYTES = 256 * 1024 * 1024;
+// File-backed staging incurs an additional disk write + read pass, so keep it as a
+// high-watermark fallback for very large meshes where in-memory staging becomes risky.
+const STAGE_MESH_FILE_BACKED_MIN_BYTES = 2 * 1024 * 1024 * 1024;
+const STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS = 250;
+const STAGE_PROGRESS_UPDATE_MIN_BYTES = 64 * 1024 * 1024;
+
+type StageMeshChunkAck = {
+  chunkBytes: number;
+  totalBytes: number;
+  capacityBytes: number;
+  reserveGrew: boolean;
+  chunksReceived: number;
+  appendNs: number;
+  appendNsTotal: number;
+};
 
 function logDebug(...args: unknown[]): void {
   if (typeof console === 'undefined' || typeof console.debug !== 'function') return;
   console.debug(DEBUG_PREFIX, ...args);
+}
+
+function estimateInitialMeshStagingBytes(models: LoadedModel[]): number {
+  const visibleModelTriangles = models.reduce((sum, model) => {
+    if (!model.visible) return sum;
+    const triangleCount = Number.isFinite(model.polygonCount)
+      ? Math.max(0, Math.floor(model.polygonCount))
+      : 0;
+    return sum + triangleCount;
+  }, 0);
+
+  if (visibleModelTriangles <= 0) {
+    return STAGING_PREALLOC_MIN_BYTES;
+  }
+
+  const estimatedBytes = Math.ceil(
+    visibleModelTriangles * BYTES_PER_TRIANGLE_XYZ * STAGING_PREALLOC_HEADROOM,
+  );
+
+  return Math.max(
+    STAGING_PREALLOC_MIN_BYTES,
+    Math.min(STAGING_PREALLOC_MAX_BYTES, estimatedBytes),
+  );
+}
+
+function resolveMeshChunkTargetBytes(initialMeshStagingBytes: number): number {
+  const dynamicTarget = Math.ceil(initialMeshStagingBytes / STAGING_CHUNK_TARGET_DIVISOR);
+  return Math.max(
+    STAGING_CHUNK_TARGET_MIN_BYTES,
+    Math.min(STAGING_CHUNK_TARGET_MAX_BYTES, dynamicTarget),
+  );
 }
 
 export type SliceExportOrchestratorOptions = {
@@ -138,6 +192,10 @@ export type SliceExportResult = {
       metadataJsonBytes: number;
       exportThumbnailProvided: boolean;
       exportThumbnailBytes: number;
+      initialMeshStagingBytes: number;
+      meshChunkTargetBytes: number;
+      meshTransferMode: 'single-shot' | 'streamed' | 'file-backed';
+      meshStageFilePath: string | null;
     };
     nativePerf: {
       perf: NativeSlicerPerfMetrics | null;
@@ -149,6 +207,13 @@ export type SliceExportResult = {
       triangleFloatCount: number | null;
       meshBytesLen: number | null;
       stageMeshMs: number | null;
+      stageMeshBytes: number | null;
+      stageMeshChunkCount: number | null;
+      stageMeshAvgChunkBytes: number | null;
+      stageMeshThroughputMiBPerSec: number | null;
+      stageMeshAckAppendMs: number | null;
+      stageMeshCapacityMaxBytes: number | null;
+      stageMeshReserveGrowthEvents: number | null;
       transportOverheadMs: number | null;
       renderWallMs: number | null;
       renderCpuMs: number | null;
@@ -310,18 +375,94 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     modelCount: options.models.length,
   });
 
-  // Tell Rust to get ready. The bytes length is not needed upfront anymore!
-  await invoke('stage_mesh_binary_start', { totalBytes: 0 });
+  const initialMeshStagingBytes = estimateInitialMeshStagingBytes(options.models);
+  const meshChunkTargetBytes = resolveMeshChunkTargetBytes(initialMeshStagingBytes);
+  const meshTransferMode: 'single-shot' | 'streamed' | 'file-backed' = initialMeshStagingBytes >= STAGE_MESH_FILE_BACKED_MIN_BYTES
+    ? 'file-backed'
+    : initialMeshStagingBytes <= STAGE_MESH_SINGLE_SHOT_MAX_BYTES
+      ? 'single-shot'
+      : 'streamed';
+  let meshStageFilePath: string | null = null;
+
+  if (meshTransferMode === 'streamed') {
+    // Tell Rust to reserve a realistic staging buffer before chunks arrive.
+    await invoke('stage_mesh_binary_start', { totalBytes: initialMeshStagingBytes });
+  } else if (meshTransferMode === 'file-backed') {
+    meshStageFilePath = await invoke<string>('allocate_mesh_stage_path');
+  }
+
+  logDebug('Initialized mesh staging buffer', {
+    initialMeshStagingBytes,
+    initialMeshStagingMiB: Number((initialMeshStagingBytes / (1024 * 1024)).toFixed(2)),
+    meshChunkTargetBytes,
+    meshChunkTargetMiB: Number((meshChunkTargetBytes / (1024 * 1024)).toFixed(2)),
+    meshTransferMode,
+  });
 
   let cumulativeBytesStage = 0;
+  let stageMeshIpcMs = 0;
+  let stageMeshChunkCount = 0;
+  let stageMeshAckAppendNsTotal = 0;
+  let stageMeshCapacityMaxBytes = 0;
+  let stageMeshReserveGrowthEvents = 0;
+  let lastStageProgressUpdateMs = 0;
+  let lastStageProgressUpdateBytes = 0;
+
+  const maybeEmitStageProgress = () => {
+    const nowMs = performance.now();
+    const shouldEmitProgress = stageMeshChunkCount === 1
+      || (nowMs - lastStageProgressUpdateMs) >= STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS
+      || (cumulativeBytesStage - lastStageProgressUpdateBytes) >= STAGE_PROGRESS_UPDATE_MIN_BYTES;
+    if (!shouldEmitProgress) return;
+
+    const mb = Math.round(cumulativeBytesStage / (1024 * 1024));
+    options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
+    lastStageProgressUpdateMs = nowMs;
+    lastStageProgressUpdateBytes = cumulativeBytesStage;
+  };
+
   const handleMeshChunk = async (chunk: Uint8Array) => {
     throwIfAborted(options.abortSignal);
     cumulativeBytesStage += chunk.byteLength;
-    const mb = Math.round(cumulativeBytesStage / (1024 * 1024));
-    options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
-    await invoke('stage_mesh_binary_chunk', chunk, {
+    stageMeshChunkCount += 1;
+    maybeEmitStageProgress();
+
+    const chunkInvokeStart = performance.now();
+    const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_chunk', chunk, {
       headers: { 'Content-Type': 'application/octet-stream' },
     });
+
+    stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
+    stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
+    if (chunkAck.reserveGrew) {
+      stageMeshReserveGrowthEvents += 1;
+    }
+
+    stageMeshIpcMs += performance.now() - chunkInvokeStart;
+  };
+
+  const handleMeshFileChunk = async (chunk: Uint8Array) => {
+    throwIfAborted(options.abortSignal);
+    if (!meshStageFilePath) {
+      throw new Error('Mesh stage file path was not allocated before chunk append.');
+    }
+
+    cumulativeBytesStage += chunk.byteLength;
+    stageMeshChunkCount += 1;
+    maybeEmitStageProgress();
+
+    const appendStart = performance.now();
+    const appendedLen = await invoke<number>('append_mesh_stage_chunk', chunk, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-mesh-stage-path': meshStageFilePath,
+      },
+    });
+    stageMeshIpcMs += performance.now() - appendStart;
+
+    if (appendedLen > 0) {
+      cumulativeBytesStage = appendedLen;
+    }
   };
 
   const meshPrepStartMs = performance.now();
@@ -330,9 +471,52 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     printerProfile: options.printerProfile,
     materialProfile: options.materialProfile,
     filenameBase: options.filenameBase,
-    flushBinaryMeshChunk: handleMeshChunk,
+    flushBinaryMeshChunk: meshTransferMode === 'streamed'
+      ? handleMeshChunk
+      : meshTransferMode === 'file-backed'
+        ? handleMeshFileChunk
+        : undefined,
+    meshChunkTargetBytes,
   });
   const meshPrepMs = performance.now() - meshPrepStartMs;
+
+  if (meshTransferMode === 'single-shot') {
+    const meshBytes = new Uint8Array(
+      solidMesh.trianglesXYZ.buffer,
+      solidMesh.trianglesXYZ.byteOffset,
+      solidMesh.trianglesXYZ.byteLength,
+    );
+    const mb = Math.round(meshBytes.byteLength / (1024 * 1024));
+    options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
+
+    const chunkInvokeStart = performance.now();
+    const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_set', meshBytes, {
+      headers: { 'Content-Type': 'application/octet-stream' },
+    });
+
+    stageMeshIpcMs += performance.now() - chunkInvokeStart;
+    cumulativeBytesStage = chunkAck.totalBytes > 0 ? chunkAck.totalBytes : meshBytes.byteLength;
+    stageMeshChunkCount = chunkAck.chunksReceived > 0 ? chunkAck.chunksReceived : 1;
+    stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
+    stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
+    if (chunkAck.reserveGrew) {
+      stageMeshReserveGrowthEvents += 1;
+    }
+  } else if (meshTransferMode === 'file-backed') {
+    if (!meshStageFilePath) {
+      throw new Error('Mesh stage file path missing for file-backed transfer mode.');
+    }
+
+    const registerStart = performance.now();
+    const registeredLen = await invoke<number>('stage_mesh_file_path', {
+      meshFilePath: meshStageFilePath,
+    });
+    stageMeshIpcMs += performance.now() - registerStart;
+
+    if (registeredLen > 0) {
+      cumulativeBytesStage = registeredLen;
+    }
+  }
 
   logDebug('Solid mesh prepared for native backend', {
     source: `${solidMesh.sourceWidthPx}x${solidMesh.sourceHeightPx}`,
@@ -340,6 +524,11 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     packingMode: solidMesh.xPackingMode,
     totalLayers: solidMesh.totalLayers,
     meshPrepMs,
+    stagedMeshBytes: cumulativeBytesStage,
+    stagedMeshChunkCount: stageMeshChunkCount,
+    stageMeshIpcMs,
+    meshTransferMode,
+    meshStageFilePath,
   });
   emitDiagnosticProgress('Preparing mesh complete', 1, 1, {
     meshPrepMs,
@@ -444,6 +633,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   const layersPerSecond = totalElapsedMs > 0
     ? (solidMesh.totalLayers * 1000) / totalElapsedMs
     : null;
+  const stageMeshAvgChunkBytes = stageMeshChunkCount > 0
+    ? (cumulativeBytesStage / stageMeshChunkCount)
+    : null;
+  const stageMeshThroughputMiBPerSec = stageMeshIpcMs > 0
+    ? ((cumulativeBytesStage / (1024 * 1024)) / (stageMeshIpcMs / 1000))
+    : null;
+  const stageMeshAckAppendMs = stageMeshAckAppendNsTotal > 0
+    ? (stageMeshAckAppendNsTotal / 1_000_000)
+    : null;
 
   return {
     backend: 'native-rust-tauri',
@@ -489,6 +687,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         metadataJsonBytes: nativeJob.metadataJson.length,
         exportThumbnailProvided: Boolean(options.exportThumbnailPng && options.exportThumbnailPng.length > 0),
         exportThumbnailBytes: options.exportThumbnailPng?.length ?? 0,
+        initialMeshStagingBytes,
+        meshChunkTargetBytes,
+        meshTransferMode,
+        meshStageFilePath,
       },
       nativePerf: {
         perf: encodedArtifact.perf,
@@ -499,7 +701,16 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         bridgePayloadChars: encodedArtifact.bridge?.payloadChars ?? null,
         triangleFloatCount: encodedArtifact.bridge?.triangleFloatCount ?? null,
         meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
-        stageMeshMs: encodedArtifact.bridge?.stageMeshMs ?? null,
+        stageMeshMs: stageMeshIpcMs > 0
+          ? stageMeshIpcMs
+          : (encodedArtifact.bridge?.stageMeshMs ?? null),
+        stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
+        stageMeshChunkCount: stageMeshChunkCount > 0 ? stageMeshChunkCount : null,
+        stageMeshAvgChunkBytes,
+        stageMeshThroughputMiBPerSec,
+        stageMeshAckAppendMs,
+        stageMeshCapacityMaxBytes: stageMeshCapacityMaxBytes > 0 ? stageMeshCapacityMaxBytes : null,
+        stageMeshReserveGrowthEvents,
         transportOverheadMs: encodedArtifact.perf
           ? Math.max(0, coreSlicingMs - (encodedArtifact.perf.totalNs / 1_000_000))
           : null,

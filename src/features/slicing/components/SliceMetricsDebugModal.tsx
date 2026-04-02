@@ -27,6 +27,11 @@ function formatRate(value: number | null | undefined): string {
   return `${value.toFixed(2)} layers/s`;
 }
 
+function formatMiBPerSec(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${value.toFixed(2)} MiB/s`;
+}
+
 function formatBytes(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
   const bytes = Math.max(0, value);
@@ -155,6 +160,10 @@ export function SliceMetricsDebugModal({
               <RuntimeStat label="Container compression" value={String(benchmark.jobConfig.containerCompressionLevel)} />
               <RuntimeStat label="BVH accel requested" value={benchmark.jobConfig.bvhAccelerationEnabled ? 'true' : 'false'} />
               <RuntimeStat label="AA level" value={benchmark.jobConfig.antiAliasingLevel} />
+              <RuntimeStat label="Mesh transfer mode" value={benchmark.jobConfig.meshTransferMode} />
+              <RuntimeStat label="Stage file path" value={benchmark.jobConfig.meshStageFilePath ?? '—'} />
+              <RuntimeStat label="Initial staging reserve" value={formatBytes(benchmark.jobConfig.initialMeshStagingBytes)} />
+              <RuntimeStat label="Target chunk size" value={formatBytes(benchmark.jobConfig.meshChunkTargetBytes)} />
 
               <RuntimeStat label="Layer height" value={`${benchmark.jobConfig.layerHeightMm.toFixed(4)} mm`} />
               <RuntimeStat label="Build area" value={`${benchmark.jobConfig.buildWidthMm.toFixed(2)} × ${benchmark.jobConfig.buildDepthMm.toFixed(2)} mm`} />
@@ -170,6 +179,9 @@ export function SliceMetricsDebugModal({
               <RuntimeStat label="Metadata JSON" value={formatBytes(benchmark.jobConfig.metadataJsonBytes)} />
               <RuntimeStat label="Thumbnail provided" value={benchmark.jobConfig.exportThumbnailProvided ? 'true' : 'false'} />
               <RuntimeStat label="Thumbnail bytes" value={formatBytes(benchmark.jobConfig.exportThumbnailBytes)} />
+              <RuntimeStat label="Staged mesh bytes" value={formatBytes(benchmark.nativePerf.stageMeshBytes)} />
+              <RuntimeStat label="Staged chunk count" value={benchmark.nativePerf.stageMeshChunkCount != null ? benchmark.nativePerf.stageMeshChunkCount.toLocaleString() : '—'} />
+              <RuntimeStat label="Average chunk bytes" value={formatBytes(benchmark.nativePerf.stageMeshAvgChunkBytes)} />
               <RuntimeStat label="Mesh payload bytes" value={formatBytes(benchmark.nativePerf.meshBytesLen)} />
               <RuntimeStat label="Bridge payload chars" value={benchmark.nativePerf.bridgePayloadChars != null ? benchmark.nativePerf.bridgePayloadChars.toLocaleString() : '—'} />
             </div>
@@ -206,6 +218,10 @@ export function SliceMetricsDebugModal({
                 <RuntimeStat label="Mesh prep vs app wall" value={formatPercent(meshPrepVsWallPct)} />
                 <RuntimeStat label="Transport overhead" value={formatMs(benchmark.nativePerf.transportOverheadMs, 2)} />
                 <RuntimeStat label="Stage mesh IPC" value={formatMs(benchmark.nativePerf.stageMeshMs, 2)} />
+                <RuntimeStat label="Stage mesh throughput" value={formatMiBPerSec(benchmark.nativePerf.stageMeshThroughputMiBPerSec)} />
+                <RuntimeStat label="Rust append time" value={formatMs(benchmark.nativePerf.stageMeshAckAppendMs, 2)} />
+                <RuntimeStat label="Staging max capacity" value={formatBytes(benchmark.nativePerf.stageMeshCapacityMaxBytes)} />
+                <RuntimeStat label="Reserve growth events" value={(benchmark.nativePerf.stageMeshReserveGrowthEvents ?? 0).toLocaleString()} />
                 <RuntimeStat label="Bridge payload build" value={formatMs(benchmark.nativePerf.bridgePayloadBuildMs, 2)} />
                 <RuntimeStat label="Bridge invoke roundtrip" value={formatMs(benchmark.nativePerf.bridgeInvokeRoundTripMs, 2)} />
                 <RuntimeStat label="Bridge total" value={formatMs(benchmark.nativePerf.bridgeTotalMs, 2)} />
@@ -222,6 +238,11 @@ export function SliceMetricsDebugModal({
               <RuntimeStat label="bridgePayloadChars" value={benchmark.nativePerf.bridgePayloadChars != null ? benchmark.nativePerf.bridgePayloadChars.toLocaleString() : '—'} />
               <RuntimeStat label="triangleFloatCount" value={benchmark.nativePerf.triangleFloatCount != null ? benchmark.nativePerf.triangleFloatCount.toLocaleString() : '—'} />
               <RuntimeStat label="meshBytesLen" value={benchmark.nativePerf.meshBytesLen != null ? benchmark.nativePerf.meshBytesLen.toLocaleString() : '—'} />
+              <RuntimeStat label="stageMeshChunkCount" value={benchmark.nativePerf.stageMeshChunkCount != null ? benchmark.nativePerf.stageMeshChunkCount.toLocaleString() : '—'} />
+              <RuntimeStat label="stageMeshAvgChunkBytes" value={benchmark.nativePerf.stageMeshAvgChunkBytes != null ? Math.round(benchmark.nativePerf.stageMeshAvgChunkBytes).toLocaleString() : '—'} />
+              <RuntimeStat label="stageMeshAckAppendMs" value={benchmark.nativePerf.stageMeshAckAppendMs != null ? benchmark.nativePerf.stageMeshAckAppendMs.toFixed(3) : '—'} />
+              <RuntimeStat label="stageMeshCapacityMaxBytes" value={benchmark.nativePerf.stageMeshCapacityMaxBytes != null ? benchmark.nativePerf.stageMeshCapacityMaxBytes.toLocaleString() : '—'} />
+              <RuntimeStat label="stageMeshReserveGrowthEvents" value={benchmark.nativePerf.stageMeshReserveGrowthEvents != null ? benchmark.nativePerf.stageMeshReserveGrowthEvents.toLocaleString() : '—'} />
               <RuntimeStat label="totalNs" value={formatNs(perf?.totalNs)} />
               <RuntimeStat label="indexBuildNs" value={formatNs(perf?.indexBuildNs)} />
               <RuntimeStat label="renderWallNs" value={formatNs(perf?.renderWallNs)} />

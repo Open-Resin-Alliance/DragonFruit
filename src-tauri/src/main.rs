@@ -116,9 +116,83 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
 static SLICER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 static CANCEL_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 static STAGED_MESH: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+static STAGED_MESH_STATS: OnceLock<Mutex<StageMeshStats>> = OnceLock::new();
+static STAGED_MESH_FILE_PATH: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static STAGED_MESH_FILE_APPENDER: OnceLock<Mutex<Option<StageFileAppender>>> = OnceLock::new();
+const STAGED_MESH_PREALLOC_MIN_BYTES: usize = 16 * 1024 * 1024;
+const STAGED_MESH_PREALLOC_MAX_BYTES: usize = 1024 * 1024 * 1024;
+
+struct StageFileAppender {
+    path: String,
+    writer: std::io::BufWriter<std::fs::File>,
+    len: u64,
+}
+
+#[derive(Default)]
+struct StageMeshStats {
+    chunks_received: u64,
+    append_ns_total: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StageMeshChunkAck {
+    chunk_bytes: u64,
+    total_bytes: u64,
+    capacity_bytes: u64,
+    reserve_grew: bool,
+    chunks_received: u64,
+    append_ns: u64,
+    append_ns_total: u64,
+}
 
 fn staged_mesh() -> &'static Mutex<Option<Vec<u8>>> {
     STAGED_MESH.get_or_init(|| Mutex::new(None))
+}
+
+fn staged_mesh_stats() -> &'static Mutex<StageMeshStats> {
+    STAGED_MESH_STATS.get_or_init(|| Mutex::new(StageMeshStats::default()))
+}
+
+fn staged_mesh_file_path() -> &'static Mutex<Option<String>> {
+    STAGED_MESH_FILE_PATH.get_or_init(|| Mutex::new(None))
+}
+
+fn staged_mesh_file_appender() -> &'static Mutex<Option<StageFileAppender>> {
+    STAGED_MESH_FILE_APPENDER.get_or_init(|| Mutex::new(None))
+}
+
+fn resolve_mesh_stage_directory() -> std::path::PathBuf {
+    let configured = std::env::var("DF_MESH_STAGE_DIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from);
+
+    configured.unwrap_or_else(std::env::temp_dir)
+}
+
+fn allocate_mesh_stage_file_path() -> Result<std::path::PathBuf, String> {
+    let mut dir = resolve_mesh_stage_directory();
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Failed creating mesh stage directory '{}': {e}",
+            dir.display()
+        )
+    })?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    dir.push(format!("dragonfruit-mesh-stage-{stamp}.bin"));
+    Ok(dir)
+}
+
+fn normalize_staged_mesh_prealloc_bytes(total_bytes_hint: usize) -> usize {
+    total_bytes_hint
+        .max(STAGED_MESH_PREALLOC_MIN_BYTES)
+        .min(STAGED_MESH_PREALLOC_MAX_BYTES)
 }
 
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -340,15 +414,211 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
 /// The bytes are stored in a pre-allocated memory vector and consumed by the next `slice_solid_native_to_temp_path` call.
 #[tauri::command]
 async fn stage_mesh_binary_start(total_bytes: usize) -> Result<(), String> {
+    let reserve_bytes = normalize_staged_mesh_prealloc_bytes(total_bytes);
     *staged_mesh()
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))? =
-        Some(Vec::with_capacity(total_bytes));
+        Some(Vec::with_capacity(reserve_bytes));
+
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats::default();
+
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
+
+    *staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+
     Ok(())
 }
 
 #[tauri::command]
-async fn stage_mesh_binary_chunk(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
+async fn allocate_mesh_stage_path() -> Result<String, String> {
+    let path = allocate_mesh_stage_file_path()?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => {
+            return Err("append_mesh_stage_chunk expects raw binary body, got JSON".into())
+        }
+    };
+
+    let path_header = request
+        .headers()
+        .get("x-mesh-stage-path")
+        .ok_or("append_mesh_stage_chunk missing x-mesh-stage-path header")?;
+
+    let path_text = path_header
+        .to_str()
+        .map_err(|e| format!("Invalid x-mesh-stage-path header value: {e}"))?
+        .trim();
+
+    if path_text.is_empty() {
+        return Err("append_mesh_stage_chunk received empty x-mesh-stage-path header".into());
+    }
+
+    let path = std::path::PathBuf::from(path_text);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
+    }
+
+    let mut appender_lock = staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    let needs_new_appender = match appender_lock.as_ref() {
+        Some(existing) => existing.path != path_text,
+        None => true,
+    };
+
+    if needs_new_appender {
+        if let Some(existing) = appender_lock.as_mut() {
+            use std::io::Write;
+            let _ = existing.writer.flush();
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|err| format!("Failed opening mesh stage file for write: {err}"))?;
+
+        *appender_lock = Some(StageFileAppender {
+            path: path_text.to_string(),
+            writer: std::io::BufWriter::with_capacity(4 * 1024 * 1024, file),
+            len: 0,
+        });
+    }
+
+    let appender = appender_lock
+        .as_mut()
+        .ok_or("Failed initializing mesh stage file appender")?;
+
+    use std::io::Write;
+    appender
+        .writer
+        .write_all(bytes)
+        .map_err(|err| format!("Failed appending mesh stage bytes: {err}"))?;
+    appender.len = appender.len.saturating_add(bytes.len() as u64);
+
+    Ok(appender.len)
+}
+
+#[tauri::command]
+async fn stage_mesh_file_path(mesh_file_path: String) -> Result<u64, String> {
+    let trimmed = mesh_file_path.trim();
+    if trimmed.is_empty() {
+        return Err("stage_mesh_file_path requires a non-empty path".into());
+    }
+
+    let path = std::path::PathBuf::from(trimmed);
+    if !path.exists() {
+        return Err(format!(
+            "Mesh stage file does not exist: {}",
+            path.display()
+        ));
+    }
+
+    {
+        let mut appender_lock = staged_mesh_file_appender()
+            .lock()
+            .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+        if let Some(appender) = appender_lock.as_mut() {
+            if appender.path == trimmed {
+                use std::io::Write;
+                appender
+                    .writer
+                    .flush()
+                    .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            }
+        }
+    }
+
+    let len = std::fs::metadata(&path)
+        .map_err(|e| format!("Failed reading mesh stage file metadata: {e}"))?
+        .len();
+
+    *staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = None;
+
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? =
+        Some(path.to_string_lossy().to_string());
+
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats {
+        chunks_received: 1,
+        append_ns_total: 0,
+    };
+
+    Ok(len)
+}
+
+#[tauri::command]
+async fn stage_mesh_binary_set(
+    request: tauri::ipc::Request<'_>,
+) -> Result<StageMeshChunkAck, String> {
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => {
+            return Err("stage_mesh_binary_set expects raw binary body, got JSON".into())
+        }
+    };
+
+    let reserve_bytes = normalize_staged_mesh_prealloc_bytes(bytes.len());
+    let append_start = std::time::Instant::now();
+    let mut staged = Vec::with_capacity(reserve_bytes);
+    staged.extend_from_slice(bytes);
+    let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let capacity_bytes = staged.capacity() as u64;
+    let total_bytes = staged.len() as u64;
+
+    *staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(staged);
+
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats {
+        chunks_received: 1,
+        append_ns_total: append_ns,
+    };
+
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
+
+    *staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+
+    Ok(StageMeshChunkAck {
+        chunk_bytes: total_bytes,
+        total_bytes,
+        capacity_bytes,
+        reserve_grew: capacity_bytes > reserve_bytes as u64,
+        chunks_received: 1,
+        append_ns,
+        append_ns_total: append_ns,
+    })
+}
+
+#[tauri::command]
+async fn stage_mesh_binary_chunk(
+    request: tauri::ipc::Request<'_>,
+) -> Result<StageMeshChunkAck, String> {
     let bytes = match request.body() {
         InvokeBody::Raw(bytes) => bytes,
         InvokeBody::Json(_) => {
@@ -363,9 +633,32 @@ async fn stage_mesh_binary_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
     let vec = lock
         .as_mut()
         .ok_or("Staged mesh not started. Call stage_mesh_binary_start first")?;
-    vec.extend_from_slice(bytes);
 
-    Ok(vec.len() as u64)
+    let chunk_bytes = bytes.len() as u64;
+    let capacity_before = vec.capacity();
+    let append_start = std::time::Instant::now();
+    vec.extend_from_slice(bytes);
+    let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let capacity_after = vec.capacity();
+    let total_bytes = vec.len() as u64;
+
+    drop(lock);
+
+    let mut stats = staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))?;
+    stats.chunks_received = stats.chunks_received.saturating_add(1);
+    stats.append_ns_total = stats.append_ns_total.saturating_add(append_ns);
+
+    Ok(StageMeshChunkAck {
+        chunk_bytes,
+        total_bytes,
+        capacity_bytes: capacity_after as u64,
+        reserve_grew: capacity_after > capacity_before,
+        chunks_received: stats.chunks_received,
+        append_ns,
+        append_ns_total: stats.append_ns_total,
+    })
 }
 
 #[tauri::command]
@@ -374,11 +667,50 @@ async fn slice_solid_native_to_temp_path(
     job_json: String,
 ) -> Result<NativeSliceTempPathResult, String> {
     // Take the pre-staged mesh bytes (set by stage_mesh_binary)
-    let mesh_bytes = staged_mesh()
+    let staged_mesh_bytes = staged_mesh()
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-        .take()
-        .ok_or("No staged mesh binary — call stage_mesh_binary first")?;
+        .take();
+
+    let mesh_bytes = if let Some(bytes) = staged_mesh_bytes {
+        bytes
+    } else {
+        {
+            let mut appender_lock = staged_mesh_file_appender()
+                .lock()
+                .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+            if let Some(appender) = appender_lock.as_mut() {
+                use std::io::Write;
+                appender
+                    .writer
+                    .flush()
+                    .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            }
+        }
+
+        let staged_path = staged_mesh_file_path()
+            .lock()
+            .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))?
+            .take()
+            .ok_or("No staged mesh binary or file path — call stage_mesh_binary_* or stage_mesh_file_path first")?;
+
+        let path = std::path::PathBuf::from(staged_path.trim());
+        if !path.exists() {
+            return Err(format!(
+                "Staged mesh file no longer exists: {}",
+                path.display()
+            ));
+        }
+
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("Failed reading staged mesh file '{}': {e}", path.display()))?;
+
+        let _ = std::fs::remove_file(&path);
+        *staged_mesh_file_appender()
+            .lock()
+            .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+        bytes
+    };
 
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
@@ -1251,6 +1583,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
             stage_mesh_binary_start,
+            allocate_mesh_stage_path,
+            append_mesh_stage_chunk,
+            stage_mesh_file_path,
+            stage_mesh_binary_set,
             stage_mesh_binary_chunk,
             slice_solid_native_to_temp_path,
             cancel_slicing,

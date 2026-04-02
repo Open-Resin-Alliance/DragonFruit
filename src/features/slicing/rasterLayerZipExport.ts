@@ -22,6 +22,9 @@ import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
+const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
+const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
+const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
 
 export type RasterLayerZipExportOptions = {
   models: LoadedModel[];
@@ -32,7 +35,20 @@ export type RasterLayerZipExportOptions = {
   abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
   flushBinaryMeshChunk?: (chunk: Uint8Array) => Promise<void>;
+  meshChunkTargetBytes?: number;
 };
+
+function normalizeMeshChunkTargetBytes(value: number | null | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_MESH_CHUNK_TARGET_BYTES;
+  }
+
+  const rounded = Math.floor(value as number);
+  return Math.max(
+    MIN_MESH_CHUNK_TARGET_BYTES,
+    Math.min(MAX_MESH_CHUNK_TARGET_BYTES, rounded),
+  );
+}
 
 function createAbortError(message = 'Slicing canceled by user.'): Error {
   if (typeof DOMException !== 'undefined') {
@@ -354,15 +370,24 @@ class TriangleFloatCollector {
   
   private flushChain: Promise<void> = Promise.resolve();
   
-  private chunkElementLimit = 0;
+  private chunkElementLimit = Number.POSITIVE_INFINITY;
 
-  constructor(initialTriangleCapacity: number, flushCallback?: (chunk: Uint8Array) => Promise<void>) {
+  constructor(
+    initialTriangleCapacity: number,
+    flushCallback?: (chunk: Uint8Array) => Promise<void>,
+    chunkTargetBytes?: number,
+  ) {
     const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
     this.data = new Float32Array(safeTriangleCapacity * 9);
     this.flushCallback = flushCallback;
-    
-    // If flushing is enabled, cap the local array at 6M floats (~24MB per chunk)
-    this.chunkElementLimit = flushCallback ? 6_000_000 : Infinity;
+
+    if (flushCallback) {
+      const normalizedChunkBytes = normalizeMeshChunkTargetBytes(chunkTargetBytes);
+      this.chunkElementLimit = Math.max(
+        9,
+        Math.floor(normalizedChunkBytes / Float32Array.BYTES_PER_ELEMENT),
+      );
+    }
   }
 
   get triangleCount(): number {
@@ -1995,7 +2020,11 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const settings = resolveEffectiveSettings(options);
   const perfSettings = getSavedSlicingPerformanceSettings();
   const modelTriangleCount = countModelWorldTriangles(visibleModels);
-  const collector = new TriangleFloatCollector(modelTriangleCount + 4096, options.flushBinaryMeshChunk);
+  const collector = new TriangleFloatCollector(
+    modelTriangleCount + 4096,
+    options.flushBinaryMeshChunk,
+    options.meshChunkTargetBytes,
+  );
 
   appendModelWorldTrianglesToCollector(visibleModels, collector);
   emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
