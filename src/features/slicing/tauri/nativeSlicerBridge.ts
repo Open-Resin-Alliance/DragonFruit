@@ -30,6 +30,15 @@ export type NativeSolidSliceJobEnvelope = {
   totalLayers: number;
   exportThumbnailPngBase64?: string | null;
   trianglesXYZ: Float32Array;
+  meshEncoding?: 'raw_f32' | 'quantized_u16';
+  meshQuantization?: {
+    minX: number;
+    minY: number;
+    minZ: number;
+    maxX: number;
+    maxY: number;
+    maxZ: number;
+  } | null;
   metadataJson: string;
 };
 
@@ -57,6 +66,15 @@ type NativeSolidSlicePayload = {
   total_layers: number;
   export_thumbnail_png_base64?: string | null;
   triangles_xyz: number[];
+  mesh_encoding?: 'raw_f32' | 'quantized_u16';
+  mesh_quantization?: {
+    min_x: number;
+    min_y: number;
+    min_z: number;
+    max_x: number;
+    max_y: number;
+    max_z: number;
+  } | null;
   metadata_json: string;
 };
 
@@ -80,6 +98,15 @@ type NativeSolidSliceMetadataPayload = {
   layer_height_mm: number;
   total_layers: number;
   export_thumbnail_png_base64?: string | null;
+  mesh_encoding?: 'raw_f32' | 'quantized_u16';
+  mesh_quantization?: {
+    min_x: number;
+    min_y: number;
+    min_z: number;
+    max_x: number;
+    max_y: number;
+    max_z: number;
+  } | null;
   metadata_json: string;
 };
 
@@ -154,6 +181,17 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     total_layers: job.totalLayers,
     export_thumbnail_png_base64: job.exportThumbnailPngBase64 ?? null,
     triangles_xyz: Array.from(job.trianglesXYZ),
+    mesh_encoding: job.meshEncoding ?? 'raw_f32',
+    mesh_quantization: job.meshQuantization
+      ? {
+          min_x: job.meshQuantization.minX,
+          min_y: job.meshQuantization.minY,
+          min_z: job.meshQuantization.minZ,
+          max_x: job.meshQuantization.maxX,
+          max_y: job.meshQuantization.maxY,
+          max_z: job.meshQuantization.maxZ,
+        }
+      : null,
     metadata_json: job.metadataJson,
   };
 }
@@ -178,6 +216,17 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     layer_height_mm: job.layerHeightMm,
     total_layers: job.totalLayers,
     export_thumbnail_png_base64: job.exportThumbnailPngBase64 ?? null,
+    mesh_encoding: job.meshEncoding ?? 'raw_f32',
+    mesh_quantization: job.meshQuantization
+      ? {
+          min_x: job.meshQuantization.minX,
+          min_y: job.meshQuantization.minY,
+          min_z: job.meshQuantization.minZ,
+          max_x: job.meshQuantization.maxX,
+          max_y: job.meshQuantization.maxY,
+          max_z: job.meshQuantization.maxZ,
+        }
+      : null,
     metadata_json: job.metadataJson,
   };
 }

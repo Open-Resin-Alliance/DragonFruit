@@ -161,6 +161,7 @@ export function SliceMetricsDebugModal({
               <RuntimeStat label="BVH accel requested" value={benchmark.jobConfig.bvhAccelerationEnabled ? 'true' : 'false'} />
               <RuntimeStat label="AA level" value={benchmark.jobConfig.antiAliasingLevel} />
               <RuntimeStat label="Mesh transfer mode" value={benchmark.jobConfig.meshTransferMode} />
+              <RuntimeStat label="Mesh encoding" value={benchmark.jobConfig.meshEncoding} />
               <RuntimeStat label="Stage file path" value={benchmark.jobConfig.meshStageFilePath ?? '—'} />
               <RuntimeStat label="Initial staging reserve" value={formatBytes(benchmark.jobConfig.initialMeshStagingBytes)} />
               <RuntimeStat label="Target chunk size" value={formatBytes(benchmark.jobConfig.meshChunkTargetBytes)} />

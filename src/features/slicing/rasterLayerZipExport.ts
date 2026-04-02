@@ -131,6 +131,14 @@ export type SolidSliceMeshForWasm = {
   totalLayers: number;
   tallestObjectHeightMm: number;
   trianglesXYZ: Float32Array;
+  meshBounds: {
+    minX: number;
+    minY: number;
+    minZ: number;
+    maxX: number;
+    maxY: number;
+    maxZ: number;
+  };
   metadataJson: string;
 };
 
@@ -365,6 +373,16 @@ class TriangleFloatCollector {
   private triangleCountValue = 0;
 
   private maxZValue = -Infinity;
+
+  private minXValue = Infinity;
+
+  private minYValue = Infinity;
+
+  private minZValue = Infinity;
+
+  private maxXValue = -Infinity;
+
+  private maxYValue = -Infinity;
   
   private flushCallback?: (chunk: Uint8Array) => Promise<void>;
   
@@ -398,6 +416,17 @@ class TriangleFloatCollector {
     return this.maxZValue;
   }
 
+  get meshBounds() {
+    return {
+      minX: this.minXValue,
+      minY: this.minYValue,
+      minZ: this.minZValue,
+      maxX: this.maxXValue,
+      maxY: this.maxYValue,
+      maxZ: this.maxZValue,
+    };
+  }
+
   pushTriangle(
     ax: number,
     ay: number,
@@ -427,6 +456,18 @@ class TriangleFloatCollector {
     if (triMaxZ > this.maxZValue) {
       this.maxZValue = triMaxZ;
     }
+
+    const triMinX = Math.min(ax, bx, cx);
+    const triMinY = Math.min(ay, by, cy);
+    const triMinZ = Math.min(az, bz, cz);
+    const triMaxX = Math.max(ax, bx, cx);
+    const triMaxY = Math.max(ay, by, cy);
+
+    if (triMinX < this.minXValue) this.minXValue = triMinX;
+    if (triMinY < this.minYValue) this.minYValue = triMinY;
+    if (triMinZ < this.minZValue) this.minZValue = triMinZ;
+    if (triMaxX > this.maxXValue) this.maxXValue = triMaxX;
+    if (triMaxY > this.maxYValue) this.maxYValue = triMaxY;
   }
 
   appendWorldTriangles(triangles: WorldTriangle[]): void {
@@ -1973,7 +2014,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
   };
 
   emitMeshPrepDiagnostic('Mesh prep: complete', 4, 4, {
-    triangleFloatCount: trianglesXYZ.length,
+    triangleFloatCount: triangles.length * 9,
     totalLayers,
   });
 
@@ -2134,6 +2175,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     totalLayers,
     tallestObjectHeightMm,
     trianglesXYZ,
+    meshBounds: collector.meshBounds,
     metadataJson: JSON.stringify(manifest),
   };
 }

@@ -265,6 +265,16 @@ fn bytes_into_f32_vec(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
 
 /// Metadata-only slice job (no inline triangles — those come from staged binary).
 #[derive(Deserialize)]
+struct MeshQuantizationMetadata {
+    min_x: f32,
+    min_y: f32,
+    min_z: f32,
+    max_x: f32,
+    max_y: f32,
+    max_z: f32,
+}
+
+#[derive(Deserialize)]
 struct SliceJobMetadata {
     output_format: String,
     #[serde(default)]
@@ -288,6 +298,10 @@ struct SliceJobMetadata {
     layer_height_mm: f32,
     total_layers: u32,
     export_thumbnail_png_base64: Option<String>,
+    #[serde(default)]
+    mesh_encoding: Option<String>,
+    #[serde(default)]
+    mesh_quantization: Option<MeshQuantizationMetadata>,
     metadata_json: String,
 }
 
@@ -311,6 +325,14 @@ struct NativeSlicerRuntimeMetrics {
     queue_buffer: u32,
 }
 
+fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+    match phase {
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+    }
+}
+
 fn slicer_pool() -> &'static ThreadPool {
     SLICER_POOL.get_or_init(|| {
         let threads = std::thread::available_parallelism()
@@ -324,23 +346,66 @@ fn slicer_pool() -> &'static ThreadPool {
     })
 }
 
+fn decode_quantized_u16_mesh(
+    bytes: &[u8],
+    quant: &MeshQuantizationMetadata,
+) -> Result<Vec<f32>, String> {
+    if bytes.len() % 2 != 0 {
+        return Err(format!(
+            "Quantized mesh binary length {} is not a multiple of 2 (u16 size)",
+            bytes.len()
+        ));
+    }
+
+    let spans = [
+        (quant.max_x - quant.min_x).max(0.0),
+        (quant.max_y - quant.min_y).max(0.0),
+        (quant.max_z - quant.min_z).max(0.0),
+    ];
+    let mins = [quant.min_x, quant.min_y, quant.min_z];
+    let values = bytes.len() / 2;
+    let mut floats = Vec::with_capacity(values);
+
+    for (index, chunk) in bytes.chunks_exact(2).enumerate() {
+        let q = u16::from_le_bytes([chunk[0], chunk[1]]);
+        let axis = index % 3;
+        let span = spans[axis];
+        if span <= 0.0 || !span.is_finite() {
+            floats.push(mins[axis]);
+            continue;
+        }
+
+        let normalized = (q as f32) / 65_535.0;
+        floats.push(mins[axis] + normalized * span);
+    }
+
+    Ok(floats)
+}
+
+fn decode_mesh_bytes(bytes: Vec<u8>, meta: &SliceJobMetadata) -> Result<Vec<f32>, String> {
+    match meta.mesh_encoding.as_deref() {
+        Some("quantized_u16") => {
+            let quant = meta
+                .mesh_quantization
+                .as_ref()
+                .ok_or("Quantized mesh encoding requires mesh_quantization metadata")?;
+            decode_quantized_u16_mesh(&bytes, quant)
+        }
+        Some("raw_f32") | None => bytes_into_f32_vec(bytes),
+        Some(other) => Err(format!("Unsupported mesh encoding: {other}")),
+    }
+}
+
 fn cancel_flag() -> &'static Arc<AtomicBool> {
     CANCEL_FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SliceProgressPayload {
     done: u32,
     total: u32,
     phase: String,
-}
-
-fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
-    match phase {
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
-    }
 }
 
 #[derive(Clone, Serialize)]
@@ -720,7 +785,7 @@ async fn slice_solid_native_to_temp_path(
         let meta: SliceJobMetadata = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
 
-        let triangles_xyz = bytes_into_f32_vec(mesh_bytes)?;
+        let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
 
         let job = dragonfruit_slicer_v3::SliceJobV3 {
             output_format: meta.output_format,
