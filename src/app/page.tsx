@@ -7518,18 +7518,49 @@ export default function Home() {
   }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
-  // Only calculate expensive Z range with triangles for printing/analysis (layer scrubbing critical)
-  // Export mode uses cheap sceneBounds - accurate range calculated only when actually slicing
+  const hasAnyEntries = React.useCallback((record: Record<string, unknown>) => {
+    for (const _key in record) {
+      return true;
+    }
+    return false;
+  }, []);
+
+  const hasSupportOrRaftGeometry = React.useMemo(() => {
+    return (
+      raftSettingsSnapshot.bottomMode !== 'off'
+      || hasAnyEntries(supportStateSnapshot.roots)
+      || hasAnyEntries(supportStateSnapshot.trunks)
+      || hasAnyEntries(supportStateSnapshot.branches)
+      || hasAnyEntries(supportStateSnapshot.leaves)
+      || hasAnyEntries(supportStateSnapshot.twigs)
+      || hasAnyEntries(supportStateSnapshot.sticks)
+      || hasAnyEntries(supportStateSnapshot.braces)
+      || hasAnyEntries(kickstandStateSnapshot.kickstands)
+    );
+  }, [
+    hasAnyEntries,
+    kickstandStateSnapshot.kickstands,
+    raftSettingsSnapshot.bottomMode,
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
+  ]);
+
+  // For non-printing workflows, avoid expensive world-triangle projection work.
+  // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
   const fallbackZRange = React.useMemo(() => ({
-    min: scene.sceneBounds?.min.z ?? 0,
+    min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
     max: scene.sceneBounds?.max.z ?? 100,
-  }), [scene.sceneBounds]);
+  }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
   useEffect(() => {
-    // Only printing/analysis modes need expensive accurate Z range with all support triangles
-    // Export mode can use cheap sceneBounds - accurate range only needed when actually slicing
+    // Projected world-triangle bounds are expensive and only required for analysis/printing.
     const needsAccurateZRange = scene.mode === 'printing' || scene.mode === 'analysis';
     
     if (needsAccurateZRange) {
@@ -7547,9 +7578,6 @@ export default function Home() {
     scene.mode,
     scene.models,
     fallbackZRange,
-    supportStateSnapshot,
-    kickstandStateSnapshot,
-    raftSettingsSnapshot,
   ]);
 
   const slicing = useSlicingManager({
@@ -7933,7 +7961,7 @@ export default function Home() {
   }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
 
   const supportBoundsByModelId = React.useMemo(() => {
-    if (scene.mode !== 'prepare') {
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
       return EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID;
     }
 
@@ -8113,6 +8141,7 @@ export default function Home() {
     return boundsByModelId;
   }, [
     scene.mode,
+    transformMgr.transformMode,
     supportStateSnapshot.braces,
     supportStateSnapshot.branches,
     supportStateSnapshot.knots,

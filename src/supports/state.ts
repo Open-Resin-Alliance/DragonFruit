@@ -32,6 +32,8 @@ function logSupportSettingsDebug(...args: unknown[]): void {
 }
 
 const listeners = new Set<() => void>();
+let notifyBatchDepth = 0;
+let pendingNotify = false;
 
 type SupportSettingsHexCache = {
     trunk: Record<string, string>;
@@ -889,7 +891,24 @@ export function removeJointById(jointId: string): RemoveJointByIdResult | null {
 }
 
 function notify() {
+    if (notifyBatchDepth > 0) {
+        pendingNotify = true;
+        return;
+    }
     listeners.forEach((l) => l());
+}
+
+export function beginSupportStateBatch() {
+    notifyBatchDepth += 1;
+}
+
+export function endSupportStateBatch() {
+    if (notifyBatchDepth <= 0) return;
+    notifyBatchDepth -= 1;
+    if (notifyBatchDepth === 0 && pendingNotify) {
+        pendingNotify = false;
+        listeners.forEach((l) => l());
+    }
 }
 
 function rebuildSupportSettingsHexCacheFromState() {
