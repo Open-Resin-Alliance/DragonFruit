@@ -301,7 +301,7 @@ export function SlicingPanel({
 
   const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
   // Respect printer-profile capability: explicit `false` means AA must be disabled.
-  const antiAliasingAvailable = Boolean(activePrinterProfile) && activePrinterProfile.antiAliasing !== false;
+  const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
   const minimumAaControlsDisabled = !antiAliasingAvailable;
   const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter)
     && activePrinterProfile?.networkConnection?.connected === true;
