@@ -1941,6 +1941,10 @@ export default function Home() {
     isPrintingPngLoaded,
   ]);
 
+  const printingPreviewPngUrlForDisplay = React.useMemo(() => {
+    return selectedPrintingLayerPreviewUrl ?? printingPngLoadedUrl;
+  }, [printingPngLoadedUrl, selectedPrintingLayerPreviewUrl]);
+
   React.useEffect(() => {
     if (!selectedPrintingLayerPreviewUrl) {
       setPrintingPngLoadedUrl(null);
@@ -6173,14 +6177,16 @@ export default function Home() {
     if (!Number.isFinite(nextLayer)) return;
     const clamped = clampPrintingLayer(nextLayer);
 
-    const flushPendingLayer = () => {
+    const flushPendingLayer = (options?: { syncDisplayedLayer?: boolean }) => {
       const pending = pendingPrintingSelectedLayerRef.current;
       pendingPrintingSelectedLayerRef.current = null;
       if (pending == null) return;
 
       printingSelectedLayerRef.current = pending;
       setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
-      setPrintingDisplayedLayer((previous) => (previous === pending ? previous : pending));
+      if (options?.syncDisplayedLayer !== false) {
+        setPrintingDisplayedLayer((previous) => (previous === pending ? previous : pending));
+      }
     };
 
     if (isPrintingLayerScrubbing) {
@@ -6193,7 +6199,7 @@ export default function Home() {
 
       printingSelectedLayerRafRef.current = window.requestAnimationFrame(() => {
         printingSelectedLayerRafRef.current = null;
-        flushPendingLayer();
+        flushPendingLayer({ syncDisplayedLayer: false });
       });
       return;
     }
@@ -11521,7 +11527,7 @@ export default function Home() {
                         <div
                           className="absolute inset-0 transition-opacity duration-100"
                           style={{
-                            opacity: shouldShowScrubPreview ? 1 : 0,
+                            opacity: 1,
                             pointerEvents: 'none',
                           }}
                         >
@@ -11546,8 +11552,8 @@ export default function Home() {
                         </div>
                       )}
 
-                      {/* PNG layer on top (fades in when loaded, hidden during active scrub) */}
-                      {selectedPrintingLayerPreviewUrl && !shouldShowScrubPreview && (
+                      {/* PNG layer on top (held briefly during scrub handoff to avoid flash). */}
+                      {printingPreviewPngUrlForDisplay && (
                         <div 
                           className="absolute inset-0 transition-opacity duration-150" 
                           style={{ opacity: isPrintingPngLoaded ? 1 : 0 }}
@@ -11561,7 +11567,7 @@ export default function Home() {
                               aria-label={`Layer ${printingSelectedLayer} preview`}
                             >
                               <image
-                                href={selectedPrintingLayerPreviewUrl}
+                                href={printingPreviewPngUrlForDisplay}
                                 x={0}
                                 y={0}
                                 width={printingPreviewTargetResolution.viewportWidth}
@@ -11572,7 +11578,7 @@ export default function Home() {
                             </svg>
                           ) : (
                             <img
-                              src={selectedPrintingLayerPreviewUrl}
+                              src={printingPreviewPngUrlForDisplay}
                               alt={`Layer ${printingSelectedLayer} preview`}
                               className="block rounded w-full h-full object-contain"
                               style={{ imageRendering: 'pixelated' }}
