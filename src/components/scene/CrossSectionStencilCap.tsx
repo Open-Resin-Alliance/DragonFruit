@@ -10,17 +10,25 @@ export type CrossSectionStencilCapEntry = {
   geometry: THREE.BufferGeometry;
   center: THREE.Vector3;
   transform: ModelTransform;
+  minZ?: number;
+  maxZ?: number;
 };
 
 type CrossSectionStencilCapProps = {
   entries: CrossSectionStencilCapEntry[];
   sourceObject?: THREE.Object3D | null;
   sourceObjectVersion?: unknown;
+  skipSourceZBounds?: boolean;
   y: number;
   color?: string;
   planeWidthMm: number;
   planeHeightMm: number;
   visible?: boolean;
+  capOpacity?: number;
+  capDepthTest?: boolean;
+  glowThicknessMm?: number;
+  glowOpacity?: number;
+  glowColor?: string;
 };
 
 type StaticStencilMeshEntry = {
@@ -287,11 +295,17 @@ function CrossSectionStencilCapInner({
   entries,
   sourceObject,
   sourceObjectVersion,
+  skipSourceZBounds = false,
   y,
   color = '#ffffff',
   planeWidthMm,
   planeHeightMm,
   visible = true,
+  capOpacity = 1,
+  capDepthTest = true,
+  glowThicknessMm = 0,
+  glowOpacity = 0,
+  glowColor,
 }: CrossSectionStencilCapProps) {
   const clipPlaneRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 0, -1), y));
   
@@ -340,22 +354,48 @@ function CrossSectionStencilCapInner({
     const material = new THREE.MeshBasicMaterial({
       color,
       side: THREE.DoubleSide,
-      transparent: false,
-      opacity: 1,
-      depthWrite: true,
-      depthTest: true,
+      transparent: capOpacity < 0.999,
+      opacity: Math.max(0, Math.min(1, capOpacity)),
+      depthWrite: false,
+      depthTest: capDepthTest,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
       stencilWrite: true,
       stencilRef: 0,
       stencilFunc: THREE.NotEqualStencilFunc,
-      stencilFail: THREE.ReplaceStencilOp,
-      stencilZFail: THREE.ReplaceStencilOp,
-      stencilZPass: THREE.ReplaceStencilOp,
+      stencilFail: THREE.KeepStencilOp,
+      stencilZFail: THREE.KeepStencilOp,
+      stencilZPass: THREE.KeepStencilOp,
     });
     return material;
-  }, [color]);
+  }, [capDepthTest, capOpacity, color]);
+
+  const glowPlaneMaterial = React.useMemo(() => {
+    if (glowThicknessMm <= 0 || glowOpacity <= 0) return null;
+
+    const material = new THREE.MeshBasicMaterial({
+      color: glowColor ?? color,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: Math.max(0, Math.min(1, glowOpacity)),
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      stencilWrite: true,
+      stencilRef: 0,
+      stencilFunc: THREE.NotEqualStencilFunc,
+      stencilFail: THREE.KeepStencilOp,
+      stencilZFail: THREE.KeepStencilOp,
+      stencilZPass: THREE.KeepStencilOp,
+    });
+
+    return material;
+  }, [color, glowColor, glowOpacity, glowThicknessMm]);
 
   const staticSourceEntries = React.useMemo<StaticStencilEntry[]>(() => {
     if (!sourceObject) return [];
@@ -376,19 +416,21 @@ function CrossSectionStencilCapInner({
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
         const initialCount = maybeInstancedMesh.count;
         const matrixElements = new Float32Array(initialCount * 16);
-        const minBounds = new Float32Array(initialCount);
-        const maxBounds = new Float32Array(initialCount);
+        const minBounds = skipSourceZBounds ? null : new Float32Array(initialCount);
+        const maxBounds = skipSourceZBounds ? null : new Float32Array(initialCount);
         let acceptedCount = 0;
 
         for (let i = 0; i < initialCount; i += 1) {
           maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
           worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
-          const bounds = getGeometryWorldZBounds(geometry, worldInstanceMatrix);
-          if (!bounds) continue;
+          if (!skipSourceZBounds) {
+            const bounds = getGeometryWorldZBounds(geometry, worldInstanceMatrix);
+            if (!bounds) continue;
+            minBounds![acceptedCount] = bounds.min;
+            maxBounds![acceptedCount] = bounds.max;
+          }
 
           worldInstanceMatrix.toArray(matrixElements, acceptedCount * 16);
-          minBounds[acceptedCount] = bounds.min;
-          maxBounds[acceptedCount] = bounds.max;
           acceptedCount += 1;
         }
 
@@ -398,12 +440,25 @@ function CrossSectionStencilCapInner({
           ? matrixElements
           : matrixElements.slice(0, acceptedCount * 16);
 
-        const compactMinBounds = acceptedCount === initialCount
-          ? minBounds
-          : minBounds.slice(0, acceptedCount);
-        const compactMaxBounds = acceptedCount === initialCount
-          ? maxBounds
-          : maxBounds.slice(0, acceptedCount);
+        const compactMinBounds = minBounds
+          ? (acceptedCount === initialCount ? minBounds : minBounds.slice(0, acceptedCount))
+          : null;
+        const compactMaxBounds = maxBounds
+          ? (acceptedCount === initialCount ? maxBounds : maxBounds.slice(0, acceptedCount))
+          : null;
+
+        if (skipSourceZBounds) {
+          results.push({
+            kind: 'instanced',
+            key: `${mesh.uuid}:instanced`,
+            geometry,
+            count: acceptedCount,
+            matrixElements: compactMatrixElements,
+            minZ: Number.NEGATIVE_INFINITY,
+            maxZ: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
 
         const bucketSize = Math.max(0.1, INSTANCED_STENCIL_Z_BUCKET_MM);
         const buckets = new Map<number, {
@@ -475,6 +530,18 @@ function CrossSectionStencilCapInner({
       }
 
       const worldMatrix = mesh.matrixWorld.clone();
+      if (skipSourceZBounds) {
+        results.push({
+          kind: 'single',
+          key: mesh.uuid,
+          geometry,
+          matrix: worldMatrix,
+          minZ: Number.NEGATIVE_INFINITY,
+          maxZ: Number.POSITIVE_INFINITY,
+        });
+        return;
+      }
+
       const bounds = getGeometryWorldZBounds(geometry, worldMatrix);
       if (!bounds) return;
 
@@ -489,7 +556,7 @@ function CrossSectionStencilCapInner({
     });
 
     return results;
-  }, [sourceObject, sourceObjectVersion]);
+  }, [skipSourceZBounds, sourceObject, sourceObjectVersion]);
 
   const modelStencilEntryCacheRef = React.useRef<Map<string, {
     signature: string;
@@ -503,7 +570,7 @@ function CrossSectionStencilCapInner({
 
     for (const entry of entries) {
       liveIds.add(entry.id);
-      const { transform, center, geometry } = entry;
+      const { transform, center, geometry, minZ: providedMinZ, maxZ: providedMaxZ } = entry;
       const signature = [
         geometry.uuid,
         center.x.toFixed(5),
@@ -528,16 +595,27 @@ function CrossSectionStencilCapInner({
 
       const matrix = composeTransformMatrix(transform);
       const worldMatrix = composeCenteredGeometryMatrix(matrix, center);
-      const bounds = getGeometryWorldZBounds(geometry, worldMatrix);
-      if (!bounds) continue;
+      const hasProvidedBounds = Number.isFinite(providedMinZ) && Number.isFinite(providedMaxZ);
+      const resolvedMinZ = hasProvidedBounds ? Number(providedMinZ) : null;
+      const resolvedMaxZ = hasProvidedBounds ? Number(providedMaxZ) : null;
+
+      let minZ = resolvedMinZ;
+      let maxZ = resolvedMaxZ;
+
+      if (minZ == null || maxZ == null) {
+        const bounds = getGeometryWorldZBounds(geometry, worldMatrix);
+        if (!bounds) continue;
+        minZ = bounds.min;
+        maxZ = bounds.max;
+      }
 
       const rebuilt: ModelStencilPassEntry = {
         id: entry.id,
         geometry,
         matrix,
         offset: new THREE.Vector3(-center.x, -center.y, -center.z),
-        minZ: bounds.min,
-        maxZ: bounds.max,
+        minZ,
+        maxZ,
       };
 
       cache.set(entry.id, {
@@ -597,8 +675,9 @@ function CrossSectionStencilCapInner({
       stencilFront.dispose();
       capPlaneGeometry.dispose();
       capPlaneMaterial.dispose();
+      glowPlaneMaterial?.dispose();
     };
-  }, [capPlaneGeometry, capPlaneMaterial, stencilBack, stencilBase, stencilFront]);
+  }, [capPlaneGeometry, capPlaneMaterial, glowPlaneMaterial, stencilBack, stencilBase, stencilFront]);
 
   const modelStencilPassNodes = React.useMemo(() => {
     return visibleModelStencilEntries.map((entry) => (
@@ -647,6 +726,27 @@ function CrossSectionStencilCapInner({
 
       {staticInstancedStencilPassNodes}
 
+      {glowPlaneMaterial && glowThicknessMm > 0 && (
+        <>
+          <mesh
+            geometry={capPlaneGeometry}
+            material={glowPlaneMaterial}
+            position={[0, 0, y + Math.max(1e-4, glowThicknessMm)]}
+            renderOrder={990.44}
+            frustumCulled
+            raycast={() => null}
+          />
+          <mesh
+            geometry={capPlaneGeometry}
+            material={glowPlaneMaterial}
+            position={[0, 0, y - Math.max(1e-4, glowThicknessMm)]}
+            renderOrder={990.445}
+            frustumCulled
+            raycast={() => null}
+          />
+        </>
+      )}
+
       <mesh
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
@@ -670,11 +770,17 @@ const areCrossSectionStencilCapPropsEqual = (
     prev.entries === next.entries
     && prev.sourceObject === next.sourceObject
     && prev.sourceObjectVersion === next.sourceObjectVersion
+    && prev.skipSourceZBounds === next.skipSourceZBounds
     && prev.y === next.y
     && prev.color === next.color
     && prev.planeWidthMm === next.planeWidthMm
     && prev.planeHeightMm === next.planeHeightMm
     && prev.visible === next.visible
+    && prev.capOpacity === next.capOpacity
+    && prev.capDepthTest === next.capDepthTest
+    && prev.glowThicknessMm === next.glowThicknessMm
+    && prev.glowOpacity === next.glowOpacity
+    && prev.glowColor === next.glowColor
   );
 };
 

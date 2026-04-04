@@ -284,6 +284,8 @@ export function SceneCanvas({
   isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
   exportThumbnailRenderOptions,
+  indicatorPlaneZ = null,
+  indicatorPlaneColor,
   deferCameraIntro = false,
   freezeViewportActive = false,
 }: {
@@ -428,6 +430,8 @@ export function SceneCanvas({
   isLayerScrubbing?: boolean;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
   exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
+  indicatorPlaneZ?: number | null;
+  indicatorPlaneColor?: string;
   deferCameraIntro?: boolean;
   freezeViewportActive?: boolean;
 }) {
@@ -783,19 +787,6 @@ export function SceneCanvas({
     resetSupportDragGroupNow,
   ]);
 
-  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
-    return models
-      .filter((model) => model.visible)
-      .map((model) => ({
-        id: model.id,
-        geometry: model.geometry.geometry,
-        center: model.geometry.center,
-        transform: model.id === activeModelId && transform
-          ? transform
-          : model.transform,
-      }));
-  }, [activeModelId, models, transform]);
-
   React.useEffect(() => {
     return () => {
       liveDragTransformRef.current = null;
@@ -849,6 +840,7 @@ export function SceneCanvas({
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
   const [isWheelZoomInteracting, setIsWheelZoomInteracting] = React.useState(false);
+  const [interactionResetNonce, setInteractionResetNonce] = React.useState(0);
   const [canvasRecoveryNonce, setCanvasRecoveryNonce] = React.useState(0);
   const [frozenViewportDataUrl, setFrozenViewportDataUrl] = React.useState<string | null>(null);
   const freezeCaptureArmedRef = React.useRef(false);
@@ -1269,6 +1261,26 @@ export function SceneCanvas({
     return map;
   }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, isGizmoRetargeting, models, transform]);
 
+  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
+    return models
+      .filter((model) => model.visible)
+      .map((model) => {
+        const bounds = modelWorldBounds.get(model.id);
+        const hasBounds = Boolean(bounds && !bounds.isEmpty());
+
+        return {
+          id: model.id,
+          geometry: model.geometry.geometry,
+          center: model.geometry.center,
+          transform: model.id === activeModelId && transform
+            ? transform
+            : model.transform,
+          minZ: hasBounds ? bounds!.min.z : undefined,
+          maxZ: hasBounds ? bounds!.max.z : undefined,
+        };
+      });
+  }, [activeModelId, modelWorldBounds, models, transform]);
+
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
     if (isGizmoDragging || isGizmoRetargeting || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
@@ -1345,8 +1357,9 @@ export function SceneCanvas({
   );
 
   const hasRaftSelection = !!committedActiveModelId || !!activeModelId || (selectedModelIds?.length ?? 0) > 0;
-  const raftColorized = mode === 'support' || hasRaftSelection || !!hoveredModelId;
-  const raftHoverized = mode === 'support' || (!hasRaftSelection && !!hoveredModelId);
+  const raftTintEnabled = mode !== 'printing';
+  const raftColorized = raftTintEnabled && (mode === 'support' || hasRaftSelection || !!hoveredModelId);
+  const raftHoverized = raftTintEnabled && (mode === 'support' || (!hasRaftSelection && !!hoveredModelId));
 
   const modelBoundingBoxDebugData = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
@@ -2105,6 +2118,7 @@ export function SceneCanvas({
     endMarqueeSelection,
   } = useMarqueeSelectionHandlers({
     containerRef,
+    interactionResetToken: interactionResetNonce,
     mode,
     isGizmoDragging,
     isPostGizmoInteractionGuardActive,
@@ -3882,6 +3896,19 @@ export function SceneCanvas({
 
     handleOrbitEnd();
     forceEndWheelZoomInteraction();
+    setIsGizmoDragging(false);
+    setIsGizmoRetargeting(false);
+    setActiveGizmoDragDescriptor(null);
+    setGizmoGroupStartSnapshot(null);
+    setIsPostGizmoInteractionGuardActive(false);
+    setSupportGizmoInteractionActive(false);
+    gizmoTransformStartSnapshotRef.current = null;
+    liveDragTransformRef.current = null;
+    queueLiveDragTransform(null);
+    dragMoveLockZEnabledRef.current = false;
+    dragMoveLockedZRef.current = 0;
+    clearDragCornerCageBaseData();
+    setInteractionResetNonce((value) => value + 1);
 
     if (webGlRecoveryTimeoutRef.current !== null) return;
 
@@ -3890,7 +3917,7 @@ export function SceneCanvas({
       console.warn('[SceneCanvas] WebGL context restore timeout reached; remounting canvas.');
       setCanvasRecoveryNonce((value) => value + 1);
     }, 1800);
-  }, [forceEndWheelZoomInteraction, handleOrbitEnd]);
+  }, [clearDragCornerCageBaseData, forceEndWheelZoomInteraction, handleOrbitEnd, queueLiveDragTransform]);
 
   const handleWebGlContextRestored = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -4145,7 +4172,7 @@ export function SceneCanvas({
           showGrid={!thumbnailCaptureActive || includeHelpersGridDuringCapture}
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
         />
-        <EnableLocalClipping enabled={clipLower != null || clipUpper != null} />
+        <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null} />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} />
         <CameraClipPlaneStabilizer />
@@ -4620,16 +4647,22 @@ export function SceneCanvas({
               )}
               </group>{/* end supportDragGroupRef */}
 
-              {clipUpper != null && !hideCrossSectionCap && (
+              {(clipUpper != null || indicatorPlaneZ != null) && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
-                  sourceObjectVersion={crossSectionStencilSourceVersion}
-                  y={clipUpper}
-                  color="#FFFFFF"
+                  sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
+                  skipSourceZBounds={clipUpper == null}
+                  y={(clipUpper ?? indicatorPlaneZ)!}
+                  color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
-                  visible={!hideCrossSectionCap && clipUpper != null}
+                  capOpacity={clipUpper != null ? 1 : 0.78}
+                  capDepthTest={clipUpper != null}
+                  glowThicknessMm={clipUpper != null ? 0 : 0.11}
+                  glowOpacity={clipUpper != null ? 0 : 0.44}
+                  glowColor={clipUpper != null ? undefined : (indicatorPlaneColor ?? '#ec2a77')}
+                  visible={!hideCrossSectionCap && (clipUpper != null || indicatorPlaneZ != null)}
                 />
               )}
 

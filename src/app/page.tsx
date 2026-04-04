@@ -2389,9 +2389,10 @@ export default function Home() {
     return promise;
   }, [computeBaseResinMlChunked]);
 
-  // First, check if we should even calculate volumes based on mode
-  // This is a cheap check that prevents us from depending on support state changes during editing
-  const shouldCalculateVolumes = scene.mode === 'export' || scene.mode === 'printing';
+  // First, check if we should even calculate volumes based on mode.
+  // Printing-mode reopen with an existing artifact should stay responsive;
+  // avoid re-running heavy support/raft volume aggregation in that case.
+  const shouldCalculateVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
 
   const supportAndRaftResinMl = React.useMemo(() => {
     if (!shouldCalculateVolumes) return 0;
@@ -7634,8 +7635,9 @@ export default function Home() {
   useEffect(() => {
     // Projected world-triangle bounds are expensive.
     // Analysis can run on fallback bounds to keep mode-entry instant.
-    // Printing still needs accurate support/raft-aware bounds.
-    const needsAccurateZRange = scene.mode === 'printing';
+    // Printing only needs accurate support/raft-aware bounds before a print artifact
+    // exists; reopening printing with an existing artifact should avoid this rebuild.
+    const needsAccurateZRange = scene.mode === 'printing' && !printingArtifact;
     
     if (needsAccurateZRange) {
       const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
@@ -7685,6 +7687,7 @@ export default function Home() {
     }
   }, [
     fallbackZRange,
+    printingArtifact,
     projectedZRangeCacheKey,
     scene.mode,
     scene.models,
@@ -9258,10 +9261,44 @@ export default function Home() {
   }, [scene.mode, supportSpotlightHoldHotkey.key, supportSpotlightHoldHotkey.modifier]);
 
   const effectiveSelectionHighlightMode = React.useMemo(() => {
+    if (scene.mode === 'printing') return 'none';
     if (scene.mode !== 'support') return scene.selectionHighlightMode;
     if (isSupportSpotlightHoldActive) return 'spotlight';
     return scene.selectionHighlightMode === 'spotlight' ? 'tint' : scene.selectionHighlightMode;
   }, [isSupportSpotlightHoldActive, scene.mode, scene.selectionHighlightMode]);
+
+  const sceneClipLower = React.useMemo(() => {
+    if (scene.mode === 'printing') return null;
+    return slicing.clipLower;
+  }, [scene.mode, slicing.clipLower]);
+
+  const sceneClipUpper = React.useMemo(() => {
+    if (scene.mode === 'printing') return null;
+    return slicing.clipUpper;
+  }, [scene.mode, slicing.clipUpper]);
+
+  const effectiveHoverTintStrengthForScene = React.useMemo(() => {
+    return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
+  }, [scene.hoverTintStrength, scene.mode]);
+
+  const effectiveSelectedTintStrengthForScene = React.useMemo(() => {
+    return scene.mode === 'printing' ? 0 : scene.selectedTintStrength;
+  }, [scene.mode, scene.selectedTintStrength]);
+
+  const sceneCanvasActiveModelId = React.useMemo(() => {
+    if (scene.mode === 'printing') return null;
+    return displayActiveModelId;
+  }, [displayActiveModelId, scene.mode]);
+
+  const sceneCanvasVisualActiveModelId = React.useMemo(() => {
+    if (scene.mode === 'printing') return null;
+    return scene.activeModelId;
+  }, [scene.activeModelId, scene.mode]);
+
+  const sceneCanvasSelectedModelIds = React.useMemo(() => {
+    if (scene.mode === 'printing') return [] as string[];
+    return scene.selectedModelIds;
+  }, [scene.mode, scene.selectedModelIds]);
 
   React.useEffect(() => {
     if (scene.mode !== 'support') return;
@@ -11188,11 +11225,11 @@ export default function Home() {
 
           <SceneCanvas
             models={scene.models}
-            activeModelId={displayActiveModelId}
-            visualActiveModelId={scene.activeModelId}
-            selectedModelIds={scene.selectedModelIds}
-            clipLower={slicing.clipLower}
-            clipUpper={slicing.clipUpper}
+            activeModelId={sceneCanvasActiveModelId}
+            visualActiveModelId={sceneCanvasVisualActiveModelId}
+            selectedModelIds={sceneCanvasSelectedModelIds}
+            clipLower={sceneClipLower}
+            clipUpper={sceneClipUpper}
             meshColor={scene.meshColor}
             meshVisible={scene.meshVisible}
             shaderType={effectiveShaderType}
@@ -11259,8 +11296,8 @@ export default function Home() {
             selectionHighlightMode={effectiveSelectionHighlightMode}
             selectionColor={scene.selectionColor}
             hoverColor={scene.hoverColor}
-            hoverTintStrength={scene.hoverTintStrength}
-            selectedTintStrength={scene.selectedTintStrength}
+            hoverTintStrength={effectiveHoverTintStrengthForScene}
+            selectedTintStrength={effectiveSelectedTintStrengthForScene}
             crossSectionMode={slicing.crossSectionMode}
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
@@ -11290,6 +11327,8 @@ export default function Home() {
             exportThumbnailRenderOptions={exportThumbnailRenderOptions}
             deferCameraIntro={holdEmptyStateSceneImportUi}
             freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
+            indicatorPlaneZ={scene.mode === 'printing' ? slicing.currentHeightMm : null}
+            indicatorPlaneColor={scene.selectionColor || '#ec2a77'}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
