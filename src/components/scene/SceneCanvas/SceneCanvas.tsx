@@ -112,6 +112,74 @@ import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
+type GhostPreviewTransform = {
+  position: THREE.Vector3;
+  rotation: THREE.Euler;
+  scale: THREE.Vector3;
+};
+
+function GhostPreviewInstances({
+  geometry,
+  center,
+  color,
+  transforms,
+  opacity = 0.22,
+  renderOrder = 2,
+}: {
+  geometry: THREE.BufferGeometry;
+  center: THREE.Vector3;
+  color: string;
+  transforms: GhostPreviewTransform[];
+  opacity?: number;
+  renderOrder?: number;
+}) {
+  const instancedRef = React.useRef<THREE.InstancedMesh>(null);
+  const workMatrixRef = React.useRef(new THREE.Matrix4());
+  const workQuaternionRef = React.useRef(new THREE.Quaternion());
+  const workOffsetMatrixRef = React.useRef(new THREE.Matrix4());
+
+  React.useLayoutEffect(() => {
+    const instanced = instancedRef.current;
+    if (!instanced) return;
+
+    const workMatrix = workMatrixRef.current;
+    const workQuaternion = workQuaternionRef.current;
+    const offsetMatrix = workOffsetMatrixRef.current.makeTranslation(-center.x, -center.y, -center.z);
+
+    for (let i = 0; i < transforms.length; i += 1) {
+      const transform = transforms[i];
+      workQuaternion.setFromEuler(transform.rotation);
+      workMatrix.compose(transform.position, workQuaternion, transform.scale);
+      workMatrix.multiply(offsetMatrix);
+      instanced.setMatrixAt(i, workMatrix);
+    }
+
+    instanced.count = transforms.length;
+    instanced.instanceMatrix.needsUpdate = true;
+    instanced.computeBoundingSphere();
+  }, [center.x, center.y, center.z, transforms]);
+
+  if (transforms.length === 0) return null;
+
+  return (
+    <instancedMesh
+      ref={instancedRef}
+      args={[geometry, undefined, transforms.length]}
+      renderOrder={renderOrder}
+      raycast={() => null}
+      frustumCulled={false}
+    >
+      <meshBasicMaterial
+        color={color}
+        transparent
+        opacity={opacity}
+        depthWrite={false}
+        toneMapped={false}
+      />
+    </instancedMesh>
+  );
+}
+
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
@@ -194,6 +262,7 @@ export function SceneCanvas({
   isLeafPlacementActive,
   isBracePlacementActive,
   isKickstandPlacementActive,
+  hideCrossSectionCap = false,
   branchTipPosition,
   branchHoverPosition,
   leafTipPosition,
@@ -215,7 +284,10 @@ export function SceneCanvas({
   isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
   exportThumbnailRenderOptions,
+  indicatorPlaneZ = null,
+  indicatorPlaneColor,
   deferCameraIntro = false,
+  freezeViewportActive = false,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -358,7 +430,10 @@ export function SceneCanvas({
   isLayerScrubbing?: boolean;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
   exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
+  indicatorPlaneZ?: number | null;
+  indicatorPlaneColor?: string;
   deferCameraIntro?: boolean;
+  freezeViewportActive?: boolean;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -462,6 +537,22 @@ export function SceneCanvas({
     return map;
   }, [models]);
 
+  React.useEffect(() => {
+    const modelIdSet = new Set(models.map((model) => model.id));
+    for (const id of Object.keys(meshGroupRefCallbacks.current)) {
+      if (!modelIdSet.has(id)) {
+        delete meshGroupRefCallbacks.current[id];
+        delete meshRefs.current[id];
+      }
+    }
+    for (const id of Object.keys(actualMeshRefCallbacks.current)) {
+      if (!modelIdSet.has(id)) {
+        delete actualMeshRefCallbacks.current[id];
+        delete actualMeshRefs.current[id];
+      }
+    }
+  }, [models]);
+
   const alignLiveTransformToLift = React.useCallback((model: LoadedModel | null | undefined, candidate: ModelTransform | null) => {
     if (!model || !candidate) return candidate;
     if (!autoSnapEnabled) return candidate;
@@ -519,6 +610,8 @@ export function SceneCanvas({
 
   const meshRefs = React.useRef<Record<string, THREE.Group | null>>({});
   const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
+  const meshGroupRefCallbacks = React.useRef<Record<string, (node: THREE.Group | null) => void>>({});
+  const actualMeshRefCallbacks = React.useRef<Record<string, (node: THREE.Mesh | null) => void>>({});
 
   const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
   const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
@@ -747,9 +840,14 @@ export function SceneCanvas({
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
   const [isWheelZoomInteracting, setIsWheelZoomInteracting] = React.useState(false);
+  const [interactionResetNonce, setInteractionResetNonce] = React.useState(0);
+  const [canvasRecoveryNonce, setCanvasRecoveryNonce] = React.useState(0);
+  const [frozenViewportDataUrl, setFrozenViewportDataUrl] = React.useState<string | null>(null);
+  const freezeCaptureArmedRef = React.useRef(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
   const [supportGizmoInteractionActive, setSupportGizmoInteractionActive] = React.useState(false);
   const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
+  const webGlRecoveryTimeoutRef = React.useRef<number | null>(null);
     const isOrbitInRotateState = React.useCallback(() => {
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
@@ -825,6 +923,8 @@ export function SceneCanvas({
     }
 
     setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+    setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+    setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
     emitImmediateModelHover(null);
   }, [supportGizmoInteractionActive]);
 
@@ -839,6 +939,10 @@ export function SceneCanvas({
       pendingHoverModelIdRef.current = null;
       if (pending === hoveredMeshModelIdRef.current) return;
       setHoveredMeshModelId((prev) => (prev === pending ? prev : pending));
+      if (pending) {
+        setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+        setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+      }
     });
   }, []);
 
@@ -846,7 +950,7 @@ export function SceneCanvas({
     const handleModelPointerHoverImmediate = (event: Event) => {
       const customEvent = event as CustomEvent<{ modelId?: string | null }>;
       const modelId = customEvent.detail?.modelId ?? null;
-      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
+      onModelHoverModelChange(modelId);
     };
 
     const handleSupportRaftModelPointerHover = (event: Event) => {
@@ -854,6 +958,15 @@ export function SceneCanvas({
       const category = customEvent.detail?.category;
       if (category === 'raft') {
         const modelId = customEvent.detail?.modelId ?? null;
+        if (modelId) {
+          pendingHoverModelIdRef.current = null;
+          if (hoverModelRafRef.current !== null) {
+            cancelAnimationFrame(hoverModelRafRef.current);
+            hoverModelRafRef.current = null;
+          }
+          setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+          setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+        }
         if (modelId) {
           setHoveredRaftModelId((prev) => (prev === modelId ? prev : modelId));
         } else {
@@ -864,6 +977,15 @@ export function SceneCanvas({
 
       if (category === 'support') {
         const modelId = customEvent.detail?.modelId ?? null;
+        if (modelId) {
+          pendingHoverModelIdRef.current = null;
+          if (hoverModelRafRef.current !== null) {
+            cancelAnimationFrame(hoverModelRafRef.current);
+            hoverModelRafRef.current = null;
+          }
+          setHoveredMeshModelId((prev) => (prev === null ? prev : null));
+          setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+        }
         if (modelId) {
           setHoveredSupportPointerModelId((prev) => (prev === modelId ? prev : modelId));
         } else {
@@ -879,7 +1001,7 @@ export function SceneCanvas({
       window.removeEventListener('model-pointer-hover-immediate', handleModelPointerHoverImmediate as EventListener);
       window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
     };
-  }, []);
+  }, [onModelHoverModelChange]);
 
 
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
@@ -1139,6 +1261,26 @@ export function SceneCanvas({
     return map;
   }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, isGizmoRetargeting, models, transform]);
 
+  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
+    return models
+      .filter((model) => model.visible)
+      .map((model) => {
+        const bounds = modelWorldBounds.get(model.id);
+        const hasBounds = Boolean(bounds && !bounds.isEmpty());
+
+        return {
+          id: model.id,
+          geometry: model.geometry.geometry,
+          center: model.geometry.center,
+          transform: model.id === activeModelId && transform
+            ? transform
+            : model.transform,
+          minZ: hasBounds ? bounds!.min.z : undefined,
+          maxZ: hasBounds ? bounds!.max.z : undefined,
+        };
+      });
+  }, [activeModelId, modelWorldBounds, models, transform]);
+
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
     if (isGizmoDragging || isGizmoRetargeting || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
@@ -1188,13 +1330,10 @@ export function SceneCanvas({
   }, [colorActiveModelId, committedActiveModelId, meshColor, models]);
 
   const supportHoverTintColor = React.useMemo(() => {
-    const blend = (baseHex: string, tintHex: string, strength: number) =>
-      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
-
-    if (committedActiveModelId) return '#3b82f6';
-    if (hoveredModelId) return blend('#a3a3a3', '#3b82f6', 0.5);
+    if (activeModelId) return '#c8752a';
+    if (hoveredModelId) return '#c8752a';
     return '#a3a3a3';
-  }, [committedActiveModelId, hoveredModelId]);
+  }, [activeModelId, hoveredModelId]);
 
   const supportCreationModeActive = Boolean(
     isBranchPlacementActive
@@ -1218,8 +1357,9 @@ export function SceneCanvas({
   );
 
   const hasRaftSelection = !!committedActiveModelId || !!activeModelId || (selectedModelIds?.length ?? 0) > 0;
-  const raftColorized = mode === 'support' || hasRaftSelection || !!hoveredModelId;
-  const raftHoverized = mode === 'support' || (!hasRaftSelection && !!hoveredModelId);
+  const raftTintEnabled = mode !== 'printing';
+  const raftColorized = raftTintEnabled && (mode === 'support' || hasRaftSelection || !!hoveredModelId);
+  const raftHoverized = raftTintEnabled && (mode === 'support' || (!hasRaftSelection && !!hoveredModelId));
 
   const modelBoundingBoxDebugData = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
@@ -1424,10 +1564,68 @@ export function SceneCanvas({
   const isActiveGizmoZMove = activeGizmoDragDescriptor?.operation === 'move'
     && activeGizmoDragDescriptor.axis === 'z';
 
-  const useActiveModelAttachedSupportProxy = mode === 'prepare'
-    && transformMode === 'transform'
-    && (isGizmoDragging || effectiveHoldSupportDragDelta)
-    && !!activeModelId;
+  const activeModelVisualSupportTransform = React.useMemo(() => {
+    if (!activeModelId) return null;
+    if (duplicateActivePreviewTransform) return duplicateActivePreviewTransform;
+
+    if (transformMode === 'transform' && (isGizmoDragging || effectiveHoldSupportDragDelta) && transform) {
+      return transform;
+    }
+
+    if (transformMode === 'arrange' && transform) {
+      return transform;
+    }
+
+    return null;
+  }, [
+    activeModelId,
+    duplicateActivePreviewTransform,
+    effectiveHoldSupportDragDelta,
+    isGizmoDragging,
+    transform,
+    transformMode,
+  ]);
+
+  const useActiveModelAttachedSupportProxy = React.useMemo(() => {
+    if (mode !== 'prepare' || !activeModelId || !activeModelVisualSupportTransform) return false;
+
+    // During live gizmo interaction, force active-model support attachment so
+    // global support batching doesn't get dragged as a single cloud.
+    if (
+      transformMode === 'transform'
+      && (
+        isGizmoDragging
+        || isGizmoRetargeting
+        || isPostGizmoInteractionGuardActive
+        || effectiveHoldSupportDragDelta
+      )
+    ) {
+      return true;
+    }
+
+    const committedTransform = modelById.get(activeModelId)?.transform;
+    if (!committedTransform) return false;
+
+    const EPSILON = 1e-6;
+    const posChanged = committedTransform.position.distanceToSquared(activeModelVisualSupportTransform.position) > EPSILON;
+    const scaleChanged = committedTransform.scale.distanceToSquared(activeModelVisualSupportTransform.scale) > EPSILON;
+    const rotChanged =
+      Math.abs(committedTransform.rotation.x - activeModelVisualSupportTransform.rotation.x) > EPSILON
+      || Math.abs(committedTransform.rotation.y - activeModelVisualSupportTransform.rotation.y) > EPSILON
+      || Math.abs(committedTransform.rotation.z - activeModelVisualSupportTransform.rotation.z) > EPSILON;
+
+    return posChanged || scaleChanged || rotChanged;
+  }, [
+    activeModelId,
+    activeModelVisualSupportTransform,
+    effectiveHoldSupportDragDelta,
+    isGizmoDragging,
+    isGizmoRetargeting,
+    isPostGizmoInteractionGuardActive,
+    mode,
+    modelById,
+    transformMode,
+  ]);
 
   const activeModelAttachedSupportLocalMatrix = React.useMemo(() => {
     if (!useActiveModelAttachedSupportProxy || !activeModelId) return null;
@@ -1566,6 +1764,10 @@ export function SceneCanvas({
   const selectedModelIdSet = React.useMemo(() => {
     return new Set(selectedModelIds ?? []);
   }, [selectedModelIds]);
+
+  const emptySelectedModelIds = React.useMemo<string[]>(() => [], []);
+  const emptyModelDropOffsets = React.useMemo<Record<string, number>>(() => ({}), []);
+  const emptyHeatmapColors = React.useMemo<string[]>(() => [], []);
 
   const selectedTransformableModelIds = React.useMemo(() => {
     const allIds = selectedModelIds ?? [];
@@ -1916,6 +2118,7 @@ export function SceneCanvas({
     endMarqueeSelection,
   } = useMarqueeSelectionHandlers({
     containerRef,
+    interactionResetToken: interactionResetNonce,
     mode,
     isGizmoDragging,
     isPostGizmoInteractionGuardActive,
@@ -2026,31 +2229,67 @@ export function SceneCanvas({
   const duplicateActiveSupportPreviewDelta = React.useMemo(() => {
     if (!duplicatePreviewModel || !duplicateActivePreviewTransform) return null;
 
+    const oldSourceTransform = duplicatePreviewModel.transform;
+    const targetSourceTransform = duplicateActivePreviewTransform;
+
+    let sourceSupportAnchor: THREE.Vector3 | null = null;
+    let sourceSupportAnchorCount = 0;
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      if (root.modelId !== duplicatePreviewModel.id) continue;
+      if (!sourceSupportAnchor) sourceSupportAnchor = new THREE.Vector3();
+      sourceSupportAnchor.add(root.transform.pos);
+      sourceSupportAnchorCount += 1;
+    }
+
+    for (const root of Object.values(kickstandStateForBounds.roots)) {
+      if (root.modelId !== duplicatePreviewModel.id) continue;
+      if (!sourceSupportAnchor) sourceSupportAnchor = new THREE.Vector3();
+      sourceSupportAnchor.add(root.transform.pos);
+      sourceSupportAnchorCount += 1;
+    }
+
+    if (sourceSupportAnchor && sourceSupportAnchorCount > 0) {
+      sourceSupportAnchor.multiplyScalar(1 / sourceSupportAnchorCount);
+    }
+
+    const sourceToTarget = targetSourceTransform.position.clone().sub(oldSourceTransform.position);
+    const sourceToTargetLenSq = sourceToTarget.lengthSq();
+
+    let supportBasisTransform = oldSourceTransform;
+    if (sourceSupportAnchor && sourceToTargetLenSq > 1e-8) {
+      const anchorProgress = sourceSupportAnchor.clone().sub(oldSourceTransform.position).dot(sourceToTarget) / sourceToTargetLenSq;
+      // If source supports are already at least halfway to the target slot,
+      // treat them as committed and avoid applying the offset twice.
+      if (anchorProgress >= 0.5) {
+        supportBasisTransform = targetSourceTransform;
+      }
+    } else {
+      const sourceModelFromStore = modelById.get(duplicatePreviewModel.id);
+      if (sourceModelFromStore?.transform) {
+        supportBasisTransform = sourceModelFromStore.transform;
+      }
+    }
+
     const sourceMatrix = new THREE.Matrix4().compose(
-      duplicatePreviewModel.transform.position,
-      quaternionFromGlobalEuler(duplicatePreviewModel.transform.rotation),
-      duplicatePreviewModel.transform.scale,
+      supportBasisTransform.position,
+      quaternionFromGlobalEuler(supportBasisTransform.rotation),
+      supportBasisTransform.scale,
     );
     const targetMatrix = new THREE.Matrix4().compose(
-      duplicateActivePreviewTransform.position,
-      quaternionFromGlobalEuler(duplicateActivePreviewTransform.rotation),
-      duplicateActivePreviewTransform.scale,
+      targetSourceTransform.position,
+      quaternionFromGlobalEuler(targetSourceTransform.rotation),
+      targetSourceTransform.scale,
     );
 
     return targetMatrix.multiply(sourceMatrix.clone().invert());
-  }, [duplicateActivePreviewTransform, duplicatePreviewModel]);
+  }, [duplicateActivePreviewTransform, duplicatePreviewModel, kickstandStateForBounds.roots, modelById, supportStateForBounds.roots]);
 
   const duplicateSourceSupportPreviewModelId = React.useMemo(() => {
+    if (!hideDuplicateSourceDuringApply) return null;
     if (!duplicatePreviewModel || !duplicateActiveSupportPreviewDelta) return null;
     return duplicatePreviewModel.id;
-  }, [duplicateActiveSupportPreviewDelta, duplicatePreviewModel]);
-
-  const supportBaseExcludeModelIds = React.useMemo(() => {
-    const ids = [...multiGizmoSupportPreviewIds];
-    if (duplicateSourceSupportPreviewModelId) ids.push(duplicateSourceSupportPreviewModelId);
-    if (useActiveModelAttachedSupportProxy && activeModelId) ids.push(activeModelId);
-    return Array.from(new Set(ids));
-  }, [activeModelId, duplicateSourceSupportPreviewModelId, multiGizmoSupportPreviewIds, useActiveModelAttachedSupportProxy]);
+  }, [duplicateActiveSupportPreviewDelta, duplicatePreviewModel, hideDuplicateSourceDuringApply]);
 
   const arrangeSupportPreviewDeltas = React.useMemo(() => {
     if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
@@ -2058,10 +2297,18 @@ export function SceneCanvas({
     }
 
     return arrangeArrayPreviewItems.map((item) => {
+      const sourceTransform = (
+        activeModelId
+        && transform
+        && item.model.id === activeModelId
+      )
+        ? transform
+        : item.model.transform;
+
       const sourceMatrix = new THREE.Matrix4().compose(
-        item.model.transform.position,
-        quaternionFromGlobalEuler(item.model.transform.rotation),
-        item.model.transform.scale,
+        sourceTransform.position,
+        quaternionFromGlobalEuler(sourceTransform.rotation),
+        sourceTransform.scale,
       );
 
       const targetMatrix = new THREE.Matrix4().compose(
@@ -2074,8 +2321,80 @@ export function SceneCanvas({
         modelId: item.model.id,
         delta: targetMatrix.multiply(sourceMatrix.clone().invert()),
       };
-    });
+    }).filter(({ modelId }) => !(useActiveModelAttachedSupportProxy && !!activeModelId && modelId === activeModelId));
+  }, [activeModelId, arrangeArrayPreviewItems, transform, useActiveModelAttachedSupportProxy]);
+
+  const SUPPORT_GHOST_PROXY_SIMPLIFY_THRESHOLD = 6;
+
+  const supportGhostPreviewLayerCount = React.useMemo(() => {
+    return duplicateSupportPreviewDeltas.length + arrangeSupportPreviewDeltas.length + (duplicateSourceSupportPreviewModelId ? 1 : 0);
+  }, [arrangeSupportPreviewDeltas.length, duplicateSourceSupportPreviewModelId, duplicateSupportPreviewDeltas.length]);
+
+  const renderSupportGhostPreviews = supportGhostPreviewLayerCount > 0;
+  const useSimplifiedSupportGhostProxy = supportGhostPreviewLayerCount > SUPPORT_GHOST_PROXY_SIMPLIFY_THRESHOLD;
+
+  const renderDuplicateSourceSupportGhostPreview = !!duplicateSourceSupportPreviewModelId && !!duplicateActiveSupportPreviewDelta;
+
+  const arrangeSupportPreviewModelIds = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) return [] as string[];
+    return Array.from(new Set(arrangeArrayPreviewItems.map((item) => item.model.id)));
   }, [arrangeArrayPreviewItems]);
+
+  const supportBaseExcludeModelIds = React.useMemo(() => {
+    const ids = [...multiGizmoSupportPreviewIds];
+    if (arrangeSupportPreviewModelIds.length > 0) {
+      ids.push(...arrangeSupportPreviewModelIds);
+    }
+    if (renderDuplicateSourceSupportGhostPreview && duplicateSourceSupportPreviewModelId) {
+      ids.push(duplicateSourceSupportPreviewModelId);
+    }
+    if (useActiveModelAttachedSupportProxy && activeModelId) ids.push(activeModelId);
+    return Array.from(new Set(ids));
+  }, [
+    activeModelId,
+    arrangeSupportPreviewModelIds,
+    duplicateSourceSupportPreviewModelId,
+    multiGizmoSupportPreviewIds,
+    renderDuplicateSourceSupportGhostPreview,
+    useActiveModelAttachedSupportProxy,
+  ]);
+
+  const arrangeGhostPreviewGroups = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
+      return [] as Array<{ model: LoadedModel; transforms: GhostPreviewTransform[] }>;
+    }
+
+    const groups = new Map<string, { model: LoadedModel; transforms: GhostPreviewTransform[] }>();
+    for (const item of arrangeArrayPreviewItems) {
+      const existing = groups.get(item.model.id);
+      if (existing) {
+        existing.transforms.push(item.transform);
+      } else {
+        groups.set(item.model.id, {
+          model: item.model,
+          transforms: [item.transform],
+        });
+      }
+    }
+
+    return Array.from(groups.values());
+  }, [arrangeArrayPreviewItems]);
+
+  const hideFootprintOutlineForPreview = React.useMemo(() => {
+    if (mode !== 'prepare' || transformMode !== 'arrange') return false;
+
+    const hasArrangePreview = arrangeGhostPreviewGroups.length > 0 || arrangeSupportPreviewDeltas.length > 0;
+    const hasDuplicatePreview = effectiveDuplicatePreviewTransforms.length > 0 || !!duplicateActivePreviewTransform;
+
+    return hasArrangePreview || hasDuplicatePreview;
+  }, [
+    arrangeGhostPreviewGroups.length,
+    arrangeSupportPreviewDeltas.length,
+    duplicateActivePreviewTransform,
+    effectiveDuplicatePreviewTransforms.length,
+    mode,
+    transformMode,
+  ]);
 
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
@@ -2444,18 +2763,54 @@ export function SceneCanvas({
     transform,
   ]);
 
-  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
-    return models
-      .filter((model) => model.visible)
-      .map((model) => ({
-        id: model.id,
-        geometry: model.geometry.geometry,
-        center: model.geometry.center,
-        transform: model.id === activeModelId && transform
-          ? transform
-          : model.transform,
-      }));
-  }, [activeModelId, models, transform]);
+  const crossSectionStencilSourceVersion = React.useMemo(() => ({
+    supportRenderRefreshNonce,
+    supportDragTransactionId,
+    isGizmoDragging,
+    effectiveHoldSupportDragDelta,
+    // Restrict invalidation to geometry-bearing support/kickstand refs plus
+    // raft geometry parameters. This avoids recaching on hover/selection-only
+    // snapshot churn that does not alter cross-section source geometry.
+    supportTrunksRef: supportStateForBounds.trunks,
+    supportRootsRef: supportStateForBounds.roots,
+    supportKnotsRef: supportStateForBounds.knots,
+    supportBranchesRef: supportStateForBounds.branches,
+    supportLeavesRef: supportStateForBounds.leaves,
+    supportTwigsRef: supportStateForBounds.twigs,
+    supportSticksRef: supportStateForBounds.sticks,
+    supportBracesRef: supportStateForBounds.braces,
+    kickstandKickstandsRef: kickstandStateForBounds.kickstands,
+    kickstandRootsRef: kickstandStateForBounds.roots,
+    kickstandKnotsRef: kickstandStateForBounds.knots,
+    raftBottomMode: raftSettingsForBounds.bottomMode,
+    raftThickness: raftSettingsForBounds.thickness,
+    raftLineHeightMm: raftSettingsForBounds.lineHeightMm,
+    raftWallEnabled: raftSettingsForBounds.wallEnabled,
+    raftWallHeight: raftSettingsForBounds.wallHeight,
+    raftChamferAngle: raftSettingsForBounds.chamferAngle,
+  }), [
+    effectiveHoldSupportDragDelta,
+    isGizmoDragging,
+    kickstandStateForBounds.kickstands,
+    kickstandStateForBounds.knots,
+    kickstandStateForBounds.roots,
+    raftSettingsForBounds.bottomMode,
+    raftSettingsForBounds.chamferAngle,
+    raftSettingsForBounds.lineHeightMm,
+    raftSettingsForBounds.thickness,
+    raftSettingsForBounds.wallEnabled,
+    raftSettingsForBounds.wallHeight,
+    supportStateForBounds.braces,
+    supportStateForBounds.branches,
+    supportStateForBounds.knots,
+    supportStateForBounds.leaves,
+    supportStateForBounds.roots,
+    supportStateForBounds.sticks,
+    supportStateForBounds.trunks,
+    supportStateForBounds.twigs,
+    supportDragTransactionId,
+    supportRenderRefreshNonce,
+  ]);
 
   const crossSectionPlaneWidthMm = Math.max(
     1,
@@ -2880,7 +3235,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
-  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
+  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -3003,6 +3358,23 @@ export function SceneCanvas({
 
   React.useEffect(() => {
     navigationResumeDelayRef.current = navigationResumeDelayMs;
+  }, [navigationResumeDelayMs]);
+
+  const forceEndWheelZoomInteraction = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (wheelZoomEndTimeoutRef.current !== null) {
+      window.clearTimeout(wheelZoomEndTimeoutRef.current);
+      wheelZoomEndTimeoutRef.current = null;
+    }
+
+    if (!wheelZoomInteractionActiveRef.current) return;
+
+    wheelZoomInteractionActiveRef.current = false;
+    setIsWheelZoomInteracting(false);
+    window.dispatchEvent(new CustomEvent('picking-zoom-end', {
+      detail: { resumeAfterMs: navigationResumeDelayMs },
+    }));
   }, [navigationResumeDelayMs]);
 
   React.useEffect(() => {
@@ -3519,6 +3891,100 @@ export function SceneCanvas({
     }));
   }, [mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
 
+  const handleWebGlContextLost = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    handleOrbitEnd();
+    forceEndWheelZoomInteraction();
+    setIsGizmoDragging(false);
+    setIsGizmoRetargeting(false);
+    setActiveGizmoDragDescriptor(null);
+    setGizmoGroupStartSnapshot(null);
+    setIsPostGizmoInteractionGuardActive(false);
+    setSupportGizmoInteractionActive(false);
+    gizmoTransformStartSnapshotRef.current = null;
+    liveDragTransformRef.current = null;
+    queueLiveDragTransform(null);
+    dragMoveLockZEnabledRef.current = false;
+    dragMoveLockedZRef.current = 0;
+    clearDragCornerCageBaseData();
+    setInteractionResetNonce((value) => value + 1);
+
+    if (webGlRecoveryTimeoutRef.current !== null) return;
+
+    webGlRecoveryTimeoutRef.current = window.setTimeout(() => {
+      webGlRecoveryTimeoutRef.current = null;
+      console.warn('[SceneCanvas] WebGL context restore timeout reached; remounting canvas.');
+      setCanvasRecoveryNonce((value) => value + 1);
+    }, 1800);
+  }, [clearDragCornerCageBaseData, forceEndWheelZoomInteraction, handleOrbitEnd, queueLiveDragTransform]);
+
+  const handleWebGlContextRestored = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (webGlRecoveryTimeoutRef.current !== null) {
+      window.clearTimeout(webGlRecoveryTimeoutRef.current);
+      webGlRecoveryTimeoutRef.current = null;
+    }
+
+    orbitControlsRef.current?.update();
+    updateCameraBelowBuildPlate();
+    onCameraChange?.();
+  }, [onCameraChange, updateCameraBelowBuildPlate]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      if (webGlRecoveryTimeoutRef.current !== null) {
+        window.clearTimeout(webGlRecoveryTimeoutRef.current);
+        webGlRecoveryTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!freezeViewportActive) {
+      freezeCaptureArmedRef.current = false;
+      if (frozenViewportDataUrl !== null) {
+        setFrozenViewportDataUrl(null);
+      }
+      return;
+    }
+
+    if (freezeCaptureArmedRef.current) return;
+    freezeCaptureArmedRef.current = true;
+
+    let rafId = 0;
+    let attempts = 0;
+    const maxAttempts = 12;
+
+    const tryCapture = () => {
+      if (!freezeViewportActive) return;
+      const canvas = rendererRef.current?.domElement;
+      if (!canvas) {
+        attempts += 1;
+        if (attempts < maxAttempts) {
+          rafId = requestAnimationFrame(tryCapture);
+        }
+        return;
+      }
+
+      try {
+        const snapshot = canvas.toDataURL('image/png');
+        if (snapshot && snapshot.length > 64) {
+          setFrozenViewportDataUrl(snapshot);
+        }
+      } catch {
+        // If snapshot capture fails, keep UI functional and simply skip freeze overlay.
+      }
+    };
+
+    rafId = requestAnimationFrame(tryCapture);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [freezeViewportActive, frozenViewportDataUrl]);
+
   React.useEffect(() => {
     if (spaceMouseNavigationActive) {
       window.dispatchEvent(new Event('picking-pan-start'));
@@ -3676,6 +4142,7 @@ export function SceneCanvas({
       ref={containerRef}
     >
       <Canvas
+        key={`scene-canvas-${canvasRecoveryNonce}`}
         style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
         camera={defaultCamera}
         shadows
@@ -3683,7 +4150,12 @@ export function SceneCanvas({
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}
       >
-        <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
+        <SceneRenderBindings
+          rendererRef={rendererRef}
+          sceneRef={sceneRef}
+          onWebGlContextLost={handleWebGlContextLost}
+          onWebGlContextRestored={handleWebGlContextRestored}
+        />
         <LoggingHelper mode={mode} />
         
         <Lights
@@ -3700,7 +4172,7 @@ export function SceneCanvas({
           showGrid={!thumbnailCaptureActive || includeHelpersGridDuringCapture}
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
         />
-        <EnableLocalClipping enabled={clipLower != null || clipUpper != null} />
+        <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null} />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} />
         <CameraClipPlaneStabilizer />
@@ -3717,6 +4189,22 @@ export function SceneCanvas({
 
             <React.Suspense fallback={null}>
               {models.map((model) => {
+                const meshGroupRefCallback = meshGroupRefCallbacks.current[model.id]
+                  ?? ((node: THREE.Group | null) => {
+                    meshRefs.current[model.id] = node;
+                  });
+                if (!meshGroupRefCallbacks.current[model.id]) {
+                  meshGroupRefCallbacks.current[model.id] = meshGroupRefCallback;
+                }
+
+                const actualMeshRefCallback = actualMeshRefCallbacks.current[model.id]
+                  ?? ((node: THREE.Mesh | null) => {
+                    actualMeshRefs.current[model.id] = node;
+                  });
+                if (!actualMeshRefCallbacks.current[model.id]) {
+                  actualMeshRefCallbacks.current[model.id] = actualMeshRefCallback;
+                }
+
                 const isCaptureTintModel = thumbnailCaptureActive && model.visible;
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
@@ -3779,12 +4267,8 @@ export function SceneCanvas({
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       meshColor={model.color || meshColor} // Use model color
-                      meshRef={(el: THREE.Group | null) => {
-                        meshRefs.current[model.id] = el;
-                      }}
-                      actualMeshRef={(el: THREE.Mesh | null) => {
-                        actualMeshRefs.current[model.id] = el;
-                      }}
+                      meshRef={meshGroupRefCallback}
+                      actualMeshRef={actualMeshRefCallback}
                       materialRoughness={materialRoughness}
                       shaderType={shaderType ?? 'soft_clay'}
                       matcapVariant={matcapVariant}
@@ -3793,7 +4277,7 @@ export function SceneCanvas({
                       xrayOpacity={xrayOpacity}
                       heatmapBlend={heatmapBlend}
                       heatmapContrast={heatmapContrast}
-                      heatmapColors={heatmapColors ?? []}
+                      heatmapColors={heatmapColors ?? emptyHeatmapColors}
                       transform={animatedTransform}
                       mode={mode}
                       transformMode={transformMode}
@@ -3828,7 +4312,7 @@ export function SceneCanvas({
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
                       suppressModelInteraction={suppressModelInteraction}
-                      externalHoveredModelId={hoveredModelId}
+                      isExternallyHovered={hoveredModelId === model.id}
                       deferExternalTransformUpdates={
                         isActive
                         && mode === 'prepare'
@@ -3850,10 +4334,10 @@ export function SceneCanvas({
                             clipLower={clipLower}
                             clipUpper={clipUpper}
                             supportColorsByModelId={supportColorsByModelId}
-                            hoverTintColor={hoverTintColor}
+                            hoverTintColor={supportHoverTintColor}
                             hoverTintStrength={hoverTintStrength}
                             selectedTintStrength={selectedTintStrength}
-                            activeModelId={committedActiveModelId}
+                            activeModelId={activeModelId}
                             selectedModelIds={selectedModelIds}
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
@@ -3873,35 +4357,21 @@ export function SceneCanvas({
               })}
 
               {duplicatePreviewModel
-                && duplicatePreviewMeshOffset
                 && effectiveDuplicatePreviewTransforms.length > 0
-                ? effectiveDuplicatePreviewTransforms.map((previewTransform, index) => (
-                    <group
-                      key={`duplicate-preview-${index}`}
-                      position={previewTransform.position}
-                      quaternion={quaternionFromGlobalEuler(previewTransform.rotation)}
-                      scale={previewTransform.scale}
-                    >
-                      <mesh
-                        geometry={duplicatePreviewModel.geometry.geometry}
-                        position={duplicatePreviewMeshOffset}
-                      raycast={() => null}
-                      renderOrder={2}
-                      >
-                      <meshStandardMaterial
-                        color={duplicatePreviewModel.color ?? '#a3a3a3'}
-                        transparent
-                        opacity={0.22}
-                        roughness={0.5}
-                        metalness={0.02}
-                        depthWrite={false}
-                      />
-                    </mesh>
-                  </group>
-                ))
+                ? (
+                  <GhostPreviewInstances
+                    geometry={duplicatePreviewModel.geometry.geometry}
+                    center={duplicatePreviewModel.geometry.center}
+                    color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                    transforms={effectiveDuplicatePreviewTransforms}
+                    opacity={0.22}
+                    renderOrder={2}
+                  />
+                )
                 : null}
 
-              {duplicatePreviewModel
+              {renderSupportGhostPreviews
+                && duplicatePreviewModel
                 && duplicateSupportPreviewDeltas.length > 0
                 ? duplicateSupportPreviewDeltas.map((deltaMatrix, index) => (
                     <group
@@ -3918,13 +4388,13 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
-                        selectedModelIds={[]}
+                        selectedModelIds={emptySelectedModelIds}
                         hoverModelId={null}
-                        modelDropOffsetsById={{}}
+                        modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={duplicatePreviewModel.id}
                         ghostOpacity={0.3}
                         ghostRenderOrder={2}
@@ -3932,6 +4402,7 @@ export function SceneCanvas({
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportProxyIncludeDetailedPrimitives={!useSimplifiedSupportGhostProxy}
                         supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
@@ -3956,56 +4427,34 @@ export function SceneCanvas({
                       raycast={() => null}
                       renderOrder={2}
                     >
-                      <meshStandardMaterial
+                      <meshBasicMaterial
                         color={duplicatePreviewModel.color ?? '#a3a3a3'}
                         transparent
                         opacity={0.22}
-                        roughness={0.5}
-                        metalness={0.02}
                         depthWrite={false}
+                        toneMapped={false}
                       />
                     </mesh>
                   </group>
                 )
                 : null}
 
-              {arrangeArrayPreviewItems && arrangeArrayPreviewItems.length > 0
-                ? arrangeArrayPreviewItems.map((item) => {
-                  const offset = new THREE.Vector3(
-                    -item.model.geometry.center.x,
-                    -item.model.geometry.center.y,
-                    -item.model.geometry.center.z,
-                  );
-
-                  return (
-                    <group
-                      key={`arrange-array-preview-${item.model.id}`}
-                      position={item.transform.position}
-                      quaternion={quaternionFromGlobalEuler(item.transform.rotation)}
-                      scale={item.transform.scale}
-                      raycast={() => null}
-                    >
-                      <mesh
-                        geometry={item.model.geometry.geometry}
-                        position={offset}
-                        raycast={() => null}
-                        renderOrder={2}
-                      >
-                        <meshStandardMaterial
-                          color={item.model.color ?? '#a3a3a3'}
-                          transparent
-                          opacity={0.22}
-                          roughness={0.5}
-                          metalness={0.02}
-                          depthWrite={false}
-                        />
-                      </mesh>
-                    </group>
-                  );
-                })
+              {arrangeGhostPreviewGroups.length > 0
+                ? arrangeGhostPreviewGroups.map((group) => (
+                  <GhostPreviewInstances
+                    key={`arrange-array-preview-${group.model.id}`}
+                    geometry={group.model.geometry.geometry}
+                    center={group.model.geometry.center}
+                    color={group.model.color ?? '#a3a3a3'}
+                    transforms={group.transforms}
+                    opacity={0.22}
+                    renderOrder={2}
+                  />
+                ))
                 : null}
 
-              {duplicatePreviewModel
+              {renderDuplicateSourceSupportGhostPreview
+                && duplicatePreviewModel
                 && duplicateActiveSupportPreviewDelta
                 ? (
                     <group
@@ -4022,13 +4471,13 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
-                        selectedModelIds={[]}
+                        selectedModelIds={emptySelectedModelIds}
                         hoverModelId={null}
-                        modelDropOffsetsById={{}}
+                        modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={duplicatePreviewModel.id}
                         ghostOpacity={0.3}
                         ghostRenderOrder={2}
@@ -4036,13 +4485,14 @@ export function SceneCanvas({
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportProxyIncludeDetailedPrimitives={!useSimplifiedSupportGhostProxy}
                         supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
                   )
                 : null}
 
-              {arrangeSupportPreviewDeltas.length > 0
+              {renderSupportGhostPreviews && arrangeSupportPreviewDeltas.length > 0
                 ? arrangeSupportPreviewDeltas.map(({ modelId, delta }) => (
                     <group
                       key={`arrange-support-preview-${modelId}`}
@@ -4058,20 +4508,21 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
-                        selectedModelIds={[]}
+                        selectedModelIds={emptySelectedModelIds}
                         hoverModelId={null}
-                        modelDropOffsetsById={{}}
+                        modelDropOffsetsById={emptyModelDropOffsets}
                         modelFilterId={modelId}
-                        ghostOpacity={0.3}
+                        ghostOpacity={0.45}
                         ghostRenderOrder={2}
                         disableSelectionAndHover
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportProxyIncludeDetailedPrimitives={!useSimplifiedSupportGhostProxy}
                         supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
@@ -4173,10 +4624,10 @@ export function SceneCanvas({
                   clipLower={clipLower}
                   clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
-                  hoverTintColor={hoverTintColor}
+                  hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
-                  activeModelId={committedActiveModelId}
+                  activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
@@ -4196,16 +4647,22 @@ export function SceneCanvas({
               )}
               </group>{/* end supportDragGroupRef */}
 
-              {clipUpper != null && !hideCrossSectionCap && (
+              {(clipUpper != null || indicatorPlaneZ != null) && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
-                  sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (effectiveHoldSupportDragDelta ? 1 : 0)}
-                  y={clipUpper}
-                  color="#FFFFFF"
+                  sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
+                  skipSourceZBounds={clipUpper == null}
+                  y={(clipUpper ?? indicatorPlaneZ)!}
+                  color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
-                  visible={!hideCrossSectionCap && clipUpper != null}
+                  capOpacity={clipUpper != null ? 1 : 0.78}
+                  capDepthTest={clipUpper != null}
+                  glowThicknessMm={clipUpper != null ? 0 : 0.11}
+                  glowOpacity={clipUpper != null ? 0 : 0.44}
+                  glowColor={clipUpper != null ? undefined : (indicatorPlaneColor ?? '#ec2a77')}
+                  visible={!hideCrossSectionCap && (clipUpper != null || indicatorPlaneZ != null)}
                 />
               )}
 
@@ -4213,12 +4670,13 @@ export function SceneCanvas({
                 && !thumbnailCaptureActive
                 && !isGizmoDragging
                 && !isGizmoRetargeting
+                && !hideFootprintOutlineForPreview
                 && !(transformMode === 'placeOnFace' && disableRaycast)
                 && (
                 <FootprintBorderRenderer
                   modelGeometry={activeModel ? activeModel.geometry : null}
                   modelTransform={activeModelTransform}
-                  modelId={committedActiveModelId ?? hoveredModelId ?? null}
+                  modelId={activeModelId ?? hoveredModelId ?? null}
                   color={supportHoverTintColor}
                 />
               )}
@@ -4247,10 +4705,10 @@ export function SceneCanvas({
                   clipLower={clipLower}
                   clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
-                  hoverTintColor={hoverTintColor}
+                  hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
-                  activeModelId={committedActiveModelId}
+                  activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
@@ -4282,10 +4740,10 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
-                        hoverTintColor={hoverTintColor}
+                        hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
-                        activeModelId={committedActiveModelId}
+                        activeModelId={activeModelId}
                         selectedModelIds={selectedModelIds}
                         hoverModelId={hoveredModelId}
                         modelDropOffsetsById={entryDropOffsets}
@@ -5000,6 +5458,32 @@ export function SceneCanvas({
       </Canvas>
 
       <SceneMoodOverlay />
+
+      {frozenViewportDataUrl && freezeViewportActive && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 55,
+            pointerEvents: 'none',
+            background: '#181a22',
+          }}
+          aria-hidden="true"
+        >
+          <img
+            src={frozenViewportDataUrl}
+            alt=""
+            draggable={false}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+              userSelect: 'none',
+            }}
+          />
+        </div>
+      )}
 
       {smoothingLoading.active && (
         <div

@@ -27,6 +27,10 @@ export function VisualSettingsPanel({
   maxHeightMm,
   crossSectionMode,
 }: VisualSettingsPanelProps) {
+  const handleLayerChange = React.useCallback((nextValue: number) => {
+    onLayerIndexChange(Math.round(nextValue));
+  }, [onLayerIndexChange]);
+
   return (
     <Card className="h-[calc(100vh-var(--topbar-height)-24px)] flex flex-col">
       <div className="px-0 py-2 min-h-0 flex-1 flex flex-col">
@@ -36,7 +40,7 @@ export function VisualSettingsPanel({
             max={maxLayers}
             step={1}
             value={layerIndex}
-            onChange={(v) => onLayerIndexChange(Math.round(v))}
+            onChange={handleLayerChange}
             onScrubStart={onScrubStart}
             onScrubEnd={onScrubEnd}
             onCrossSectionModeChange={onCrossSectionModeChange}

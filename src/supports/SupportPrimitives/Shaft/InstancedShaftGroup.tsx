@@ -19,6 +19,7 @@ interface InstancedShaftGroupProps {
     emissiveIntensity?: number;
     transparent?: boolean;
     opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
     radialSegments?: number;
     onShaftClick?: (shaft: InstancedShaft, event: ThreeEvent<MouseEvent>) => void;
     onShaftPointerMove?: (shaft: InstancedShaft, event: ThreeEvent<PointerEvent>) => void;
@@ -34,6 +35,7 @@ export function InstancedShaftGroup({
     emissiveIntensity = 0,
     transparent = false,
     opacity = 1,
+    clippingPlanes = null,
     radialSegments = 12,
     onShaftClick,
     onShaftPointerMove,
@@ -125,7 +127,7 @@ export function InstancedShaftGroup({
             onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
             onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
         >
-            <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, true]} />
+            <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, false]} />
             <meshStandardMaterial
                 color={color}
                 emissive={emissive}
@@ -133,6 +135,7 @@ export function InstancedShaftGroup({
                 transparent={transparent}
                 opacity={opacity}
                 depthWrite={!transparent}
+                clippingPlanes={clippingPlanes ?? undefined}
             />
         </instancedMesh>
     );

@@ -18,6 +18,7 @@ interface InstancedJointGroupProps {
     emissiveIntensity?: number;
     transparent?: boolean;
     opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
     widthSegments?: number;
     heightSegments?: number;
     onJointClick?: (joint: InstancedJoint, event: ThreeEvent<MouseEvent>) => void;
@@ -32,6 +33,7 @@ export function InstancedJointGroup({
     emissiveIntensity = 0,
     transparent = false,
     opacity = 1,
+    clippingPlanes = null,
     widthSegments = 12,
     heightSegments = 10,
     onJointClick,
@@ -114,6 +116,7 @@ export function InstancedJointGroup({
                 transparent={transparent}
                 opacity={opacity}
                 depthWrite={!transparent}
+                clippingPlanes={clippingPlanes ?? undefined}
             />
         </instancedMesh>
     );

@@ -7,6 +7,7 @@
 use crate::encode::{encode_binary_grayscale_png_1bit, encode_grayscale_png};
 use crate::engine::SlicerV3Error;
 use crate::geometry::Triangle;
+use crate::index::LayerIndex;
 use crate::metrics::SlicingPerfV3;
 use crate::raster::rasterize_layer_with_stats;
 use crate::types::{
@@ -152,7 +153,7 @@ fn choose_streaming_buffer_depth_for_mask_bytes(layer_pixels_len: usize) -> usiz
 pub fn render_layers_bounded(
     job: &SliceJobV3,
     triangles: &[Triangle],
-    layer_index: &[Vec<usize>],
+    layer_index: &LayerIndex,
     compute_area_stats: bool,
     emit_png_layers: bool,
     emit_raw_mask_layers: bool,
@@ -224,7 +225,9 @@ pub fn render_layers_bounded(
                                 return Err(SlicerV3Error::Cancelled);
                             }
 
-                            if layer_index[layer as usize].is_empty() {
+                            let layer_candidates = layer_index.candidates_for_layer(layer);
+
+                            if layer_candidates.is_empty() {
                                 let stats = LayerAreaStatsV3::default();
                                 let png = if emit_png_layers {
                                     let png_start = std::time::Instant::now();
@@ -266,7 +269,7 @@ pub fn render_layers_bounded(
                             let (mask, stats) = rasterize_layer_with_stats(
                                 job,
                                 triangles,
-                                &layer_index[layer as usize],
+                                layer_candidates,
                                 layer,
                                 compute_area_stats,
                             );

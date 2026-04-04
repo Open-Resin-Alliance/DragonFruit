@@ -183,13 +183,18 @@ export function RtspRelayCanvasPlayer({
         await ensureJsmpegBundleLoaded();
         if (disposed) return;
 
+        const jsmpegNamespace = window.JSMpeg;
+        if (!jsmpegNamespace) {
+          throw new Error('RTSP relay player failed to initialize because the JSMpeg bundle was unavailable.');
+        }
+
         startupTimeoutId = window.setTimeout(() => {
           if (disposed || hasReceivedFirstFrame) return;
           emitError('The webcam stream did not deliver any video data in time.');
           safeDestroyPlayer();
         }, 15_000);
 
-        const createdPlayer = new window.JSMpeg.Player(normalizedUrl, {
+        const createdPlayer = new jsmpegNamespace.Player(normalizedUrl, {
           canvas,
           onVideoDecode: () => {
             if (disposed) return;

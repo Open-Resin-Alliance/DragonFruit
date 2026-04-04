@@ -311,6 +311,10 @@ export function SupportSidebar() {
             setSettings(globalSettingsBeforeSupportEditRef.current);
             globalSettingsBeforeSupportEditRef.current = null;
         }
+
+        if (leavingSupportEdit && activeKind !== 'trunk') {
+            setActiveSupportKind('trunk');
+        }
     }, [editableTarget, commitPendingSettingsSession]);
 
     React.useEffect(() => {

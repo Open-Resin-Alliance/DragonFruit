@@ -7,9 +7,13 @@ import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion
 export function SceneRenderBindings({
   rendererRef,
   sceneRef,
+  onWebGlContextLost,
+  onWebGlContextRestored,
 }: {
   rendererRef: React.MutableRefObject<THREE.WebGLRenderer | null>;
   sceneRef: React.MutableRefObject<THREE.Scene | null>;
+  onWebGlContextLost?: (event: WebGLContextEvent) => void;
+  onWebGlContextRestored?: (event: Event) => void;
 }) {
   const { gl, scene } = useThree();
 
@@ -17,7 +21,25 @@ export function SceneRenderBindings({
     rendererRef.current = gl;
     sceneRef.current = scene;
 
+    const canvas = gl.domElement;
+    const handleContextLost = (event: Event) => {
+      const webGlEvent = event as WebGLContextEvent;
+      // Required to allow the browser to attempt context restoration.
+      webGlEvent.preventDefault();
+      onWebGlContextLost?.(webGlEvent);
+    };
+
+    const handleContextRestored = (event: Event) => {
+      onWebGlContextRestored?.(event);
+    };
+
+    canvas.addEventListener('webglcontextlost', handleContextLost as EventListener, false);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored as EventListener, false);
+
     return () => {
+      canvas.removeEventListener('webglcontextlost', handleContextLost as EventListener, false);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored as EventListener, false);
+
       if (rendererRef.current === gl) {
         rendererRef.current = null;
       }
@@ -25,7 +47,7 @@ export function SceneRenderBindings({
         sceneRef.current = null;
       }
     };
-  }, [gl, scene, rendererRef, sceneRef]);
+  }, [gl, onWebGlContextLost, onWebGlContextRestored, scene, rendererRef, sceneRef]);
 
   return null;
 }

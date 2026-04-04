@@ -332,21 +332,6 @@ export function JointGizmo() {
             const clamped = getJointPosInSegments(newBranch.segments as any[], joint.id);
             if (clamped) gizmoPos = clamped;
         } else if (twig) {
-            if (!initialBranchRef.current) {
-                initialBranchRef.current = cloneObj(branch);
-            }
-            const newBranch = computeJointDragSupportPreview({
-                kind: 'branch',
-                support: branch,
-                jointId: joint.id,
-                newPos,
-                isCurveMode: false,
-            }) as Branch;
-            if (liveBranchPreviewRef.current !== newBranch) {
-                liveBranchPreviewRef.current = newBranch;
-                publishJointDragSupportPreview('branch', newBranch);
-            }
-        } else if (twig) {
             const newTwig: Twig = {
                 ...twig,
                 segments: updateSegmentsJointPos(twig.segments as any[], joint.id, newPos) as any,
