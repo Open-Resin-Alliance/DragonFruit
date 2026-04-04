@@ -669,6 +669,10 @@ export default function Home() {
     before: ModelTransform;
     after?: ModelTransform;
     description?: string;
+    supportBefore?: ReturnType<typeof getSupportSnapshot>;
+    supportAfter?: ReturnType<typeof getSupportSnapshot>;
+    kickstandBefore?: ReturnType<typeof getKickstandSnapshot>;
+    kickstandAfter?: ReturnType<typeof getKickstandSnapshot>;
   } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const transformHistoryCommitNonceRef = React.useRef(0);
@@ -6671,6 +6675,22 @@ export default function Home() {
       && a.scale.distanceToSquared(b.scale) <= EPSILON;
   }, []);
 
+  const captureTransformSupportSnapshot = React.useCallback(() => {
+    const supportSnapshot = structuredClone(getSupportSnapshot());
+    supportSnapshot.selectedId = null;
+    supportSnapshot.selectedCategory = null;
+    supportSnapshot.hoveredId = null;
+    supportSnapshot.hoveredCategory = 'none';
+
+    const kickstandSnapshot = structuredClone(getKickstandSnapshot());
+    kickstandSnapshot.selectedId = null;
+
+    return {
+      support: supportSnapshot,
+      kickstand: kickstandSnapshot,
+    };
+  }, []);
+
   const invalidatePendingTransformHistory = React.useCallback((options?: { clearRotateCommit?: boolean }) => {
     const now = {
       perfMs: performance.now(),
@@ -6777,8 +6797,25 @@ export default function Home() {
             }
     );
 
+    const supportHistoryOptions = (
+      pending.supportBefore
+      && pending.kickstandBefore
+    )
+      ? {
+          includeSupportState: true,
+          supportBefore: pending.supportBefore,
+          kickstandBefore: pending.kickstandBefore,
+        }
+      : undefined;
+
     const undoCountBefore = getUndoCount();
-    const pushed = scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
+    const pushed = scene.commitModelTransformHistory(
+      pending.modelId,
+      pending.before,
+      afterTransform,
+      pending.description,
+      supportHistoryOptions,
+    );
     const undoCountAfter = getUndoCount();
     const equalTransform = transformsApproximatelyEqual(pending.before, afterTransform);
     transformHistoryDebugRef.current = {
@@ -6796,7 +6833,7 @@ export default function Home() {
     pendingTransformHistoryRef.current = null;
     transformHistoryCommitRequestedRef.current = false;
     return true;
-  }, [invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform, transformsApproximatelyEqual]);
+  }, [captureTransformSupportSnapshot, invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform, transformsApproximatelyEqual]);
 
   const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
     const scheduledNonce = ++transformHistoryCommitNonceRef.current;
@@ -7506,6 +7543,7 @@ export default function Home() {
       if (posChanged || rotChanged || scaleChanged) {
         const pending = pendingTransformHistoryRef.current;
         if (!pending || pending.modelId !== scene.activeModelId) {
+          const beforeSupportSnapshot = captureTransformSupportSnapshot();
           pendingTransformHistoryRef.current = {
             modelId: scene.activeModelId,
             before: {
@@ -7519,6 +7557,8 @@ export default function Home() {
               scale: current.scale.clone(),
             },
             description: pending?.description,
+            supportBefore: beforeSupportSnapshot.support,
+            kickstandBefore: beforeSupportSnapshot.kickstand,
           };
         } else {
           pending.after = {
@@ -7530,6 +7570,13 @@ export default function Home() {
 
         const isDirectTransformPath = !transformMgr.pendingTransformRef.current;
         scene.updateModelTransform(scene.activeModelId, current);
+
+        const afterSupportSnapshot = captureTransformSupportSnapshot();
+        const pendingAfter = pendingTransformHistoryRef.current;
+        if (pendingAfter && pendingAfter.modelId === scene.activeModelId) {
+          pendingAfter.supportAfter = afterSupportSnapshot.support;
+          pendingAfter.kickstandAfter = afterSupportSnapshot.kickstand;
+        }
 
         if (isDirectTransformPath) {
           setSupportRenderRefreshNonce((prev) => prev + 1);
@@ -7543,6 +7590,7 @@ export default function Home() {
       }
     }
   }, [
+    captureTransformSupportSnapshot,
     commitPendingTransformHistory,
     scene.activeModelId,
     scene.activeModel,
@@ -9644,6 +9692,8 @@ export default function Home() {
           scale: pendingRotateGizmoCommitRef.current.after.scale.clone(),
         },
         description: pendingRotateGizmoCommitRef.current.description,
+        supportBefore: pendingTransformHistoryRef.current?.supportBefore,
+        kickstandBefore: pendingTransformHistoryRef.current?.kickstandBefore,
       };
       pendingRotateGizmoCommitRef.current = null;
     }
@@ -9710,6 +9760,10 @@ export default function Home() {
       if (!existingAfterIsMeaningful) {
         pendingTransformHistoryRef.current.after = afterFromFinal ?? afterFromPending ?? afterFromTransform ?? existingAfter ?? undefined;
       }
+
+      const afterSupportSnapshot = captureTransformSupportSnapshot();
+      pendingTransformHistoryRef.current.supportAfter = afterSupportSnapshot.support;
+      pendingTransformHistoryRef.current.kickstandAfter = afterSupportSnapshot.kickstand;
     }
 
     const skipCommitToken = skipNextTransformEndCommitRef.current;
@@ -9760,18 +9814,44 @@ export default function Home() {
       return;
     }
 
-    scene.commitModelTransformHistory(
-      payload.modelId,
-      payload.before,
-      payload.after,
-      `transform:${payload.operation} ${targetModelName}`,
-    );
+    // For move/scale, defer history commit to handleTransformEnd where support state
+    // has already been transformed in-store. Early commits from this callback can
+    // capture stale support "after" snapshots, which breaks redo.
+    const existing = pendingTransformHistoryRef.current;
+    if (existing && existing.modelId === payload.modelId) {
+      existing.before = {
+        position: payload.before.position.clone(),
+        rotation: payload.before.rotation.clone(),
+        scale: payload.before.scale.clone(),
+      };
+      existing.after = {
+        position: payload.after.position.clone(),
+        rotation: payload.after.rotation.clone(),
+        scale: payload.after.scale.clone(),
+      };
+      existing.description = `transform:${payload.operation} ${targetModelName}`;
+    } else {
+      const beforeSupportSnapshot = captureTransformSupportSnapshot();
+      pendingTransformHistoryRef.current = {
+        modelId: payload.modelId,
+        before: {
+          position: payload.before.position.clone(),
+          rotation: payload.before.rotation.clone(),
+          scale: payload.before.scale.clone(),
+        },
+        after: {
+          position: payload.after.position.clone(),
+          rotation: payload.after.rotation.clone(),
+          scale: payload.after.scale.clone(),
+        },
+        description: `transform:${payload.operation} ${targetModelName}`,
+        supportBefore: beforeSupportSnapshot.support,
+        kickstandBefore: beforeSupportSnapshot.kickstand,
+      };
+    }
 
-    skipNextTransformEndCommitRef.current = {
-      modelId: payload.modelId,
-      operation: payload.operation,
-    };
-  }, [scene]);
+    skipNextTransformEndCommitRef.current = null;
+  }, [captureTransformSupportSnapshot, scene]);
 
   const handleGizmoTransformGroupCommit = React.useCallback((payload: {
     operation: 'move' | 'rotate' | 'scale';
@@ -9915,6 +9995,8 @@ export default function Home() {
           scale: scene.activeModel.transform.scale.clone(),
         },
         description: `transform:${operation} ${targetModelName}`,
+        supportBefore: captureTransformSupportSnapshot().support,
+        kickstandBefore: captureTransformSupportSnapshot().kickstand,
       };
     }
 
@@ -9923,13 +10005,14 @@ export default function Home() {
     }
 
     return true;
-  }, [disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId]);
+  }, [captureTransformSupportSnapshot, disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
 
     const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
     if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
+      const beforeSupportSnapshot = captureTransformSupportSnapshot();
       pendingTransformHistoryRef.current = {
         modelId: scene.activeModelId,
         before: {
@@ -9945,6 +10028,8 @@ export default function Home() {
             }
           : undefined,
         description: `transform:${operation} ${targetModelName}`,
+        supportBefore: beforeSupportSnapshot.support,
+        kickstandBefore: beforeSupportSnapshot.kickstand,
       };
       return;
     }
@@ -9957,7 +10042,7 @@ export default function Home() {
         scale: transformMgr.transform.scale.clone(),
       };
     }
-  }, [isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transform]);
+  }, [captureTransformSupportSnapshot, isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transform]);
 
   React.useEffect(() => {
     return () => {

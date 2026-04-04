@@ -98,6 +98,16 @@ type SceneSnapshot = {
 
 type SceneSnapshotCaptureOptions = {
   includeSupportState?: boolean;
+  supportStateOverride?: SupportState;
+  kickstandStateOverride?: KickstandState;
+};
+
+type TransformHistorySupportSnapshotOptions = {
+  supportBefore?: SupportState;
+  supportAfter?: SupportState;
+  kickstandBefore?: KickstandState;
+  kickstandAfter?: KickstandState;
+  includeSupportState?: boolean;
 };
 
 type SceneSnapshotPair = {
@@ -143,6 +153,8 @@ function captureSceneSnapshot(
   options?: SceneSnapshotCaptureOptions,
 ): SceneSnapshot {
   const includeSupportState = options?.includeSupportState ?? false;
+  const supportStateOverride = options?.supportStateOverride;
+  const kickstandStateOverride = options?.kickstandStateOverride;
 
   return {
     models: models.map(cloneLoadedModel),
@@ -150,11 +162,29 @@ function captureSceneSnapshot(
     selectedModelIds: [...selectedModelIds],
     ...(includeSupportState
       ? {
-          supportState: clonePlainObject(getSnapshot()),
-          kickstandState: clonePlainObject(getKickstandSnapshot()),
+          supportState: clonePlainObject(supportStateOverride ?? getSnapshot()),
+          kickstandState: clonePlainObject(kickstandStateOverride ?? getKickstandSnapshot()),
         }
       : {}),
   };
+}
+
+function hasSupportsOrKickstandsForModel(
+  modelId: string,
+  supportState: SupportState,
+  kickstandState: KickstandState,
+): boolean {
+  const supportIds = getSupportsForModel(supportState, modelId);
+  const hasMainSupports = supportIds.roots.length > 0
+    || supportIds.trunks.length > 0
+    || supportIds.branches.length > 0
+    || supportIds.braces.length > 0
+    || supportIds.leaves.length > 0
+    || supportIds.twigs.length > 0
+    || supportIds.sticks.length > 0;
+  if (hasMainSupports) return true;
+
+  return Object.values(kickstandState.kickstands).some((kickstand) => kickstand.modelId === modelId);
 }
 
 function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
@@ -1732,7 +1762,13 @@ export function useSceneCollectionManager() {
     };
   }, []);
 
-  const commitModelTransformHistory = useCallback((id: string, beforeTransform: ModelTransform, afterTransform: ModelTransform, description?: string) => {
+  const commitModelTransformHistory = useCallback((
+    id: string,
+    beforeTransform: ModelTransform,
+    afterTransform: ModelTransform,
+    description?: string,
+    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions,
+  ) => {
     if (transformsEqual(beforeTransform, afterTransform)) return false;
 
     const currentModels = modelsRef.current;
@@ -1754,8 +1790,30 @@ export function useSceneCollectionManager() {
         : m
     ));
 
-    const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds);
-    const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds);
+    const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
+      || !!supportSnapshotOptions?.supportBefore
+      || !!supportSnapshotOptions?.supportAfter
+      || !!supportSnapshotOptions?.kickstandBefore
+      || !!supportSnapshotOptions?.kickstandAfter;
+
+    const includeSupportByState = (() => {
+      const supportStateNow = getSnapshot();
+      const kickstandStateNow = getKickstandSnapshot();
+      return hasSupportsOrKickstandsForModel(id, supportStateNow, kickstandStateNow);
+    })();
+
+    const includeSupportHistory = includeSupportByOption || includeSupportByState;
+
+    const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportSnapshotOptions?.supportBefore,
+      kickstandStateOverride: supportSnapshotOptions?.kickstandBefore,
+    });
+    const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportSnapshotOptions?.supportAfter,
+      kickstandStateOverride: supportSnapshotOptions?.kickstandAfter,
+    });
     const targetModelName = currentModels.find((m) => m.id === id)?.name ?? id;
     pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
     return true;
@@ -1774,7 +1832,15 @@ export function useSceneCollectionManager() {
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const supportStateBefore = getSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
+    const includeSupportHistory = updates.some((entry) => hasSupportsOrKickstandsForModel(entry.id, supportStateBefore, kickstandStateBefore));
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
+      kickstandStateOverride: includeSupportHistory ? kickstandStateBefore : undefined,
+    });
 
     const updateMap = new Map<string, ModelTransform>();
     let supportsChanged = false;
@@ -1807,7 +1873,13 @@ export function useSceneCollectionManager() {
 
     setModels(nextModels);
 
-    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
+    const supportStateAfter = includeSupportHistory ? getSnapshot() : undefined;
+    const kickstandStateAfter = includeSupportHistory ? getKickstandSnapshot() : undefined;
+    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportStateAfter,
+      kickstandStateOverride: kickstandStateAfter,
+    });
     pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
 
     return {
