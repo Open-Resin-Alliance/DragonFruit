@@ -15,7 +15,7 @@ export type CrossSectionStencilCapEntry = {
 type CrossSectionStencilCapProps = {
   entries: CrossSectionStencilCapEntry[];
   sourceObject?: THREE.Object3D | null;
-  sourceObjectVersion?: number;
+  sourceObjectVersion?: unknown;
   y: number;
   color?: string;
   planeWidthMm: number;
@@ -205,30 +205,6 @@ function composeCenteredGeometryMatrix(matrix: THREE.Matrix4, center: THREE.Vect
   return new THREE.Matrix4().multiplyMatrices(matrix, centerOffset);
 }
 
-function getGeometryCenter(geometry: THREE.BufferGeometry): THREE.Vector3 {
-  let boundingSphere = geometry.boundingSphere;
-  if (!boundingSphere) {
-    geometry.computeBoundingSphere();
-    boundingSphere = geometry.boundingSphere;
-  }
-
-  if (boundingSphere) {
-    return boundingSphere.center.clone();
-  }
-
-  let boundingBox = geometry.boundingBox;
-  if (!boundingBox) {
-    geometry.computeBoundingBox();
-    boundingBox = geometry.boundingBox;
-  }
-
-  if (boundingBox) {
-    return boundingBox.getCenter(new THREE.Vector3());
-  }
-
-  return new THREE.Vector3();
-}
-
 function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
   return clipZ >= minZ - 1e-4 && clipZ <= maxZ + 1e-4;
 }
@@ -245,7 +221,7 @@ function CrossSectionStencilCapInner({
 }: CrossSectionStencilCapProps) {
   const clipPlaneRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 0, -1), y));
   
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     clipPlaneRef.current.constant = y;
   }, [y]);
 
@@ -322,12 +298,8 @@ function CrossSectionStencilCapInner({
       const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
       if (!geometry || !geometry.getAttribute('position')) return;
 
-      const center = getGeometryCenter(geometry);
-
       const maybeInstancedMesh = mesh as THREE.InstancedMesh;
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
-        const centerOffsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-        const centeredMatrix = new THREE.Matrix4();
         const initialCount = maybeInstancedMesh.count;
         const matrixElements = new Float32Array(initialCount * 16);
         const minZByInstance = new Float32Array(initialCount);
@@ -339,11 +311,10 @@ function CrossSectionStencilCapInner({
         for (let i = 0; i < initialCount; i += 1) {
           maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
           worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
-          centeredMatrix.multiplyMatrices(worldInstanceMatrix, centerOffsetMatrix);
-          const bounds = getGeometryWorldZBounds(geometry, centeredMatrix);
+          const bounds = getGeometryWorldZBounds(geometry, worldInstanceMatrix);
           if (!bounds) continue;
 
-          centeredMatrix.toArray(matrixElements, acceptedCount * 16);
+          worldInstanceMatrix.toArray(matrixElements, acceptedCount * 16);
           minZByInstance[acceptedCount] = bounds.min;
           maxZByInstance[acceptedCount] = bounds.max;
           minZ = Math.min(minZ, bounds.min);
@@ -377,15 +348,15 @@ function CrossSectionStencilCapInner({
         return;
       }
 
-      const centeredMatrix = composeCenteredGeometryMatrix(mesh.matrixWorld, center);
-      const bounds = getGeometryWorldZBounds(geometry, centeredMatrix);
+      const worldMatrix = mesh.matrixWorld.clone();
+      const bounds = getGeometryWorldZBounds(geometry, worldMatrix);
       if (!bounds) return;
 
       results.push({
         kind: 'single',
         key: mesh.uuid,
         geometry,
-        matrix: centeredMatrix,
+        matrix: worldMatrix,
         minZ: bounds.min,
         maxZ: bounds.max,
       });

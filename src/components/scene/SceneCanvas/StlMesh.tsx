@@ -143,26 +143,24 @@ function StlMeshComponent({
   const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
 
-  // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const ps: THREE.Plane[] = [];
+  // Build clipping planes directly from current props so clipping never lags
+  // by one frame when layer slider updates.
+  const planes = React.useMemo(() => {
+    const next: THREE.Plane[] = [];
 
     if (clipLower != null) {
       // Clip below clipLower in world space
       // Normal points up (0,0,1), hide points where world Z < clipLower
-      ps.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
+      next.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
     }
     if (clipUpper != null) {
       // Clip above clipUpper in world space
       // Normal points down (0,0,-1), hide points where world Z > clipUpper
-      ps.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
+      next.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
-    clippingPlanesRef.current = ps;
-  }, [clipLower, clipUpper]);
 
-  const planes = clippingPlanesRef.current;
+    return next;
+  }, [clipLower, clipUpper]);
 
   React.useEffect(() => {
     if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {

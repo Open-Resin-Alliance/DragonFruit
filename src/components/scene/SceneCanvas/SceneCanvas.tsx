@@ -2745,6 +2745,26 @@ export function SceneCanvas({
       }));
   }, [activeModelId, models, transform]);
 
+  const crossSectionStencilSourceVersion = React.useMemo(() => ({
+    supportRenderRefreshNonce,
+    supportDragTransactionId,
+    isGizmoDragging,
+    effectiveHoldSupportDragDelta,
+    // Use full snapshot identities so cache invalidation remains correct even
+    // if nested maps are updated in-place by any workflow.
+    supportSnapshotRef: supportStateForBounds,
+    kickstandSnapshotRef: kickstandStateForBounds,
+    raftSettingsRef: raftSettingsForBounds,
+  }), [
+    effectiveHoldSupportDragDelta,
+    isGizmoDragging,
+    kickstandStateForBounds,
+    raftSettingsForBounds,
+    supportStateForBounds,
+    supportDragTransactionId,
+    supportRenderRefreshNonce,
+  ]);
+
   const crossSectionPlaneWidthMm = Math.max(
     1,
     (activeBuildVolumeSettings?.widthMm ?? 200) + 24,
@@ -4528,7 +4548,7 @@ export function SceneCanvas({
                 <CrossSectionStencilCap
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
-                  sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (effectiveHoldSupportDragDelta ? 1 : 0)}
+                  sourceObjectVersion={crossSectionStencilSourceVersion}
                   y={clipUpper}
                   color="#FFFFFF"
                   planeWidthMm={crossSectionPlaneWidthMm}
