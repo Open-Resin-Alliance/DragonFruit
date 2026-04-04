@@ -78,7 +78,9 @@ export function ModelAttachedSupportLayer({
   bracePlacementPreview = null,
   kickstandPlacementPreview = null,
 }: ModelAttachedSupportLayerProps) {
-  const useUltraLazySupports = mode === 'prepare' || mode === 'printing';
+  // Performance policy: use proxy support/raft rendering everywhere except
+  // support workspace, where full editable primitives are required.
+  const useUltraLazySupports = mode !== 'support';
   const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
 
