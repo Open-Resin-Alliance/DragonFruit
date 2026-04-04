@@ -14,6 +14,10 @@ import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/gene
 import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
 import { generateCrenelatedWallManual } from '@/supports/Rafts/Crenelated/geometry/generateCrenelatedWallManual';
 import { generatePerimeterBorderBeam } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterBorderBeam';
+import { generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
+import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
+import { delaunayTriangulate2d } from '@/supports/Rafts/Crenelated/geometry/delaunayTriangulate2d';
+import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
 import type { ContactDisk } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
@@ -25,6 +29,18 @@ const MAX_CANVAS_PIXELS = 24_000_000;
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
 const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
 const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
+
+type EdgeKey = string;
+
+function edgeKey(a: number, b: number): EdgeKey {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+
+function edgeLen(a: THREE.Vector2, b: THREE.Vector2): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 
 export type RasterLayerZipExportOptions = {
   models: LoadedModel[];
@@ -1030,6 +1046,112 @@ function buildSupportAndRaftWorldTriangles(
           appendGeometryTriangles(sink, wallMesh.geometry);
         }
       } else if (raft.bottomMode === 'line') {
+        const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
+        const hasBorderRing = !!profile && profile.length >= 3;
+
+        const hull = convexHull2d(nodes2d);
+        const hullIndices: number[] = hull.map((hp) => {
+          let best = 0;
+          let bestD2 = Infinity;
+          for (let i = 0; i < nodes2d.length; i += 1) {
+            const p = nodes2d[i];
+            const dx = p.x - hp.x;
+            const dy = p.y - hp.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) {
+              bestD2 = d2;
+              best = i;
+            }
+          }
+          return best;
+        });
+
+        const hullEdges: Array<[number, number]> = [];
+        if (hullIndices.length >= 2) {
+          for (let i = 0; i < hullIndices.length; i += 1) {
+            const a = hullIndices[i];
+            const b = hullIndices[(i + 1) % hullIndices.length];
+            if (a !== b) hullEdges.push([a, b]);
+          }
+        }
+
+        const hullEdgeSet = new Set<EdgeKey>();
+        for (const [a, b] of hullEdges) hullEdgeSet.add(edgeKey(a, b));
+
+        const tris = delaunayTriangulate2d(nodes2d);
+
+        const nn = new Array(nodes2d.length).fill(Infinity);
+        for (let i = 0; i < nodes2d.length; i += 1) {
+          for (let j = 0; j < nodes2d.length; j += 1) {
+            if (i === j) continue;
+            nn[i] = Math.min(nn[i], edgeLen(nodes2d[i], nodes2d[j]));
+          }
+          if (!Number.isFinite(nn[i])) nn[i] = 0;
+        }
+
+        const keepFactor = 3.2;
+        const absMaxLen = 120;
+        const edges = new Set<EdgeKey>();
+        const edgePairs: Array<[number, number]> = [];
+
+        if (!hasBorderRing) {
+          for (const [a, b] of hullEdges) {
+            const key = edgeKey(a, b);
+            if (!edges.has(key)) {
+              edges.add(key);
+              edgePairs.push([a, b]);
+            }
+          }
+        }
+
+        for (const [i, j, k] of tris) {
+          const triEdges: Array<[number, number]> = [
+            [i, j],
+            [j, k],
+            [k, i],
+          ];
+
+          for (const [a, b] of triEdges) {
+            const key = edgeKey(a, b);
+            if (edges.has(key)) continue;
+            if (hasBorderRing && hullEdgeSet.has(key)) continue;
+
+            const len = edgeLen(nodes2d[a], nodes2d[b]);
+            const localMax = keepFactor * Math.min(nn[a], nn[b]);
+            if (len > absMaxLen) continue;
+            if (nn[a] > 0 && nn[b] > 0 && len > localMax) continue;
+
+            edges.add(key);
+            edgePairs.push([a, b]);
+          }
+        }
+
+        const beamHeight = Math.max(0.01, raft.lineHeightMm);
+
+        const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]);
+        const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
+          widthMm: raft.lineWidthMm,
+          heightMm: beamHeight,
+          borderProfile: null,
+        });
+
+        const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
+        const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
+        if (unionHasGeometry) {
+          appendGeometryTriangles(sink, unionMesh.geometry);
+        } else {
+          for (const [a, b] of edgePairs) {
+            const start = new THREE.Vector3(nodes2d[a].x, nodes2d[a].y, 0);
+            const end = new THREE.Vector3(nodes2d[b].x, nodes2d[b].y, 0);
+            const beam = generateChamferedBeam(start, end, {
+              widthMm: raft.lineWidthMm,
+              heightMm: beamHeight,
+              chamferAngleDeg: 90,
+            });
+            appendGeometryTriangles(sink, beam.geometry);
+          }
+        }
+
         const borderMesh = generatePerimeterBorderBeam(profile, {
           widthMm: raft.lineWidthMm,
           heightMm: raft.lineHeightMm,
