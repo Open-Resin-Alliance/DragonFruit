@@ -162,7 +162,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const dir: 1 | -1 = e.deltaY > 0 ? 1 : -1;
+      // Inverted direction: wheel down moves to lower layers, wheel up moves to higher layers.
+      const dir: 1 | -1 = e.deltaY > 0 ? -1 : 1;
       
       if (e.shiftKey) {
         // Fine-grained control: move by 0.1 steps

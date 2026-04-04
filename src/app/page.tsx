@@ -6251,6 +6251,37 @@ export default function Home() {
     setIsSceneLayerScrubbing(false);
   }, []);
 
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handlePrintingLayerHotkeys = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      if (printingPreviewTotalLayers <= 0) return;
+
+      const key = event.key;
+      const isUp = key === 'ArrowUp' || key === 'w' || key === 'W';
+      const isDown = key === 'ArrowDown' || key === 's' || key === 'S';
+      if (!isUp && !isDown) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const delta = isUp ? 1 : -1;
+      const nextLayer = printingSelectedLayerRef.current + delta;
+      handlePrintingLayerChange(nextLayer);
+    };
+
+    window.addEventListener('keydown', handlePrintingLayerHotkeys, true);
+    return () => {
+      window.removeEventListener('keydown', handlePrintingLayerHotkeys, true);
+    };
+  }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode]);
+
   const usePrintingSettledHiResCanvas = React.useMemo(() => {
     return Boolean(
       selectedPrintingLayerPreviewUrl

@@ -366,7 +366,10 @@ function CrossSectionStencilCapInner({
       side: THREE.DoubleSide,
       transparent: !isOpaqueCap,
       opacity: resolvedOpacity,
-      depthWrite: false,
+      // Opaque caps must contribute depth so later transparent passes
+      // (e.g. build plate helpers) don't overdraw and make the cap look
+      // like it's rendering behind the plate.
+      depthWrite: isOpaqueCap,
       depthTest: capDepthTest,
       polygonOffset: true,
       polygonOffsetFactor: -1,

@@ -5,7 +5,6 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { OrbitControls } from '@react-three/drei';
 import { CrossSectionStencilCap, type CrossSectionStencilCapEntry } from '@/components/scene/CrossSectionStencilCap';
-import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
@@ -4648,37 +4647,22 @@ export function SceneCanvas({
               )}
               </group>{/* end supportDragGroupRef */}
 
-              {clipUpper != null && !hideCrossSectionCap && (
-                <CrossSectionCap
-                  projectedModels={models}
-                  projectedContextVersion={crossSectionStencilSourceVersion}
-                  sourceObject={supportDragGroupRef?.current ?? null}
-                  y={clipUpper}
-                  color="#FFFFFF"
-                  mode={crossSectionMode}
-                  pxMm={pxMm}
-                  interactive={isLayerScrubbing}
-                  interactiveZStepMm={layerHeightMm ?? 0.2}
-                  preferProjectedOnlyDuringInteractive={false}
-                  visible
-                />
-              )}
-
-              {clipUpper == null && indicatorPlaneZ != null && !hideCrossSectionCap && (
+              {(clipUpper != null || indicatorPlaneZ != null) && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
-                  skipSourceZBounds
-                  y={indicatorPlaneZ}
-                  color={indicatorPlaneColor ?? '#ec2a77'}
+                  sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
+                  skipSourceZBounds={clipUpper == null}
+                  y={(clipUpper ?? indicatorPlaneZ)!}
+                  color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
-                  capOpacity={0.78}
-                  capDepthTest={false}
-                  glowThicknessMm={0.11}
-                  glowOpacity={0.44}
-                  glowColor={indicatorPlaneColor ?? '#ec2a77'}
-                  visible
+                  capOpacity={clipUpper != null ? 1 : 0.78}
+                  capDepthTest={clipUpper != null}
+                  glowThicknessMm={clipUpper != null ? 0 : 0.11}
+                  glowOpacity={clipUpper != null ? 0 : 0.44}
+                  glowColor={clipUpper != null ? undefined : (indicatorPlaneColor ?? '#ec2a77')}
+                  visible={!hideCrossSectionCap && (clipUpper != null || indicatorPlaneZ != null)}
                 />
               )}
 
