@@ -285,6 +285,7 @@ export function SceneCanvas({
   onRegisterExportThumbnailCapture,
   exportThumbnailRenderOptions,
   deferCameraIntro = false,
+  freezeViewportActive = false,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -428,6 +429,7 @@ export function SceneCanvas({
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
   exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
   deferCameraIntro?: boolean;
+  freezeViewportActive?: boolean;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -848,6 +850,8 @@ export function SceneCanvas({
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
   const [isWheelZoomInteracting, setIsWheelZoomInteracting] = React.useState(false);
   const [canvasRecoveryNonce, setCanvasRecoveryNonce] = React.useState(0);
+  const [frozenViewportDataUrl, setFrozenViewportDataUrl] = React.useState<string | null>(null);
+  const freezeCaptureArmedRef = React.useRef(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
   const [supportGizmoInteractionActive, setSupportGizmoInteractionActive] = React.useState(false);
   const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
@@ -2750,17 +2754,46 @@ export function SceneCanvas({
     supportDragTransactionId,
     isGizmoDragging,
     effectiveHoldSupportDragDelta,
-    // Use full snapshot identities so cache invalidation remains correct even
-    // if nested maps are updated in-place by any workflow.
-    supportSnapshotRef: supportStateForBounds,
-    kickstandSnapshotRef: kickstandStateForBounds,
-    raftSettingsRef: raftSettingsForBounds,
+    // Restrict invalidation to geometry-bearing support/kickstand refs plus
+    // raft geometry parameters. This avoids recaching on hover/selection-only
+    // snapshot churn that does not alter cross-section source geometry.
+    supportTrunksRef: supportStateForBounds.trunks,
+    supportRootsRef: supportStateForBounds.roots,
+    supportKnotsRef: supportStateForBounds.knots,
+    supportBranchesRef: supportStateForBounds.branches,
+    supportLeavesRef: supportStateForBounds.leaves,
+    supportTwigsRef: supportStateForBounds.twigs,
+    supportSticksRef: supportStateForBounds.sticks,
+    supportBracesRef: supportStateForBounds.braces,
+    kickstandKickstandsRef: kickstandStateForBounds.kickstands,
+    kickstandRootsRef: kickstandStateForBounds.roots,
+    kickstandKnotsRef: kickstandStateForBounds.knots,
+    raftBottomMode: raftSettingsForBounds.bottomMode,
+    raftThickness: raftSettingsForBounds.thickness,
+    raftLineHeightMm: raftSettingsForBounds.lineHeightMm,
+    raftWallEnabled: raftSettingsForBounds.wallEnabled,
+    raftWallHeight: raftSettingsForBounds.wallHeight,
+    raftChamferAngle: raftSettingsForBounds.chamferAngle,
   }), [
     effectiveHoldSupportDragDelta,
     isGizmoDragging,
-    kickstandStateForBounds,
-    raftSettingsForBounds,
-    supportStateForBounds,
+    kickstandStateForBounds.kickstands,
+    kickstandStateForBounds.knots,
+    kickstandStateForBounds.roots,
+    raftSettingsForBounds.bottomMode,
+    raftSettingsForBounds.chamferAngle,
+    raftSettingsForBounds.lineHeightMm,
+    raftSettingsForBounds.thickness,
+    raftSettingsForBounds.wallEnabled,
+    raftSettingsForBounds.wallHeight,
+    supportStateForBounds.braces,
+    supportStateForBounds.branches,
+    supportStateForBounds.knots,
+    supportStateForBounds.leaves,
+    supportStateForBounds.roots,
+    supportStateForBounds.sticks,
+    supportStateForBounds.trunks,
+    supportStateForBounds.twigs,
     supportDragTransactionId,
     supportRenderRefreshNonce,
   ]);
@@ -3881,6 +3914,49 @@ export function SceneCanvas({
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!freezeViewportActive) {
+      freezeCaptureArmedRef.current = false;
+      if (frozenViewportDataUrl !== null) {
+        setFrozenViewportDataUrl(null);
+      }
+      return;
+    }
+
+    if (freezeCaptureArmedRef.current) return;
+    freezeCaptureArmedRef.current = true;
+
+    let rafId = 0;
+    let attempts = 0;
+    const maxAttempts = 12;
+
+    const tryCapture = () => {
+      if (!freezeViewportActive) return;
+      const canvas = rendererRef.current?.domElement;
+      if (!canvas) {
+        attempts += 1;
+        if (attempts < maxAttempts) {
+          rafId = requestAnimationFrame(tryCapture);
+        }
+        return;
+      }
+
+      try {
+        const snapshot = canvas.toDataURL('image/png');
+        if (snapshot && snapshot.length > 64) {
+          setFrozenViewportDataUrl(snapshot);
+        }
+      } catch {
+        // If snapshot capture fails, keep UI functional and simply skip freeze overlay.
+      }
+    };
+
+    rafId = requestAnimationFrame(tryCapture);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [freezeViewportActive, frozenViewportDataUrl]);
 
   React.useEffect(() => {
     if (spaceMouseNavigationActive) {
@@ -5349,6 +5425,32 @@ export function SceneCanvas({
       </Canvas>
 
       <SceneMoodOverlay />
+
+      {frozenViewportDataUrl && freezeViewportActive && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 55,
+            pointerEvents: 'none',
+            background: '#181a22',
+          }}
+          aria-hidden="true"
+        >
+          <img
+            src={frozenViewportDataUrl}
+            alt=""
+            draggable={false}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+              userSelect: 'none',
+            }}
+          />
+        </div>
+      )}
 
       {smoothingLoading.active && (
         <div

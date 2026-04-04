@@ -11245,6 +11245,7 @@ export default function Home() {
             onRegisterExportThumbnailCapture={handleRegisterExportThumbnailCapture}
             exportThumbnailRenderOptions={exportThumbnailRenderOptions}
             deferCameraIntro={holdEmptyStateSceneImportUi}
+            freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />

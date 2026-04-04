@@ -663,6 +663,10 @@ export function SlicingPanel({
       if (captureSceneThumbnailPng && !skipThumbnailCapture) {
         try {
           exportThumbnailPng = await captureSceneThumbnailPng();
+          console.info('[Slicing] Scene thumbnail capture result', {
+            hasThumbnail: Boolean(exportThumbnailPng && exportThumbnailPng.length > 0),
+            bytes: exportThumbnailPng?.length ?? 0,
+          });
         } catch (thumbnailError) {
           console.warn('[Slicing] Scene thumbnail capture failed, continuing with layer preview fallback.', thumbnailError);
         }
