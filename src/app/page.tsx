@@ -9267,15 +9267,17 @@ export default function Home() {
     return scene.selectionHighlightMode === 'spotlight' ? 'tint' : scene.selectionHighlightMode;
   }, [isSupportSpotlightHoldActive, scene.mode, scene.selectionHighlightMode]);
 
+  const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
+
   const sceneClipLower = React.useMemo(() => {
-    if (scene.mode === 'printing') return null;
+    if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipLower;
-  }, [scene.mode, slicing.clipLower]);
+  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
 
   const sceneClipUpper = React.useMemo(() => {
-    if (scene.mode === 'printing') return null;
+    if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipUpper;
-  }, [scene.mode, slicing.clipUpper]);
+  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
