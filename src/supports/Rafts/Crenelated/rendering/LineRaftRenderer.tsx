@@ -148,6 +148,7 @@ export default function LineRaftRenderer({
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
+  const lastSyncedPrepareActiveModelIdRef = React.useRef<string | null>(activeModelId ?? null);
 
   React.useEffect(() => {
     if (passive) {
@@ -196,6 +197,20 @@ export default function LineRaftRenderer({
     };
   }, [passive]);
 
+  React.useEffect(() => {
+    const next = passive ? null : (activeModelId ?? null);
+    if (lastSyncedPrepareActiveModelIdRef.current === next) return;
+    lastSyncedPrepareActiveModelIdRef.current = next;
+    setImmediatePrepareActiveModelId((prev) => (prev === next ? prev : next));
+  }, [activeModelId, passive]);
+
+  React.useEffect(() => {
+    if (passive) return;
+    if (!immediatePrepareActiveModelId) return;
+    if (selectedModelIds.includes(immediatePrepareActiveModelId)) return;
+    setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+  }, [immediatePrepareActiveModelId, passive, selectedModelIds]);
+
   // Initialize clipping planes once (update in-place to avoid recreation)
   const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
 
@@ -217,7 +232,7 @@ export default function LineRaftRenderer({
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
-  const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
+  const hasSelectedModels = selectedModelIdSet.size > 0;
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
 
@@ -239,7 +254,7 @@ export default function LineRaftRenderer({
 
     const resolveTintStrength = (modelId: string) => {
       if (!colorized) return 0;
-      if (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -358,7 +373,7 @@ export default function LineRaftRenderer({
       borderProfile: null,
     });
     unionMesh.renderOrder = ghostRenderOrder;
-    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
     unionMesh.userData.modelId = modelId;
@@ -377,7 +392,7 @@ export default function LineRaftRenderer({
           chamferAngleDeg: 90,
         });
         mesh.renderOrder = ghostRenderOrder;
-        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
         mesh.userData.modelId = modelId;
@@ -416,7 +431,7 @@ export default function LineRaftRenderer({
               thickness: beamHeight,
             });
 
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
   wallMesh.renderOrder = ghostRenderOrder;
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
@@ -488,7 +503,7 @@ export default function LineRaftRenderer({
     const resolveTintStrength = (modelId: string | null) => {
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
-      if (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -518,11 +533,15 @@ export default function LineRaftRenderer({
         material.needsUpdate = true;
       }
 
+      if (!material.depthTest) {
+        material.depthTest = true;
+      }
+
       if (Math.abs(material.opacity - raftOpacity) > 1e-4) {
         material.opacity = raftOpacity;
       }
 
-      const nextDepthWrite = !raftTransparent;
+      const nextDepthWrite = true;
       if (material.depthWrite !== nextDepthWrite) {
         material.depthWrite = nextDepthWrite;
       }

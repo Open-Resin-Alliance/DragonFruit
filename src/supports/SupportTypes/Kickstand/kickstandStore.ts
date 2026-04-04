@@ -3,7 +3,11 @@ import type { KickstandBuildResult, KickstandState } from './types';
 import * as THREE from 'three';
 import type { Vec3, Segment, BezierSegment } from '../../types';
 
+export type { KickstandState } from './types';
+
 const listeners = new Set<() => void>();
+let notifyBatchDepth = 0;
+let pendingNotify = false;
 
 const initialState: KickstandState = {
     kickstands: {},
@@ -15,7 +19,24 @@ const initialState: KickstandState = {
 let state: KickstandState = { ...initialState };
 
 function notify() {
+    if (notifyBatchDepth > 0) {
+        pendingNotify = true;
+        return;
+    }
     listeners.forEach((listener) => listener());
+}
+
+export function beginKickstandStoreBatch() {
+    notifyBatchDepth += 1;
+}
+
+export function endKickstandStoreBatch() {
+    if (notifyBatchDepth <= 0) return;
+    notifyBatchDepth -= 1;
+    if (notifyBatchDepth === 0 && pendingNotify) {
+        pendingNotify = false;
+        listeners.forEach((listener) => listener());
+    }
 }
 
 export function subscribeToKickstandStore(listener: () => void) {

@@ -615,6 +615,10 @@ export function pasteModelSupportsFromClipboard(
   targetModelId: string,
   sourceTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
   targetTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+  options?: {
+    recordHistory?: boolean;
+    historyDescription?: string;
+  },
 ): number {
   if (!payload || !targetModelId) return 0;
 
@@ -637,7 +641,10 @@ export function pasteModelSupportsFromClipboard(
 
   transformSupportsForModel(targetModelId, sourceTransform, targetTransform);
 
-  pushSupportEditHistory('Paste supports', before, captureSupportEditSnapshot());
+  const shouldRecordHistory = options?.recordHistory ?? true;
+  if (shouldRecordHistory) {
+    pushSupportEditHistory(options?.historyDescription ?? 'Paste supports', before, captureSupportEditSnapshot());
+  }
   return hasSupports;
 }
 

@@ -15,6 +15,8 @@ import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
 
+export type { SupportState } from './types';
+
 function isSupportSettingsDebugEnabled(): boolean {
     if (typeof window === 'undefined') return false;
     try {
@@ -30,6 +32,8 @@ function logSupportSettingsDebug(...args: unknown[]): void {
 }
 
 const listeners = new Set<() => void>();
+let notifyBatchDepth = 0;
+let pendingNotify = false;
 
 type SupportSettingsHexCache = {
     trunk: Record<string, string>;
@@ -887,7 +891,24 @@ export function removeJointById(jointId: string): RemoveJointByIdResult | null {
 }
 
 function notify() {
+    if (notifyBatchDepth > 0) {
+        pendingNotify = true;
+        return;
+    }
     listeners.forEach((l) => l());
+}
+
+export function beginSupportStateBatch() {
+    notifyBatchDepth += 1;
+}
+
+export function endSupportStateBatch() {
+    if (notifyBatchDepth <= 0) return;
+    notifyBatchDepth -= 1;
+    if (notifyBatchDepth === 0 && pendingNotify) {
+        pendingNotify = false;
+        listeners.forEach((l) => l());
+    }
 }
 
 function rebuildSupportSettingsHexCacheFromState() {
@@ -3771,6 +3792,7 @@ function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettings {
 function inferSettingsFromTrunk(trunk: Trunk, root: Roots | null, base?: SupportSettings): SupportSettings {
     const merged = mergeSettingsWithDefaults(base);
     const coneProfile = trunk.contactCone?.profile;
+    const diskConeProfile = coneProfile?.type === 'disk' ? coneProfile : undefined;
     const shaftDiameter = trunk.baseDiameterMm ?? trunk.segments[0]?.diameter ?? merged.shaft.diameterMm;
 
     return {
@@ -3781,9 +3803,9 @@ function inferSettingsFromTrunk(trunk: Trunk, root: Roots | null, base?: Support
             bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
             lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
             penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
-            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
-            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
-            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+            diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
         },
         shaft: {
             ...merged.shaft,
@@ -3802,6 +3824,7 @@ function inferSettingsFromTrunk(trunk: Trunk, root: Roots | null, base?: Support
 function inferSettingsFromBranch(branch: Branch, base?: SupportSettings): SupportSettings {
     const merged = mergeSettingsWithDefaults(base);
     const coneProfile = branch.contactCone?.profile;
+    const diskConeProfile = coneProfile?.type === 'disk' ? coneProfile : undefined;
     const shaftDiameter = branch.segments[0]?.diameter ?? merged.shaft.diameterMm;
 
     return {
@@ -3812,9 +3835,9 @@ function inferSettingsFromBranch(branch: Branch, base?: SupportSettings): Suppor
             bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
             lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
             penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
-            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
-            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
-            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+            diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
         },
         shaft: {
             ...merged.shaft,
@@ -3827,6 +3850,7 @@ function inferSettingsFromBranch(branch: Branch, base?: SupportSettings): Suppor
 function inferSettingsFromLeaf(leaf: Leaf, base?: SupportSettings): SupportSettings {
     const merged = mergeSettingsWithDefaults(base);
     const coneProfile = leaf.contactCone?.profile;
+    const diskConeProfile = coneProfile?.type === 'disk' ? coneProfile : undefined;
 
     return {
         ...merged,
@@ -3836,9 +3860,9 @@ function inferSettingsFromLeaf(leaf: Leaf, base?: SupportSettings): SupportSetti
             bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
             lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
             penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
-            diskThicknessMm: coneProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
-            maxStandoffMm: coneProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
-            standoffAngleThreshold: coneProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+            diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+            maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+            standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
         },
     };
 }
@@ -4063,6 +4087,47 @@ export function getSupportSettingsForSelection(
     return getSupportSettingsForTarget(target, base);
 }
 
+function applyTipSettingsToConeProfile(
+    profile: SupportTipProfile,
+    tip: SupportSettings['tip'],
+    options?: { includeBodyAndLength?: boolean },
+): SupportTipProfile {
+    const includeBodyAndLength = options?.includeBodyAndLength ?? true;
+    const baseProfile = includeBodyAndLength
+        ? {
+            ...profile,
+            contactDiameterMm: tip.contactDiameterMm,
+            bodyDiameterMm: tip.bodyDiameterMm,
+            lengthMm: tip.lengthMm,
+            penetrationMm: tip.penetrationMm,
+        }
+        : {
+            ...profile,
+            contactDiameterMm: tip.contactDiameterMm,
+            penetrationMm: tip.penetrationMm,
+        };
+
+    if (profile.type === 'disk') {
+        return {
+            ...baseProfile,
+            type: 'disk',
+            diskThicknessMm: tip.diskThicknessMm ?? profile.diskThicknessMm,
+            maxStandoffMm: tip.maxStandoffMm ?? profile.maxStandoffMm,
+            standoffAngleThreshold: tip.standoffAngleThreshold ?? profile.standoffAngleThreshold,
+        };
+    }
+
+    if (profile.type === 'sphere') {
+        return {
+            ...baseProfile,
+            type: 'sphere',
+            sphereRadiusRatio: tip.sphereRadiusRatio ?? profile.sphereRadiusRatio,
+        };
+    }
+
+    return baseProfile;
+}
+
 export function applySettingsToSupportTarget(target: EditableSupportTarget, settings: SupportSettings): boolean {
     logSupportSettingsDebug('apply start', target);
 
@@ -4083,16 +4148,7 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
         const nextContactCone = trunk.contactCone
             ? {
                 ...trunk.contactCone,
-                profile: {
-                    ...trunk.contactCone.profile,
-                    contactDiameterMm: settings.tip.contactDiameterMm,
-                    bodyDiameterMm: settings.tip.bodyDiameterMm,
-                    lengthMm: settings.tip.lengthMm,
-                    penetrationMm: settings.tip.penetrationMm,
-                    diskThicknessMm: settings.tip.diskThicknessMm,
-                    maxStandoffMm: settings.tip.maxStandoffMm,
-                    standoffAngleThreshold: settings.tip.standoffAngleThreshold,
-                },
+                profile: applyTipSettingsToConeProfile(trunk.contactCone.profile, settings.tip),
             }
             : trunk.contactCone;
 
@@ -4103,16 +4159,17 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             nextContactCone?.socketJointId,
             socketPos,
         );
+        const nextTrunkSettingsCodeHex = encodeSupportSettingsHex(settings);
 
         const nextTrunk: Trunk = {
             ...trunk,
-            settingsCodeHex: encodeSupportSettingsHex(settings),
+            settingsCodeHex: nextTrunkSettingsCodeHex,
             baseDiameterMm: settings.shaft.diameterMm,
             segments: nextSegments,
             contactCone: nextContactCone,
         };
 
-        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunk.settingsCodeHex);
+        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunkSettingsCodeHex);
 
         logSupportSettingsDebug('apply trunk hex', {
             target,
@@ -4140,16 +4197,7 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
         const nextContactCone = branch.contactCone
             ? {
                 ...branch.contactCone,
-                profile: {
-                    ...branch.contactCone.profile,
-                    contactDiameterMm: settings.tip.contactDiameterMm,
-                    bodyDiameterMm: settings.tip.bodyDiameterMm,
-                    lengthMm: settings.tip.lengthMm,
-                    penetrationMm: settings.tip.penetrationMm,
-                    diskThicknessMm: settings.tip.diskThicknessMm,
-                    maxStandoffMm: settings.tip.maxStandoffMm,
-                    standoffAngleThreshold: settings.tip.standoffAngleThreshold,
-                },
+                profile: applyTipSettingsToConeProfile(branch.contactCone.profile, settings.tip),
             }
             : branch.contactCone;
 
@@ -4160,15 +4208,16 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
             nextContactCone?.socketJointId,
             socketPos,
         );
+        const nextBranchSettingsCodeHex = encodeSupportSettingsHex(settings);
 
         const nextBranch: Branch = {
             ...branch,
-            settingsCodeHex: encodeSupportSettingsHex(settings),
+            settingsCodeHex: nextBranchSettingsCodeHex,
             segments: nextSegments,
             contactCone: nextContactCone,
         };
 
-        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranch.settingsCodeHex);
+        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranchSettingsCodeHex);
 
         logSupportSettingsDebug('apply branch hex', {
             target,
@@ -4184,23 +4233,17 @@ export function applySettingsToSupportTarget(target: EditableSupportTarget, sett
     const leaf = state.leaves[target.id];
     if (!leaf) return false;
 
+    const nextLeafSettingsCodeHex = encodeSupportSettingsHex(settings);
     const nextLeaf: Leaf = {
         ...leaf,
-        settingsCodeHex: encodeSupportSettingsHex(settings),
+        settingsCodeHex: nextLeafSettingsCodeHex,
         contactCone: {
             ...leaf.contactCone,
-            profile: {
-                ...leaf.contactCone.profile,
-                contactDiameterMm: settings.tip.contactDiameterMm,
-                penetrationMm: settings.tip.penetrationMm,
-                diskThicknessMm: settings.tip.diskThicknessMm,
-                maxStandoffMm: settings.tip.maxStandoffMm,
-                standoffAngleThreshold: settings.tip.standoffAngleThreshold,
-            },
+            profile: applyTipSettingsToConeProfile(leaf.contactCone.profile, settings.tip, { includeBodyAndLength: false }),
         },
     };
 
-    setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeaf.settingsCodeHex);
+    setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeafSettingsCodeHex);
 
     logSupportSettingsDebug('apply leaf hex', {
         target,

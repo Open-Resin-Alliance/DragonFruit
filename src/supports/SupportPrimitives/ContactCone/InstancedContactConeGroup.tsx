@@ -24,6 +24,7 @@ interface InstancedContactConeGroupProps {
     emissiveIntensity?: number;
     transparent?: boolean;
     opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
     onConeClick?: (cone: InstancedContactCone, event: ThreeEvent<MouseEvent>) => void;
     onConePointerMove?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerOut?: (cone: InstancedContactCone | null, event: ThreeEvent<PointerEvent>) => void;
@@ -62,6 +63,7 @@ function ConeBucketMesh({
     emissiveIntensity,
     transparent,
     opacity,
+    clippingPlanes,
     onConeClick,
     onConePointerMove,
     onConePointerOut,
@@ -73,6 +75,7 @@ function ConeBucketMesh({
     emissiveIntensity: number;
     transparent: boolean;
     opacity: number;
+    clippingPlanes: THREE.Plane[] | null;
     onConeClick?: (cone: InstancedContactCone, event: ThreeEvent<MouseEvent>) => void;
     onConePointerMove?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerOut?: (cone: InstancedContactCone | null, event: ThreeEvent<PointerEvent>) => void;
@@ -203,6 +206,7 @@ function ConeBucketMesh({
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}
+                        clippingPlanes={clippingPlanes ?? undefined}
                         polygonOffset
                         polygonOffsetFactor={1}
                         polygonOffsetUnits={1}
@@ -224,6 +228,7 @@ function ConeBucketMesh({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    clippingPlanes={clippingPlanes ?? undefined}
                 />
             </instancedMesh>
 
@@ -241,6 +246,7 @@ function ConeBucketMesh({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    clippingPlanes={clippingPlanes ?? undefined}
                 />
             </instancedMesh>
         </group>
@@ -254,6 +260,7 @@ export function InstancedContactConeGroup({
     emissiveIntensity = 0,
     transparent = false,
     opacity = 1,
+    clippingPlanes = null,
     onConeClick,
     onConePointerMove,
     onConePointerOut,
@@ -330,6 +337,7 @@ export function InstancedContactConeGroup({
                     emissiveIntensity={emissiveIntensity}
                     transparent={transparent}
                     opacity={opacity}
+                    clippingPlanes={clippingPlanes}
                     onConeClick={onConeClick}
                     onConePointerMove={onConePointerMove}
                     onConePointerOut={onConePointerOut}

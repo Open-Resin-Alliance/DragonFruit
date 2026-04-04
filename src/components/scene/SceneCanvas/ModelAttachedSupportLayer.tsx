@@ -2,6 +2,8 @@ import React from 'react';
 import * as THREE from 'three';
 import type { SupportMode } from '@/supports/types';
 import { SupportRenderer } from '@/supports/SupportRenderer';
+import { SupportProxyMeshLayer } from '@/supports/SupportProxyMeshLayer';
+import { RaftProxyMeshLayer } from '@/supports/RaftProxyMeshLayer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import type { SupportData } from '@/supports/rendering';
@@ -34,6 +36,7 @@ export type ModelAttachedSupportLayerProps = {
   ghostRenderOrder?: number;
   supportRendererRef?: React.Ref<THREE.Group>;
   supportRenderRefreshNonce?: number;
+  supportProxyIncludeDetailedPrimitives?: boolean;
   trunkPlacementPreview?: SupportData | null;
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
@@ -68,15 +71,43 @@ export function ModelAttachedSupportLayer({
   ghostRenderOrder,
   supportRendererRef,
   supportRenderRefreshNonce = 0,
+  supportProxyIncludeDetailedPrimitives = true,
   trunkPlacementPreview = null,
   branchPlacementPreview = null,
   leafPlacementPreview = null,
   bracePlacementPreview = null,
   kickstandPlacementPreview = null,
 }: ModelAttachedSupportLayerProps) {
+  // Performance policy: use proxy support/raft rendering everywhere except
+  // support workspace, where full editable primitives are required.
+  const useUltraLazySupports = mode !== 'support';
+  const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
+  const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
+
   return (
     <>
-      {!hideRaftPrimitives && (
+      {!hideRaftPrimitives && useUltraLazySupports && (
+        <RaftProxyMeshLayer
+          clipLower={clipLower}
+          clipUpper={clipUpper}
+          activeModelId={activeModelId}
+          selectedModelIds={selectedModelIds}
+          hoverModelId={hoverModelId}
+          modelFilterId={modelFilterId}
+          excludeModelId={excludeModelId}
+          excludeModelIds={excludeModelIds}
+          ghostOpacity={ghostOpacity}
+          ghostRenderOrder={ghostRenderOrder}
+          onModelPointerSelect={onModelPointerSelect}
+          enablePointerSelection={proxyPointerSelectionEnabled}
+          colorized={raftColorized}
+          hoverized={raftHoverized}
+          navigationLodActive={navigationLodActive}
+          passive={passive}
+        />
+      )}
+
+      {!hideRaftPrimitives && !useUltraLazySupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}
@@ -113,35 +144,57 @@ export function ModelAttachedSupportLayer({
         </>
       )}
 
-      <SupportRenderer
-        key={`support-renderer-${supportRenderRefreshNonce}`}
-        ref={supportRendererRef}
-        mode={mode}
-        navigationLodActive={navigationLodActive}
-        hidePlateContactPrimitives={hidePlateContactPrimitives}
-        clipLower={clipLower}
-        clipUpper={clipUpper}
-        supportColorsByModelId={supportColorsByModelId}
-        hoverTintColor={hoverTintColor}
-        hoverTintStrength={hoverTintStrength}
-        selectedTintStrength={selectedTintStrength}
-        activeModelId={activeModelId}
-        selectedModelIds={selectedModelIds}
-        hoverModelId={hoverModelId}
-        modelDropOffsetsById={modelDropOffsetsById}
-        modelFilterId={modelFilterId}
-        excludeModelId={excludeModelId}
-        excludeModelIds={excludeModelIds}
-        disableSelectionAndHover={disableSelectionAndHover}
-        ghostOpacity={ghostOpacity}
-        ghostRenderOrder={ghostRenderOrder}
-        passive={passive}
-        trunkPlacementPreview={trunkPlacementPreview}
-        branchPlacementPreview={branchPlacementPreview}
-        leafPlacementPreview={leafPlacementPreview}
-        bracePlacementPreview={bracePlacementPreview}
-        kickstandPlacementPreview={kickstandPlacementPreview}
-      />
+      {useUltraLazySupports ? (
+        <SupportProxyMeshLayer
+          mode={mode}
+          clipLower={clipLower}
+          clipUpper={clipUpper}
+          supportColorsByModelId={supportColorsByModelId}
+          activeModelId={activeModelId}
+          selectedModelIds={selectedModelIds}
+          hoverModelId={hoverModelId}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          modelFilterId={modelFilterId}
+          excludeModelId={excludeModelId}
+          excludeModelIds={excludeModelIds}
+          modelDropOffsetsById={modelDropOffsetsById}
+          ghostOpacity={ghostOpacity}
+          onModelPointerSelect={onModelPointerSelect}
+          enablePointerSelection={proxyPointerSelectionEnabled}
+          includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
+        />
+      ) : (
+        <SupportRenderer
+          key={`support-renderer-${supportRenderRefreshNonce}`}
+          ref={supportRendererRef}
+          mode={mode}
+          navigationLodActive={navigationLodActive}
+          hidePlateContactPrimitives={hidePlateContactPrimitives}
+          clipLower={clipLower}
+          clipUpper={clipUpper}
+          supportColorsByModelId={supportColorsByModelId}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
+          activeModelId={activeModelId}
+          selectedModelIds={selectedModelIds}
+          hoverModelId={hoverModelId}
+          modelDropOffsetsById={modelDropOffsetsById}
+          modelFilterId={modelFilterId}
+          excludeModelId={excludeModelId}
+          excludeModelIds={excludeModelIds}
+          disableSelectionAndHover={disableSelectionAndHover}
+          ghostOpacity={ghostOpacity}
+          ghostRenderOrder={ghostRenderOrder}
+          passive={passive}
+          trunkPlacementPreview={trunkPlacementPreview}
+          branchPlacementPreview={branchPlacementPreview}
+          leafPlacementPreview={leafPlacementPreview}
+          bracePlacementPreview={bracePlacementPreview}
+          kickstandPlacementPreview={kickstandPlacementPreview}
+        />
+      )}
     </>
   );
 }

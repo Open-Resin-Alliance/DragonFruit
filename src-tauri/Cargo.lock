@@ -1051,6 +1051,7 @@ dependencies = [
  "base64 0.22.1",
  "dragonfruit-islands",
  "dragonfruit-slicer-v3",
+ "flate2",
  "if-addrs",
  "rayon",
  "reqwest 0.12.28",

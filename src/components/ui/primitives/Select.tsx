@@ -6,7 +6,7 @@ function extractOptionLabel(node: React.ReactNode): string {
   if (node == null || typeof node === 'boolean') return '';
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (Array.isArray(node)) return node.map(extractOptionLabel).join('').trim();
-  if (React.isValidElement(node)) return extractOptionLabel(node.props.children);
+  if (React.isValidElement<{ children?: React.ReactNode }>(node)) return extractOptionLabel(node.props.children);
   return '';
 }
 
@@ -15,7 +15,7 @@ function collectOptions(
   target: Array<{ value: string; label: string; disabled?: boolean }>,
 ) {
   React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return;
+    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) return;
 
     if (child.type === React.Fragment) {
       collectOptions(child.props.children, target);

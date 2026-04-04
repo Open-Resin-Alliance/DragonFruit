@@ -216,7 +216,7 @@ function main() {
 
   const cascadedResult = bench('cascaded preview propagation', iterations, () => {
     computeCascadedPreviewKnotOverrides({
-      activeJointDragPreview: { kind: 'branch', supportId: s.activeBranch.id, support: s.activeBranchPreview },
+      enableCascade: true,
       basePreviewKnotOverrides: s.basePreviewKnotOverrides,
       branchesByParentKnotId: s.branchesByParentKnotId,
       branchCandidateKnotIdsByBranchId: s.branchCandidateKnotIdsByBranchId,

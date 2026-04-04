@@ -22,7 +22,7 @@ import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
-export function StlMesh({
+function StlMeshComponent({
   geometry,
   clipLower,
   clipUpper,
@@ -69,7 +69,7 @@ export function StlMesh({
   outOfBoundsMax,
   outOfBoundsStripeColor,
   suppressModelInteraction,
-  externalHoveredModelId,
+  isExternallyHovered,
   deferExternalTransformUpdates,
   children,
 }: {
@@ -126,7 +126,7 @@ export function StlMesh({
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
   suppressModelInteraction?: boolean;
-  externalHoveredModelId?: string | null;
+  isExternallyHovered?: boolean;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
   deferExternalTransformUpdates?: boolean;
   children?: React.ReactNode;
@@ -143,26 +143,24 @@ export function StlMesh({
   const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
 
-  // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const ps: THREE.Plane[] = [];
+  // Build clipping planes directly from current props so clipping never lags
+  // by one frame when layer slider updates.
+  const planes = React.useMemo(() => {
+    const next: THREE.Plane[] = [];
 
     if (clipLower != null) {
       // Clip below clipLower in world space
       // Normal points up (0,0,1), hide points where world Z < clipLower
-      ps.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
+      next.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
     }
     if (clipUpper != null) {
       // Clip above clipUpper in world space
       // Normal points down (0,0,-1), hide points where world Z > clipUpper
-      ps.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
+      next.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
-    clippingPlanesRef.current = ps;
-  }, [clipLower, clipUpper]);
 
-  const planes = clippingPlanesRef.current;
+    return next;
+  }, [clipLower, clipUpper]);
 
   React.useEffect(() => {
     if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
@@ -355,10 +353,8 @@ export function StlMesh({
     || event?.nativeEvent?.shiftKey
     || event?.sourceEvent?.shiftKey
   );
-  const hasExternalHoverSource = externalHoveredModelId !== undefined;
-  const isExternallyHoveredModel = !shouldSuppressModelInteraction
-    && !!externalHoveredModelId
-    && externalHoveredModelId === modelId;
+  const hasExternalHoverSource = isExternallyHovered !== undefined;
+  const isExternallyHoveredModel = !shouldSuppressModelInteraction && !!isExternallyHovered;
   const isHoveredModelFromPicking = !shouldSuppressModelInteraction && (
     hasGpuModelHoverId
       ? hit.objectId === modelId
@@ -559,7 +555,7 @@ export function StlMesh({
         }}
         onPointerMove={(e) => {
           if (isSupportShiftGesture(e)) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
             emitImmediateModelHover(null);
@@ -570,7 +566,7 @@ export function StlMesh({
           }
 
           if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
             emitImmediateModelHover(null);
@@ -579,13 +575,13 @@ export function StlMesh({
 
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             return;
           }
 
           e.stopPropagation();
 
-          schedulePointerHover(true);
+          if (!hasExternalHoverSource) schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
           emitImmediateModelHover(modelId);
@@ -640,7 +636,7 @@ export function StlMesh({
             return;
           }
 
-          schedulePointerHover(false);
+          if (!hasExternalHoverSource) schedulePointerHover(false);
           onModelHoverPointChange?.(null);
           onModelHoverModelChange?.(null);
           emitImmediateModelHover(null);
@@ -780,3 +776,6 @@ export function StlMesh({
     </group>
   );
 }
+
+export const StlMesh = React.memo(StlMeshComponent);
+StlMesh.displayName = 'StlMesh';

@@ -116,56 +116,6 @@ export function useKnotInteraction(enabled: boolean = true) {
         };
     }, []);
 
-    const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
-        if (typeof window === 'undefined') return;
-
-        const w = window as any;
-        w.__knotGizmoDragging = isDragging;
-        w.__knotGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
-
-        window.dispatchEvent(new CustomEvent('knot-gizmo-interaction-lock', {
-            detail: {
-                active: isDragging,
-                guardUntil: w.__knotGizmoGuardUntil,
-            },
-        }));
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            setKnotDragInteractionLock(false, 0);
-        };
-    }, [setKnotDragInteractionLock]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-
-        const markForceEndDrag = () => {
-            if (!activeKnotId.current) return;
-            forceEndDragRef.current = true;
-        };
-
-        const handleVisibilityChange = () => {
-            if (document.visibilityState === 'hidden') {
-                markForceEndDrag();
-            }
-        };
-
-        window.addEventListener('pointerup', markForceEndDrag, true);
-        window.addEventListener('pointercancel', markForceEndDrag, true);
-        window.addEventListener('mouseup', markForceEndDrag, true);
-        window.addEventListener('blur', markForceEndDrag);
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-
-        return () => {
-            window.removeEventListener('pointerup', markForceEndDrag, true);
-            window.removeEventListener('pointercancel', markForceEndDrag, true);
-            window.removeEventListener('mouseup', markForceEndDrag, true);
-            window.removeEventListener('blur', markForceEndDrag);
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-        };
-    }, []);
-
     // Segment→host lookup cache: rebuilt whenever support state changes
     type SegmentHostEntry = { containerType: 'trunk'; entityId: string } | { containerType: 'branch'; entityId: string } | { containerType: 'kickstand'; entityId: string } | { containerType: 'twig'; entityId: string } | { containerType: 'stick'; entityId: string };
     const segmentHostMapRef = useRef<Map<string, SegmentHostEntry>>(new Map());

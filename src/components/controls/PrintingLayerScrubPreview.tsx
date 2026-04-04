@@ -101,10 +101,22 @@ export function PrintingLayerScrubPreview({
   }, []);
 
   const modelSignature = React.useMemo(() => computeModelSignature(models), [models]);
+  const visibleModelCount = React.useMemo(() => models.reduce((count, model) => count + (model.visible ? 1 : 0), 0), [models]);
+  const scrubQuantizationMm = React.useMemo(() => {
+    if (visibleModelCount >= 120) return Math.max(0.001, layerHeightMm * 4);
+    if (visibleModelCount >= 60) return Math.max(0.001, layerHeightMm * 3);
+    if (visibleModelCount >= 24) return Math.max(0.001, layerHeightMm * 2);
+    return Math.max(0.001, layerHeightMm);
+  }, [layerHeightMm, visibleModelCount]);
+
+  const effectiveClipZ = React.useMemo(() => {
+    if (clipZ == null) return null;
+    return Math.round(clipZ / scrubQuantizationMm) * scrubQuantizationMm;
+  }, [clipZ, scrubQuantizationMm]);
 
   // Compute (or retrieve from cache) the cross-section loops at clipZ
   const loops = React.useMemo(() => {
-    if (clipZ == null || !modelSignature) return null;
+    if (effectiveClipZ == null || !modelSignature) return null;
 
     let context = contextCacheRef.current.get(modelSignature);
     if (!context) {
@@ -120,13 +132,13 @@ export function PrintingLayerScrubPreview({
     }
     if (!context) return null;
 
-    const loopKey = `${modelSignature}|${clipZ.toFixed(3)}`;
+    const loopKey = `${modelSignature}|${effectiveClipZ.toFixed(3)}|${scrubQuantizationMm.toFixed(3)}`;
     let cached = loopsCacheRef.current.get(loopKey);
     if (!cached) {
       cached = buildProjectedCrossSectionLoopsAtZFromContext({
         context,
-        zMm: clipZ,
-        quantizedStepMm: layerHeightMm,
+        zMm: effectiveClipZ,
+        quantizedStepMm: scrubQuantizationMm,
       });
       loopsCacheRef.current.set(loopKey, cached);
       if (loopsCacheRef.current.size > LOOPS_CACHE_LIMIT) {
@@ -136,7 +148,7 @@ export function PrintingLayerScrubPreview({
     }
     return cached;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSignature, clipZ, layerHeightMm]);
+  }, [effectiveClipZ, modelSignature, scrubQuantizationMm]);
   // Note: `models` intentionally omitted — signature change covers it
 
   // Deferred render effect: only redraw canvas once per animation frame even if loops change multiple times
