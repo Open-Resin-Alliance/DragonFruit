@@ -362,8 +362,8 @@ type ExportThumbnailRenderOptions = {
 const EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY = 'dragonfruit.slicing.thumbnailRenderOptions';
 const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   includeGradient: false,
-  includeBuildPlate: true,
-  includeGrid: true,
+  includeBuildPlate: false,
+  includeGrid: false,
   centerOnModel: true,
 };
 

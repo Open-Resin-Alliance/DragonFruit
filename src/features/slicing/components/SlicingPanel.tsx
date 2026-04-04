@@ -198,8 +198,8 @@ export function SlicingPanel({
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
   thumbnailIncludeGradient = false,
-  thumbnailIncludeBuildPlate = true,
-  thumbnailIncludeGrid = true,
+  thumbnailIncludeBuildPlate = false,
+  thumbnailIncludeGrid = false,
   onThumbnailRenderOptionsChange,
   onSliceRunStarted,
   onLayerPreviewGenerated,
@@ -212,6 +212,7 @@ export function SlicingPanel({
   onSlicingBusyChange,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const [isThumbnailDrawerOpen, setIsThumbnailDrawerOpen] = useState(false);
   const [isSlicingZip, setIsSlicingZip] = useState(false);
   const [sliceStatus, setSliceStatus] = useState('Idle');
   const [currentPhase, setCurrentPhase] = useState('Idle');
@@ -299,9 +300,9 @@ export function SlicingPanel({
   }, [activePrinterProfile, effectiveMaterialProfile]);
 
   const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
-  // V3 supports grayscale anti-aliasing in the native raster pipeline,
-  // so this should not be gated by legacy profile capability flags.
-  const antiAliasingAvailable = true;
+  // Respect printer-profile capability: explicit `false` means AA must be disabled.
+  const antiAliasingAvailable = Boolean(activePrinterProfile) && activePrinterProfile.antiAliasing !== false;
+  const minimumAaControlsDisabled = !antiAliasingAvailable;
   const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter)
     && activePrinterProfile?.networkConnection?.connected === true;
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
@@ -402,26 +403,45 @@ export function SlicingPanel({
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
   const minimumAlphaLabel = 'Minimum Alpha';
 
-  const profileMinimumAaAlphaPercent = useMemo(() => {
+  const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
       0,
       Math.min(100, Math.round(Number(effectiveMaterialProfile?.minimumAaAlphaPercent ?? 35))),
     );
 
-    if (!effectiveMaterialProfile) return fallback;
+    if (!effectiveMaterialProfile) {
+      return {
+        available: false as const,
+        value: fallback,
+      };
+    }
 
     const outputFormat = (selectedFormat?.outputFormat ?? activePrinterProfile?.display.outputFormat ?? '').trim();
-    if (!outputFormat) return fallback;
+    if (!outputFormat) {
+      return {
+        available: false as const,
+        value: fallback,
+      };
+    }
 
     const normalizedOutput = outputFormat.toLowerCase();
     const outputWithoutDot = normalizedOutput.replace(/^\./, '');
     const settingsMode = resolveOutputSettingsMode(outputFormat, activePrinterProfile?.display.settingsMode);
 
     const localAdapter = getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
-    const profileAlphaFieldKey = localAdapter?.fields.find((field) => {
+    const profileField = localAdapter?.fields.find((field) => {
       const metadataPath = field.metadataPath?.trim().toLowerCase();
       return metadataPath === 'dragonfruit.minimumaaalphapercent' || field.key === 'minimumAaAlphaPercent';
-    })?.key ?? 'minimumAaAlphaPercent';
+    });
+
+    if (!profileField) {
+      return {
+        available: false as const,
+        value: fallback,
+      };
+    }
+
+    const profileAlphaFieldKey = profileField.key;
 
     const localForOutput = effectiveMaterialProfile.localSettingsByOutput?.[normalizedOutput]
       ?? effectiveMaterialProfile.localSettingsByOutput?.[outputWithoutDot]
@@ -429,9 +449,17 @@ export function SlicingPanel({
 
     const localValue = localForOutput?.[profileAlphaFieldKey];
     const parsed = Number(localValue);
-    if (!Number.isFinite(parsed)) return fallback;
+    if (!Number.isFinite(parsed)) {
+      return {
+        available: true as const,
+        value: fallback,
+      };
+    }
 
-    return Math.max(0, Math.min(100, Math.round(parsed)));
+    return {
+      available: true as const,
+      value: Math.max(0, Math.min(100, Math.round(parsed))),
+    };
   }, [
     activePrinterProfile?.display.outputFormat,
     activePrinterProfile?.display.settingsMode,
@@ -439,10 +467,29 @@ export function SlicingPanel({
     selectedFormat?.outputFormat,
   ]);
 
+  const profileMinimumAaAlphaPercent = minimumAaProfileSupport.value;
+  const hasProfileMinimumAaAlpha = minimumAaProfileSupport.available;
+
   const setClampedMinimumAaAlphaPercent = useCallback((value: number) => {
     const next = Number.isFinite(value) ? value : 50;
     setMinimumAaAlphaPercent(Math.max(0, Math.min(100, Math.round(next))));
   }, []);
+
+  useEffect(() => {
+    if (!antiAliasingAvailable) {
+      if (antiAliasingLevel !== 'Off') {
+        setAntiAliasingLevel('Off');
+      }
+      if (!enableMinimumAaAlphaOverride) {
+        setEnableMinimumAaAlphaOverride(true);
+      }
+      return;
+    }
+
+    if (!hasProfileMinimumAaAlpha && !enableMinimumAaAlphaOverride) {
+      setEnableMinimumAaAlphaOverride(true);
+    }
+  }, [antiAliasingAvailable, antiAliasingLevel, enableMinimumAaAlphaOverride, hasProfileMinimumAaAlpha]);
 
 
   useEffect(() => {
@@ -1088,6 +1135,7 @@ export function SlicingPanel({
                       key={level}
                       type="button"
                       disabled={!antiAliasingAvailable}
+                      aria-disabled={!antiAliasingAvailable}
                       className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                       style={!antiAliasingAvailable
                         ? {
@@ -1116,22 +1164,26 @@ export function SlicingPanel({
                 })}
               </div>
               {!antiAliasingAvailable && (
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Unavailable for the active printer profile.
+                <div
+                  className="mt-2 px-1 text-[11px] leading-snug font-mono text-center"
+                  style={{
+                    color: 'color-mix(in srgb, #fca5a5, var(--text-muted) 38%)',
+                  }}
+                >
+                  The selected Machine does not support AA at this time.
                 </div>
               )}
-                <div className="space-y-1">
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Alpha</div>
-                  <div className="grid grid-cols-2 gap-1">
-                    {(['Profile', 'Override'] as const).map((mode) => {
-                      const active = (mode === 'Profile' && !enableMinimumAaAlphaOverride) || (mode === 'Override' && enableMinimumAaAlphaOverride);
-                      const displayText = mode === 'Profile' ? `Profile (${profileMinimumAaAlphaPercent}%)` : 'Override';
-                      return (
+                {antiAliasingAvailable && (
+                  <div className="space-y-1">
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Alpha</div>
+                    {hasProfileMinimumAaAlpha && (
+                      <div className="grid grid-cols-2 gap-1">
                         <button
-                          key={mode}
                           type="button"
+                          disabled={minimumAaControlsDisabled}
+                          aria-disabled={minimumAaControlsDisabled}
                           className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                          style={active
+                          style={(!enableMinimumAaAlphaOverride && !minimumAaControlsDisabled)
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
@@ -1139,72 +1191,128 @@ export function SlicingPanel({
                               }
                             : {
                                 borderColor: 'var(--border-subtle)',
-                                background: 'var(--surface-0)',
-                                color: 'var(--text-muted)',
+                                background: minimumAaControlsDisabled
+                                  ? 'color-mix(in srgb, var(--surface-0), black 8%)'
+                                  : 'var(--surface-0)',
+                                color: minimumAaControlsDisabled
+                                  ? 'color-mix(in srgb, var(--text-muted), black 18%)'
+                                  : 'var(--text-muted)',
+                                cursor: minimumAaControlsDisabled ? 'not-allowed' : 'pointer',
+                                opacity: minimumAaControlsDisabled ? 0.68 : 1,
                               }}
                           onClick={() => {
-                            if (mode === 'Profile') {
-                              setEnableMinimumAaAlphaOverride(false);
-                            } else {
-                              setEnableMinimumAaAlphaOverride(true);
-                            }
+                            if (minimumAaControlsDisabled) return;
+                            setEnableMinimumAaAlphaOverride(false);
                           }}
                         >
-                          {displayText}
+                          {`Profile (${profileMinimumAaAlphaPercent}%)`}
                         </button>
-                      );
-                    })}
-                  </div>
-                  {enableMinimumAaAlphaOverride && (
-                    <div className="mt-1 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                      <div className="flex min-w-0 items-center gap-1">
-                        <IconButton
-                          className="!h-8 !w-8 shrink-0 !p-0"
-                          onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent - 1)}
-                          disabled={minimumAaAlphaPercent <= 0}
-                          title="Decrease minimum alpha"
-                        >
-                          <Minus className="h-3.5 w-3.5" />
-                        </IconButton>
-
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          step={1}
-                          value={minimumAaAlphaPercent}
-                          onChange={(event) => setClampedMinimumAaAlphaPercent(Number(event.target.value))}
-                          onWheel={(event) => {
-                            event.preventDefault();
-                            setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + (event.deltaY < 0 ? 1 : -1));
+                        <button
+                          type="button"
+                          disabled={minimumAaControlsDisabled}
+                          aria-disabled={minimumAaControlsDisabled}
+                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          style={(enableMinimumAaAlphaOverride && !minimumAaControlsDisabled)
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: minimumAaControlsDisabled
+                                  ? 'color-mix(in srgb, var(--surface-0), black 8%)'
+                                  : 'var(--surface-0)',
+                                color: minimumAaControlsDisabled
+                                  ? 'color-mix(in srgb, var(--text-muted), black 18%)'
+                                  : 'var(--text-muted)',
+                                cursor: minimumAaControlsDisabled ? 'not-allowed' : 'pointer',
+                                opacity: minimumAaControlsDisabled ? 0.68 : 1,
+                              }}
+                          onClick={() => {
+                            if (minimumAaControlsDisabled) return;
+                            setEnableMinimumAaAlphaOverride(true);
                           }}
-                          className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                          aria-label="Minimum alpha percent override"
-                        />
-
-                        <IconButton
-                          className="!h-8 !w-8 shrink-0 !p-0"
-                          onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + 1)}
-                          disabled={minimumAaAlphaPercent >= 100}
-                          title="Increase minimum alpha"
                         >
-                          <Plus className="h-3.5 w-3.5" />
-                        </IconButton>
+                          Override
+                        </button>
                       </div>
-                    </div>
-                  )}
-                </div>
+                    )}
+                    {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
+                      <div className="mt-1 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                        <div className="flex min-w-0 items-center gap-1">
+                          <IconButton
+                            className="!h-8 !w-8 shrink-0 !p-0"
+                            onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent - 1)}
+                            disabled={minimumAaControlsDisabled || minimumAaAlphaPercent <= 0}
+                            title="Decrease minimum alpha"
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </IconButton>
+
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={minimumAaAlphaPercent}
+                            disabled={minimumAaControlsDisabled}
+                            aria-disabled={minimumAaControlsDisabled}
+                            onChange={(event) => setClampedMinimumAaAlphaPercent(Number(event.target.value))}
+                            onWheel={(event) => {
+                              if (minimumAaControlsDisabled) return;
+                              event.preventDefault();
+                              setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + (event.deltaY < 0 ? 1 : -1));
+                            }}
+                            className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
+                            aria-label="Minimum alpha percent override"
+                          />
+
+                          <IconButton
+                            className="!h-8 !w-8 shrink-0 !p-0"
+                            onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + 1)}
+                            disabled={minimumAaControlsDisabled || minimumAaAlphaPercent >= 100}
+                            title="Increase minimum alpha"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </IconButton>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
             </div>
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Layers3 className="w-3.5 h-3.5" />
-              <span>Thumbnails</span>
-            </div>
+            <button
+              type="button"
+              className="mb-1 w-full flex items-center justify-between gap-2 text-left"
+              onClick={() => setIsThumbnailDrawerOpen((prev) => !prev)}
+              aria-expanded={isThumbnailDrawerOpen}
+              aria-label="Toggle thumbnail settings"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                <Layers3 className="w-3.5 h-3.5" />
+                <span>Thumbnails</span>
+              </span>
+              <svg
+                className="w-3 h-3 transform transition-transform"
+                style={{ color: isThumbnailDrawerOpen ? 'var(--accent)' : 'var(--text-muted)' }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {isThumbnailDrawerOpen ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                )}
+              </svg>
+            </button>
 
-            <div className="mt-1 rounded-md border px-2.5 py-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Export Thumbnail</div>
+            {isThumbnailDrawerOpen && (
+              <div className="mt-1 space-y-2">
 
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -1271,7 +1379,8 @@ export function SlicingPanel({
                   />
                 </button>
               </div>
-            </div>
+              </div>
+            )}
           </div>
 
           <Button
