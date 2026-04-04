@@ -164,7 +164,7 @@ function ModelStencilPass({
           geometry={entry.geometry}
           position={entry.offset}
           material={backMaterial}
-          renderOrder={990.1}
+          renderOrder={STENCIL_MODEL_BACK_ORDER}
           frustumCulled
           raycast={() => null}
         />
@@ -172,7 +172,7 @@ function ModelStencilPass({
           geometry={entry.geometry}
           position={entry.offset}
           material={frontMaterial}
-          renderOrder={990.2}
+          renderOrder={STENCIL_MODEL_FRONT_ORDER}
           frustumCulled
           raycast={() => null}
         />
@@ -206,14 +206,14 @@ function StaticSingleStencilPass({
         <mesh
           geometry={entry.geometry}
           material={backMaterial}
-          renderOrder={990.3}
+          renderOrder={STENCIL_SOURCE_BACK_ORDER}
           frustumCulled
           raycast={() => null}
         />
         <mesh
           geometry={entry.geometry}
           material={frontMaterial}
-          renderOrder={990.4}
+          renderOrder={STENCIL_SOURCE_FRONT_ORDER}
           frustumCulled
           raycast={() => null}
         />
@@ -290,6 +290,14 @@ function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
 }
 
 const INSTANCED_STENCIL_Z_BUCKET_MM = 6;
+const STENCIL_RENDER_ORDER_BASE = 9800;
+const STENCIL_MODEL_BACK_ORDER = STENCIL_RENDER_ORDER_BASE + 0.1;
+const STENCIL_MODEL_FRONT_ORDER = STENCIL_RENDER_ORDER_BASE + 0.2;
+const STENCIL_SOURCE_BACK_ORDER = STENCIL_RENDER_ORDER_BASE + 0.3;
+const STENCIL_SOURCE_FRONT_ORDER = STENCIL_RENDER_ORDER_BASE + 0.4;
+const STENCIL_GLOW_BACK_ORDER = STENCIL_RENDER_ORDER_BASE + 0.44;
+const STENCIL_GLOW_FRONT_ORDER = STENCIL_RENDER_ORDER_BASE + 0.445;
+const STENCIL_CAP_ORDER = STENCIL_RENDER_ORDER_BASE + 0.45;
 
 function CrossSectionStencilCapInner({
   entries,
@@ -351,11 +359,13 @@ function CrossSectionStencilCapInner({
   }, [planeHeightMm, planeWidthMm]);
 
   const capPlaneMaterial = React.useMemo(() => {
+    const resolvedOpacity = Math.max(0, Math.min(1, capOpacity));
+    const isOpaqueCap = resolvedOpacity >= 0.999;
     const material = new THREE.MeshBasicMaterial({
       color,
       side: THREE.DoubleSide,
-      transparent: capOpacity < 0.999,
-      opacity: Math.max(0, Math.min(1, capOpacity)),
+      transparent: !isOpaqueCap,
+      opacity: resolvedOpacity,
       depthWrite: false,
       depthTest: capDepthTest,
       polygonOffset: true,
@@ -460,6 +470,10 @@ function CrossSectionStencilCapInner({
           return;
         }
 
+        if (!compactMinBounds || !compactMaxBounds) return;
+        const compactMinBoundsSafe = compactMinBounds as Float32Array;
+        const compactMaxBoundsSafe = compactMaxBounds as Float32Array;
+
         const bucketSize = Math.max(0.1, INSTANCED_STENCIL_Z_BUCKET_MM);
         const buckets = new Map<number, {
           matrixValues: number[];
@@ -469,8 +483,8 @@ function CrossSectionStencilCapInner({
         }>();
 
         for (let instanceIndex = 0; instanceIndex < acceptedCount; instanceIndex += 1) {
-          const minZ = compactMinBounds[instanceIndex];
-          const maxZ = compactMaxBounds[instanceIndex];
+          const minZ = compactMinBoundsSafe[instanceIndex];
+          const maxZ = compactMaxBoundsSafe[instanceIndex];
           const centerZ = (minZ + maxZ) * 0.5;
           const bucketKey = Math.floor(centerZ / bucketSize);
 
@@ -499,8 +513,8 @@ function CrossSectionStencilCapInner({
           let minZ = Number.POSITIVE_INFINITY;
           let maxZ = Number.NEGATIVE_INFINITY;
           for (let i = 0; i < acceptedCount; i += 1) {
-            minZ = Math.min(minZ, compactMinBounds[i]);
-            maxZ = Math.max(maxZ, compactMaxBounds[i]);
+            minZ = Math.min(minZ, compactMinBoundsSafe[i]);
+            maxZ = Math.max(maxZ, compactMaxBoundsSafe[i]);
           }
 
           results.push({
@@ -710,8 +724,8 @@ function CrossSectionStencilCapInner({
         matrixElements={entry.matrixElements}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
-        backRenderOrder={990.3}
-        frontRenderOrder={990.4}
+        backRenderOrder={STENCIL_SOURCE_BACK_ORDER}
+        frontRenderOrder={STENCIL_SOURCE_FRONT_ORDER}
       />
     ));
   }, [stencilBack, stencilFront, visibleStaticInstancedEntries]);
@@ -719,7 +733,7 @@ function CrossSectionStencilCapInner({
   if (!visible || (visibleModelStencilEntries.length === 0 && !hasVisibleStaticSource)) return null;
 
   return (
-    <group renderOrder={990}>
+    <group renderOrder={STENCIL_RENDER_ORDER_BASE}>
       {modelStencilPassNodes}
 
       {staticSingleStencilPassNodes}
@@ -732,7 +746,7 @@ function CrossSectionStencilCapInner({
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
             position={[0, 0, y + Math.max(1e-4, glowThicknessMm)]}
-            renderOrder={990.44}
+            renderOrder={STENCIL_GLOW_BACK_ORDER}
             frustumCulled
             raycast={() => null}
           />
@@ -740,7 +754,7 @@ function CrossSectionStencilCapInner({
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
             position={[0, 0, y - Math.max(1e-4, glowThicknessMm)]}
-            renderOrder={990.445}
+            renderOrder={STENCIL_GLOW_FRONT_ORDER}
             frustumCulled
             raycast={() => null}
           />
@@ -751,7 +765,7 @@ function CrossSectionStencilCapInner({
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
         position={[0, 0, y + 1e-4]}
-        renderOrder={990.45}
+        renderOrder={STENCIL_CAP_ORDER}
         frustumCulled
         raycast={() => null}
         onAfterRender={(renderer) => {
