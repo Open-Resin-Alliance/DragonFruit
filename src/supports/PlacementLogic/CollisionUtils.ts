@@ -2,6 +2,21 @@ import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { bezierToLineSegments } from '../Curves/BezierUtils';
 
+const WHISKER_DIAGONAL = 0.7071067811865476;
+const WHISKER_OFFSETS: ReadonlyArray<{ u: number; v: number }> = [
+    { u: 1, v: 0 },
+    { u: -1, v: 0 },
+    { u: 0, v: 1 },
+    { u: 0, v: -1 },
+    { u: WHISKER_DIAGONAL, v: WHISKER_DIAGONAL },
+    { u: -WHISKER_DIAGONAL, v: WHISKER_DIAGONAL },
+    { u: WHISKER_DIAGONAL, v: -WHISKER_DIAGONAL },
+    { u: -WHISKER_DIAGONAL, v: -WHISKER_DIAGONAL },
+];
+
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const WORLD_RIGHT = new THREE.Vector3(1, 0, 0);
+
 export interface CollisionResult {
     hit: boolean;
     point?: Vec3;
@@ -27,17 +42,15 @@ export function checkShaftCollision(
     raycaster: THREE.Raycaster = new THREE.Raycaster()
 ): CollisionResult {
     const startVec = new THREE.Vector3(start.x, start.y, start.z);
-    const endVec = new THREE.Vector3(end.x, end.y, end.z);
-    
-    // Calculate direction and length
-    const direction = new THREE.Vector3().subVectors(endVec, startVec);
+    const direction = new THREE.Vector3(end.x - start.x, end.y - start.y, end.z - start.z);
     const length = direction.length();
-    direction.normalize();
 
     // If segment is too short, skip check
     if (length < 0.1) {
         return { hit: false };
     }
+
+    direction.multiplyScalar(1 / length);
 
     // Setup Raycaster
     raycaster.near = 0;
@@ -47,21 +60,31 @@ export function checkShaftCollision(
     // Move the origin slightly forward along the ray direction.
     const RAY_ORIGIN_EPS_MM = 0.02;
     const eps = Math.min(RAY_ORIGIN_EPS_MM, Math.max(0, length * 0.1));
+    const maxRayDistance = Math.max(0, length - eps);
+    const rayOrigin = new THREE.Vector3();
+
+    const castFirstHit = (originX: number, originY: number, originZ: number): THREE.Intersection | null => {
+        rayOrigin.set(originX, originY, originZ);
+        raycaster.near = 0;
+        raycaster.far = maxRayDistance;
+        raycaster.set(rayOrigin, direction);
+        const intersections = raycaster.intersectObject(mesh, false);
+        return intersections.length > 0 ? intersections[0] : null;
+    };
 
     // 1. Check Center Ray
-    const centerOrigin = startVec.clone().add(direction.clone().multiplyScalar(eps));
-    raycaster.near = 0;
-    raycaster.far = Math.max(0, length - eps);
-    raycaster.set(centerOrigin, direction);
-    const centerIntersects = raycaster.intersectObject(mesh, false);
+    const centerHit = castFirstHit(
+        startVec.x + direction.x * eps,
+        startVec.y + direction.y * eps,
+        startVec.z + direction.z * eps,
+    );
 
-    if (centerIntersects.length > 0) {
-        const hit = centerIntersects[0];
+    if (centerHit) {
         return {
             hit: true,
-            point: hit.point,
-            normal: hit.face?.normal ? hit.face.normal : undefined,
-            distance: hit.distance
+            point: centerHit.point,
+            normal: centerHit.face?.normal ? centerHit.face.normal : undefined,
+            distance: centerHit.distance
         };
     }
 
@@ -70,49 +93,28 @@ export function checkShaftCollision(
     // We need a coordinate system perpendicular to the direction.
     
     // Create arbitrary perp vector
-    const arbitrary = Math.abs(direction.dot(new THREE.Vector3(0, 1, 0))) > 0.9
-        ? new THREE.Vector3(1, 0, 0) 
-        : new THREE.Vector3(0, 1, 0);
-        
+    const arbitrary = Math.abs(direction.dot(WORLD_UP)) > 0.9 ? WORLD_RIGHT : WORLD_UP;
+
     const perp1 = new THREE.Vector3().crossVectors(direction, arbitrary).normalize();
     const perp2 = new THREE.Vector3().crossVectors(direction, perp1).normalize();
 
-    // 8 points around the circle (45 degrees)
-    const d = 0.7071; // approx sqrt(2)/2
-    const offsets = [
-        { u: 1, v: 0 },
-        { u: -1, v: 0 },
-        { u: 0, v: 1 },
-        { u: 0, v: -1 },
-        { u: d, v: d },
-        { u: -d, v: d },
-        { u: d, v: -d },
-        { u: -d, v: -d }
-    ];
+    for (const off of WHISKER_OFFSETS) {
+        const offsetX = (perp1.x * off.u + perp2.x * off.v) * radius;
+        const offsetY = (perp1.y * off.u + perp2.y * off.v) * radius;
+        const offsetZ = (perp1.z * off.u + perp2.z * off.v) * radius;
 
-    for (const off of offsets) {
-        const originOffset = new THREE.Vector3()
-            .addScaledVector(perp1, off.u * radius)
-            .addScaledVector(perp2, off.v * radius);
-            
-        const whiskerStart = new THREE.Vector3().addVectors(startVec, originOffset);
-        const whiskerOrigin = whiskerStart.clone().add(direction.clone().multiplyScalar(eps));
-        
-        raycaster.near = 0;
-        raycaster.far = Math.max(0, length - eps);
-        raycaster.set(whiskerOrigin, direction);
-        const intersects = raycaster.intersectObject(mesh, false);
+        const whiskerHit = castFirstHit(
+            startVec.x + offsetX + direction.x * eps,
+            startVec.y + offsetY + direction.y * eps,
+            startVec.z + offsetZ + direction.z * eps,
+        );
 
-        if (intersects.length > 0) {
-            const hit = intersects[0];
-            // Adjust hit point back to center line? 
-            // For now, returning the actual hit point is fine, 
-            // but the distance should be relative to start.
+        if (whiskerHit) {
             return {
                 hit: true,
-                point: hit.point,
-                normal: hit.face?.normal ? hit.face.normal : undefined,
-                distance: hit.distance
+                point: whiskerHit.point,
+                normal: whiskerHit.face?.normal ? whiskerHit.face.normal : undefined,
+                distance: whiskerHit.distance
             };
         }
     }

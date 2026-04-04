@@ -85,12 +85,14 @@ export function SpaceMouseController({
   fallbackPivot,
   mouseOrbitDragRunId,
   onNavigationActiveChange,
+  onNavigationFrame,
 }: {
   pivotPoint?: THREE.Vector3 | null;
   pivotCandidates?: THREE.Vector3[];
   fallbackPivot?: THREE.Vector3 | null;
   mouseOrbitDragRunId?: number;
   onNavigationActiveChange?: (active: boolean) => void;
+  onNavigationFrame?: () => void;
 }) {
   const { camera, controls, scene } = useThree();
 
@@ -393,11 +395,11 @@ export function SpaceMouseController({
 
     // ── Translation (pan trucks camera + pivot together, dolly moves camera only) ──
     if (Math.abs(panX) > 1e-4 || Math.abs(panZ) > 1e-4 || Math.abs(dolly) > 1e-4) {
-      const forward = toLook.lengthSq() > 1e-8 ? toLook.clone().normalize() : toPivot.clone().normalize();
-      const cameraUp = camera.up.clone().normalize();
-      const right = new THREE.Vector3().crossVectors(forward, cameraUp);
-      if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
-      right.normalize();
+      // Use camera-local frame for panning so up/down remains stable even when
+      // camera.up is freely tilted during unconstrained orbit.
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
 
       const orthoWorldHeight = orthoCamera ? (orthoCamera.top - orthoCamera.bottom) / Math.max(1e-6, orthoCamera.zoom) : null;
       const panDistanceBase = orthoWorldHeight ?? distance;
@@ -428,23 +430,26 @@ export function SpaceMouseController({
 
       const offset = camera.position.clone().sub(pivot);
       const lookOffset = lookTarget.clone().sub(pivot);
+      const localUpAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+      const localRightAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
 
-      // Yaw: rotate offset around camera up (free orbit, not horizon-locked).
+      // Yaw: rotate around camera-local up axis.
       if (Math.abs(yaw) > 1e-4) {
-        const yawAxis = camera.up.clone().normalize();
-        const q = new THREE.Quaternion().setFromAxisAngle(yawAxis, -yaw * rotScale);
+        const q = new THREE.Quaternion().setFromAxisAngle(localUpAxis, -yaw * rotScale);
         offset.applyQuaternion(q);
         lookOffset.applyQuaternion(q);
+        camera.up.applyQuaternion(q).normalize();
+        localRightAxis.applyQuaternion(q).normalize();
       }
 
-      // Pitch: rotate offset around camera's local right axis.
+      // Pitch: rotate around camera-local right axis.
+      // Using the camera-local basis avoids the pole singularity that occurs when
+      // deriving pitch axis from cross(offset, up) near top-down orientation.
       if (Math.abs(pitch) > 1e-4) {
-        const pitchAxis = new THREE.Vector3().crossVectors(offset, camera.up).normalize();
-        if (pitchAxis.lengthSq() > 1e-6) {
-          const q = new THREE.Quaternion().setFromAxisAngle(pitchAxis, -pitch * rotScale);
-          offset.applyQuaternion(q);
-          lookOffset.applyQuaternion(q);
-        }
+        const q = new THREE.Quaternion().setFromAxisAngle(localRightAxis, -pitch * rotScale);
+        offset.applyQuaternion(q);
+        lookOffset.applyQuaternion(q);
+        camera.up.applyQuaternion(q).normalize();
       }
 
       camera.position.copy(pivot.clone().add(offset));
@@ -464,6 +469,7 @@ export function SpaceMouseController({
 
     camera.lookAt(lookTarget);
     camera.updateMatrixWorld();
+    onNavigationFrame?.();
   });
 
   return (

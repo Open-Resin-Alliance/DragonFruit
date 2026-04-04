@@ -164,6 +164,61 @@ function nearestNodeId(target: Vec2, nodes: VoronoiSupportNode[], maxDistanceMm?
     return best.supportId;
 }
 
+type SpatialNodeBuckets = {
+    cellSize: number;
+    buckets: Map<string, VoronoiSupportNode[]>;
+};
+
+function buildSpatialNodeBuckets(nodes: VoronoiSupportNode[], cellSize: number): SpatialNodeBuckets {
+    const safeCellSize = Math.max(cellSize, 0.1);
+    const buckets = new Map<string, VoronoiSupportNode[]>();
+
+    for (const node of nodes) {
+        const ix = Math.floor(node.point.x / safeCellSize);
+        const iy = Math.floor(node.point.y / safeCellSize);
+        const key = makeBucketKey(ix, iy);
+        const list = buckets.get(key) ?? [];
+        list.push(node);
+        buckets.set(key, list);
+    }
+
+    return {
+        cellSize: safeCellSize,
+        buckets,
+    };
+}
+
+function nearestNodeIdFromBuckets(
+    target: Vec2,
+    spatial: SpatialNodeBuckets,
+    maxDistanceMm: number,
+): string | null {
+    const maxDistSq = maxDistanceMm * maxDistanceMm;
+    const ix = Math.floor(target.x / spatial.cellSize);
+    const iy = Math.floor(target.y / spatial.cellSize);
+    const bucketRadius = Math.max(1, Math.ceil(maxDistanceMm / spatial.cellSize));
+
+    let best: VoronoiSupportNode | null = null;
+    let bestDistSq = maxDistSq + EPS;
+
+    for (let ox = -bucketRadius; ox <= bucketRadius; ox += 1) {
+        for (let oy = -bucketRadius; oy <= bucketRadius; oy += 1) {
+            const bucket = spatial.buckets.get(makeBucketKey(ix + ox, iy + oy));
+            if (!bucket) continue;
+
+            for (const node of bucket) {
+                const distSq = squaredDistance(target, node.point);
+                if (distSq > maxDistSq + EPS) continue;
+                if (distSq >= bestDistSq) continue;
+                best = node;
+                bestDistSq = distSq;
+            }
+        }
+    }
+
+    return best?.supportId ?? null;
+}
+
 function buildSeeds(nodes: VoronoiSupportNode[], settings: VoronoiPartitionSettings): Set<string> {
     const seeds = new Set<string>();
     if (nodes.length === 0) return seeds;
@@ -183,6 +238,7 @@ function buildSeeds(nodes: VoronoiSupportNode[], settings: VoronoiPartitionSetti
     const spacing = Math.max(settings.seedSpacingMm, 0.25);
     const jitter = clamp(settings.seedJitterMm, 0, spacing * 0.49);
     const snapRadius = Math.max(spacing * 0.75, 0.25);
+    const spatial = buildSpatialNodeBuckets(nodes, snapRadius);
     const modelSeed = hashString(nodes[0].modelId);
 
     let ix = 0;
@@ -192,7 +248,7 @@ function buildSeeds(nodes: VoronoiSupportNode[], settings: VoronoiPartitionSetti
             const jx = (pseudoRandom01(ix, iy, modelSeed) * 2 - 1) * jitter;
             const jy = (pseudoRandom01(ix, iy, modelSeed + 7919) * 2 - 1) * jitter;
             const target = { x: gx + jx, y: gy + jy };
-            const snapped = nearestNodeId(target, nodes, snapRadius);
+            const snapped = nearestNodeIdFromBuckets(target, spatial, snapRadius);
             if (snapped) seeds.add(snapped);
         }
     }

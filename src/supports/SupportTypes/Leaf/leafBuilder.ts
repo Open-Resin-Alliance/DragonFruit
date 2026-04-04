@@ -4,6 +4,7 @@ import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/Con
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings';
+import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -71,6 +72,7 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
     const { tipPos, surfaceNormal, modelId, parentKnot, hostDiameterMm } = input;
 
     const settings = getSettings();
+    const settingsCodeHex = encodeSupportSettingsHex(settings);
 
     const baseProfile: SupportTipProfile = {
         type: 'disk',
@@ -108,6 +110,7 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
     const leaf: Leaf = {
         id: leafId,
         modelId,
+        settingsCodeHex,
         parentKnotId: parentKnot.id,
         contactCone,
     };

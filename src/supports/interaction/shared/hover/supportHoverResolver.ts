@@ -73,6 +73,7 @@ export function resolveSelectedPrimitiveHoverSuppression(
     selectedId: string | null,
     selectedCategory: string | null | undefined,
     selectedSupportIdSet: ReadonlySet<string>,
+    selectedPrimitiveSupportId: string | null = null,
 ) {
     const primitiveHoverOnSelectedSupport = hoveredSupportIdFromPicking !== null
         && selectedSupportIdSet.has(hoveredSupportIdFromPicking)
@@ -86,10 +87,16 @@ export function resolveSelectedPrimitiveHoverSuppression(
         && hoveredSupportIdFromPicking !== null
         && selectedSupportIdSet.has(hoveredSupportIdFromPicking);
 
+    const suppressSupportHoverForSelectedJointSupport = isSupportPrimitiveHoverCategory(selectedCategory)
+        && selectedPrimitiveSupportId !== null
+        && hoveredSupportIdFromPicking !== null
+        && hoveredSupportIdFromPicking === selectedPrimitiveSupportId;
+
     return {
         primitiveHoverOnSelectedSupport,
         selectedPrimitiveHoverActive,
         suppressSupportHoverForSelectedKnotSupport,
+        suppressSupportHoverForSelectedJointSupport,
     };
 }
 
@@ -97,13 +104,19 @@ export function resolveHoveredSupportVisualState(
     marqueeHoveredSupportId: string | null,
     hoveredSupportIdFromPicking: string | null,
     sceneHoveredSupportId: string | null,
+    hoveredCategory: string | null | undefined,
     selectedPrimitiveHoverActive: boolean,
     suppressSupportHoverForSelectedKnotSupport: boolean,
     selectedSupportIdSet: ReadonlySet<string>,
+    selectedPrimitiveSupportId: string | null = null,
 ) {
-    const hoveredSupportIdForVisual = (selectedPrimitiveHoverActive || suppressSupportHoverForSelectedKnotSupport)
+    const candidateId = marqueeHoveredSupportId ?? hoveredSupportIdFromPicking ?? sceneHoveredSupportId;
+    const suppressForHoveredPrimitivePriority = hoveredCategory === 'knot' || isJointHoverCategory(hoveredCategory);
+    const suppressForSelectedPrimitiveParent = selectedPrimitiveSupportId !== null && candidateId === selectedPrimitiveSupportId;
+
+    const hoveredSupportIdForVisual = (suppressForHoveredPrimitivePriority || selectedPrimitiveHoverActive || suppressSupportHoverForSelectedKnotSupport || suppressForSelectedPrimitiveParent)
         ? null
-        : (marqueeHoveredSupportId ?? hoveredSupportIdFromPicking ?? sceneHoveredSupportId);
+        : candidateId;
 
     return {
         hoveredSupportIdForVisual,
@@ -126,12 +139,18 @@ export function shouldSuppressSceneBatchedSupportHover(
     selectedPrimitiveHoverActive: boolean,
     primitiveHoverOnSelectedSupport: boolean,
     selectedSupportIdSet: ReadonlySet<string>,
+    selectedPrimitiveSupportId: string | null = null,
 ) {
     const suppressForSelectedKnotSupport = selectedCategory === 'knot'
         && !!supportId
         && selectedSupportIdSet.has(supportId);
 
-    return selectedPrimitiveHoverActive || suppressForSelectedKnotSupport || (
+    const suppressForSelectedPrimitiveSupport = isSupportPrimitiveHoverCategory(selectedCategory)
+        && !!supportId
+        && selectedPrimitiveSupportId !== null
+        && supportId === selectedPrimitiveSupportId;
+
+    return selectedPrimitiveHoverActive || suppressForSelectedKnotSupport || suppressForSelectedPrimitiveSupport || (
         primitiveHoverOnSelectedSupport
         && (!supportId || !selectedSupportIdSet.has(supportId))
     );

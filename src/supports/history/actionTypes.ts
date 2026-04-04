@@ -26,6 +26,7 @@ export const SUPPORT_REMOVE_KICKSTAND = 'support:remove-kickstand' as const;
 
 export const SUPPORT_REPLACE_TRUNK = 'support:replace-trunk' as const;
 export const SUPPORT_AUTO_BRACE_REPLACE = 'support:auto-brace-replace' as const;
+export const SUPPORT_EDIT_REPLACE = 'support:edit-replace' as const;
 
 export type SupportHistoryActionType =
   | typeof SUPPORT_ADD_TRUNK
@@ -45,6 +46,7 @@ export type SupportHistoryActionType =
   | typeof SUPPORT_ADD_KICKSTAND
   | typeof SUPPORT_REMOVE_KICKSTAND
   | typeof SUPPORT_REPLACE_TRUNK
+  | typeof SUPPORT_EDIT_REPLACE
   | typeof SUPPORT_AUTO_BRACE_REPLACE;
 
 export interface SupportTrunkPayload {

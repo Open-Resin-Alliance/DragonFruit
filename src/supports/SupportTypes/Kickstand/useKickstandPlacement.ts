@@ -4,6 +4,7 @@ import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { kickstandPlacementStore, useKickstandPlacementState } from './kickstandPlacementState';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 
 export function useKickstandPlacement() {
     const { getHotkey } = useHotkeyConfig();
@@ -20,6 +21,9 @@ export function useKickstandPlacement() {
 
             if (matches) {
                 e.preventDefault();
+                // Kickstand placement should be usable immediately even if a joint
+                // was selected from prior editing. Clear selection to avoid preview suppression.
+                clearSupportSelection();
                 kickstandPlacementStore.setHotkeyActive(true);
             }
         };
@@ -61,7 +65,15 @@ export function useKickstandPlacement() {
     }, [binding]);
 
     useEffect(() => {
-        if (isGizmoActive && state.hotkeyActive) {
+        if (!state.hotkeyActive) return;
+        if (typeof window === 'undefined') return;
+
+        const w = window as any;
+        const gizmoDragging = !!w.__jointGizmoDragging || !!w.__knotGizmoDragging || !!w.__bezierGizmoDragging;
+
+        // Only cancel kickstand placement when a gizmo is actively being dragged,
+        // not merely because a joint is selected.
+        if (gizmoDragging) {
             kickstandPlacementStore.setHotkeyActive(false);
         }
     }, [isGizmoActive, state.hotkeyActive]);

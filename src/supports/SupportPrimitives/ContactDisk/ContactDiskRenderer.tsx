@@ -7,8 +7,9 @@ import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './contac
 import { ContactDiskHud } from './ContactDiskHud';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setContactDiskHudDraggingActive, setContactDiskHudHoverActive, setContactDiskHudInteractionTarget, setContactDiskHudPointerCaptureActive } from './contactDiskHudInteraction';
-import { setHoveredCategory, setHoveredId } from '../../state';
+import { setHoveredState } from '../../state';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ContactDiskRendererProps {
     id?: string;
@@ -92,25 +93,34 @@ export function ContactDiskRenderer({
     const handlePointerMove = React.useCallback((e: any) => {
         if (!id || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
 
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredState('none', null);
+            return;
+        }
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             emitImmediateModelHover(frontModelId);
-            setHoveredId(null);
-            setHoveredCategory('none');
+            setHoveredState('none', null);
             return;
         }
 
         emitImmediateModelHover(null);
-        setHoveredId(id);
-        setHoveredCategory('contactDisk');
+        setHoveredState('contactDisk', id);
     }, [id, isInteractable, isParentSelected, isContactDiskSelected]);
 
     const handlePointerOut = React.useCallback(() => {
         if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
 
+        if (isSupportEditInteractionActive()) {
+            emitImmediateModelHover(null);
+            setHoveredState('none', null);
+            return;
+        }
+
         emitImmediateModelHover(null);
-        setHoveredId(null);
-        setHoveredCategory('none');
+        setHoveredState('none', null);
     }, [isInteractable, isParentSelected, isContactDiskSelected]);
 
     const handleHudHoverChange = React.useCallback((hovered: boolean) => {

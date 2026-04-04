@@ -1,3 +1,5 @@
+import type { SupportSettings } from '../types';
+
 type AnatomyPreviewDomRect = {
     left: number;
     top: number;
@@ -9,6 +11,7 @@ type AnatomyPreviewState = {
     domRect: AnatomyPreviewDomRect | null;
     activeSettingKey: string | null;
     activeSettingValue: number | null;
+    hoveredPresetSettings: SupportSettings | null;
     showTuner: boolean;
 };
 
@@ -16,6 +19,7 @@ let currentState: AnatomyPreviewState = {
     domRect: null,
     activeSettingKey: null,
     activeSettingValue: null,
+    hoveredPresetSettings: null,
     showTuner: false,
 };
 
@@ -63,6 +67,14 @@ export function setAnatomyPreviewActiveSettingValue(activeSettingValue: number |
     currentState = {
         ...currentState,
         activeSettingValue,
+    };
+    notify();
+}
+
+export function setAnatomyPreviewHoveredPresetSettings(hoveredPresetSettings: SupportSettings | null): void {
+    currentState = {
+        ...currentState,
+        hoveredPresetSettings,
     };
     notify();
 }

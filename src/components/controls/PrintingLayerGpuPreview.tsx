@@ -2,7 +2,7 @@
 
 import React from 'react';
 import * as THREE from 'three';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { CrossSectionStencilCap, type CrossSectionStencilCapEntry } from '@/components/scene/CrossSectionStencilCap';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 
@@ -19,6 +19,41 @@ interface Props {
   mirrorY?: boolean;
   className?: string;
   style?: React.CSSProperties;
+}
+
+function DemandInvalidateOnChange({
+  clipZ,
+  supportVersion,
+  entryCount,
+  mirrorX,
+  mirrorY,
+  viewportWidthMm,
+  viewportHeightMm,
+}: {
+  clipZ: number | null;
+  supportVersion: number;
+  entryCount: number;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  viewportWidthMm?: number;
+  viewportHeightMm?: number;
+}) {
+  const { invalidate } = useThree();
+
+  React.useEffect(() => {
+    invalidate();
+  }, [
+    clipZ,
+    supportVersion,
+    entryCount,
+    mirrorX,
+    mirrorY,
+    viewportWidthMm,
+    viewportHeightMm,
+    invalidate,
+  ]);
+
+  return null;
 }
 
 /**
@@ -104,6 +139,8 @@ export function PrintingLayerGpuPreview({
       style={{ position: 'relative', overflow: 'hidden', background: '#000', ...style }}
     >
       <Canvas
+        frameloop="demand"
+        dpr={[1, 1]}
         orthographic
         camera={{
           position: cameraPosition,
@@ -130,6 +167,15 @@ export function PrintingLayerGpuPreview({
           transform: `scale(${mirrorX ? -1 : 1}, ${mirrorY ? -1 : 1})`,
         }}
       >
+        <DemandInvalidateOnChange
+          clipZ={clipZ}
+          supportVersion={supportVersion}
+          entryCount={capEntries.length}
+          mirrorX={mirrorX}
+          mirrorY={mirrorY}
+          viewportWidthMm={viewportWidthMm}
+          viewportHeightMm={viewportHeightMm}
+        />
         <CrossSectionStencilCap
           entries={capEntries}
           sourceObject={supportGroupRef?.current ?? null}

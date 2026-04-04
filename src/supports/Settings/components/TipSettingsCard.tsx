@@ -3,6 +3,7 @@
 import React from 'react';
 import { TipProfile } from '../types';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 
 interface TipSettingsCardProps {
     tip: TipProfile;
@@ -27,47 +28,48 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
     return (
         <div className="bg-neutral-750 rounded p-1 mb-1">
             <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-neutral-300">Tip</span>
-                <span className="text-[9px] text-neutral-500 uppercase tracking-wide">{tip.shape}</span>
+                <span className="text-[11px] font-semibold text-neutral-300">Tip</span>
+                <span className="text-[11px] text-neutral-500 uppercase tracking-wide">{tip.shape}</span>
             </div>
 
             {/* Contact Type Selector */}
             <div className="mb-1.5">
-                <select
+                <SelectDropdown
                     value={tip.type || 'disk'}
-                    onChange={(e) => onChange({ type: e.target.value as any })}
+                    onChange={(value) => onChange({ type: value as any })}
+                    options={[{ value: 'disk', label: 'Contact Disk' }]}
+                    className="space-y-0"
+                    selectClassName="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
                     onFocus={() => setAnatomyPreviewActiveSettingKey('tip.type')}
                     onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
-                    className="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
-                >
-                    <option value="disk">Contact Disk</option>
-                    {/* <option value="sphere">Contact Sphere</option> */}
-                </select>
+                />
             </div>
 
             <div className="mb-1.5">
                 <div className="flex items-center justify-between mb-1">
-                    <span className="text-[9px] text-neutral-400">Cone Angle Mode</span>
-                    <span className="text-[9px] text-neutral-500 uppercase tracking-wide">{tip.coneAngleMode ?? 'normal'}</span>
+                    <span className="text-[11px] text-neutral-400">Cone Angle Mode</span>
+                    <span className="text-[11px] text-neutral-500 uppercase tracking-wide">{tip.coneAngleMode ?? 'normal'}</span>
                 </div>
-                <select
+                <SelectDropdown
                     value={tip.coneAngleMode ?? 'normal'}
-                    onChange={(e) => onChange({ coneAngleMode: e.target.value as any })}
+                    onChange={(value) => onChange({ coneAngleMode: value as any })}
+                    options={[
+                        { value: 'normal', label: 'Normal' },
+                        { value: 'locked', label: 'Locked' },
+                        { value: 'adaptive', label: 'Adaptive' },
+                    ]}
+                    className="space-y-0"
+                    selectClassName="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
                     onFocus={() => setAnatomyPreviewActiveSettingKey('tip.coneAngleMode')}
                     onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
-                    className="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
-                >
-                    <option value="normal">Normal</option>
-                    <option value="locked">Locked</option>
-                    <option value="adaptive">Adaptive</option>
-                </select>
+                />
             </div>
 
             {(tip.coneAngleMode ?? 'normal') === 'adaptive' && (
                 <div className="mb-1.5">
                     <div className="flex items-center justify-between mb-1">
-                        <span className="text-[9px] text-neutral-400">Adaptive Offset (deg)</span>
-                        <span className="text-[9px] text-neutral-500 uppercase tracking-wide">+{tip.adaptiveConeAngleOffsetDeg ?? 30}</span>
+                        <span className="text-[11px] text-neutral-400">Adaptive Offset (deg)</span>
+                        <span className="text-[11px] text-neutral-500 uppercase tracking-wide">+{tip.adaptiveConeAngleOffsetDeg ?? 30}</span>
                     </div>
                     <NumberInput
                         value={tip.adaptiveConeAngleOffsetDeg ?? 30}
@@ -86,7 +88,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
 
             <div className="grid grid-cols-3 gap-1.5">
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[9px] text-neutral-400">Contact</span>
+                    <span className="text-[11px] text-neutral-400">Contact</span>
                     <NumberInput
                         value={tip.contactDiameterMm}
                         onChange={(val) => onChange({ contactDiameterMm: val })}
@@ -96,7 +98,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[9px] text-neutral-400">Body</span>
+                    <span className="text-[11px] text-neutral-400">Body</span>
                     <NumberInput
                         value={tip.bodyDiameterMm}
                         onChange={(val) => onChange({ bodyDiameterMm: val })}
@@ -106,7 +108,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[9px] text-neutral-400">Length</span>
+                    <span className="text-[11px] text-neutral-400">Length</span>
                     <NumberInput
                         value={tip.lengthMm}
                         onChange={(val) => onChange({ lengthMm: val })}

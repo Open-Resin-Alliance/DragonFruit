@@ -15,6 +15,8 @@ interface GizmoRotationProps {
   isActive?: boolean;
   isDimmed?: boolean;
   isHidden?: boolean;
+  suppressHover?: boolean;
+  opacityScale?: number;
   suppressAxisAnimations?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
@@ -34,6 +36,8 @@ export function GizmoRotation({
   isActive,
   isDimmed,
   isHidden,
+  suppressHover = false,
+  opacityScale = 1,
   suppressAxisAnimations = false,
   enableLighting = true,
   gizmoPosition,
@@ -49,7 +53,6 @@ export function GizmoRotation({
   const billboardRotationRef = useRef<number>(0);
   const lastMouseAngle = useRef<number>(0);
   const shouldFlipRef = useRef(false);
-  const rafId = useRef<number | null>(null);
   const rotatingArcRef = useRef<THREE.Group>(null);
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
@@ -103,7 +106,7 @@ export function GizmoRotation({
   }, [register, unregister, handleType]);
   
   // Check if this handle is hovered via GPU picking
-  const isPickingHovered = hit.category === 'gizmo' && 
+  const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 
     'gizmoHandle' in hit && 
     hit.gizmoHandle === handleType;
 
@@ -160,6 +163,10 @@ export function GizmoRotation({
     if (handleRootRef.current) {
       handleRootRef.current.position.set(hx, hy, 0);
       handleRootRef.current.rotation.set(0, 0, handleAngle + Math.PI / 2);
+    }
+
+    if (pickMeshRef.current) {
+      pickMeshRef.current.position.set(hx, hy, 0);
     }
 
     if (pointLightRef.current) {
@@ -232,44 +239,35 @@ export function GizmoRotation({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      // Cancel any pending animation frame
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
-      
-      // Schedule update on next frame
-      rafId.current = requestAnimationFrame(() => {
-        const currentMouseAngle = getMouseAngle(e.clientX, e.clientY);
-        let deltaAngle = currentMouseAngle - lastMouseAngle.current;
-        
-        // Handle angle wrapping (crossing -π/π boundary)
-        if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
-        if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
-        
-        // X and Z axes need inverted visual feedback, Y axis is correct as-is
-        let visualDelta = (axis === 'x' || axis === 'z') ? -deltaAngle : deltaAngle;
-        let objectDelta = deltaAngle;
-        
-        // If camera has flipped to the other side, invert both visual and object rotation
-        if (shouldFlipRef.current) {
-          visualDelta = -visualDelta;
-          objectDelta = -objectDelta;
-        }
-        
-        // Flip both visual and object to match mouse direction (all axes)
+      const currentMouseAngle = getMouseAngle(e.clientX, e.clientY);
+      let deltaAngle = currentMouseAngle - lastMouseAngle.current;
+
+      // Handle angle wrapping (crossing -π/π boundary)
+      if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
+      if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
+
+      // X and Z axes need inverted visual feedback, Y axis is correct as-is
+      let visualDelta = (axis === 'x' || axis === 'z') ? -deltaAngle : deltaAngle;
+      let objectDelta = deltaAngle;
+
+      // If camera has flipped to the other side, invert both visual and object rotation
+      if (shouldFlipRef.current) {
         visualDelta = -visualDelta;
         objectDelta = -objectDelta;
-        
-        // Update handle angle for visual feedback (ref-based)
-        handleAngleRef.current += visualDelta;
-        targetHandleAngleRef.current = handleAngleRef.current;
-        
-        // Send rotation delta to parent (object rotation)
-        onDrag(objectDelta);
-        
-        lastMouseAngle.current = currentMouseAngle;
-        rafId.current = null;
-      });
+      }
+
+      // Flip both visual and object to match mouse direction (all axes)
+      visualDelta = -visualDelta;
+      objectDelta = -objectDelta;
+
+      // Update handle angle for visual feedback (ref-based)
+      handleAngleRef.current += visualDelta;
+      targetHandleAngleRef.current = handleAngleRef.current;
+
+      // Send rotation delta to parent (object rotation)
+      onDrag(objectDelta);
+
+      lastMouseAngle.current = currentMouseAngle;
     };
 
     const handleGlobalPointerUp = () => {
@@ -283,18 +281,16 @@ export function GizmoRotation({
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
     };
   }, [isDragging, onDrag, onDragEnd, getMouseAngle, axis]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
-  const effectiveHovered = isPickingHovered || isHovered;
+  const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
   const isHighlighted = !!(effectiveHovered || isActive);
   const ringIsActive = !!isActive;
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : ringIsActive ? 0.95 : 0.72;
+  const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : ringIsActive ? 0.95 : 0.72;
+  const opacity = baseOpacity * opacityScale;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
   const diamondPrimaryColor = isDimmed
     ? dimmedColor
@@ -418,16 +414,16 @@ export function GizmoRotation({
   return (
     <group
       rotation={rotation}
-      onPointerDown={handlePointerDown}
     >
       {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
       <mesh
         ref={pickMeshRef}
+        position={initialHandlePos}
         onPointerDown={handlePointerDown}
         onPointerEnter={handlePointerEnterLocal}
         onPointerLeave={handlePointerLeaveLocal}
       >
-        <torusGeometry args={[GIZMO_SIZES.ringMajorRadius, Math.max(0.04, GIZMO_SIZES.ringDiamondRadius * 0.55), 16, 112]} />
+        <sphereGeometry args={[Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9), 16, 16]} />
         <meshBasicMaterial visible={false} />
       </mesh>
 
@@ -476,7 +472,14 @@ export function GizmoRotation({
       </group>
 
       {/* Double-pointed arrow handle (two cones) */}
-      <group ref={handleRootRef} position={initialHandlePos} scale={isHighlighted ? 1.08 : 1.0}>
+      <group
+        ref={handleRootRef}
+        position={initialHandlePos}
+        scale={isHighlighted ? 1.08 : 1.0}
+        onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnterLocal}
+        onPointerLeave={handlePointerLeaveLocal}
+      >
         {/* Billboard group to improve arrow readability relative to camera */}
         <group ref={billboardGroupRef}>
           {/* Clockwise-pointing cone along tangent */}

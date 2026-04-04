@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { runIslandScan, runScanlineScan, type ScanResults } from './ScanOrchestrator';
+import { runIslandScanNative } from './nativeIslandScan';
 import { computeIslandMarkers, type IslandMarker } from './islandOverlayLogic';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -32,6 +33,9 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   const [minOverlapPx, setMinOverlapPx] = useState<number>(4);
   const [overlapNeighborhoodPx, setOverlapNeighborhoodPx] = useState<number>(1);
   const [useSurfaceContiguity, setUseSurfaceContiguity] = useState<boolean>(false);
+
+  // Native (Rust) toggle
+  const [useNativeScan, setUseNativeScan] = useState<boolean>(true);
 
   // UI State
   const [scanCardExpanded, setScanCardExpanded] = useState<boolean>(true);
@@ -154,6 +158,41 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx, useSurfaceContiguity]);
 
+  const onRunNativeIslandScan = useCallback(async () => {
+    if (!geom) return;
+    const transformedGeom = prepareTransformedGeom();
+    if (!transformedGeom) return;
+
+    setScanning(true);
+    const transformedBBox = transformedGeom.boundingBox!;
+    setScanBBox(transformedBBox);
+
+    const numLayers = Math.max(0, Math.ceil((transformedBBox.max.z - transformedBBox.min.z) / layerHeightMm));
+    setScanProgress({ done: 0, total: numLayers });
+
+    const startTime = performance.now();
+    try {
+      const res = await runIslandScanNative(
+        { geometry: transformedGeom, bbox: transformedBBox },
+        layerHeightMm,
+        {
+          px_mm: pxMm,
+          support_buffer_mm: supportBufMm,
+          connectivity,
+          min_island_area_mm2: minIslandAreaMm2,
+          min_overlap_px: minOverlapPx,
+          overlap_neighborhood_px: overlapNeighborhoodPx,
+        },
+        (done, total) => setScanProgress({ done, total })
+      );
+      const endTime = performance.now();
+      console.log(`Native Island Scan took ${(endTime - startTime).toFixed(2)}ms`);
+      setScanData(res);
+    } finally {
+      setScanning(false);
+    }
+  }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
+
   // Compute markers
   const islandMarkers = useMemo<IslandMarker[]>(() => {
     if (!scanData || !scanBBox) return [];
@@ -198,6 +237,8 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     islandMarkers,
     onRunIslandScan,
     onRunScanlineScan,
+    onRunNativeIslandScan,
+    useNativeScan, setUseNativeScan,
     clearScanData
   };
 }

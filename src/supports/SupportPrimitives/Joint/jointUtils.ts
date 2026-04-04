@@ -540,7 +540,17 @@ import { clampShaftAngle } from '../../PlacementLogic/ShaftAngleConstraint';
  * @param parentStartPos Optional start position of the parent chain (Root pos or Knot pos) for constraint calculation
  * @returns A new Trunk object with updated joint
  */
-export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: THREE.Mesh, isCurveMode: boolean = false, root?: Roots, parentStartPos?: Vec3): Trunk {
+export function moveJoint(
+    trunk: Trunk,
+    jointId: string,
+    newPos: Vec3,
+    mesh?: THREE.Mesh,
+    isCurveMode: boolean = false,
+    root?: Roots,
+    parentStartPos?: Vec3,
+    options?: { skipContactConeSolve?: boolean }
+): Trunk {
+    const skipContactConeSolve = options?.skipContactConeSolve === true;
     // 0. Apply Shaft Angle Constraints
     const settings = getSettings();
     const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
@@ -558,12 +568,53 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
     // Update newPos to the clamped result
     newPos = clampedPos;
 
+    // Fast path: if constraint solving snaps to the already-committed joint position,
+    // skip all downstream cone/curve work to avoid no-op drag churn.
+    let currentJointPos: Vec3 | null = null;
+    for (const seg of trunk.segments) {
+        if (seg.topJoint?.id === jointId) {
+            currentJointPos = seg.topJoint.pos;
+            break;
+        }
+        if (seg.bottomJoint?.id === jointId) {
+            currentJointPos = seg.bottomJoint.pos;
+            break;
+        }
+    }
+
+    if (currentJointPos) {
+        const dx = currentJointPos.x - newPos.x;
+        const dy = currentJointPos.y - newPos.y;
+        const dz = currentJointPos.z - newPos.z;
+        const samePosEpsSq = 1e-10;
+        if ((dx * dx) + (dy * dy) + (dz * dz) <= samePosEpsSq) {
+            return trunk;
+        }
+    }
+
     // Check if we are moving the Contact Cone's Socket Joint
     let newContactCone = trunk.contactCone;
 
     if (trunk.contactCone?.socketJointId && trunk.contactCone.socketJointId === jointId) {
         const contactPos = new THREE.Vector3(trunk.contactCone.pos.x, trunk.contactCone.pos.y, trunk.contactCone.pos.z);
         const socketPos = new THREE.Vector3(newPos.x, newPos.y, newPos.z);
+
+        if (skipContactConeSolve) {
+            const axis = new THREE.Vector3().subVectors(socketPos, contactPos);
+            const axisLen = axis.length();
+            if (axisLen > 0.001) {
+                axis.normalize();
+                newContactCone = {
+                    ...trunk.contactCone,
+                    normal: { x: axis.x, y: axis.y, z: axis.z },
+                    diskLengthOverride: undefined,
+                    profile: {
+                        ...trunk.contactCone.profile,
+                        lengthMm: Math.max(0.1, axisLen),
+                    },
+                };
+            }
+        } else {
 
         // 1. Calculate Vector from Contact (Surface) -> New Socket Position
         const toSocket = new THREE.Vector3().subVectors(socketPos, contactPos);
@@ -708,6 +759,7 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
                 }
             };
         }
+        }
     }
 
     // We must iterate segments and update any reference to this joint
@@ -751,7 +803,6 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
     const shouldUpdateCurves = isCurveMode || connectedAreBezier;
 
     if (shouldUpdateCurves && root) {
-        console.log('[JointUtils] Calling updateCurvesAtJoint. Root:', root.id);
         return updateCurvesAtJoint(trunkWithMovedJoint, jointId, root, isCurveMode);
     } else if (shouldUpdateCurves && !root) {
         console.warn('[JointUtils] CurveMode active but NO ROOT provided to moveJoint');

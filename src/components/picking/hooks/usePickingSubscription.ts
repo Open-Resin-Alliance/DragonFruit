@@ -73,7 +73,7 @@ export function usePickingSubscription({
   onHoverEnd,
   onClick,
 }: UsePickingSubscriptionOptions): UsePickingSubscriptionResult {
-  const { hit, register, unregister } = usePicking();
+  const { hit, register, unregister, isDragging } = usePicking();
   
   // Ref to the Three.js object
   const pickRef = useRef<THREE.Object3D | null>(null);
@@ -130,7 +130,7 @@ export function usePickingSubscription({
   }, [enabled, category, objectId, parentId, gizmoHandle, register, unregister]);
   
   // Check if this object is currently hovered
-  const isHovered = enabled && pickIdRef.current !== null && hit.pickId === pickIdRef.current;
+  const isHovered = enabled && !isDragging && pickIdRef.current !== null && hit.pickId === pickIdRef.current;
   
   // Handle hover state changes
   useEffect(() => {

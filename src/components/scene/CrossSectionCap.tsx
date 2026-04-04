@@ -316,23 +316,11 @@ function rasterizeLoops(groups: LoopGroup[], pxMm: number, bbox: { minX: number;
   return { grid, width, height, originX, originY };
 }
 
-export function CrossSectionCap({
-  geometry,
-  sourceObject,
-  projectedModels,
-  y,
-  color = '#ffffff',
-  transformMatrix,
-  mode = 'smooth',
-  pxMm = 0.1,
-  interactive = false,
-  interactiveZStepMm = 0.2,
-  preferProjectedOnlyDuringInteractive = true,
-  visible = true
-}: {
+type CrossSectionCapProps = {
   geometry?: THREE.BufferGeometry;
   sourceObject?: THREE.Object3D | null;
   projectedModels?: LoadedModel[];
+  projectedContextVersion?: unknown;
   y: number;
   color?: string;
   transformMatrix?: THREE.Matrix4;
@@ -342,7 +330,60 @@ export function CrossSectionCap({
   interactiveZStepMm?: number;
   preferProjectedOnlyDuringInteractive?: boolean;
   visible?: boolean;
-}) {
+};
+
+function quantizeInteractiveY(y: number, interactive?: boolean, interactiveZStepMm?: number): number {
+  if (!interactive) return y;
+  const step = Math.max(0.001, interactiveZStepMm ?? 0.2);
+  return Math.round(y / step) * step;
+}
+
+function CrossSectionCapInner({
+  geometry,
+  sourceObject,
+  projectedModels,
+  projectedContextVersion,
+  y,
+  color = '#ffffff',
+  transformMatrix,
+  mode = 'smooth',
+  pxMm = 0.1,
+  interactive = false,
+  interactiveZStepMm = 0.2,
+  preferProjectedOnlyDuringInteractive = true,
+  visible = true
+}: CrossSectionCapProps) {
+  const projectedContextVersionObjectIdsRef = React.useRef<WeakMap<object, number>>(new WeakMap());
+  const projectedContextVersionCounterRef = React.useRef(1);
+
+  const projectedContextVersionKey = React.useMemo(() => {
+    if (projectedContextVersion == null) return 'ctx:none';
+
+    const valueType = typeof projectedContextVersion;
+    if (
+      valueType === 'string'
+      || valueType === 'number'
+      || valueType === 'boolean'
+      || valueType === 'bigint'
+      || valueType === 'symbol'
+    ) {
+      return `ctx:${valueType}:${String(projectedContextVersion)}`;
+    }
+
+    if (valueType === 'object' || valueType === 'function') {
+      const valueObject = projectedContextVersion as object;
+      const existingId = projectedContextVersionObjectIdsRef.current.get(valueObject);
+      if (existingId != null) return `ctx:obj:${existingId}`;
+
+      const nextId = projectedContextVersionCounterRef.current;
+      projectedContextVersionCounterRef.current += 1;
+      projectedContextVersionObjectIdsRef.current.set(valueObject, nextId);
+      return `ctx:obj:${nextId}`;
+    }
+
+    return `ctx:other:${String(projectedContextVersion)}`;
+  }, [projectedContextVersion]);
+
   const projectedModelSignature = React.useMemo(() => {
     if (!projectedModels || projectedModels.length === 0) return '';
     return projectedModels
@@ -396,8 +437,8 @@ export function CrossSectionCap({
       && !geometry,
     );
 
-    if (projectedModels) {
-      const cacheKey = `${projectedModelSignature}|${effectiveY.toFixed(3)}`;
+    if (projectedModels && projectedModels.length > 0) {
+      const cacheKey = `${projectedContextVersionKey}|${projectedModelSignature}|${effectiveY.toFixed(3)}`;
       if (canUseProjectedCaches) {
         projectedCacheKey = cacheKey;
       }
@@ -408,11 +449,12 @@ export function CrossSectionCap({
         let computed: THREE.Vector2[][] = [];
 
         if (projectedModelSignature) {
-          let context = projectedContextCacheRef.current.get(projectedModelSignature);
+          const contextCacheKey = `${projectedContextVersionKey}|${projectedModelSignature}`;
+          let context = projectedContextCacheRef.current.get(contextCacheKey);
           if (!context) {
             context = buildProjectedCrossSectionContext(projectedModels) ?? undefined;
             if (context) {
-              projectedContextCacheRef.current.set(projectedModelSignature, context);
+              projectedContextCacheRef.current.set(contextCacheKey, context);
               if (projectedContextCacheRef.current.size > CONTEXT_CACHE_LIMIT) {
                 const oldestContextKey = projectedContextCacheRef.current.keys().next().value;
                 if (oldestContextKey) projectedContextCacheRef.current.delete(oldestContextKey);
@@ -426,11 +468,12 @@ export function CrossSectionCap({
               zMm: effectiveY,
               quantizedStepMm,
             });
+          } else {
+            // Fallback only when context construction failed.
+            // If context exists and returns zero loops, that is a valid empty
+            // intersection and should not trigger a second full context build.
+            computed = buildProjectedCrossSectionLoopsAtZ({ models: projectedModels, zMm: effectiveY });
           }
-        }
-
-        if (computed.length === 0) {
-          computed = buildProjectedCrossSectionLoopsAtZ({ models: projectedModels, zMm: effectiveY });
         }
 
         loops.push(...computed);
@@ -612,7 +655,7 @@ export function CrossSectionCap({
     mode,
     preferProjectedOnlyDuringInteractive,
     projectedModelSignature,
-    projectedModels,
+    projectedContextVersionKey,
     pxMm,
     sourceObject,
     transformMatrix,
@@ -622,4 +665,35 @@ export function CrossSectionCap({
 
   if (!mesh) return null;
   return <primitive object={mesh} />;
+}
+
+const areCrossSectionCapPropsEqual = (
+  prev: Readonly<CrossSectionCapProps>,
+  next: Readonly<CrossSectionCapProps>,
+) => {
+  const prevY = quantizeInteractiveY(prev.y, prev.interactive, prev.interactiveZStepMm);
+  const nextY = quantizeInteractiveY(next.y, next.interactive, next.interactiveZStepMm);
+
+  return (
+    prev.geometry === next.geometry
+    && prev.sourceObject === next.sourceObject
+    && prev.projectedModels === next.projectedModels
+    && prev.projectedContextVersion === next.projectedContextVersion
+    && prev.color === next.color
+    && prev.transformMatrix === next.transformMatrix
+    && prev.mode === next.mode
+    && prev.pxMm === next.pxMm
+    && prev.interactive === next.interactive
+    && prev.interactiveZStepMm === next.interactiveZStepMm
+    && prev.preferProjectedOnlyDuringInteractive === next.preferProjectedOnlyDuringInteractive
+    && prev.visible === next.visible
+    && Math.abs(prevY - nextY) <= 1e-9
+  );
+};
+
+const CrossSectionCapMemo = React.memo(CrossSectionCapInner, areCrossSectionCapPropsEqual);
+CrossSectionCapMemo.displayName = 'CrossSectionCapMemo';
+
+export function CrossSectionCap(props: CrossSectionCapProps) {
+  return <CrossSectionCapMemo {...props} />;
 }

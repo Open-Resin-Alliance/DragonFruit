@@ -17,6 +17,10 @@ type CameraIntroControllerProps = {
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
+  enabled?: boolean;
+  enableRotate?: boolean;
+  enablePan?: boolean;
+  enableZoom?: boolean;
   enableDamping?: boolean;
   update: () => void;
 };
@@ -75,6 +79,7 @@ export function CameraIntroController({
     const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * aspect);
     const minFov = Math.max(0.0001, Math.min(vFov, hFov));
     const modelDistance = (radius / Math.sin(minFov * 0.5));
+    const modelDistanceByTan = radius / Math.tan(minFov * 0.5);
 
     const hasPlateDims = Number.isFinite(plateWidthMm) && Number.isFinite(plateDepthMm)
       && (plateWidthMm ?? 0) > 0
@@ -90,7 +95,9 @@ export function CameraIntroController({
     const yawRad = THREE.MathUtils.degToRad(20);
     // Adaptive support framing: smaller models get a tighter fit, larger models get more margin.
     const supportFitMargin = THREE.MathUtils.clamp(1.08 + (radius * 0.0012), 1.08, 1.26);
-    const prepareFitDistance = Math.max(modelDistance * 0.95, plateDistance * 0.9) * 0.8;
+    // Load intro should primarily fit loaded content, not the full plate.
+    // This keeps newly loaded models/scenes framed tighter in the viewport.
+    const prepareFitDistance = modelDistanceByTan * 1.05;
     const supportFitDistance = modelDistance * supportFitMargin;
     const distance = mode === 'support'
       ? supportFitDistance
@@ -107,7 +114,12 @@ export function CameraIntroController({
       viewDir.normalize();
     }
 
-    const endPos = center.clone().add(viewDir.clone().multiplyScalar(distance));
+    const prepareVerticalBias = THREE.MathUtils.clamp(radius * 0.12, 1.5, 10);
+    const endTarget = mode === 'support'
+      ? center.clone()
+      : center.clone().setZ(center.z - prepareVerticalBias);
+
+    const endPos = endTarget.clone().add(viewDir.clone().multiplyScalar(distance));
 
     if (mode === 'support') {
       const minVerticalClearance = Math.max(10, radius * 0.35);
@@ -124,8 +136,8 @@ export function CameraIntroController({
     if (isOrthographic) {
       const ortho = camera as THREE.OrthographicCamera;
       const frustumHeight = Math.max(1e-6, ortho.top - ortho.bottom);
-      const worldHeightAtDistance = Math.max(1e-6, 2 * Math.tan(vFov * 0.5) * distance);
-      endZoom = THREE.MathUtils.clamp(frustumHeight / worldHeightAtDistance, 0.0001, 200);
+      const requiredWorldHeight = (radius * 2) * (mode === 'support' ? supportFitMargin : 1.08);
+      endZoom = THREE.MathUtils.clamp(frustumHeight / Math.max(1e-6, requiredWorldHeight), 0.0001, 200);
     }
 
     if (preserveCurrentViewDirection) {
@@ -135,9 +147,27 @@ export function CameraIntroController({
 
     animatingRef.current = true;
     const prevEnableDamping = orbitControls.enableDamping;
+    const prevEnabled = orbitControls.enabled;
+    const prevEnableRotate = orbitControls.enableRotate;
+    const prevEnablePan = orbitControls.enablePan;
+    const prevEnableZoom = orbitControls.enableZoom;
+
     if (typeof prevEnableDamping === 'boolean') {
       orbitControls.enableDamping = false;
     }
+    if (typeof prevEnabled === 'boolean') {
+      orbitControls.enabled = false;
+    }
+    if (typeof prevEnableRotate === 'boolean') {
+      orbitControls.enableRotate = false;
+    }
+    if (typeof prevEnablePan === 'boolean') {
+      orbitControls.enablePan = false;
+    }
+    if (typeof prevEnableZoom === 'boolean') {
+      orbitControls.enableZoom = false;
+    }
+
     const duration = 1000;
     let startTime: number | null = null;
 
@@ -159,9 +189,9 @@ export function CameraIntroController({
       }
 
       if (preserveCurrentViewDirection) {
-        orbitControls.target.copy(center);
+        orbitControls.target.copy(endTarget);
       } else {
-        orbitControls.target.lerpVectors(startTarget, center, eased);
+        orbitControls.target.lerpVectors(startTarget, endTarget, eased);
       }
       orbitControls.update();
 
@@ -175,9 +205,21 @@ export function CameraIntroController({
         if (typeof prevEnableDamping === 'boolean') {
           orbitControls.enableDamping = prevEnableDamping;
         }
+        if (typeof prevEnabled === 'boolean') {
+          orbitControls.enabled = prevEnabled;
+        }
+        if (typeof prevEnableRotate === 'boolean') {
+          orbitControls.enableRotate = prevEnableRotate;
+        }
+        if (typeof prevEnablePan === 'boolean') {
+          orbitControls.enablePan = prevEnablePan;
+        }
+        if (typeof prevEnableZoom === 'boolean') {
+          orbitControls.enableZoom = prevEnableZoom;
+        }
 
         camera.position.copy(endPos);
-        orbitControls.target.copy(center);
+        orbitControls.target.copy(endTarget);
         orbitControls.update();
 
         onComplete?.(runId);
@@ -194,6 +236,18 @@ export function CameraIntroController({
       }
       if (typeof prevEnableDamping === 'boolean') {
         orbitControls.enableDamping = prevEnableDamping;
+      }
+      if (typeof prevEnabled === 'boolean') {
+        orbitControls.enabled = prevEnabled;
+      }
+      if (typeof prevEnableRotate === 'boolean') {
+        orbitControls.enableRotate = prevEnableRotate;
+      }
+      if (typeof prevEnablePan === 'boolean') {
+        orbitControls.enablePan = prevEnablePan;
+      }
+      if (typeof prevEnableZoom === 'boolean') {
+        orbitControls.enableZoom = prevEnableZoom;
       }
       if (activeRunIdRef.current === runId && completedRunIdRef.current !== runId) {
         activeRunIdRef.current = 0;

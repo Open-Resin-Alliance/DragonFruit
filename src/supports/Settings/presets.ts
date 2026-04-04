@@ -1,12 +1,66 @@
 /**
  * Support Presets
  * 
- * Built-in and custom preset management.
+ * Built-in presets + dynamically created custom presets.
  */
 
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
-import { getSettings, setSettings } from './state';
+import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+
+function normalizePresetSettings(
+    settings: Partial<SupportSettings> | undefined,
+    fallback: SupportSettings,
+): SupportSettings {
+    const defaults = createDefaultSettings();
+    const source = settings ?? {};
+
+    return {
+        ...defaults,
+        ...fallback,
+        ...source,
+        tip: {
+            ...defaults.tip,
+            ...fallback.tip,
+            ...(source.tip ?? {}),
+        },
+        shaft: {
+            ...defaults.shaft,
+            ...fallback.shaft,
+            ...(source.shaft ?? {}),
+        },
+        roots: {
+            ...defaults.roots,
+            ...fallback.roots,
+            ...(source.roots ?? {}),
+        },
+        baseFlare: {
+            ...defaults.baseFlare,
+            ...fallback.baseFlare,
+            ...(source.baseFlare ?? {}),
+        },
+        joint: {
+            ...defaults.joint,
+            ...fallback.joint,
+            ...(source.joint ?? {}),
+        },
+        grid: {
+            ...defaults.grid,
+            ...fallback.grid,
+            ...(source.grid ?? {}),
+        },
+        meshToMesh: {
+            ...defaults.meshToMesh,
+            ...fallback.meshToMesh,
+            ...(source.meshToMesh ?? {}),
+        },
+        autoBracing: {
+            ...defaults.autoBracing,
+            ...fallback.autoBracing,
+            ...(source.autoBracing ?? {}),
+        },
+    };
+}
 
 // --- Built-in Presets ---
 
@@ -32,6 +86,7 @@ const DETAIL_PRESET: SupportPreset = {
             diameterMm: 0.8,
             secondaryDiameterMm: 0.8,
             isStraight: true,
+            maxAngleDeg: 80,
         },
         roots: {
             shape: 'cylinder',
@@ -97,6 +152,7 @@ const ANCHOR_PRESET: SupportPreset = {
             diameterMm: 1.5,
             secondaryDiameterMm: 1.5,
             isStraight: true,
+            maxAngleDeg: 80,
         },
         roots: {
             shape: 'cylinder',
@@ -130,43 +186,14 @@ const ANCHOR_PRESET: SupportPreset = {
     },
 };
 
-// --- New Presets ---
-
-const CUSTOM_1_PRESET: SupportPreset = {
-    id: 'custom1',
-    name: 'Custom 1',
-    description: 'User custom preset',
-    hotkey: '4',
-    icon: '👤',
-    isBuiltIn: false,
-    settings: createDefaultSettings(),
-};
-
-const CUSTOM_2_PRESET: SupportPreset = {
-    id: 'custom2',
-    name: 'Custom 2',
-    description: 'User custom preset',
-    hotkey: '5',
-    icon: '👤',
-    isBuiltIn: false,
-    settings: createDefaultSettings(),
-};
-
-const CUSTOM_3_PRESET: SupportPreset = {
-    id: 'custom3',
-    name: 'Custom 3',
-    description: 'User custom preset',
-    hotkey: '6',
-    icon: '👤',
-    isBuiltIn: false,
-    settings: createDefaultSettings(),
-};
-
 // --- Store ---
 
 // --- Store ---
 
 const PRESET_STORAGE_KEY = 'support-presets-v1';
+const ACTIVE_PRESET_STORAGE_KEY = 'support-active-preset-id-v1';
+const SUPPORT_SETTINGS_STORAGE_KEY = 'support-settings';
+const LEGACY_CUSTOM_IDS = new Set(['custom1', 'custom2', 'custom3']);
 
 let presets: PresetCollection = loadPresetsFromStorage();
 
@@ -176,17 +203,15 @@ function loadPresetsFromStorage(): PresetCollection {
             detail: DETAIL_PRESET,
             structure: STRUCTURE_PRESET,
             anchor: ANCHOR_PRESET,
-            custom1: CUSTOM_1_PRESET,
-            custom2: CUSTOM_2_PRESET,
-            custom3: CUSTOM_3_PRESET,
         },
-        allIds: ['detail', 'custom1', 'structure', 'custom2', 'anchor', 'custom3'],
+        allIds: ['detail', 'structure', 'anchor'],
         activePresetId: 'structure',
     };
 
     if (typeof window === 'undefined') return defaults;
 
     try {
+        let resolvedActiveFromStorage = false;
         const stored = localStorage.getItem(PRESET_STORAGE_KEY);
         if (stored) {
             const parsed = JSON.parse(stored);
@@ -195,21 +220,74 @@ function loadPresetsFromStorage(): PresetCollection {
             // But allows stored names/settings to win.
             defaults.allIds.forEach(id => {
                 if (parsed.byId && parsed.byId[id]) {
+                    const parsedPreset = parsed.byId[id];
+                    const fallbackPreset = defaults.byId[id];
                     defaults.byId[id] = {
-                        ...defaults.byId[id],
-                        name: parsed.byId[id].name || defaults.byId[id].name,
-                        settings: {
-                            ...defaults.byId[id].settings,
-                            ...parsed.byId[id].settings,
-                        },
-                        updatedAt: parsed.byId[id].updatedAt,
+                        ...fallbackPreset,
+                        name: parsedPreset.name || fallbackPreset.name,
+                        settings: normalizePresetSettings(
+                            parsedPreset.settings,
+                            fallbackPreset.settings,
+                        ),
+                        updatedAt: parsedPreset.updatedAt,
                     };
                 }
             });
 
+            // Recover dynamically-created custom presets from storage.
+            if (parsed.byId && typeof parsed.byId === 'object') {
+                Object.entries(parsed.byId as Record<string, SupportPreset>).forEach(([id, parsedPreset]) => {
+                    if (LEGACY_CUSTOM_IDS.has(id)) return;
+                    if (!parsedPreset || defaults.byId[id] || parsedPreset.isBuiltIn) return;
+
+                    defaults.byId[id] = {
+                        ...parsedPreset,
+                        id,
+                        name: parsedPreset.name || 'Custom Preset',
+                        description: parsedPreset.description || 'User custom preset',
+                        icon: parsedPreset.icon || '👤',
+                        isBuiltIn: false,
+                        settings: normalizePresetSettings(
+                            parsedPreset.settings,
+                            createDefaultSettings(),
+                        ),
+                        updatedAt: parsedPreset.updatedAt,
+                    };
+
+                    if (!defaults.allIds.includes(id)) {
+                        defaults.allIds.push(id);
+                    }
+                });
+            }
+
             // Restore active ID if valid
             if (parsed.activePresetId && defaults.byId[parsed.activePresetId]) {
                 defaults.activePresetId = parsed.activePresetId;
+                resolvedActiveFromStorage = true;
+            } else {
+                const storedActivePresetId = localStorage.getItem(ACTIVE_PRESET_STORAGE_KEY);
+                if (storedActivePresetId && defaults.byId[storedActivePresetId]) {
+                    defaults.activePresetId = storedActivePresetId;
+                    resolvedActiveFromStorage = true;
+                }
+            }
+        }
+
+        // Fallback: infer active preset from persisted settings when explicit active id
+        // is missing/invalid (older or stale localStorage cases).
+        if (!resolvedActiveFromStorage) {
+            const storedSettingsRaw = localStorage.getItem(SUPPORT_SETTINGS_STORAGE_KEY);
+            if (storedSettingsRaw) {
+                const parsedSettings = JSON.parse(storedSettingsRaw) as Partial<SupportSettings>;
+                const normalizedCurrent = normalizePresetSettings(parsedSettings, createDefaultSettings());
+                for (const id of defaults.allIds) {
+                    const preset = defaults.byId[id];
+                    if (!preset) continue;
+                    if (doesPresetMatchSettings(preset.settings, normalizedCurrent)) {
+                        defaults.activePresetId = id;
+                        break;
+                    }
+                }
             }
         }
     } catch (err) {
@@ -223,6 +301,11 @@ function savePresetsToStorage() {
     if (typeof window === 'undefined') return;
     try {
         localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+        if (presets.activePresetId) {
+            localStorage.setItem(ACTIVE_PRESET_STORAGE_KEY, presets.activePresetId);
+        } else {
+            localStorage.removeItem(ACTIVE_PRESET_STORAGE_KEY);
+        }
     } catch (err) {
         console.error('[PresetStore] Failed to save presets:', err);
     }
@@ -254,6 +337,38 @@ export function getPresetList(): SupportPreset[] {
 
 export function getPresetById(id: string): SupportPreset | undefined {
     return presets.byId[id];
+}
+
+function doesPresetMatchSettings(presetSettings: SupportSettings, current: SupportSettings): boolean {
+    return (
+        current.tip.shape === presetSettings.tip.shape
+        && current.tip.contactDiameterMm === presetSettings.tip.contactDiameterMm
+        && current.tip.bodyDiameterMm === presetSettings.tip.bodyDiameterMm
+        && current.tip.lengthMm === presetSettings.tip.lengthMm
+        && current.tip.penetrationMm === presetSettings.tip.penetrationMm
+        && (current.tip.breakpointMm ?? 0) === (presetSettings.tip.breakpointMm ?? 0)
+        && JSON.stringify(current.shaft) === JSON.stringify(presetSettings.shaft)
+        && JSON.stringify(current.roots) === JSON.stringify(presetSettings.roots)
+        && JSON.stringify(current.baseFlare) === JSON.stringify(presetSettings.baseFlare)
+    );
+}
+
+export function isPresetDirtyForSettings(presetId: string | null | undefined, current: SupportSettings): boolean {
+    if (!presetId) return false;
+    const preset = presets.byId[presetId];
+    if (!preset) return false;
+    return !doesPresetMatchSettings(preset.settings, current);
+}
+
+export function findMatchingPresetIdForSettings(current: SupportSettings): string | null {
+    for (const id of presets.allIds) {
+        const preset = presets.byId[id];
+        if (!preset) continue;
+        if (doesPresetMatchSettings(preset.settings, current)) {
+            return id;
+        }
+    }
+    return null;
 }
 
 // --- Setters ---
@@ -294,16 +409,15 @@ export function checkPresetDrift(current: SupportSettings): void {
         JSON.stringify(current.meshToMesh) !== JSON.stringify(presetSettings.meshToMesh);
 
     if (isDifferent) {
-        console.log('[PresetStore] Drift detected, deselecting preset.');
-        presets.activePresetId = null;
-        savePresetsToStorage(); // Persist the "no selection" state
-        notify();
+        // Keep the current preset selected even when values drift.
+        // UX requirement: no "unselected" preset state in the trunk preset dropdown.
+        return;
     }
 }
 
 export function setActivePreset(id: string | null): void {
     if (id === null) {
-        presets.activePresetId = null;
+        presets.activePresetId = 'structure';
         savePresetsToStorage();
         notify();
         return;
@@ -338,6 +452,11 @@ export function setActivePreset(id: string | null): void {
             ...current.autoBracing,
         },
     });
+
+    // Keep selected preset + persisted settings in sync across app restarts.
+    // Without this, active preset can persist while support-settings storage
+    // still holds older values, which produces a false "dirty" state on load.
+    saveSettingsToLocalStorage();
 
     savePresetsToStorage();
     notify();
@@ -390,13 +509,123 @@ export function renamePreset(id: string, newName: string): void {
         return;
     }
 
+    const uniqueName = ensureUniqueName(newName, id);
+
     presets.byId[id] = {
         ...presets.byId[id],
-        name: newName,
+        name: uniqueName,
     };
 
     savePresetsToStorage();
     notify();
+}
+
+export function updateCustomPresetMetadata(id: string, name: string, description: string): void {
+    if (!presets.byId[id]) {
+        console.warn('[PresetStore] Cannot update preset metadata, preset not found:', id);
+        return;
+    }
+
+    if (presets.byId[id].isBuiltIn) {
+        console.warn('[PresetStore] Cannot update built-in preset metadata:', id);
+        return;
+    }
+
+    const uniqueName = ensureUniqueName(name, id);
+    const sanitizedDescription = sanitizePresetDescription(description);
+
+    presets.byId[id] = {
+        ...presets.byId[id],
+        name: uniqueName,
+        description: sanitizedDescription,
+    };
+
+    savePresetsToStorage();
+    notify();
+}
+
+function sanitizePresetName(name: string): string {
+    const trimmed = name.trim();
+    return trimmed.length > 0 ? trimmed : 'Custom Preset';
+}
+
+function sanitizePresetDescription(description: string): string {
+    const trimmed = description.trim();
+    return trimmed.length > 0 ? trimmed : 'User custom preset';
+}
+
+function ensureUniqueName(desiredName: string, excludeId?: string): string {
+    const base = desiredName.trim().length > 0 ? desiredName.trim() : 'Custom Preset';
+    let name = base;
+    let counter = 1;
+
+    const exists = (candidate: string) => {
+        const lower = candidate.toLowerCase();
+        return Object.values(presets.byId).some((p) => p.id !== excludeId && p.name.toLowerCase() === lower);
+    };
+
+    while (exists(name)) {
+        counter += 1;
+        name = `${base} (${counter})`;
+    }
+
+    return name;
+}
+
+function makeCustomPresetId(): string {
+    return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function createPreset(name: string): SupportPreset {
+    const id = makeCustomPresetId();
+    const current = getSettings();
+
+    const sanitized = sanitizePresetName(name);
+    const uniqueName = ensureUniqueName(sanitized);
+
+    const preset: SupportPreset = {
+        id,
+        name: uniqueName,
+        description: 'User custom preset',
+        icon: '👤',
+        isBuiltIn: false,
+        settings: normalizePresetSettings(current, createDefaultSettings()),
+        updatedAt: Date.now(),
+    };
+
+    presets.byId[id] = preset;
+    presets.allIds = [...presets.allIds, id];
+    presets.activePresetId = id;
+
+    savePresetsToStorage();
+    notify();
+    return preset;
+}
+
+export function deletePreset(id: string): void {
+    if (!presets.byId[id]) {
+        console.warn('[PresetStore] Cannot delete, preset not found:', id);
+        return;
+    }
+
+    // Prevent deleting built-in presets
+    if (presets.byId[id].isBuiltIn) {
+        console.warn('[PresetStore] Cannot delete built-in preset:', id);
+        return;
+    }
+
+    // Remove from byId and allIds
+    delete presets.byId[id];
+    presets.allIds = presets.allIds.filter((pid) => pid !== id);
+
+    // If deleted preset was active, fall back to 'structure' if available
+    if (presets.activePresetId === id) {
+        presets.activePresetId = presets.byId['structure'] ? 'structure' : (presets.allIds[0] ?? null);
+    }
+
+    savePresetsToStorage();
+    notify();
+    console.log('[PresetStore] Deleted preset:', id);
 }
 
 // --- Subscription ---

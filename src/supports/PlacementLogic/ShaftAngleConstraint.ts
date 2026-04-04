@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { Vec3 } from '../types';
 
 // Angle limit from vertical (0 degrees = vertical, 90 degrees = horizontal).
@@ -27,45 +26,79 @@ export function clampShaftAngle(
     maxAngleDeg: number = 80,
     referenceAxis: Vec3 = { x: 0, y: 0, z: 1 }
 ): ShaftClampResult {
-    const s = new THREE.Vector3(start.x, start.y, start.z);
-    const e = new THREE.Vector3(desiredEnd.x, desiredEnd.y, desiredEnd.z);
-
-    const v = new THREE.Vector3().subVectors(e, s);
-    const len = v.length();
+    const vx = desiredEnd.x - start.x;
+    const vy = desiredEnd.y - start.y;
+    const vz = desiredEnd.z - start.z;
+    const lenSq = (vx * vx) + (vy * vy) + (vz * vz);
+    const len = Math.sqrt(lenSq);
 
     if (len < 0.001) {
         return { clampedPos: desiredEnd, isClamped: false, angleDeg: 0 };
     }
 
-    const axis = new THREE.Vector3(referenceAxis.x, referenceAxis.y, referenceAxis.z).normalize();
-    const angleRad = v.angleTo(axis);
-    const angleDeg = THREE.MathUtils.radToDeg(angleRad);
+    const axRaw = referenceAxis.x;
+    const ayRaw = referenceAxis.y;
+    const azRaw = referenceAxis.z;
+    const axisLen = Math.sqrt((axRaw * axRaw) + (ayRaw * ayRaw) + (azRaw * azRaw));
+
+    if (axisLen < 1e-8) {
+        return { clampedPos: desiredEnd, isClamped: false, angleDeg: 0 };
+    }
+
+    const ax = axRaw / axisLen;
+    const ay = ayRaw / axisLen;
+    const az = azRaw / axisLen;
+
+    const dot = (vx * ax) + (vy * ay) + (vz * az);
+    const cosTheta = Math.max(-1, Math.min(1, dot / len));
+    const angleRad = Math.acos(cosTheta);
+    const angleDeg = angleRad * (180 / Math.PI);
 
     if (angleDeg <= maxAngleDeg) {
         return { clampedPos: desiredEnd, isClamped: false, angleDeg };
     }
 
-    // Clamp required
-    const dot = v.dot(axis);
-    const vParallel = axis.clone().multiplyScalar(dot);
-    const vPerp = new THREE.Vector3().subVectors(v, vParallel);
+    // Clamp required: preserve vector length and azimuth around the axis.
+    let perpX = vx - (ax * dot);
+    let perpY = vy - (ay * dot);
+    let perpZ = vz - (az * dot);
+    let perpLen = Math.sqrt((perpX * perpX) + (perpY * perpY) + (perpZ * perpZ));
 
-    if (vPerp.lengthSq() < 0.0001) {
-        if (Math.abs(axis.z) > 0.9) vPerp.set(1, 0, 0);
-        else vPerp.set(0, 0, 1);
-        const tempDot = vPerp.dot(axis);
-        vPerp.sub(axis.clone().multiplyScalar(tempDot));
+    // Degenerate case: choose a stable arbitrary axis-perpendicular direction.
+    if (perpLen < 1e-8) {
+        if (Math.abs(az) < 0.9) {
+            // cross(axis, z-up)
+            perpX = ay;
+            perpY = -ax;
+            perpZ = 0;
+        } else {
+            // cross(axis, x-right)
+            perpX = 0;
+            perpY = az;
+            perpZ = -ay;
+        }
+
+        perpLen = Math.sqrt((perpX * perpX) + (perpY * perpY) + (perpZ * perpZ));
+        if (perpLen < 1e-8) {
+            return { clampedPos: desiredEnd, isClamped: false, angleDeg };
+        }
     }
 
-    vPerp.normalize();
+    const invPerpLen = 1 / perpLen;
+    const perpDirX = perpX * invPerpLen;
+    const perpDirY = perpY * invPerpLen;
+    const perpDirZ = perpZ * invPerpLen;
 
-    const limitRad = THREE.MathUtils.degToRad(maxAngleDeg);
-    const vNew = axis.clone().multiplyScalar(Math.cos(limitRad))
-        .add(vPerp.multiplyScalar(Math.sin(limitRad)))
-        .multiplyScalar(len);
+    const limitRad = (maxAngleDeg * Math.PI) / 180;
+    const newParallelLen = Math.cos(limitRad) * len;
+    const newPerpLen = Math.sin(limitRad) * len;
+
+    const vNewX = (ax * newParallelLen) + (perpDirX * newPerpLen);
+    const vNewY = (ay * newParallelLen) + (perpDirY * newPerpLen);
+    const vNewZ = (az * newParallelLen) + (perpDirZ * newPerpLen);
 
     return {
-        clampedPos: { x: s.x + vNew.x, y: s.y + vNew.y, z: s.z + vNew.z },
+        clampedPos: { x: start.x + vNewX, y: start.y + vNewY, z: start.z + vNewZ },
         isClamped: true,
         angleDeg: maxAngleDeg
     };

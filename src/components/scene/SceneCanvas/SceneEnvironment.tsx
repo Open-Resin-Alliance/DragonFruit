@@ -300,7 +300,6 @@ export function Helpers({
     texture.magFilter = THREE.LinearFilter;
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.needsUpdate = true;
     return texture;
   }, []);
 
@@ -379,13 +378,14 @@ export function Helpers({
       {/* Primitive mock build plate under grid */}
       <mesh
         position={[buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ]}
+        renderOrder={-10}
         raycast={nullRaycast}
         visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
         userData={{ thumbnailHelperType: 'buildPlate' }}
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
         <meshStandardMaterial
-          color="#3a4048"
+          color="#323841"
           transparent
           opacity={0.94 * clampedBuildPlateOpacity}
           side={THREE.FrontSide}
@@ -410,7 +410,7 @@ export function Helpers({
           position={[0, 0, plateLogoZ]}
           userData={{ thumbnailHelperType: 'grid' }}
         >
-          <mesh position={[plateLogoX, plateLogoY, 0]} raycast={nullRaycast}>
+          <mesh position={[plateLogoX, plateLogoY, 0]} renderOrder={20} raycast={nullRaycast}>
             <planeGeometry args={[plateLogoWidth, plateLogoHeight]} />
             <meshBasicMaterial
               map={plateLogoTexture}
@@ -470,7 +470,7 @@ export function Helpers({
       {shouldShowBuildPlate && (
       <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]} userData={{ thumbnailHelperType: 'buildPlate' }}>
         {frontTexture && (
-          <mesh raycast={nullRaycast}>
+          <mesh renderOrder={21} raycast={nullRaycast}>
             <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
             <meshBasicMaterial
               map={frontTexture}

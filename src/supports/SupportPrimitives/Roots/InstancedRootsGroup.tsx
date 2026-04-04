@@ -21,6 +21,7 @@ interface InstancedRootsGroupProps {
     emissiveIntensity?: number;
     transparent?: boolean;
     opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
     onRootClick?: (root: InstancedRoot, event: ThreeEvent<MouseEvent>) => void;
     onRootPointerMove?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerOut?: (root: InstancedRoot | null, event: ThreeEvent<PointerEvent>) => void;
@@ -57,6 +58,7 @@ function RootBucketMesh({
     emissiveIntensity,
     transparent,
     opacity,
+    clippingPlanes,
     onRootClick,
     onRootPointerMove,
     onRootPointerOut,
@@ -67,6 +69,7 @@ function RootBucketMesh({
     emissiveIntensity: number;
     transparent: boolean;
     opacity: number;
+    clippingPlanes: THREE.Plane[] | null;
     onRootClick?: (root: InstancedRoot, event: ThreeEvent<MouseEvent>) => void;
     onRootPointerMove?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerOut?: (root: InstancedRoot | null, event: ThreeEvent<PointerEvent>) => void;
@@ -176,6 +179,7 @@ function RootBucketMesh({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    clippingPlanes={clippingPlanes ?? undefined}
                 />
             </instancedMesh>
 
@@ -196,6 +200,7 @@ function RootBucketMesh({
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}
+                        clippingPlanes={clippingPlanes ?? undefined}
                     />
                 </instancedMesh>
             )}
@@ -217,6 +222,7 @@ function RootBucketMesh({
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}
+                        clippingPlanes={clippingPlanes ?? undefined}
                     />
                 </instancedMesh>
             )}
@@ -231,6 +237,7 @@ export function InstancedRootsGroup({
     emissiveIntensity = 0,
     transparent = false,
     opacity = 1,
+    clippingPlanes = null,
     onRootClick,
     onRootPointerMove,
     onRootPointerOut,
@@ -278,6 +285,7 @@ export function InstancedRootsGroup({
                     emissiveIntensity={emissiveIntensity}
                     transparent={transparent}
                     opacity={opacity}
+                    clippingPlanes={clippingPlanes}
                     onRootClick={onRootClick}
                     onRootPointerMove={onRootPointerMove}
                     onRootPointerOut={onRootPointerOut}

@@ -2,6 +2,17 @@ import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { ContactDiskProfile } from '../ContactCone/types';
 
+const DEFAULT_MIN_DISK_THICKNESS_MM = 0.1;
+const DEFAULT_STANDOFF_ANGLE_THRESHOLD_RAD = Math.PI / 4;
+const DEFAULT_LEGACY_MAX_STANDOFF_MM = 1.5;
+const DEFAULT_LEGACY_CLAMPED_MAX_STANDOFF_MM = 0.35;
+const MAX_STANDOFF_ANGLE_RAD = Math.PI * 0.5 * 0.9; // ~81°
+const EPS = 1e-8;
+
+function clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
+}
+
 /**
  * Calculates the thickness of the contact disk ("nib") based on cone angle relative to surface.
  * 
@@ -14,31 +25,44 @@ export function calculateDiskThickness(
     coneAxis: Vec3, // The direction the cone is pointing (usually towards the socket)
     profile: ContactDiskProfile
 ): number {
-    const n = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z).normalize();
-    const axis = new THREE.Vector3(coneAxis.x, coneAxis.y, coneAxis.z).normalize();
-    
-    // Angle between Surface Normal and Cone Axis
-    // 0 = Perfectly Perpendicular (Cone pointing straight out)
-    // 90 = Parallel to surface (Bad)
-    const angle = n.angleTo(axis);
-    
-    // Threshold: When do we start extending?
-    // profile.standoffAngleThreshold is likely in radians.
-    // e.g. 45 degrees.
-    
     // SAFETY CHECK: Fallback for legacy profiles or missing props
     if (!profile) {
-        return 0.1; // Default min thickness
+        return DEFAULT_MIN_DISK_THICKNESS_MM;
     }
 
-    const threshold = profile.standoffAngleThreshold ?? (Math.PI / 4);
-    const minThickness = profile.diskThicknessMm ?? 0.1;
+    const threshold = profile.standoffAngleThreshold ?? DEFAULT_STANDOFF_ANGLE_THRESHOLD_RAD;
+    const minThickness = profile.diskThicknessMm ?? DEFAULT_MIN_DISK_THICKNESS_MM;
     
     // SMART LEGACY FIX: 
     // If maxStandoff is exactly 1.5 (old default), clamp it to 0.35.
     // If it's anything else (user customized), use it directly.
-    const rawMax = profile.maxStandoffMm ?? 1.5;
-    const maxStandoff = (rawMax === 1.5) ? 0.35 : rawMax;
+    const rawMax = profile.maxStandoffMm ?? DEFAULT_LEGACY_MAX_STANDOFF_MM;
+    const maxStandoff = (rawMax === DEFAULT_LEGACY_MAX_STANDOFF_MM)
+        ? DEFAULT_LEGACY_CLAMPED_MAX_STANDOFF_MM
+        : rawMax;
+    const maxThickness = Math.max(minThickness, maxStandoff);
+
+    const nx = surfaceNormal.x;
+    const ny = surfaceNormal.y;
+    const nz = surfaceNormal.z;
+    const ax = coneAxis.x;
+    const ay = coneAxis.y;
+    const az = coneAxis.z;
+
+    const nLenSq = nx * nx + ny * ny + nz * nz;
+    const aLenSq = ax * ax + ay * ay + az * az;
+
+    if (nLenSq < EPS || aLenSq < EPS) {
+        return minThickness;
+    }
+
+    // Angle between Surface Normal and Cone Axis
+    // 0 = Perfectly Perpendicular (Cone pointing straight out)
+    // 90 = Parallel to surface (Bad)
+    const invMag = 1 / Math.sqrt(nLenSq * aLenSq);
+    const dot = (nx * ax + ny * ay + nz * az) * invMag;
+    const clampedDot = Math.max(-1, Math.min(1, dot));
+    const angle = Math.acos(clampedDot);
 
     if (angle <= threshold) {
         return minThickness;
@@ -49,16 +73,17 @@ export function calculateDiskThickness(
     // Let's assume max extension is reached at 70 degrees or so?
     // Or just linear map from Threshold to 90deg?
     
-    const maxAngle = Math.PI / 2 * 0.9; // ~81 deg
+    const maxAngle = MAX_STANDOFF_ANGLE_RAD;
     
     // Clamp angle
     const effectiveAngle = Math.min(angle, maxAngle);
     
-    const t = (effectiveAngle - threshold) / (maxAngle - threshold);
-    const factor = Math.max(0, Math.min(1, t));
+    const denom = Math.max(EPS, maxAngle - threshold);
+    const t = (effectiveAngle - threshold) / denom;
+    const factor = clamp01(t);
     
     // Lerp
-    return minThickness + factor * (maxStandoff - minThickness);
+    return minThickness + factor * (maxThickness - minThickness);
 }
 
 /**

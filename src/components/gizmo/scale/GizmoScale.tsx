@@ -14,6 +14,8 @@ interface GizmoScaleProps {
   isActive?: boolean;
   isDimmed?: boolean;
   isHidden?: boolean;
+  suppressHover?: boolean;
+  opacityScale?: number;
   gizmoPosition: THREE.Vector3;
   onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
@@ -62,6 +64,8 @@ export function GizmoScale({
   isActive,
   isDimmed,
   isHidden,
+  suppressHover = false,
+  opacityScale = 1,
   gizmoPosition,
   onDragStart,
   onDrag,
@@ -72,7 +76,6 @@ export function GizmoScale({
   const [isDragging, setIsDragging] = useState(false);
   const [isUniformScale, setIsUniformScale] = useState(false);
   const startDistance = useRef<number>(0);
-  const rafId = useRef<number | null>(null);
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -103,7 +106,7 @@ export function GizmoScale({
   }, [register, unregister, handleType]);
   
   // Check if this handle is hovered via GPU picking
-  const isPickingHovered = hit.category === 'gizmo' && 
+  const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 
     'gizmoHandle' in hit && 
     hit.gizmoHandle === handleType;
 
@@ -223,24 +226,15 @@ export function GizmoScale({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      // Cancel any pending animation frame
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
-      
-      // Schedule update on next frame
-      rafId.current = requestAnimationFrame(() => {
-        // Convert gizmo 3D position to screen space
-        const gizmoScreenPos = gizmoPosition.clone().project(camera);
-        const canvas = gl.domElement;
-        const rect = canvas.getBoundingClientRect();
-        const gizmoCenterX = ((gizmoScreenPos.x + 1) / 2) * rect.width + rect.left;
-        const gizmoCenterY = ((-gizmoScreenPos.y + 1) / 2) * rect.height + rect.top;
-        
-        const factor = getScaleFactor(e.clientX, e.clientY, gizmoCenterX, gizmoCenterY);
-        onDrag(factor, isUniformScale);
-        rafId.current = null;
-      });
+      // Convert gizmo 3D position to screen space
+      const gizmoScreenPos = gizmoPosition.clone().project(camera);
+      const canvas = gl.domElement;
+      const rect = canvas.getBoundingClientRect();
+      const gizmoCenterX = ((gizmoScreenPos.x + 1) / 2) * rect.width + rect.left;
+      const gizmoCenterY = ((-gizmoScreenPos.y + 1) / 2) * rect.height + rect.top;
+
+      const factor = getScaleFactor(e.clientX, e.clientY, gizmoCenterX, gizmoCenterY);
+      onDrag(factor, isUniformScale);
     };
 
     const handleGlobalPointerUp = () => {
@@ -254,17 +248,15 @@ export function GizmoScale({
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
     };
   }, [isDragging, isUniformScale, onDrag, onDragEnd, getScaleFactor, gizmoPosition, camera, gl]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
-  const effectiveHovered = isPickingHovered || isHovered;
+  const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
   const isHighlighted = !!(effectiveHovered || isActive);
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const opacity = baseOpacity * opacityScale;
   const highlightScale = isActive ? 1.14 : effectiveHovered ? 1.08 : 1.0;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
   const handleColor = isDimmed
@@ -307,9 +299,9 @@ export function GizmoScale({
         onContextMenu={handleContextMenu}
       >
         <boxGeometry args={[
-          GIZMO_SIZES.scaleHexagonRadius * 1.8,
-          GIZMO_SIZES.scaleHexagonRadius * 1.8,
-          GIZMO_SIZES.scaleHexagonRadius * 1.8
+          GIZMO_SIZES.scaleHexagonRadius * 2.3,
+          GIZMO_SIZES.scaleHexagonRadius * 2.3,
+          GIZMO_SIZES.scaleHexagonRadius * 2.3
         ]} />
         <meshBasicMaterial visible={false} depthTest={false} />
       </mesh>

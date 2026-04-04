@@ -6,6 +6,7 @@ import {
   setKickstandSnapshot,
 } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand, KickstandState } from '@/supports/SupportTypes/Kickstand/types';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
@@ -614,8 +615,14 @@ export function pasteModelSupportsFromClipboard(
   targetModelId: string,
   sourceTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
   targetTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+  options?: {
+    recordHistory?: boolean;
+    historyDescription?: string;
+  },
 ): number {
   if (!payload || !targetModelId) return 0;
+
+  const before = captureSupportEditSnapshot();
 
   const hasSupports = payload.roots.length
     + payload.trunks.length
@@ -633,6 +640,11 @@ export function pasteModelSupportsFromClipboard(
   setKickstandSnapshot(mergedKickstandState);
 
   transformSupportsForModel(targetModelId, sourceTransform, targetTransform);
+
+  const shouldRecordHistory = options?.recordHistory ?? true;
+  if (shouldRecordHistory) {
+    pushSupportEditHistory(options?.historyDescription ?? 'Paste supports', before, captureSupportEditSnapshot());
+  }
   return hasSupports;
 }
 

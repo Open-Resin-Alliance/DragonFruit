@@ -1,17 +1,24 @@
+type DragonfruitJsmpegPlayerOptions = {
+  canvas?: HTMLCanvasElement;
+  onVideoDecode?: () => void;
+  onSourceEstablished?: () => void;
+  [key: string]: unknown;
+};
+
+type DragonfruitJsmpegPlayerInstance = {
+  destroy?: () => void;
+};
+
+type DragonfruitJsmpegNamespace = {
+  Player: new (
+    url: string,
+    options?: DragonfruitJsmpegPlayerOptions,
+  ) => DragonfruitJsmpegPlayerInstance;
+};
+
 declare global {
   interface Window {
-    JSMpeg?: {
-      Player: new (
-        url: string,
-        options: {
-          canvas: HTMLCanvasElement;
-          onVideoDecode?: () => void;
-          onSourceEstablished?: () => void;
-        },
-      ) => {
-        destroy?: () => void;
-      };
-    };
+    JSMpeg?: DragonfruitJsmpegNamespace;
   }
 }
 

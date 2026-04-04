@@ -14,6 +14,10 @@ const dstPlugins = path.resolve(frontendDistRoot, 'plugins');
 const nextDev = path.resolve(nextRoot, 'dev');
 const nextCache = path.resolve(nextRoot, 'cache');
 
+function skipNodeModules(sourcePath) {
+      return path.basename(sourcePath) !== 'node_modules';
+}
+
 async function ensureFileExists(filePath) {
       try {
             await access(filePath);
@@ -39,16 +43,16 @@ async function main() {
       }
 
       await mkdir(path.dirname(dstNextStatic), { recursive: true });
-      await cp(srcNextStatic, dstNextStatic, { recursive: true, force: true });
+      await cp(srcNextStatic, dstNextStatic, { recursive: true, force: true, filter: skipNodeModules });
 
       const hasPublic = await ensureFileExists(srcPublic);
       if (hasPublic) {
-            await cp(srcPublic, frontendDistRoot, { recursive: true, force: true });
+            await cp(srcPublic, frontendDistRoot, { recursive: true, force: true, filter: skipNodeModules });
       }
 
       const hasPlugins = await ensureFileExists(srcPlugins);
       if (hasPlugins) {
-            await cp(srcPlugins, dstPlugins, { recursive: true, force: true });
+            await cp(srcPlugins, dstPlugins, { recursive: true, force: true, filter: skipNodeModules });
       }
 
       // Tauri embeds everything under frontendDist. Next dev/cache artifacts can include
@@ -64,7 +68,7 @@ async function main() {
       if (hasPlugins) {
             console.log(`[prepare-tauri-frontend] Copied plugin assets from ${path.relative(projectRoot, srcPlugins)} to ${path.relative(projectRoot, dstPlugins)}`);
       }
-      console.log(`[prepare-tauri-frontend] Removed transient build caches from ${path.relative(projectRoot, nextRoot)}`);
+      console.log(`[prepare-tauri-frontend] Removed transient build caches from ${path.relative(projectRoot, nextRoot)} and prepared ${path.relative(projectRoot, frontendDistRoot)}`);
 }
 
 main().catch((err) => {

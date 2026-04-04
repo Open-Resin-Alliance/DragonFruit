@@ -46,7 +46,11 @@
     },
     {
       "id": "prepare-smoothing",
-      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-smoothing-settings"],
+      "matchPanelIds": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "prepare-smoothing-settings"
+      ],
       "order": [
         "prepare-models",
         "prepare-debug-primitives",
@@ -90,11 +94,7 @@
     {
       "id": "prepare-arrange",
       "matchPanelIds": ["prepare-models", "prepare-arrange-panel"],
-      "order": [
-        "prepare-models",
-        "visual-settings",
-        "prepare-arrange-panel"
-      ],
+      "order": ["prepare-models", "visual-settings", "prepare-arrange-panel"],
       "anchors": {
         "visual-settings": {
           "to": "prepare-models",
@@ -108,7 +108,11 @@
     },
     {
       "id": "prepare-arrange-debug",
-      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-arrange-panel"],
+      "matchPanelIds": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "prepare-arrange-panel"
+      ],
       "order": [
         "prepare-models",
         "prepare-debug-primitives",
@@ -132,7 +136,11 @@
     },
     {
       "id": "prepare-arrange-duplicate",
-      "matchPanelIds": ["prepare-models", "prepare-arrange-panel", "prepare-duplicate-panel"],
+      "matchPanelIds": [
+        "prepare-models",
+        "prepare-arrange-panel",
+        "prepare-duplicate-panel"
+      ],
       "order": [
         "prepare-models",
         "visual-settings",
@@ -156,7 +164,12 @@
     },
     {
       "id": "prepare-arrange-duplicate-debug",
-      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-arrange-panel", "prepare-duplicate-panel"],
+      "matchPanelIds": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "prepare-arrange-panel",
+        "prepare-duplicate-panel"
+      ],
       "order": [
         "prepare-models",
         "prepare-debug-primitives",
@@ -186,11 +199,7 @@
     {
       "id": "prepare-duplicate",
       "matchPanelIds": ["prepare-models", "prepare-duplicate-panel"],
-      "order": [
-        "prepare-models",
-        "visual-settings",
-        "prepare-duplicate-panel"
-      ],
+      "order": ["prepare-models", "visual-settings", "prepare-duplicate-panel"],
       "anchors": {
         "visual-settings": {
           "to": "prepare-models",
@@ -204,7 +213,11 @@
     },
     {
       "id": "prepare-duplicate-debug",
-      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-duplicate-panel"],
+      "matchPanelIds": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "prepare-duplicate-panel"
+      ],
       "order": [
         "prepare-models",
         "prepare-debug-primitives",
@@ -272,11 +285,11 @@
     },
     {
       "id": "support",
-      "matchPanelIds": ["curve-settings", "support-settings"],
-      "order": ["curve-settings", "visual-settings", "support-settings"],
+      "matchPanelIds": ["support-settings"],
+      "order": ["visual-settings", "support-settings"],
       "anchors": {
         "visual-settings": {
-          "to": "curve-settings",
+          "to": "support-settings",
           "side": "right-edge"
         },
         "support-settings": {

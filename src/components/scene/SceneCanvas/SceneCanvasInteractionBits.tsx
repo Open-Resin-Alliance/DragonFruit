@@ -2,13 +2,18 @@ import React from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
+import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
 export function SceneRenderBindings({
   rendererRef,
   sceneRef,
+  onWebGlContextLost,
+  onWebGlContextRestored,
 }: {
   rendererRef: React.MutableRefObject<THREE.WebGLRenderer | null>;
   sceneRef: React.MutableRefObject<THREE.Scene | null>;
+  onWebGlContextLost?: (event: WebGLContextEvent) => void;
+  onWebGlContextRestored?: (event: Event) => void;
 }) {
   const { gl, scene } = useThree();
 
@@ -16,7 +21,25 @@ export function SceneRenderBindings({
     rendererRef.current = gl;
     sceneRef.current = scene;
 
+    const canvas = gl.domElement;
+    const handleContextLost = (event: Event) => {
+      const webGlEvent = event as WebGLContextEvent;
+      // Required to allow the browser to attempt context restoration.
+      webGlEvent.preventDefault();
+      onWebGlContextLost?.(webGlEvent);
+    };
+
+    const handleContextRestored = (event: Event) => {
+      onWebGlContextRestored?.(event);
+    };
+
+    canvas.addEventListener('webglcontextlost', handleContextLost as EventListener, false);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored as EventListener, false);
+
     return () => {
+      canvas.removeEventListener('webglcontextlost', handleContextLost as EventListener, false);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored as EventListener, false);
+
       if (rendererRef.current === gl) {
         rendererRef.current = null;
       }
@@ -24,7 +47,7 @@ export function SceneRenderBindings({
         sceneRef.current = null;
       }
     };
-  }, [gl, scene, rendererRef, sceneRef]);
+  }, [gl, onWebGlContextLost, onWebGlContextRestored, scene, rendererRef, sceneRef]);
 
   return null;
 }
@@ -62,17 +85,13 @@ export function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }
         hoverClearTimeoutRef.current = null;
         if (lastModelHoverIdRef.current === null) return;
         lastModelHoverIdRef.current = null;
-        window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-          detail: { modelId: null },
-        }));
+        emitImmediateModelHover(null);
       }, 72);
     }
 
     if (lastModelHoverIdRef.current !== hoveredModelIdFromPicking) {
       lastModelHoverIdRef.current = hoveredModelIdFromPicking;
-      window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-        detail: { modelId: hoveredModelIdFromPicking },
-      }));
+      emitImmediateModelHover(hoveredModelIdFromPicking);
     }
 
     const isEmpty = hit.category === 'none';
@@ -84,9 +103,7 @@ export function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }
     if (wasEmptyRef.current) return;
     wasEmptyRef.current = true;
 
-    window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-      detail: { modelId: null },
-    }));
+    emitImmediateModelHover(null);
     window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
       detail: { modelId: null, category: 'support' },
     }));

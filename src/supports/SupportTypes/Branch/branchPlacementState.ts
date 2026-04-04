@@ -107,7 +107,6 @@ export const branchPlacementStore = {
         // If just finalized, ignore any attempts to set preview data
         // This prevents the useFrame loop from re-setting the preview
         if (state.justFinalized && previewData !== null) {
-            console.log('[BranchPlacement] Ignoring setPreviewData - justFinalized is true');
             return;
         }
 
@@ -140,10 +139,9 @@ export const branchPlacementStore = {
     /** Call this when a branch is successfully created to prevent ghost preview */
     finalize() {
         state = {
-            ...state,
-            previewData: null,
-            snapTarget: null,
-            justFinalized: true
+            ...initialState,
+            altActive: state.altActive,
+            justFinalized: true,
         };
         notify();
     },

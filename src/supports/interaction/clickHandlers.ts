@@ -63,6 +63,9 @@ export function emitSupportModelPointerHover(modelId: string | null) {
 
     initializeHoverGuards();
 
+    const w = window as any;
+    if (w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging) return;
+
     if (orbitInteractionActive || isContactDiskHudInteractionActive()) return;
 
     if (modelId === lastDispatchedHoverModelId) return;

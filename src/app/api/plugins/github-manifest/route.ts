@@ -463,7 +463,7 @@ async function sanitizeManifest(manifest: any, baseRawDir: string) {
     ? value.printerPresets.map((preset: unknown) => ({ preset, baseRawDir }))
     : [];
 
-  const presetPathEntries = Array.isArray(value.printerPresetPaths)
+  const presetPathEntries: string[] = Array.isArray(value.printerPresetPaths)
     ? value.printerPresetPaths
         .map((entry: unknown) => sanitizeRelativeManifestPath(entry))
         .filter((entry: string | null): entry is string => entry !== null)

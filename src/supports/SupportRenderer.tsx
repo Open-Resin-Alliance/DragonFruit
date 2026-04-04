@@ -16,14 +16,20 @@ import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roo
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore';
+import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
+import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
+import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
+import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectGhostedBraceIds, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode, BezierSegment } from './types';
-import { bezierToLineSegments } from './Curves/BezierUtils';
+import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf } from './types';
+import { bezierToLineSegments, calculateAdaptiveBezierResolution } from './Curves/BezierUtils';
+import type { SupportData } from './rendering';
+import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
@@ -37,10 +43,10 @@ import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './aut
 import { VoronoiSeedDebugMarkers } from './autoBracing/VoronoiSeedDebugMarkers';
 import { clearSupportMarqueeHover, setSupportMarqueeHoverBlocked, useSupportMarqueeHoverState } from './interaction/shared/hover/sceneHoverMarquee';
 import { applySceneHoverWriteDecision, resolveSceneBatchedShaftHoverWriteDecision, resolveSceneBatchedShaftPointerOutWriteDecision, resolveSceneBatchedSupportHoverWriteDecision, shouldClearSceneHoverForSelectedPrimitiveSuppression, shouldClearSceneHoverForSelectionChange } from './interaction/shared/hover/sceneHoverController';
-import { buildSupportIdByContactDiskId, buildSupportIdByJointId, buildSupportIdByKnotId, buildSupportIdBySegmentId } from './interaction/shared/hover/supportHoverOwnerMaps';
 import { cancelPendingSceneHoverClearFrame, clearImmediateModelHover } from './interaction/shared/hover/sceneHoverReset';
 import { isJointHoverCategory, resolveHoveredSupportOwnerId, resolveHoveredSupportVisualState, resolveRawSupportHoverSuppressionState, resolveSelectedPrimitiveHoverSuppression } from './interaction/shared/hover/supportHoverResolver';
 import { setSceneHoveredSupportId as setSharedSceneHoveredSupportId, useSceneHoveredSupportId } from './interaction/shared/hover/sceneHoverStore';
+import { useSupportRenderLookup } from './interaction/useSupportRenderLookup';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -63,6 +69,63 @@ interface SupportRendererProps {
     disableSelectionAndHover?: boolean;
     ghostOpacity?: number;
     ghostRenderOrder?: number;
+    trunkPlacementPreview?: SupportData | null;
+    branchPlacementPreview?: SupportData | null;
+    leafPlacementPreview?: SupportData | null;
+    bracePlacementPreview?: BracePreviewData | null;
+    kickstandPlacementPreview?: SupportData | null;
+}
+
+interface PlacementPreviewBatch {
+    id: string;
+    color: string;
+    opacity: number;
+    shafts: InstancedShaft[];
+    joints: InstancedJoint[];
+    roots: InstancedRoot[];
+    cones: InstancedContactCone[];
+}
+
+function applyBatchedBezierSeamOverlap(
+    points: Array<{ x: number; y: number; z: number }>,
+    index: number,
+    diameter: number,
+) {
+    const start = points[index];
+    const end = points[index + 1];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const length = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+
+    if (length < 1e-6) {
+        return { start, end };
+    }
+
+    const invLen = 1 / length;
+    const ux = dx * invLen;
+    const uy = dy * invLen;
+    const uz = dz * invLen;
+
+    const baseOverlap = Math.max(0.015, Math.min(0.45, diameter * 0.22));
+    const overlap = Math.min(baseOverlap, Math.max(0, length * 0.45));
+    const isFirst = index === 0;
+    const isLast = index === points.length - 2;
+    const startShift = isFirst ? 0 : overlap;
+    const endShift = isLast ? 0 : overlap;
+
+    return {
+        start: {
+            x: start.x - (ux * startShift),
+            y: start.y - (uy * startShift),
+            z: start.z - (uz * startShift),
+        },
+        end: {
+            x: end.x + (ux * endShift),
+            y: end.y + (uy * endShift),
+            z: end.z + (uz * endShift),
+        },
+    };
 }
 
 /** Tessellate a bezier segment into multiple straight InstancedShaft entries for batched rendering. */
@@ -73,21 +136,131 @@ function tesselllateBezierToShafts(
     supportId: string,
     modelId?: string,
 ): InstancedShaft[] {
-    const BATCHED_BEZIER_RESOLUTION = 8;
-    const res = Math.max(2, segment.resolution ?? BATCHED_BEZIER_RESOLUTION);
+    const BATCHED_BEZIER_MIN_RESOLUTION = 4;
+    const BATCHED_BEZIER_MAX_RESOLUTION = 24;
+    const adaptiveResolution = calculateAdaptiveBezierResolution(
+        startPos,
+        segment.controlPoint1,
+        segment.controlPoint2,
+        endPos,
+        {
+            minResolution: BATCHED_BEZIER_MIN_RESOLUTION,
+            maxResolution: BATCHED_BEZIER_MAX_RESOLUTION,
+            targetChordLengthMm: 2.5,
+            curvatureWeight: 2.0,
+        },
+    );
+    const res = Math.max(2, segment.resolution ?? adaptiveResolution);
     const points = bezierToLineSegments(startPos, segment.controlPoint1, segment.controlPoint2, endPos, res);
     const shafts: InstancedShaft[] = [];
     for (let i = 0; i < points.length - 1; i++) {
+        const overlapped = applyBatchedBezierSeamOverlap(points, i, segment.diameter);
         shafts.push({
             id: segment.id,
-            start: points[i],
-            end: points[i + 1],
+            start: overlapped.start,
+            end: overlapped.end,
             diameter: segment.diameter,
             supportId,
             modelId,
         });
     }
     return shafts;
+}
+
+function tessellateBraceBezierToShafts(
+    segmentId: string,
+    startPos: { x: number; y: number; z: number },
+    endPos: { x: number; y: number; z: number },
+    controlPoint1: { x: number; y: number; z: number },
+    controlPoint2: { x: number; y: number; z: number },
+    diameter: number,
+    supportId: string,
+    modelId?: string,
+): InstancedShaft[] {
+    const adaptiveResolution = calculateAdaptiveBezierResolution(
+        startPos,
+        controlPoint1,
+        controlPoint2,
+        endPos,
+        {
+            minResolution: 4,
+            maxResolution: 24,
+            targetChordLengthMm: 2.5,
+            curvatureWeight: 2.0,
+        },
+    );
+    const points = bezierToLineSegments(startPos, controlPoint1, controlPoint2, endPos, adaptiveResolution);
+    const shafts: InstancedShaft[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const overlapped = applyBatchedBezierSeamOverlap(points, i, diameter);
+        shafts.push({
+            id: segmentId,
+            start: overlapped.start,
+            end: overlapped.end,
+            diameter,
+            supportId,
+            modelId,
+        });
+    }
+    return shafts;
+}
+
+function recomputeLeafPreviewContactCone(
+    leaf: Leaf,
+    previewKnotPos: { x: number; y: number; z: number },
+) {
+    const cone = leaf.contactCone;
+    if (!cone?.surfaceNormal) return leaf;
+
+    const tip = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
+    const sn = new THREE.Vector3(cone.surfaceNormal.x, cone.surfaceNormal.y, cone.surfaceNormal.z);
+    const knot = new THREE.Vector3(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
+
+    let axis = knot.clone().sub(tip);
+    if (axis.lengthSq() < 0.000001) {
+        axis.set(sn.x, sn.y, sn.z);
+    }
+    axis.normalize();
+
+    let finalLength = Math.max(0.1, knot.distanceTo(tip));
+
+    for (let i = 0; i < 3; i++) {
+        const axisVec3 = { x: axis.x, y: axis.y, z: axis.z };
+        const thickness = cone.profile.type === 'disk'
+            ? calculateDiskThickness(cone.surfaceNormal, axisVec3, cone.profile)
+            : 0;
+
+        const start = tip.clone().add(sn.clone().multiplyScalar(thickness));
+        const coneVec = knot.clone().sub(start);
+        const len = coneVec.length();
+        if (len > 0.000001) {
+            axis = coneVec.normalize();
+            finalLength = Math.max(0.1, len);
+        }
+    }
+
+    const oldNormal = cone.normal;
+    const oldLen = cone.profile.lengthMm;
+    if (
+        oldLen === finalLength
+        && oldNormal.x === axis.x
+        && oldNormal.y === axis.y
+        && oldNormal.z === axis.z
+    ) {
+        return leaf;
+    }
+
+    return {
+        ...leaf,
+        contactCone: {
+            ...cone,
+            normal: { x: axis.x, y: axis.y, z: axis.z },
+            profile: {
+                ...cone.profile,
+                lengthMm: finalLength,
+            },
+        },
+    };
 }
 
 interface SupportShaftSet {
@@ -112,14 +285,285 @@ const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
+const PLACEMENT_PREVIEW_COLOR = '#00ff00';
+const PLACEMENT_PREVIEW_ERROR_COLOR = '#ff0000';
+const PLACEMENT_PREVIEW_WARNING_COLOR = '#ffcc00';
+const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
+const PLACEMENT_PREVIEW_OPACITY = 0.5;
+const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
+const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
+const EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
+
+function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
+    if (preview.error) {
+        return {
+            color: PLACEMENT_PREVIEW_ERROR_COLOR,
+            opacity: PLACEMENT_PREVIEW_ERROR_OPACITY,
+        };
+    }
+
+    let angle = preview.angle;
+    if (angle === undefined && preview.contactCone) {
+        const normal = new THREE.Vector3(
+            preview.contactCone.normal.x,
+            preview.contactCone.normal.y,
+            preview.contactCone.normal.z,
+        );
+        const up = new THREE.Vector3(0, 0, 1);
+        angle = normal.angleTo(up) * (180 / Math.PI);
+    }
+
+    if (angle !== undefined) {
+        const startAngle = 91;
+        const midAngle = 120;
+        const endAngle = 180;
+
+        let finalColor: THREE.Color;
+        if (angle <= midAngle) {
+            const t = Math.max(0, (angle - startAngle) / (midAngle - startAngle));
+            const c1 = new THREE.Color(PLACEMENT_PREVIEW_ORANGE_COLOR);
+            const c2 = new THREE.Color(PLACEMENT_PREVIEW_WARNING_COLOR);
+            finalColor = c1.lerp(c2, t);
+        } else {
+            const t = Math.min(1, (angle - midAngle) / (endAngle - midAngle));
+            const c1 = new THREE.Color(PLACEMENT_PREVIEW_WARNING_COLOR);
+            const c2 = new THREE.Color(PLACEMENT_PREVIEW_COLOR);
+            finalColor = c1.lerp(c2, t);
+        }
+
+        return {
+            color: `#${finalColor.getHexString()}`,
+            opacity: PLACEMENT_PREVIEW_OPACITY,
+        };
+    }
+
+    if (preview.warning) {
+        return {
+            color: PLACEMENT_PREVIEW_WARNING_COLOR,
+            opacity: PLACEMENT_PREVIEW_OPACITY,
+        };
+    }
+
+    return {
+        color: PLACEMENT_PREVIEW_COLOR,
+        opacity: PLACEMENT_PREVIEW_OPACITY,
+    };
+}
+
+function buildSupportPlacementPreviewBatch(
+    id: string,
+    preview: SupportData,
+    hasSolidBottom: boolean,
+    raftThickness: number,
+): PlacementPreviewBatch | null {
+    const shafts: InstancedShaft[] = [];
+    const jointsMap = new Map<string, InstancedJoint>();
+    const roots: InstancedRoot[] = [];
+    const cones: InstancedContactCone[] = [];
+
+    let currentStart: THREE.Vector3;
+
+    if (preview.roots) {
+        const root = preview.roots;
+        const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
+        const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
+        const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+        const shaftDiameter = Math.max(0.001, preview.segments[0]?.diameter ?? root.diameter);
+
+        roots.push({
+            id: root.id,
+            supportId: id,
+            modelId: root.modelId,
+            basePos: {
+                x: basePos.x,
+                y: basePos.y,
+                z: basePos.z + verticalOffset,
+            },
+            bottomRadius: Math.max(0.001, root.diameter / 2),
+            topRadius: shaftDiameter / 2,
+            effectiveDiskHeight,
+            coneHeight: Math.max(0, root.coneHeight),
+        });
+
+        currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
+    } else if (preview.startPos) {
+        currentStart = new THREE.Vector3(preview.startPos.x, preview.startPos.y, preview.startPos.z);
+    } else if (preview.contactCones && preview.contactCones.length > 0) {
+        const socketPos = getFinalSocketPosition(preview.contactCones[0]);
+        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+    } else if (preview.contactCone) {
+        const socketPos = getFinalSocketPosition(preview.contactCone);
+        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+    } else if (preview.segments[0]?.bottomJoint) {
+        const p = preview.segments[0].bottomJoint.pos;
+        currentStart = new THREE.Vector3(p.x, p.y, p.z);
+    } else {
+        currentStart = new THREE.Vector3(0, 0, 0);
+    }
+
+    if (preview.knot && preview.segments.length > 0) {
+        jointsMap.set(preview.knot.id, {
+            id: preview.knot.id,
+            pos: preview.knot.pos,
+            diameter: Math.max(0.001, preview.knot.diameter ?? ((preview.segments[0]?.diameter ?? 1) + 0.1)),
+            supportId: id,
+        });
+    }
+
+    for (const segment of preview.segments) {
+        if (segment.bottomJoint) {
+            jointsMap.set(segment.bottomJoint.id, {
+                id: segment.bottomJoint.id,
+                pos: segment.bottomJoint.pos,
+                diameter: segment.bottomJoint.diameter,
+                supportId: id,
+            });
+        }
+        if (segment.topJoint) {
+            jointsMap.set(segment.topJoint.id, {
+                id: segment.topJoint.id,
+                pos: segment.topJoint.pos,
+                diameter: segment.topJoint.diameter,
+                supportId: id,
+            });
+        }
+    }
+
+    const lastSegmentIndex = preview.segments.length - 1;
+    preview.segments.forEach((segment, index) => {
+        if (segment.bottomJoint) {
+            currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
+        }
+
+        let endPoint: THREE.Vector3;
+        if (segment.topJoint) {
+            endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
+        } else if (preview.contactCone && index === lastSegmentIndex) {
+            const socketPos = getFinalSocketPosition(preview.contactCone);
+            endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+        } else if (preview.contactCones && preview.contactCones.length > 0 && index === lastSegmentIndex) {
+            const socketPos = getFinalSocketPosition(preview.contactCones[preview.contactCones.length - 1]);
+            endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+        } else {
+            endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
+        }
+
+        if (segment.type === 'bezier') {
+            shafts.push(
+                ...tesselllateBezierToShafts(
+                    segment as BezierSegment,
+                    { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                    { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                    id,
+                ),
+            );
+        } else {
+            shafts.push({
+                id: segment.id,
+                start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                diameter: segment.diameter,
+                supportId: id,
+            });
+        }
+
+        currentStart = endPoint;
+    });
+
+    const allCones = preview.contactCones?.length
+        ? preview.contactCones
+        : preview.contactCone
+            ? [preview.contactCone]
+            : [];
+
+    allCones.forEach((cone, index) => {
+        cones.push({
+            id: cone.id ?? `${id}:cone:${index}`,
+            supportId: id,
+            pos: cone.pos,
+            normal: cone.normal,
+            surfaceNormal: cone.surfaceNormal,
+            diskLengthOverride: cone.diskLengthOverride,
+            profile: cone.profile,
+        });
+    });
+
+    if (shafts.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
+        return null;
+    }
+
+    const { color, opacity } = resolvePlacementPreviewMaterial(preview);
+    return {
+        id,
+        color,
+        opacity,
+        shafts,
+        joints: Array.from(jointsMap.values()),
+        roots,
+        cones,
+    };
+}
+
+function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData): PlacementPreviewBatch | null {
+    const start = preview.start;
+    const end = preview.end;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const lenSq = dx * dx + dy * dy + dz * dz;
+    const startDiameter = Math.max(0.001, preview.startDiameterMm);
+    const endDiameter = Math.max(0.001, preview.endDiameterMm);
+    const knotStartDiameter = Math.max(0.001, preview.startDiameterMm + 0.1);
+    const knotEndDiameter = Math.max(0.001, preview.endDiameterMm + 0.1);
+
+    const joints: InstancedJoint[] = [
+        {
+            id: `${id}:start-joint`,
+            pos: start,
+            diameter: knotStartDiameter,
+            supportId: id,
+        },
+    ];
+
+    const shafts: InstancedShaft[] = [];
+    if (lenSq >= 1e-6) {
+        shafts.push({
+            id: `${id}:shaft`,
+            start,
+            end,
+            diameter: (startDiameter + endDiameter) / 2,
+            supportId: id,
+        });
+
+        joints.push({
+            id: `${id}:end-joint`,
+            pos: end,
+            diameter: knotEndDiameter,
+            supportId: id,
+        });
+    }
+
+    return {
+        id,
+        color: PLACEMENT_PREVIEW_COLOR,
+        opacity: PLACEMENT_PREVIEW_OPACITY,
+        shafts,
+        joints,
+        roots: [],
+        cones: [],
+    };
+}
+
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0, trunkPlacementPreview = null, branchPlacementPreview = null, leafPlacementPreview = null, bracePlacementPreview = null, kickstandPlacementPreview = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const kickstandState = useKickstandStoreState();
+    const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
+    const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
 
     const selectionEnabled = mode === 'support';
     const effectiveSelectedSupportIds = selectionEnabled ? resolvedSelection.selectedIds : [];
@@ -170,6 +614,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const suppressHover = supportSelectionAndHoverSuppressed || isJointCreationActive || !isInteractable || braceAltActive;
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
     const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
+    const lastSyncedPrepareActiveModelIdRef = React.useRef<string | null>(activeModelId ?? null);
     const sceneHoveredSupportId = useSceneHoveredSupportId();
     const setSceneHoveredSupportId = setSharedSceneHoveredSupportId;
     const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
@@ -178,57 +623,65 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportId = supportSelectionAndHoverSuppressed ? null : marqueeHover.supportId;
     const marqueeHoveredSupportIds = supportSelectionAndHoverSuppressed ? EMPTY_SUPPORT_ID_LIST : marqueeHover.supportIds;
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
+    const activeKnotDragPreview = useActiveKnotDragPreview();
+    const supportRenderLookupInput = useMemo(() => ({
+        state: {
+            roots: state.roots,
+            trunks: state.trunks,
+            branches: state.branches,
+            leaves: state.leaves,
+            twigs: state.twigs,
+            sticks: state.sticks,
+            braces: state.braces,
+            knots: state.knots,
+        },
+        kickstandState: {
+            kickstands: kickstandState.kickstands,
+            knots: kickstandState.knots,
+        },
+        // Keep worker lookups driven by committed state only.
+        // Drag previews are resolved locally in this renderer to avoid per-frame
+        // structured-clone payload churn during joint dragging.
+        activePreviewSupport: null,
+    }), [
+        state.roots,
+        state.trunks,
+        state.branches,
+        state.leaves,
+        state.twigs,
+        state.sticks,
+        state.braces,
+        state.knots,
+        kickstandState.kickstands,
+        kickstandState.knots,
+    ]);
+    const supportRenderLookup = useSupportRenderLookup(supportRenderLookupInput);
+
+    const trunkList = useMemo(() => Object.values(state.trunks), [state.trunks]);
+    const branchList = useMemo(() => Object.values(state.branches), [state.branches]);
+    const leafList = useMemo(() => Object.values(state.leaves), [state.leaves]);
+    const twigList = useMemo(() => Object.values(state.twigs), [state.twigs]);
+    const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
+    const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
+    const kickstandList = useMemo(() => Object.values(kickstandState.kickstands), [kickstandState.kickstands]);
+    const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
+    const kickstandKnotList = useMemo(() => Object.values(kickstandState.knots), [kickstandState.knots]);
+
     const entitySegmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
-
-        for (const trunk of Object.values(state.trunks)) {
-            for (const segment of trunk.segments) map.set(segment.id, trunk.modelId);
+        for (const [id, modelId] of Object.entries(supportRenderLookup.entitySegmentModelIdById)) {
+            map.set(id, modelId);
         }
-
-        for (const branch of Object.values(state.branches)) {
-            for (const segment of branch.segments) map.set(segment.id, branch.modelId);
-        }
-
-        for (const twig of Object.values(state.twigs)) {
-            for (const segment of twig.segments) map.set(segment.id, twig.modelId);
-        }
-
-        for (const stick of Object.values(state.sticks)) {
-            for (const segment of stick.segments) map.set(segment.id, stick.modelId);
-        }
-
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
-            for (const segment of kickstand.segments) map.set(segment.id, kickstand.modelId);
-        }
-
         return map;
-    }, [state.trunks, state.branches, state.twigs, state.sticks, kickstandState.kickstands]);
+    }, [supportRenderLookup.entitySegmentModelIdById]);
 
     const entityModelIdByKnotId = useMemo(() => {
         const map = new Map<string, string | undefined>();
-
-        const resolveByParentShaftId = (parentShaftId: string): string | undefined => {
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
-                return state.braces[braceId]?.modelId;
-            }
-            if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                return state.leaves[leafId]?.modelId;
-            }
-            return entitySegmentModelIdById.get(parentShaftId);
-        };
-
-        for (const knot of Object.values(state.knots)) {
-            map.set(knot.id, resolveByParentShaftId(knot.parentShaftId));
+        for (const [id, modelId] of Object.entries(supportRenderLookup.entityModelIdByKnotId)) {
+            map.set(id, modelId);
         }
-
-        for (const knot of Object.values(kickstandState.knots)) {
-            map.set(knot.id, resolveByParentShaftId(knot.parentShaftId));
-        }
-
         return map;
-    }, [state.knots, state.braces, state.leaves, kickstandState.knots, entitySegmentModelIdById]);
+    }, [supportRenderLookup.entityModelIdByKnotId]);
 
     const resolveSupportModelId = React.useCallback((modelId?: string, supportId?: string) => {
         if (modelId) return modelId;
@@ -345,10 +798,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const w = window as any;
             const knotDragging = !!w.__knotGizmoDragging;
             const jointDragging = !!w.__jointGizmoDragging;
-            const dragging = knotDragging || jointDragging;
+            const bezierDragging = !!w.__bezierGizmoDragging;
+            const dragging = knotDragging || jointDragging || bezierDragging;
             const knotGuardUntil = typeof w.__knotGizmoGuardUntil === 'number' ? w.__knotGizmoGuardUntil : 0;
             const jointGuardUntil = typeof w.__jointGizmoGuardUntil === 'number' ? w.__jointGizmoGuardUntil : 0;
-            const guardUntil = Math.max(knotGuardUntil, jointGuardUntil);
+            const bezierGuardUntil = typeof w.__bezierGizmoGuardUntil === 'number' ? w.__bezierGizmoGuardUntil : 0;
+            const guardUntil = Math.max(knotGuardUntil, jointGuardUntil, bezierGuardUntil);
             const now = Date.now();
             const guardActive = guardUntil > now;
             const nextActive = dragging || guardActive;
@@ -410,12 +865,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             refreshFromGlobals();
         };
 
+        const handleBezierGizmoInteractionLock = (event: Event) => {
+            const detail = (event as CustomEvent<{ active?: boolean; guardUntil?: number }>).detail;
+            if (typeof detail?.active !== 'boolean') {
+                refreshFromGlobals();
+                return;
+            }
+
+            const w = window as any;
+            if (typeof detail.active === 'boolean') {
+                w.__bezierGizmoDragging = detail.active;
+            }
+            if (typeof detail.guardUntil === 'number') {
+                w.__bezierGizmoGuardUntil = detail.guardUntil;
+            }
+
+            refreshFromGlobals();
+        };
+
         refreshFromGlobals();
         window.addEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
         window.addEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+        window.addEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
         return () => {
             window.removeEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
             window.removeEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+            window.removeEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
             if (knotGizmoInteractionLockTimeoutRef.current != null) {
                 window.clearTimeout(knotGizmoInteractionLockTimeoutRef.current);
                 knotGizmoInteractionLockTimeoutRef.current = null;
@@ -449,25 +924,29 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         : activeModelId;
     const hoveredCategoryForVisual = supportSelectionAndHoverSuppressed ? 'none' : state.hoveredCategory;
     const hoveredIdForVisual = supportSelectionAndHoverSuppressed ? null : state.hoveredId;
-    const supportIdBySegmentId = useMemo(
-        () => buildSupportIdBySegmentId(state, kickstandState),
-        [state.trunks, state.branches, state.twigs, state.sticks, state.braces, kickstandState.kickstands],
-    );
+    const supportIdBySegmentId = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdBySegmentId)) map.set(id, supportId);
+        return map;
+    }, [supportRenderLookup.supportIdBySegmentId]);
 
-    const supportIdByJointId = useMemo(
-        () => buildSupportIdByJointId(state, kickstandState),
-        [state.trunks, state.branches, state.twigs, state.sticks, kickstandState.kickstands],
-    );
+    const supportIdByJointId = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByJointId)) map.set(id, supportId);
+        return map;
+    }, [supportRenderLookup.supportIdByJointId]);
 
-    const supportIdByKnotId = useMemo(
-        () => buildSupportIdByKnotId(state, kickstandState),
-        [state.branches, state.leaves, state.braces, kickstandState.kickstands],
-    );
+    const supportIdByKnotId = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByKnotId)) map.set(id, supportId);
+        return map;
+    }, [supportRenderLookup.supportIdByKnotId]);
 
-    const supportIdByContactDiskId = useMemo(
-        () => buildSupportIdByContactDiskId(state),
-        [state.trunks, state.branches, state.leaves, state.twigs, state.sticks],
-    );
+    const supportIdByContactDiskId = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByContactDiskId)) map.set(id, supportId);
+        return map;
+    }, [supportRenderLookup.supportIdByContactDiskId]);
 
     const hoveredSupportIdFromPicking = useMemo(() => {
         return resolveHoveredSupportOwnerId(
@@ -480,10 +959,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         );
     }, [hoveredCategoryForVisual, hoveredIdForVisual, supportIdBySegmentId, supportIdByJointId, supportIdByKnotId, supportIdByContactDiskId]);
 
+    const selectedPrimitiveSupportId = useMemo(() => {
+        if (!selectedId) return null;
+        if (selectedCategory === 'joint') return supportIdByJointId.get(selectedId) ?? null;
+        if (selectedCategory === 'segment') return supportIdBySegmentId.get(selectedId) ?? null;
+        if (selectedCategory === 'contactDisk') return supportIdByContactDiskId.get(selectedId) ?? null;
+        if (selectedCategory === 'knot') return supportIdByKnotId.get(selectedId) ?? null;
+        return null;
+    }, [selectedCategory, selectedId, supportIdByContactDiskId, supportIdByJointId, supportIdByKnotId, supportIdBySegmentId]);
+
     const {
         primitiveHoverOnSelectedSupport,
         selectedPrimitiveHoverActive,
         suppressSupportHoverForSelectedKnotSupport,
+        suppressSupportHoverForSelectedJointSupport,
     } = resolveSelectedPrimitiveHoverSuppression(
         hoveredSupportIdFromPicking,
         hoveredCategoryForVisual,
@@ -491,6 +980,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedId,
         selectedCategory,
         selectedSupportIdSet,
+        selectedPrimitiveSupportId,
     );
 
     const {
@@ -500,9 +990,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         marqueeHoveredSupportId,
         hoveredSupportIdFromPicking,
         sceneHoveredSupportId,
+        hoveredCategoryForVisual,
         selectedPrimitiveHoverActive,
         suppressSupportHoverForSelectedKnotSupport,
         selectedSupportIdSet,
+        selectedPrimitiveSupportId,
     );
     const previousSelectionKeyRef = React.useRef<string>('');
 
@@ -524,7 +1016,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [sceneHoveredSupportId, selectedId, effectiveSelectedSupportIds]);
 
     useEffect(() => {
-        if (!shouldClearSceneHoverForSelectedPrimitiveSuppression(selectedPrimitiveHoverActive, suppressSupportHoverForSelectedKnotSupport)) return;
+        const clearForJointParent = selectedPrimitiveSupportId !== null
+            && sceneHoveredSupportId !== null
+            && sceneHoveredSupportId === selectedPrimitiveSupportId;
+
+        if (!shouldClearSceneHoverForSelectedPrimitiveSuppression(
+            selectedPrimitiveHoverActive,
+            suppressSupportHoverForSelectedKnotSupport,
+            suppressSupportHoverForSelectedJointSupport,
+        ) && !clearForJointParent) return;
 
         cancelPendingSceneHoverClearFrame(pendingSceneHoverClearFrameRef);
         applySceneHoverWriteDecision(
@@ -533,7 +1033,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [selectedPrimitiveHoverActive, suppressSupportHoverForSelectedKnotSupport]);
+    }, [selectedPrimitiveHoverActive, suppressSupportHoverForSelectedKnotSupport, suppressSupportHoverForSelectedJointSupport, selectedPrimitiveSupportId, sceneHoveredSupportId]);
 
     useEffect(() => {
         if (mode !== 'prepare') {
@@ -561,12 +1061,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [mode]);
 
     useEffect(() => {
+        const next = (mode === 'prepare' && !passive) ? (activeModelId ?? null) : null;
+        if (lastSyncedPrepareActiveModelIdRef.current === next) return;
+        lastSyncedPrepareActiveModelIdRef.current = next;
+        setImmediatePrepareActiveModelId((prev) => (prev === next ? prev : next));
+    }, [activeModelId, mode, passive]);
+
+    useEffect(() => {
+        if (mode !== 'prepare') return;
+        if (!immediatePrepareActiveModelId) return;
+        if (selectedModelIdSet.has(immediatePrepareActiveModelId)) return;
+        setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+    }, [immediatePrepareActiveModelId, mode, selectedModelIdSet]);
+
+    useEffect(() => {
         if (typeof window === 'undefined') return;
 
         const w = window as any;
         const knotGuardUntil = typeof w.__knotGizmoGuardUntil === 'number' ? w.__knotGizmoGuardUntil : 0;
         const jointGuardUntil = typeof w.__jointGizmoGuardUntil === 'number' ? w.__jointGizmoGuardUntil : 0;
-        const guardUntil = Math.max(knotGuardUntil, jointGuardUntil);
+        const bezierGuardUntil = typeof w.__bezierGizmoGuardUntil === 'number' ? w.__bezierGizmoGuardUntil : 0;
+        const guardUntil = Math.max(knotGuardUntil, jointGuardUntil, bezierGuardUntil);
         w.__supportRendererDebug = {
             supportInteractionSuppressed,
             supportSelectionAndHoverSuppressed,
@@ -575,9 +1090,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             jointCategoryHoverSuppressed,
             knotGizmoDragging: !!w.__knotGizmoDragging,
             jointGizmoDragging: !!w.__jointGizmoDragging,
+            bezierGizmoDragging: !!w.__bezierGizmoDragging,
             knotGizmoGuardUntil: guardUntil,
             knotOnlyGuardUntil: knotGuardUntil,
             jointOnlyGuardUntil: jointGuardUntil,
+            bezierOnlyGuardUntil: bezierGuardUntil,
             immediateModelHoverId,
             externalHoverModelId: hoverModelId,
             effectiveHoverModelId,
@@ -636,7 +1153,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 || a.pos.z !== b.pos.z;
         };
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of kickstandList) {
             const root = kickstandState.roots[kickstand.rootId];
             if (root) {
                 const existingRoot = state.roots[root.id] as typeof root | undefined;
@@ -694,20 +1211,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const clippingPlanes = clippingPlanesRef.current;
 
     const resolveBaseColor = useMemo(() => {
-        const baseHex = '#a3a3a3';
-        const hoverTintHex = '#ff8800';
-        const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.5).getStyle();
+        const baseHex = '#9a9a9a';
+        const selectedHex = '#c8752a';
+        const hoverTintHex = '#d18a4a';
+        const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.35).getStyle();
 
         return (modelId?: string) => {
-            const isSelectedModelSupport = !!modelId && (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId));
-            if (isSelectedModelSupport) return '#ff8800';
+            const isSelectedModelSupport = !!modelId && selectedModelIdSet.has(modelId);
+            if (isSelectedModelSupport) return selectedHex;
 
             const isHoveredModelSupport = !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
             if (isHoveredModelSupport) return hoveredColor;
 
             return baseHex;
         };
-    }, [effectiveHoverModelId, effectiveVisualActiveModelId, selectedModelIdSet]);
+    }, [effectiveHoverModelId, selectedModelIdSet]);
 
     const resolveSceneSupportColor = React.useCallback((modelId: string | undefined, supportId: string) => {
         if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
@@ -732,186 +1250,510 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
     }, [resolveModelDropOffsetZ]);
 
-    const selectedTrunkIds = useMemo(() => {
-        const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+    const trunkIdByRootIdForSelection = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const trunk of trunkList) {
+            map.set(trunk.rootId, trunk.id);
+        }
+        return map;
+    }, [trunkList]);
 
-        if (hasSingleSelection && selectedCategory === 'trunk') {
-            selected.add(selectedId);
-            return selected;
+    const branchIdsByParentKnotIdForSelection = useMemo(() => {
+        const map = new Map<string, string[]>();
+        for (const branch of branchList) {
+            const list = map.get(branch.parentKnotId);
+            if (list) {
+                list.push(branch.id);
+            } else {
+                map.set(branch.parentKnotId, [branch.id]);
+            }
+        }
+        return map;
+    }, [branchList]);
+
+    const leafIdsByParentKnotIdForSelection = useMemo(() => {
+        const map = new Map<string, string[]>();
+        for (const leaf of leafList) {
+            const list = map.get(leaf.parentKnotId);
+            if (list) {
+                list.push(leaf.id);
+            } else {
+                map.set(leaf.parentKnotId, [leaf.id]);
+            }
+        }
+        return map;
+    }, [leafList]);
+
+    const braceIdsByKnotIdForSelection = useMemo(() => {
+        const map = new Map<string, string[]>();
+        for (const brace of braceList) {
+            const startList = map.get(brace.startKnotId);
+            if (startList) {
+                startList.push(brace.id);
+            } else {
+                map.set(brace.startKnotId, [brace.id]);
+            }
+
+            const endList = map.get(brace.endKnotId);
+            if (endList) {
+                endList.push(brace.id);
+            } else {
+                map.set(brace.endKnotId, [brace.id]);
+            }
+        }
+        return map;
+    }, [braceList]);
+
+    const kickstandIdsByHostKnotIdForSelection = useMemo(() => {
+        const map = new Map<string, string[]>();
+        for (const kickstand of kickstandList) {
+            const list = map.get(kickstand.hostKnotId);
+            if (list) {
+                list.push(kickstand.id);
+            } else {
+                map.set(kickstand.hostKnotId, [kickstand.id]);
+            }
+        }
+        return map;
+    }, [kickstandList]);
+
+    const fallbackSupportIdByPrimitiveForSelection = useMemo(() => {
+        const map = new Map<string, string>();
+
+        for (const kickstand of kickstandList) {
+            map.set(kickstand.id, kickstand.id);
+            map.set(kickstand.hostKnotId, kickstand.id);
+            for (const segment of kickstand.segments) {
+                map.set(segment.id, kickstand.id);
+                if (segment.topJoint?.id) map.set(segment.topJoint.id, kickstand.id);
+                if (segment.bottomJoint?.id) map.set(segment.bottomJoint.id, kickstand.id);
+            }
         }
 
-        for (const trunk of Object.values(state.trunks)) {
-            const isTrunkSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(trunk.id)) || selectedId === trunk.id;
-            const isChildSelected = hasSingleSelection
-                ? trunk.segments.some((segment) =>
-                    segment.id === selectedId
-                    || segment.topJoint?.id === selectedId
-                    || segment.bottomJoint?.id === selectedId,
-                )
-                || trunk.contactCone?.id === selectedId
-                : false;
-            if (isTrunkSelected || isChildSelected) selected.add(trunk.id);
+        for (const brace of braceList) {
+            map.set(`braceSegment:${brace.id}`, brace.id);
+        }
+
+        return map;
+    }, [kickstandList, braceList]);
+
+    const singleSelectedSupportId = useMemo(() => {
+        if (!selectedId) return null;
+
+        if (selectedCategory === 'knot') {
+            return null;
+        }
+
+        if (selectedCategory === 'root') {
+            return trunkIdByRootIdForSelection.get(selectedId) ?? null;
+        }
+
+        if (
+            selectedCategory === 'trunk'
+            || selectedCategory === 'branch'
+            || selectedCategory === 'leaf'
+            || selectedCategory === 'twig'
+            || selectedCategory === 'stick'
+            || selectedCategory === 'brace'
+        ) {
+            return selectedId;
+        }
+
+        return selectedPrimitiveSupportId
+            ?? fallbackSupportIdByPrimitiveForSelection.get(selectedId)
+            ?? null;
+    }, [
+        selectedId,
+        selectedCategory,
+        selectedPrimitiveSupportId,
+        fallbackSupportIdByPrimitiveForSelection,
+        trunkIdByRootIdForSelection,
+    ]);
+
+    const selectedTrunkIds = useMemo(() => {
+        const selected = new Set<string>();
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.trunks[supportId]) selected.add(supportId);
+            }
+        }
+
+        if (singleSelectedSupportId && state.trunks[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
         }
 
         return selected;
-    }, [state.trunks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [singleSelectedSupportId, selectedSupportIdSet, state.trunks, useMultiSelectionDetail]);
 
     const selectedBranchIds = useMemo(() => {
         const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
-
-        if (hasSingleSelection && selectedCategory === 'branch') {
-            selected.add(selectedId);
-            return selected;
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.branches[supportId]) selected.add(supportId);
+            }
         }
 
-        for (const branch of Object.values(state.branches)) {
-            const isBranchSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(branch.id)) || selectedId === branch.id;
-            const isKnotSelected = hasSingleSelection ? branch.parentKnotId === selectedId : false;
-            const isChildSelected = hasSingleSelection
-                ? branch.segments.some((segment) =>
-                    segment.id === selectedId
-                    || segment.topJoint?.id === selectedId
-                    || segment.bottomJoint?.id === selectedId,
-                )
-                || branch.contactCone?.id === selectedId
-                : false;
-            if (isBranchSelected || isKnotSelected || isChildSelected) selected.add(branch.id);
+        if (singleSelectedSupportId && state.branches[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
+        }
+
+        if (selectedCategory === 'knot' && selectedId) {
+            const branchIds = branchIdsByParentKnotIdForSelection.get(selectedId) ?? [];
+            for (const id of branchIds) selected.add(id);
         }
 
         return selected;
-    }, [state.branches, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [
+        branchIdsByParentKnotIdForSelection,
+        selectedCategory,
+        selectedId,
+        selectedSupportIdSet,
+        singleSelectedSupportId,
+        state.branches,
+        useMultiSelectionDetail,
+    ]);
 
     const selectedBraceIds = useMemo(() => {
         const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
-
-        if (hasSingleSelection && state.braces[selectedId]) {
-            selected.add(selectedId);
-            return selected;
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.braces[supportId]) selected.add(supportId);
+            }
         }
 
-        for (const brace of Object.values(state.braces)) {
-            const isBraceSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(brace.id)) || selectedId === brace.id;
-            const isSegmentSelected = hasSingleSelection ? selectedId === `braceSegment:${brace.id}` : false;
-            const isEndpointSelected = hasSingleSelection ? selectedId === brace.startKnotId || selectedId === brace.endKnotId : false;
-            if (isBraceSelected || isSegmentSelected || isEndpointSelected) selected.add(brace.id);
+        if (singleSelectedSupportId && state.braces[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
+        }
+
+        if (selectedCategory === 'segment' && selectedId?.startsWith('braceSegment:')) {
+            selected.add(selectedId.slice('braceSegment:'.length));
+        }
+
+        if (selectedCategory === 'knot' && selectedId) {
+            const braceIds = braceIdsByKnotIdForSelection.get(selectedId) ?? [];
+            for (const id of braceIds) selected.add(id);
         }
 
         return selected;
-    }, [state.braces, selectedId, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [
+        braceIdsByKnotIdForSelection,
+        selectedCategory,
+        selectedId,
+        selectedSupportIdSet,
+        singleSelectedSupportId,
+        state.braces,
+        useMultiSelectionDetail,
+    ]);
 
     const selectedTwigIds = useMemo(() => {
         const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
-
-        if (hasSingleSelection && selectedCategory === 'twig') {
-            selected.add(selectedId);
-            return selected;
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.twigs[supportId]) selected.add(supportId);
+            }
         }
 
-        for (const twig of Object.values(state.twigs)) {
-            const isTwigSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(twig.id)) || selectedId === twig.id;
-            const isChildSelected = hasSingleSelection
-                ? twig.segments.some((segment) =>
-                    segment.id === selectedId
-                    || segment.topJoint?.id === selectedId
-                    || segment.bottomJoint?.id === selectedId,
-                )
-                || twig.contactDiskA.id === selectedId
-                || twig.contactDiskB.id === selectedId
-                : false;
-            if (isTwigSelected || isChildSelected) selected.add(twig.id);
+        if (singleSelectedSupportId && state.twigs[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
         }
 
         return selected;
-    }, [state.twigs, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [singleSelectedSupportId, selectedSupportIdSet, state.twigs, useMultiSelectionDetail]);
 
     const selectedStickIds = useMemo(() => {
         const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
-
-        if (hasSingleSelection && selectedCategory === 'stick') {
-            selected.add(selectedId);
-            return selected;
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.sticks[supportId]) selected.add(supportId);
+            }
         }
 
-        for (const stick of Object.values(state.sticks)) {
-            const isStickSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(stick.id)) || selectedId === stick.id;
-            const isChildSelected = hasSingleSelection
-                ? stick.segments.some((segment) =>
-                    segment.id === selectedId
-                    || segment.topJoint?.id === selectedId
-                    || segment.bottomJoint?.id === selectedId,
-                )
-                || stick.contactConeA.id === selectedId
-                || stick.contactConeB.id === selectedId
-                : false;
-            if (isStickSelected || isChildSelected) selected.add(stick.id);
+        if (singleSelectedSupportId && state.sticks[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
         }
 
         return selected;
-    }, [state.sticks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [singleSelectedSupportId, selectedSupportIdSet, state.sticks, useMultiSelectionDetail]);
 
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
-
-        if (hasSingleSelection && kickstandState.kickstands[selectedId]) {
-            selected.add(selectedId);
-            return selected;
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (kickstandState.kickstands[supportId]) selected.add(supportId);
+            }
         }
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
-            const isKickstandSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(kickstand.id)) || selectedId === kickstand.id;
-            const isHostKnotSelected = hasSingleSelection ? selectedId === kickstand.hostKnotId : false;
-            const isChildSelected = hasSingleSelection
-                ? kickstand.segments.some((segment) =>
-                    segment.id === selectedId
-                    || segment.topJoint?.id === selectedId
-                    || segment.bottomJoint?.id === selectedId,
-                )
-                : false;
-            if (isKickstandSelected || isHostKnotSelected || isChildSelected) selected.add(kickstand.id);
+        if (singleSelectedSupportId && kickstandState.kickstands[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
+        }
+
+        if (selectedCategory === 'knot' && selectedId) {
+            const kickstandIds = kickstandIdsByHostKnotIdForSelection.get(selectedId) ?? [];
+            for (const id of kickstandIds) selected.add(id);
         }
 
         return selected;
-    }, [kickstandState.kickstands, selectedId, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [
+        kickstandIdsByHostKnotIdForSelection,
+        kickstandState.kickstands,
+        selectedCategory,
+        selectedId,
+        selectedSupportIdSet,
+        singleSelectedSupportId,
+        useMultiSelectionDetail,
+    ]);
 
     const selectedLeafIds = useMemo(() => {
         const selected = new Set<string>();
-        const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
-
-        if (hasSingleSelection && selectedCategory === 'leaf') {
-            selected.add(selectedId);
-            return selected;
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.leaves[supportId]) selected.add(supportId);
+            }
         }
 
-        for (const leaf of Object.values(state.leaves)) {
-            const isLeafSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(leaf.id)) || selectedId === leaf.id;
-            const isKnotSelected = hasSingleSelection ? leaf.parentKnotId === selectedId : false;
-            const isContactDiskSelected = hasSingleSelection ? leaf.contactCone?.id === selectedId : false;
-            if (isLeafSelected || isKnotSelected || isContactDiskSelected) selected.add(leaf.id);
+        if (singleSelectedSupportId && state.leaves[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
+        }
+
+        if (selectedCategory === 'knot' && selectedId) {
+            const leafIds = leafIdsByParentKnotIdForSelection.get(selectedId) ?? [];
+            for (const id of leafIds) selected.add(id);
         }
 
         return selected;
-    }, [state.leaves, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
+    }, [
+        leafIdsByParentKnotIdForSelection,
+        selectedCategory,
+        selectedId,
+        selectedSupportIdSet,
+        singleSelectedSupportId,
+        state.leaves,
+        useMultiSelectionDetail,
+    ]);
+
+    const knotIdsByParentShaftId = useMemo(() => {
+        const map = new Map<string, string[]>();
+        for (const [id, knots] of Object.entries(supportRenderLookup.knotIdsByParentShaftId)) map.set(id, knots);
+        return map;
+    }, [supportRenderLookup.knotIdsByParentShaftId]);
+
+    const kickstandKnotIdsByParentShaftId = useMemo(() => {
+        const map = new Map<string, string[]>();
+        for (const [id, knots] of Object.entries(supportRenderLookup.kickstandKnotIdsByParentShaftId)) map.set(id, knots);
+        return map;
+    }, [supportRenderLookup.kickstandKnotIdsByParentShaftId]);
+
+    const previewCandidateKnots = useMemo(() => {
+        const result: Record<string, Knot> = {};
+        const previewSupport = activeJointDragPreview?.support;
+        if (!previewSupport) return result;
+
+        for (const segment of previewSupport.segments) {
+            const sharedIds = knotIdsByParentShaftId.get(segment.id) ?? [];
+            for (const knotId of sharedIds) {
+                const knot = state.knots[knotId];
+                if (knot) result[knotId] = knot;
+            }
+
+            const kickstandIds = kickstandKnotIdsByParentShaftId.get(segment.id) ?? [];
+            for (const knotId of kickstandIds) {
+                const knot = kickstandState.knots[knotId];
+                if (knot) result[knotId] = knot;
+            }
+        }
+
+        return result;
+    }, [activeJointDragPreview, knotIdsByParentShaftId, kickstandKnotIdsByParentShaftId, state.knots, kickstandState.knots]);
+
+    const basePreviewKnotOverrides = useJointDragPreviewOverrides({
+        roots: state.roots,
+        knots: state.knots,
+        kickstandKnots: kickstandState.knots,
+        candidateKnots: previewCandidateKnots,
+    });
+
+    const branchesByParentKnotId = useMemo(() => buildBranchesByParentKnotId(branchList), [branchList]);
+    const leafIdsByParentKnotId = useMemo(() => buildLeafIdsByParentKnotId(leafList), [leafList]);
+    const braceIdsByKnotId = useMemo(() => buildBraceIdsByKnotId(braceList), [braceList]);
+    const branchCandidateKnotIdsByBranchId = useMemo(
+        () => buildBranchCandidateKnotIdsByBranchId(branchList, knotIdsByParentShaftId),
+        [branchList, knotIdsByParentShaftId],
+    );
+
+    const freezeDependentPreviewDuringJointDrag = FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG
+        && !!activeJointDragPreview?.support;
+
+    const previewSeedKnotOverrides = useMemo(() => {
+        const knotPreview = activeKnotDragPreview?.knot;
+        if (!knotPreview) return basePreviewKnotOverrides;
+        if (basePreviewKnotOverrides[knotPreview.id] === knotPreview) return basePreviewKnotOverrides;
+        return {
+            ...basePreviewKnotOverrides,
+            [knotPreview.id]: knotPreview,
+        };
+    }, [basePreviewKnotOverrides, activeKnotDragPreview]);
+
+    const shouldCascadeDependentPreview = !freezeDependentPreviewDuringJointDrag
+        && (!!activeJointDragPreview?.support || !!activeKnotDragPreview?.knot);
+
+    const previewKnotOverrides = useMemo(() => {
+        return computeCascadedPreviewKnotOverrides({
+            enableCascade: shouldCascadeDependentPreview,
+            basePreviewKnotOverrides: previewSeedKnotOverrides,
+            branchesByParentKnotId,
+            branchCandidateKnotIdsByBranchId,
+            branchesById: state.branches,
+            committedKnotsById: state.knots,
+        });
+    }, [shouldCascadeDependentPreview, previewSeedKnotOverrides, branchesByParentKnotId, branchCandidateKnotIdsByBranchId, state.branches, state.knots]);
+
+    const previewKnotOverrideIds = useMemo(() => Object.keys(previewKnotOverrides), [previewKnotOverrides]);
+    const hasPreviewKnotOverrides = previewKnotOverrideIds.length > 0;
+
+    const previewLeavesById = useMemo(() => {
+        if (!hasPreviewKnotOverrides) return new Map<string, Leaf>();
+        return collectPreviewLeavesById({
+            previewKnotOverrideIds,
+            previewKnotOverrides,
+            leafIdsByParentKnotId,
+            leavesById: state.leaves,
+            recomputeLeafPreviewContactCone,
+        });
+    }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves]);
+
+    const activePreviewTrunk = activeJointDragPreview?.kind === 'trunk'
+        ? (activeJointDragPreview.support as (typeof state.trunks)[string])
+        : null;
+    const activePreviewBranch = activeJointDragPreview?.kind === 'branch'
+        ? (activeJointDragPreview.support as (typeof state.branches)[string])
+        : null;
+    const activePreviewKickstand = activeJointDragPreview?.kind === 'kickstand'
+        ? (activeJointDragPreview.support as (typeof kickstandState.kickstands)[string])
+        : null;
+
+    const renderLeavesById = useMemo(() => {
+        if (previewLeavesById.size === 0) return state.leaves;
+        const leaves = Object.create(state.leaves) as typeof state.leaves;
+        for (const [leafId, previewLeaf] of previewLeavesById) {
+            leaves[leafId] = previewLeaf;
+        }
+        return leaves;
+    }, [state.leaves, previewLeavesById]);
+
+    const renderBracesById = state.braces;
+    const ghostedBraceIdSet = useMemo(() => {
+        return collectGhostedBraceIds({
+            activeJointDragPreview,
+            previewKnotOverrideIds,
+            braceIdsByKnotId,
+            bracesById: state.braces,
+            isBraceVisible: (brace) => isModelVisible(brace.modelId, brace.id),
+        });
+    }, [activeJointDragPreview, hasPreviewKnotOverrides, previewKnotOverrideIds, braceIdsByKnotId, state.braces, isModelVisible]);
+    const renderKnotsById = useMemo(() => {
+        if (!hasPreviewKnotOverrides) return state.knots;
+        const knots = Object.create(state.knots) as typeof state.knots;
+        for (const knotId of previewKnotOverrideIds) {
+            knots[knotId] = previewKnotOverrides[knotId];
+        }
+        return knots;
+    }, [state.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
+    const renderKickstandKnotsById = useMemo(() => {
+        if (!hasPreviewKnotOverrides) return kickstandState.knots;
+        const knots = Object.create(kickstandState.knots) as typeof kickstandState.knots;
+        for (const knotId of previewKnotOverrideIds) {
+            knots[knotId] = previewKnotOverrides[knotId];
+        }
+        return knots;
+    }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
+
+    const activeKnotDragPreviewKnotId = activeKnotDragPreview?.knot.id ?? null;
+    const enableBraceLivePreviewForActiveBraceEdit = !!activeKnotDragPreviewKnotId
+        && (braceIdsByKnotId.get(activeKnotDragPreviewKnotId)?.length ?? 0) > 0;
+    const braceRenderKnotsById = useMemo(() => {
+        return enableBraceLivePreviewForActiveBraceEdit ? renderKnotsById : state.knots;
+    }, [enableBraceLivePreviewForActiveBraceEdit, renderKnotsById, state.knots]);
+
+    const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
+    const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
+    const branchListWithKnotDragPreview = useMemo(() => {
+        if (knotDragPreviewBranchIds.length === 0) return branchList;
+        return branchList.map((branch) => {
+            const previewSegments = knotDragPreviewBranchSegmentsById[branch.id];
+            if (!previewSegments || previewSegments === branch.segments) return branch;
+            return { ...branch, segments: previewSegments };
+        });
+    }, [branchList, knotDragPreviewBranchSegmentsById, knotDragPreviewBranchIds]);
+
+    const renderTrunkList = useMemo(() => {
+        if (!activePreviewTrunk) return trunkList;
+
+        let replaced = false;
+        const result = trunkList.map((trunk) => {
+            if (trunk.id !== activePreviewTrunk.id) return trunk;
+            replaced = true;
+            return activePreviewTrunk;
+        });
+
+        if (!replaced) result.push(activePreviewTrunk);
+        return result;
+    }, [trunkList, activePreviewTrunk]);
+
+    const renderBranchList = useMemo(() => {
+        if (!activePreviewBranch) return branchList;
+
+        let replaced = false;
+        const result = branchListWithKnotDragPreview.map((branch) => {
+            if (branch.id !== activePreviewBranch.id) return branch;
+            replaced = true;
+            return activePreviewBranch;
+        });
+
+        if (!replaced) result.push(activePreviewBranch);
+        return result;
+    }, [branchListWithKnotDragPreview, activePreviewBranch]);
+
+    const renderLeafList = useMemo(() => {
+        if (previewLeavesById.size === 0) return leafList;
+        return leafList.map((leaf) => previewLeavesById.get(leaf.id) ?? leaf);
+    }, [leafList, previewLeavesById]);
+    const renderTwigList = twigList;
+    const renderStickList = stickList;
+    const renderBraceList = braceList;
+    const renderKickstandList = useMemo(() => {
+        if (!activePreviewKickstand) return kickstandList;
+
+        let replaced = false;
+        const result = kickstandList.map((kickstand) => {
+            if (kickstand.id !== activePreviewKickstand.id) return kickstand;
+            replaced = true;
+            return activePreviewKickstand;
+        });
+
+        if (!replaced) result.push(activePreviewKickstand);
+        return result;
+    }, [kickstandList, activePreviewKickstand]);
+    const renderKnotList = useMemo(() => {
+        if (!hasPreviewKnotOverrides) return knotList;
+        return knotList.map((knot) => previewKnotOverrides[knot.id] ?? knot);
+    }, [hasPreviewKnotOverrides, knotList, previewKnotOverrides]);
+    const renderKickstandKnotList = useMemo(() => {
+        if (!hasPreviewKnotOverrides) return kickstandKnotList;
+        return kickstandKnotList.map((knot) => previewKnotOverrides[knot.id] ?? knot);
+    }, [hasPreviewKnotOverrides, kickstandKnotList, previewKnotOverrides]);
+
+    const resolvePreviewKnot = React.useCallback((knotId: string) => {
+        return previewKnotOverrides[knotId] ?? state.knots[knotId] ?? kickstandState.knots[knotId] ?? null;
+    }, [previewKnotOverrides, state.knots, kickstandState.knots]);
 
     const trunkShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
+
             const root = state.roots[trunk.rootId];
             if (!root) continue;
 
@@ -965,14 +1807,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [raftSettings.bottomMode, raftSettings.thickness, state.trunks, state.roots, isModelVisible]);
+    }, [raftSettings.bottomMode, raftSettings.thickness, renderTrunkList, state.roots, isModelVisible]);
 
     const branchShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             if (!isModelVisible(branch.modelId, branch.id)) continue;
-            const parentKnot = state.knots[branch.parentKnotId];
+            const parentKnot = renderKnotsById[branch.parentKnotId];
             if (!parentKnot) continue;
 
             const shafts: InstancedShaft[] = [];
@@ -1017,36 +1859,68 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.branches, state.knots, isModelVisible]);
+    }, [renderBranchList, renderKnotsById, isModelVisible]);
 
     const braceShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
 
-        for (const brace of Object.values(state.braces)) {
+        for (const brace of renderBraceList) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
-            if (brace.curve?.type === 'bezier') continue;
 
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
+            // Keep braces anchored to committed knots during non-brace edits,
+            // but allow live preview while the user is directly editing a brace knot.
+            const startKnot = braceRenderKnotsById[brace.startKnotId];
+            const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
-            const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-            result.set(brace.id, {
-                supportId: brace.id,
-                modelId: brace.modelId,
-                shafts: [{
-                    id: `braceSegment:${brace.id}`,
+            const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+            const startHostDiameter = Math.max(
+                0.001,
+                (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+            );
+            const endHostDiameter = Math.max(
+                0.001,
+                (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+            );
+            const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;
+
+            // Tapered braces are rendered in the detailed path so we can preserve
+            // dynamic start/end diameters. Uniform braces remain batched for speed.
+            if (isTaperedBrace) {
+                continue;
+            }
+
+            const diameter = (startHostDiameter + endHostDiameter) * 0.5;
+            const segmentId = `braceSegment:${brace.id}`;
+            const shafts = brace.curve?.type === 'bezier'
+                ? tessellateBraceBezierToShafts(
+                    segmentId,
+                    startKnot.pos,
+                    endKnot.pos,
+                    brace.curve.controlPoint1,
+                    brace.curve.controlPoint2,
+                    diameter,
+                    brace.id,
+                    brace.modelId,
+                )
+                : [{
+                    id: segmentId,
                     start: startKnot.pos,
                     end: endKnot.pos,
                     diameter,
                     supportId: brace.id,
                     modelId: brace.modelId,
-                }],
+                }];
+
+            result.set(brace.id, {
+                supportId: brace.id,
+                modelId: brace.modelId,
+                shafts,
             });
         }
 
         return result;
-    }, [state.braces, state.knots, isModelVisible]);
+    }, [renderBraceList, braceRenderKnotsById, isModelVisible]);
 
     const twigShaftsBySupport = useMemo(() => {
         if (!enableTwigSceneBatching) {
@@ -1064,7 +1938,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             };
         };
 
-        for (const twig of Object.values(state.twigs)) {
+        for (const twig of renderTwigList) {
             if (!isModelVisible(twig.modelId, twig.id)) continue;
 
             const shafts: InstancedShaft[] = [];
@@ -1121,12 +1995,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.twigs, isModelVisible, enableTwigSceneBatching]);
+    }, [renderTwigList, isModelVisible, enableTwigSceneBatching]);
 
     const stickShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             if (!isModelVisible(stick.modelId, stick.id)) continue;
 
             const shafts: InstancedShaft[] = [];
@@ -1170,18 +2044,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.sticks, isModelVisible]);
+    }, [renderStickList, isModelVisible]);
 
     const kickstandShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of renderKickstandList) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
 
             const root = kickstandState.roots[kickstand.rootId];
-            const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+            const hostKnot = renderKickstandKnotsById[kickstand.hostKnotId];
             if (!root || !hostKnot) continue;
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -1234,57 +2108,57 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
+    }, [renderKickstandList, kickstandState.roots, renderKickstandKnotsById, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
 
     const segmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             for (const segment of trunk.segments) {
                 map.set(segment.id, trunk.modelId);
             }
         }
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             for (const segment of branch.segments) {
                 map.set(segment.id, branch.modelId);
             }
         }
 
-        for (const twig of Object.values(state.twigs)) {
+        for (const twig of renderTwigList) {
             for (const segment of twig.segments) {
                 map.set(segment.id, twig.modelId);
             }
         }
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             for (const segment of stick.segments) {
                 map.set(segment.id, stick.modelId);
             }
         }
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of renderKickstandList) {
             for (const segment of kickstand.segments) {
                 map.set(segment.id, kickstand.modelId);
             }
         }
 
         return map;
-    }, [state.trunks, state.branches, state.twigs, state.sticks, kickstandState.kickstands]);
+    }, [renderTrunkList, renderBranchList, renderTwigList, renderStickList, renderKickstandList]);
 
     const modelIdByKnotId = useMemo(() => {
         const map = new Map<string, string | undefined>();
 
-        for (const knot of Object.values(state.knots)) {
+        for (const knot of renderKnotList) {
             const parentShaftId = knot.parentShaftId;
             let modelId: string | undefined;
 
             if (parentShaftId.startsWith('braceSegment:')) {
                 const braceId = parentShaftId.slice('braceSegment:'.length);
-                modelId = state.braces[braceId]?.modelId;
+                modelId = renderBracesById[braceId]?.modelId;
             } else if (parentShaftId.startsWith('leafCone:')) {
                 const leafId = parentShaftId.slice('leafCone:'.length);
-                modelId = state.leaves[leafId]?.modelId;
+                modelId = renderLeavesById[leafId]?.modelId;
             } else {
                 modelId = segmentModelIdById.get(parentShaftId);
             }
@@ -1292,16 +2166,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             map.set(knot.id, modelId);
         }
 
-        for (const knot of Object.values(kickstandState.knots)) {
+        for (const knot of renderKickstandKnotList) {
             const parentShaftId = knot.parentShaftId;
             let modelId: string | undefined;
 
             if (parentShaftId.startsWith('braceSegment:')) {
                 const braceId = parentShaftId.slice('braceSegment:'.length);
-                modelId = state.braces[braceId]?.modelId;
+                modelId = renderBracesById[braceId]?.modelId;
             } else if (parentShaftId.startsWith('leafCone:')) {
                 const leafId = parentShaftId.slice('leafCone:'.length);
-                modelId = state.leaves[leafId]?.modelId;
+                modelId = renderLeavesById[leafId]?.modelId;
             } else {
                 modelId = segmentModelIdById.get(parentShaftId);
             }
@@ -1310,12 +2184,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return map;
-    }, [state.knots, state.braces, state.leaves, kickstandState.knots, segmentModelIdById]);
+    }, [renderKnotList, renderBracesById, renderLeavesById, renderKickstandKnotList, segmentModelIdById]);
 
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             const modelId = trunk.modelId;
             if (!isModelVisible(modelId)) continue;
             if (!trunk.contactCone) continue;
@@ -1336,7 +2210,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             });
         }
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             const modelId = branch.modelId ?? modelIdByKnotId.get(branch.parentKnotId);
             if (!isModelVisible(modelId)) continue;
             if (!branch.contactCone) continue;
@@ -1357,7 +2231,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             });
         }
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             const modelId = stick.modelId;
             if (!isModelVisible(modelId)) continue;
 
@@ -1389,33 +2263,33 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             });
         }
 
-        for (const leaf of Object.values(state.leaves)) {
-            const modelId = leaf.modelId ?? modelIdByKnotId.get(leaf.parentKnotId);
+        for (const previewLeaf of renderLeafList) {
+            const modelId = previewLeaf.modelId ?? modelIdByKnotId.get(previewLeaf.parentKnotId);
             if (!isModelVisible(modelId)) continue;
 
-            result.set(leaf.id, {
-                supportId: leaf.id,
+            result.set(previewLeaf.id, {
+                supportId: previewLeaf.id,
                 modelId,
                 cones: [{
-                    id: leaf.contactCone.id,
-                    supportId: leaf.id,
+                    id: previewLeaf.contactCone.id,
+                    supportId: previewLeaf.id,
                     modelId,
-                    pos: leaf.contactCone.pos,
-                    normal: leaf.contactCone.normal,
-                    surfaceNormal: leaf.contactCone.surfaceNormal,
-                    diskLengthOverride: leaf.contactCone.diskLengthOverride,
-                    profile: leaf.contactCone.profile,
+                    pos: previewLeaf.contactCone.pos,
+                    normal: previewLeaf.contactCone.normal,
+                    surfaceNormal: previewLeaf.contactCone.surfaceNormal,
+                    diskLengthOverride: previewLeaf.contactCone.diskLengthOverride,
+                    profile: previewLeaf.contactCone.profile,
                 }],
             });
         }
 
         return result;
-    }, [state.trunks, state.branches, state.sticks, state.leaves, modelIdByKnotId, isModelVisible]);
+    }, [renderTrunkList, renderBranchList, renderStickList, renderLeafList, modelIdByKnotId, isModelVisible]);
 
     const trunkJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
 
             const seen = new Set<string>();
@@ -1444,12 +2318,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.trunks, isModelVisible]);
+    }, [renderTrunkList, isModelVisible]);
 
     const branchJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             if (!isModelVisible(branch.modelId, branch.id)) continue;
 
             const seen = new Set<string>();
@@ -1478,12 +2352,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.branches, isModelVisible]);
+    }, [renderBranchList, isModelVisible]);
 
     const twigJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
 
-        for (const twig of Object.values(state.twigs)) {
+        for (const twig of renderTwigList) {
             if (!isModelVisible(twig.modelId, twig.id)) continue;
 
             const seen = new Set<string>();
@@ -1523,12 +2397,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.twigs, isModelVisible]);
+    }, [renderTwigList, isModelVisible]);
 
     const stickJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             if (!isModelVisible(stick.modelId, stick.id)) continue;
 
             const seen = new Set<string>();
@@ -1568,12 +2442,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.sticks, isModelVisible]);
+    }, [renderStickList, isModelVisible]);
 
     const kickstandJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of renderKickstandList) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
 
             const seen = new Set<string>();
@@ -1602,7 +2476,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [kickstandState.kickstands, isModelVisible]);
+    }, [renderKickstandList, isModelVisible]);
 
     const sceneBatchedJointGroups = useMemo(() => {
         const grouped = new Map<string, InstancedJoint[]>();
@@ -1621,7 +2495,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }
         };
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
             if (selectedTrunkIds.has(trunk.id)) continue;
             const jointSet = trunkJointsBySupport.get(trunk.id);
@@ -1631,7 +2505,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             pushJoints(color, jointSet.joints);
         }
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             if (!isModelVisible(branch.modelId, branch.id)) continue;
             if (selectedBranchIds.has(branch.id)) continue;
             const jointSet = branchJointsBySupport.get(branch.id);
@@ -1641,7 +2515,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             pushJoints(color, jointSet.joints);
         }
 
-        for (const twig of Object.values(state.twigs)) {
+        for (const twig of renderTwigList) {
             if (!isModelVisible(twig.modelId, twig.id)) continue;
             if (selectedTwigIds.has(twig.id)) continue;
             const jointSet = twigJointsBySupport.get(twig.id);
@@ -1651,7 +2525,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             pushJoints(color, jointSet.joints);
         }
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             if (!isModelVisible(stick.modelId, stick.id)) continue;
             if (selectedStickIds.has(stick.id)) continue;
             const jointSet = stickJointsBySupport.get(stick.id);
@@ -1661,7 +2535,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             pushJoints(color, jointSet.joints);
         }
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of renderKickstandList) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
             if (selectedKickstandIds.has(kickstand.id)) continue;
             const jointSet = kickstandJointsBySupport.get(kickstand.id);
@@ -1674,11 +2548,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return Array.from(grouped.entries()).map(([color, joints]) => ({ color, joints }));
     }, [
         disableSelectionAndHover,
-        state.trunks,
-        state.branches,
-        state.twigs,
-        state.sticks,
-        kickstandState.kickstands,
+        renderTrunkList,
+        renderBranchList,
+        renderTwigList,
+        renderStickList,
+        renderKickstandList,
         isModelVisible,
         selectedTrunkIds,
         selectedBranchIds,
@@ -1702,7 +2576,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
-        for (const twig of Object.values(state.twigs)) {
+        for (const twig of renderTwigList) {
             if (!isModelVisible(twig.modelId, twig.id)) continue;
             const shaftSet = twigShaftsBySupport.get(twig.id);
             if (!shaftSet) continue;
@@ -1721,12 +2595,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToVec3Like, enableTwigSceneBatching, resolveSceneSupportColor]);
+    }, [renderTwigList, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToVec3Like, enableTwigSceneBatching, resolveSceneSupportColor]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             if (!isModelVisible(stick.modelId, stick.id)) continue;
             const shaftSet = stickShaftsBySupport.get(stick.id);
             if (!shaftSet) continue;
@@ -1745,12 +2619,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.sticks, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderStickList, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedKickstandShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of renderKickstandList) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
             const shaftSet = kickstandShaftsBySupport.get(kickstand.id);
             if (!shaftSet) continue;
@@ -1769,7 +2643,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [kickstandState.kickstands, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderKickstandList, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
@@ -1777,12 +2651,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const sectionColorsEnabled = !!settings.autoBracing.debugSectionColorsEnabled;
         const splitByDebugSection = sectionColorsEnabled && !dimNonSelected;
 
-        for (const brace of Object.values(state.braces)) {
+        for (const brace of renderBraceList) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
             const shaftSet = braceShaftsBySupport.get(brace.id);
             if (!shaftSet) continue;
 
-            if (selectedBraceIds.has(brace.id)) continue;
+            if (selectedBraceIds.has(brace.id) || ghostedBraceIdSet.has(brace.id)) continue;
 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
             const debugSection = splitByDebugSection
@@ -1814,12 +2688,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.braces, braceShaftsBySupport, selectedBraceIds, isModelVisible, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected, resolveSceneSupportColor]);
+    }, [renderBraceList, braceShaftsBySupport, selectedBraceIds, ghostedBraceIdSet, isModelVisible, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
             const shaftSet = trunkShaftsBySupport.get(trunk.id);
             if (!shaftSet) continue;
@@ -1840,12 +2714,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderTrunkList, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             if (!isModelVisible(branch.modelId)) continue;
             const shaftSet = branchShaftsBySupport.get(branch.id);
             if (!shaftSet) continue;
@@ -1868,7 +2742,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.branches, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderBranchList, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
@@ -1877,7 +2751,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             if (!isModelVisible(trunk.modelId)) continue;
             if (selectedTrunkIds.has(trunk.id)) continue;
 
@@ -1917,7 +2791,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hidePlateContactPrimitivesEffective,
         raftSettings.bottomMode,
         raftSettings.thickness,
-        state.trunks,
+        renderTrunkList,
         state.roots,
         dimNonSelected,
         resolveBaseColor,
@@ -1935,7 +2809,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
+        for (const kickstand of renderKickstandList) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
             if (selectedKickstandIds.has(kickstand.id)) continue;
 
@@ -1978,7 +2852,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hidePlateContactPrimitivesEffective,
         raftSettings.bottomMode,
         raftSettings.thickness,
-        kickstandState.kickstands,
+        renderKickstandList,
         kickstandState.roots,
         selectedKickstandIds,
         dimNonSelected,
@@ -1998,7 +2872,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (conesForColor.length > 0) grouped.set(color, conesForColor);
         };
 
-        for (const trunk of Object.values(state.trunks)) {
+        for (const trunk of renderTrunkList) {
             if (selectedTrunkIds.has(trunk.id)) continue;
             const coneSet = contactConesBySupport.get(trunk.id);
             if (!coneSet) continue;
@@ -2010,7 +2884,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }));
         }
 
-        for (const branch of Object.values(state.branches)) {
+        for (const branch of renderBranchList) {
             if (selectedBranchIds.has(branch.id)) continue;
             const coneSet = contactConesBySupport.get(branch.id);
             if (!coneSet) continue;
@@ -2022,7 +2896,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }));
         }
 
-        for (const stick of Object.values(state.sticks)) {
+        for (const stick of renderStickList) {
             if (selectedStickIds.has(stick.id)) continue;
             const coneSet = contactConesBySupport.get(stick.id);
             if (!coneSet) continue;
@@ -2034,7 +2908,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }));
         }
 
-        for (const leaf of Object.values(state.leaves)) {
+        for (const leaf of renderLeafList) {
             if (selectedLeafIds.has(leaf.id)) continue;
             const coneSet = contactConesBySupport.get(leaf.id);
             if (!coneSet) continue;
@@ -2048,10 +2922,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return Array.from(grouped.entries()).map(([color, cones]) => ({ color, cones }));
     }, [
-        state.trunks,
-        state.branches,
-        state.sticks,
-        state.leaves,
+        renderTrunkList,
+        renderBranchList,
+        renderStickList,
+        renderLeafList,
         contactConesBySupport,
         selectedTrunkIds,
         selectedBranchIds,
@@ -2093,6 +2967,52 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const sceneBatchedShaftRadialSegments = sceneBatchedShaftInstanceCount >= BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD
         ? BATCHED_SHAFT_LOW_RADIAL_SEGMENTS
         : BATCHED_SHAFT_RADIAL_SEGMENTS;
+
+    const placementPreviewBatches = useMemo(() => {
+        if (mode !== 'support') return [] as PlacementPreviewBatch[];
+
+        const hasSolidBottom = raftSettings.bottomMode === 'solid';
+        const raftThickness = raftSettings.thickness ?? 0;
+        const next: PlacementPreviewBatch[] = [];
+
+        const pushSupportPreview = (id: string, preview: SupportData | null) => {
+            if (!preview) return;
+            const batch = buildSupportPlacementPreviewBatch(id, preview, hasSolidBottom, raftThickness);
+            if (!batch) return;
+
+            if (hidePlateContactPrimitivesEffective) {
+                next.push({
+                    ...batch,
+                    roots: [],
+                });
+                return;
+            }
+
+            next.push(batch);
+        };
+
+        pushSupportPreview('placement-preview:trunk', trunkPlacementPreview);
+        pushSupportPreview('placement-preview:branch', branchPlacementPreview);
+        pushSupportPreview('placement-preview:leaf', leafPlacementPreview);
+        pushSupportPreview('placement-preview:kickstand', kickstandPlacementPreview);
+
+        if (bracePlacementPreview) {
+            const braceBatch = buildBracePlacementPreviewBatch('placement-preview:brace', bracePlacementPreview);
+            if (braceBatch) next.push(braceBatch);
+        }
+
+        return next;
+    }, [
+        mode,
+        trunkPlacementPreview,
+        branchPlacementPreview,
+        leafPlacementPreview,
+        bracePlacementPreview,
+        kickstandPlacementPreview,
+        raftSettings.bottomMode,
+        raftSettings.thickness,
+        hidePlateContactPrimitivesEffective,
+    ]);
 
     const hoveredSupportShaftSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -2372,7 +3292,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return;
         }
 
-        if (supportSelectionAndHoverSuppressed) {
+        if (supportSelectionAndHoverSuppressed || braceAltActive || kickstandHotkeyActive) {
             const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
             const point = e.point
                 ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
@@ -2390,11 +3310,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, kickstandHotkeyActive]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft, event: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+
+        const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
+        const allowSuppressedShaftHoverForPlacementPreview = (braceAltActive || kickstandHotkeyActive) && mode === 'support' && !jointDragInteractionActive;
 
         const sceneHoverWriteDecision = resolveSceneBatchedShaftHoverWriteDecision({
             supportId: shaft.supportId,
@@ -2405,15 +3328,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             selectedSupportIdSet,
             hoverSuppressed: supportSelectionAndHoverSuppressed,
             primitiveHoverSuppressesSceneShaftHover,
+            selectedPrimitiveSupportId,
         });
         const point = event?.point
             ? { x: (event.point as any).x, y: (event.point as any).y, z: (event.point as any).z }
             : null;
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason !== 'interaction-suppressed') {
-            window.dispatchEvent(new CustomEvent('shaft-leave', {
-                detail: { segmentId: shaft.id },
-            }));
+            // When placement hotkeys are active, always emit shaft-hover so previews can track
+            // unselected shafts even when hover suppression logic would otherwise clear it.
+            if (allowSuppressedShaftHoverForPlacementPreview) {
+                window.dispatchEvent(new CustomEvent('shaft-hover', {
+                    detail: { segmentId: shaft.id, point, intersection: event },
+                }));
+            } else {
+                window.dispatchEvent(new CustomEvent('shaft-leave', {
+                    detail: { segmentId: shaft.id },
+                }));
+            }
             applySceneHoverWriteDecision(
                 sceneHoverWriteDecision,
                 pendingSceneHoverClearFrameRef,
@@ -2424,13 +3356,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason === 'interaction-suppressed') {
-            window.dispatchEvent(new CustomEvent('shaft-hover', {
-                detail: {
-                    segmentId: shaft.id,
-                    point,
-                    intersection: event,
-                },
-            }));
+            if (allowSuppressedShaftHoverForPlacementPreview) {
+                window.dispatchEvent(new CustomEvent('shaft-hover', {
+                    detail: {
+                        segmentId: shaft.id,
+                        point,
+                        intersection: event,
+                    },
+                }));
+            } else {
+                window.dispatchEvent(new CustomEvent('shaft-leave', {
+                    detail: { segmentId: shaft.id },
+                }));
+            }
             applySceneHoverWriteDecision(
                 sceneHoverWriteDecision,
                 pendingSceneHoverClearFrameRef,
@@ -2456,7 +3394,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, mode, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, mode, braceAltActive, kickstandHotkeyActive, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback((entity: { id: string } | null) => {
         if (!isPointerInteractable) return;
@@ -2507,12 +3445,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 primitiveHoverOnSelectedSupport,
                 selectedSupportIdSet,
                 hoverSuppressed: supportSelectionAndHoverSuppressed,
+                selectedPrimitiveSupportId,
             }),
             pendingSceneHoverClearFrameRef,
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -2538,12 +3477,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 primitiveHoverOnSelectedSupport,
                 selectedSupportIdSet,
                 hoverSuppressed: supportSelectionAndHoverSuppressed,
+                selectedPrimitiveSupportId,
             }),
             pendingSceneHoverClearFrameRef,
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -2569,12 +3509,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 primitiveHoverOnSelectedSupport,
                 selectedSupportIdSet,
                 hoverSuppressed: supportInteractionSuppressed,
+                selectedPrimitiveSupportId,
             }),
             pendingSceneHoverClearFrameRef,
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveHoverActive, selectedSupportIdSet, supportInteractionSuppressed]);
+    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportInteractionSuppressed]);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -2590,6 +3531,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
 
         const applyMaterialGhostOpacity = (material: THREE.Material) => {
+            if (!ghostTransparent && Math.abs(ghostOpacityClamped - 1) <= 1e-4) {
+                return;
+            }
+
             const renderMaterial = material as THREE.Material & {
                 transparent?: boolean;
                 opacity?: number;
@@ -2723,13 +3668,61 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             ))}
 
+            {placementPreviewBatches.map((batch) => (
+                <group key={`${batch.id}:${batch.color}:${batch.opacity}`}>
+                    {batch.shafts.length > 0 && (
+                        <InstancedShaftGroup
+                            shafts={batch.shafts}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.08}
+                            transparent
+                            opacity={batch.opacity}
+                            radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                        />
+                    )}
+                    {batch.joints.length > 0 && (
+                        <InstancedJointGroup
+                            joints={batch.joints}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.08}
+                            transparent
+                            opacity={batch.opacity}
+                            widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
+                            heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
+                        />
+                    )}
+                    {batch.roots.length > 0 && (
+                        <InstancedRootsGroup
+                            roots={batch.roots}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.08}
+                            transparent
+                            opacity={batch.opacity}
+                        />
+                    )}
+                    {batch.cones.length > 0 && (
+                        <InstancedContactConeGroup
+                            cones={batch.cones}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.08}
+                            transparent
+                            opacity={batch.opacity}
+                        />
+                    )}
+                </group>
+            ))}
+
             {hoveredSupportOverlayShafts.length > 0 && hoveredSupportShaftSet && (
                 <InstancedShaftGroup
                     key={`scene-hover-overlay:${hoveredSupportShaftSet.supportId}:${hoveredSupportOverlayShafts.length}`}
                     shafts={hoveredSupportOverlayShafts}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportShaftSet.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
@@ -2745,7 +3738,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     cones={hoveredSupportOverlayCones}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportConeSet.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
@@ -2760,7 +3753,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     joints={hoveredSupportOverlayJoints}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportJointSet.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
@@ -2777,7 +3770,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     roots={hoveredSupportOverlayRoots}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportOverlayRoots[0]?.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
@@ -2792,7 +3785,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={marqueeHoveredOverlayShafts}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
@@ -2808,7 +3801,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     cones={marqueeHoveredOverlayCones}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
@@ -2823,7 +3816,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     joints={marqueeHoveredOverlayJoints}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
@@ -2840,7 +3833,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     roots={marqueeHoveredOverlayRoots}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
@@ -2849,19 +3842,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {Object.values(state.trunks).map(trunk => {
+            {renderTrunkList.map(trunk => {
                 if (!isModelVisible(trunk.modelId, trunk.id)) return null;
                 const root = state.roots[trunk.rootId];
                 if (!root) return null;
 
                 const effectiveSelected = selectedTrunkIds.has(trunk.id);
-                const hasBezierSegment = trunk.segments.some((s) => s.type === 'bezier');
-                const renderDetailedTrunk = effectiveSelected || hasBezierSegment;
+                const renderDetailedTrunk = effectiveSelected;
                 if (!renderDetailedTrunk) return null;
 
                 const isTrunkHovered = hoveredSupportIdForVisual === trunk.id
                     || marqueeHoveredSupportIdSet.has(trunk.id);
-                const deferTrunkInteractionToSceneBatch = !effectiveSelected && !hasBezierSegment;
+                const deferTrunkInteractionToSceneBatch = !effectiveSelected;
 
                 return (
                     <group key={trunk.id}>
@@ -2902,19 +3894,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 </group>
             ))}
 
-            {Object.values(state.branches).map(branch => {
+            {renderBranchList.map(branch => {
                 if (!isModelVisible(branch.modelId, branch.id)) return null;
-                const knot = state.knots[branch.parentKnotId];
+                const knot = renderKnotsById[branch.parentKnotId];
                 if (!knot) return null;
 
                 const effectiveSelected = selectedBranchIds.has(branch.id);
-                const hasBezierSegment = branch.segments.some((s) => s.type === 'bezier');
-                const renderDetailedBranch = effectiveSelected || hasBezierSegment;
+                const renderDetailedBranch = effectiveSelected;
                 if (!renderDetailedBranch) return null;
 
                 const isBranchHovered = hoveredSupportIdForVisual === branch.id
                     || marqueeHoveredSupportIdSet.has(branch.id);
-                const deferBranchInteractionToSceneBatch = !effectiveSelected && !hasBezierSegment;
+                const deferBranchInteractionToSceneBatch = !effectiveSelected;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -2940,9 +3931,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {/* Render Leaves */}
-            {Object.values(state.leaves).map(leaf => {
+            {renderLeafList.map(leaf => {
                 if (!isModelVisible(leaf.modelId, leaf.id)) return null;
-                const knot = state.knots[leaf.parentKnotId];
+                const knot = renderKnotsById[leaf.parentKnotId];
                 if (!knot) return null;
 
                 const effectiveSelected = selectedLeafIds.has(leaf.id);
@@ -2955,6 +3946,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={leaf.id}
                         leaf={leaf}
                         parentKnot={knot}
+                        selectedId={selectedId}
                         isSelected={effectiveSelected}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(leaf.modelId)}
@@ -2968,7 +3960,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {/* Render Twigs */}
-            {Object.values(state.twigs).map(twig => {
+            {renderTwigList.map(twig => {
                 if (!isModelVisible(twig.modelId, twig.id)) return null;
                 const effectiveSelected = selectedTwigIds.has(twig.id);
                 const isTwigBatchable = twigShaftsBySupport.has(twig.id);
@@ -3014,7 +4006,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             ))}
 
             {/* Render Sticks */}
-            {Object.values(state.sticks).map(stick => {
+            {renderStickList.map(stick => {
                 if (!isModelVisible(stick.modelId, stick.id)) return null;
                 const effectiveSelected = selectedStickIds.has(stick.id);
                 const isStickBatchable = stickShaftsBySupport.has(stick.id);
@@ -3076,49 +4068,51 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 </group>
             ))}
 
-            {Object.values(state.braces).map(brace => {
+            {renderBraceList.map(brace => {
                 if (!isModelVisible(brace.modelId, brace.id)) return null;
-                const startKnot = state.knots[brace.startKnotId];
-                const endKnot = state.knots[brace.endKnotId];
-                if (!startKnot || !endKnot) return null;
-
                 const effectiveSelected = selectedBraceIds.has(brace.id);
                 const isBraceBatchable = braceShaftsBySupport.has(brace.id);
-                const renderDetailedBrace = effectiveSelected || !isBraceBatchable;
+                const isBraceGhosted = ghostedBraceIdSet.has(brace.id);
+                const renderDetailedBrace = effectiveSelected || !isBraceBatchable || isBraceGhosted;
                 if (!renderDetailedBrace) return null;
 
                 const isBraceHovered = hoveredSupportIdForVisual === brace.id
                     || marqueeHoveredSupportIdSet.has(brace.id);
                 const deferBraceInteractionToSceneBatch = !effectiveSelected && isBraceBatchable;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
+                const braceStartKnot = braceRenderKnotsById[brace.startKnotId];
+                const braceEndKnot = braceRenderKnotsById[brace.endKnotId];
+                if (!braceStartKnot || !braceEndKnot) return null;
 
                 return (
                     <group key={brace.id}>
-                    <BraceRenderer
-                        key={brace.id}
-                        brace={brace}
-                        startKnot={startKnot}
-                        endKnot={endKnot}
-                        isSelected={effectiveSelected}
-                        dimNonSelected={dimNonSelected}
-                        baseColor={resolveBaseColor(brace.modelId)}
-                        showKnots={showKnots}
-                        suppressHover={suppressHover}
-                        isHovered={isBraceHovered}
-                        isInteractable={isInteractable}
-                        deferStraightShaftToSceneBatch={!effectiveSelected && isBraceBatchable}
-                        deferInteractionToSceneBatch={deferBraceInteractionToSceneBatch}
-                        debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
-                    />
+                        <BraceRenderer
+                            key={brace.id}
+                            brace={brace}
+                            startKnot={braceStartKnot}
+                            endKnot={braceEndKnot}
+                            isSelected={effectiveSelected}
+                            ghosted={isBraceGhosted}
+                            ghostOpacity={ghostOpacityClamped}
+                            dimNonSelected={dimNonSelected}
+                            baseColor={resolveBaseColor(brace.modelId)}
+                            showKnots={showKnots}
+                            suppressHover={suppressHover || isBraceGhosted}
+                            isHovered={isBraceHovered}
+                            isInteractable={isInteractable && !isBraceGhosted}
+                            deferStraightShaftToSceneBatch={!effectiveSelected && isBraceBatchable && !isBraceGhosted}
+                            deferInteractionToSceneBatch={deferBraceInteractionToSceneBatch || isBraceGhosted}
+                            debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
+                        />
                     </group>
                 );
             })}
 
             {/* Render Kickstands */}
-            {Object.values(kickstandState.kickstands).map((kickstand) => {
+            {renderKickstandList.map((kickstand) => {
                 if (!isModelVisible(kickstand.modelId, kickstand.id)) return null;
                 const root = kickstandState.roots[kickstand.rootId];
-                const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+                const hostKnot = renderKickstandKnotsById[kickstand.hostKnotId];
                 if (!root || !hostKnot) return null;
 
                 const effectiveSelected = selectedKickstandIds.has(kickstand.id);

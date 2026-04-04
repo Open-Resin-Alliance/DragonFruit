@@ -13,6 +13,7 @@ type MarqueeSelection = {
 
 type UseMarqueeSelectionHandlersParams = {
   containerRef: React.RefObject<HTMLDivElement | null>;
+  interactionResetToken?: number;
   mode?: string;
   isGizmoDragging: boolean;
   isPostGizmoInteractionGuardActive: boolean;
@@ -31,6 +32,7 @@ type UseMarqueeSelectionHandlersParams = {
 
 export function useMarqueeSelectionHandlers({
   containerRef,
+  interactionResetToken,
   mode,
   isGizmoDragging,
   isPostGizmoInteractionGuardActive,
@@ -50,6 +52,13 @@ export function useMarqueeSelectionHandlers({
   const marqueePointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [marqueeSelection, setMarqueeSelection] = React.useState<MarqueeSelection | null>(null);
   const isMarqueeSelecting = marqueeSelection !== null;
+
+  React.useEffect(() => {
+    marqueePointerIdRef.current = null;
+    marqueePointerStartRef.current = null;
+    setMarqueeSelection(null);
+    clearSupportMarqueeSelection();
+  }, [interactionResetToken]);
 
   const clampPointToContainer = React.useCallback((clientX: number, clientY: number) => {
     const rect = containerRef.current?.getBoundingClientRect();

@@ -382,7 +382,7 @@ export function PickingRenderer({
 
   // Keep cache in sync even when pointer is idle, so next pick has no setup hitch.
   useFrame(() => {
-    if (!config.enabled) return;
+    if (!config.enabled || isPaused) return;
     syncPickSceneCache();
   });
 

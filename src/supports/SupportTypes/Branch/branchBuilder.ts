@@ -7,6 +7,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
 import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
+import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -38,6 +39,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const { tipPos, tipNormal, modelId, parentKnot } = input;
 
     const settings = getSettings();
+    const settingsCodeHex = encodeSupportSettingsHex(settings);
     const coneAngleMode = settings.tip.coneAngleMode ?? 'normal';
     const adaptiveConeAngleOffsetDeg = settings.tip.adaptiveConeAngleOffsetDeg ?? 30;
 
@@ -123,6 +125,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const branch: Branch = {
         id: branchId,
         modelId,
+        settingsCodeHex,
         parentKnotId: parentKnot.id,
         segments: [bottomSegment, topSegment],
         contactCone,
@@ -131,6 +134,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const supportData: SupportData = {
         id: branchId,
         startPos: parentKnot.pos,
+        knot: parentKnot,
         segments: [bottomSegment, topSegment],
         contactCone,
     };

@@ -9,6 +9,7 @@ import { useJointCreationState } from './jointCreationState';
 import { getJointDiameter } from '../../constants';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 export function useJointCreation() {
     // Consume global state driven by page.tsx
@@ -113,6 +114,7 @@ export function useJointCreation() {
 
         const handleClick = (e: MouseEvent) => {
             if (target && preview) {
+                const beforeSnapshot = captureSupportEditSnapshot();
                 const state = getSnapshot();
                 
                 // Try to find in trunks first
@@ -122,6 +124,7 @@ export function useJointCreation() {
                     const root = state.roots[trunk.rootId];
                     const newTrunk = splitShaft(trunk, target.segmentId, preview.pos, target.t, root);
                     updateTrunk(newTrunk);
+                    pushSupportEditHistory('Create trunk joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on trunk:', trunk.id);
                     
                     e.stopPropagation(); 
@@ -137,6 +140,7 @@ export function useJointCreation() {
                     const parentKnot = knots.find(k => k.id === branch.parentKnotId);
                     const newBranch = splitBranchShaft(branch, target.segmentId, preview.pos, target.t, parentKnot);
                     updateBranch(newBranch);
+                    pushSupportEditHistory('Create branch joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on branch:', branch.id);
                     
                     e.stopPropagation(); 
@@ -150,6 +154,7 @@ export function useJointCreation() {
                 if (twig) {
                     const newTwig = splitTwigShaft(twig, target.segmentId, preview.pos, target.t);
                     updateTwig(newTwig);
+                    pushSupportEditHistory('Create twig joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on twig:', twig.id);
 
                     e.stopPropagation();
@@ -163,6 +168,7 @@ export function useJointCreation() {
                 if (stick) {
                     const newStick = splitStickShaft(stick, target.segmentId, preview.pos, target.t);
                     updateStick(newStick);
+                    pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on stick:', stick.id);
 
                     e.stopPropagation();

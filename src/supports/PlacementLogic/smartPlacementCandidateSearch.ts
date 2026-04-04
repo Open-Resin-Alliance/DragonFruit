@@ -23,6 +23,7 @@ export interface BuildCandidateNodesArgs {
     searchDropsMm: number[];
     searchAngles: number;
     minSegmentLengthMm: number;
+    raycaster?: THREE.Raycaster;
 }
 
 export function buildCandidateNodes(args: BuildCandidateNodesArgs): CandidateNode[] {
@@ -39,19 +40,34 @@ export function buildCandidateNodes(args: BuildCandidateNodesArgs): CandidateNod
         searchDropsMm,
         searchAngles,
         minSegmentLengthMm,
+        raycaster,
     } = args;
 
     const candidates: CandidateNode[] = [];
     const seen = new Set<string>();
     const anchorPoints: Vec3[] = [current.pos];
+    const minAngleRad = (minAngleDeg * Math.PI) / 180;
+    const tanMinAngle = Math.tan(minAngleRad);
+    const angleCount = Math.max(1, Math.floor(searchAngles));
+    const angularDirections: Array<{ x: number; y: number }> = new Array(angleCount);
+
+    for (let angleIdx = 0; angleIdx < angleCount; angleIdx += 1) {
+        const angleRad = (angleIdx / angleCount) * Math.PI * 2;
+        angularDirections[angleIdx] = {
+            x: Math.cos(angleRad),
+            y: Math.sin(angleRad),
+        };
+    }
 
     if (distanceXY(current.pos, blockPoint) > 0.25 || Math.abs(current.pos.z - blockPoint.z) > 0.25) {
         anchorPoints.push(blockPoint);
     }
 
-    for (const anchor of anchorPoints) {
+    for (let anchorIndex = 0; anchorIndex < anchorPoints.length; anchorIndex += 1) {
+        const anchor = anchorPoints[anchorIndex];
+        const anchorPenalty = anchorIndex === 0 ? 0 : 2;
         for (const radius of searchRadiiMm) {
-            const requiredDrop = radius * Math.tan((minAngleDeg * Math.PI) / 180);
+            const requiredDrop = radius * tanMinAngle;
 
             for (const drop of searchDropsMm) {
                 const targetDrop = Math.max(drop, requiredDrop);
@@ -59,11 +75,11 @@ export function buildCandidateNodes(args: BuildCandidateNodesArgs): CandidateNod
 
                 if (nextZ <= rootTopZ + 0.25) continue;
 
-                for (let angleIdx = 0; angleIdx < searchAngles; angleIdx++) {
-                    const angleRad = (angleIdx / searchAngles) * Math.PI * 2;
+                for (let angleIdx = 0; angleIdx < angleCount; angleIdx += 1) {
+                    const dir = angularDirections[angleIdx];
                     const candidate: Vec3 = {
-                        x: anchor.x + Math.cos(angleRad) * radius,
-                        y: anchor.y + Math.sin(angleRad) * radius,
+                        x: anchor.x + dir.x * radius,
+                        y: anchor.y + dir.y * radius,
                         z: nextZ,
                     };
 
@@ -77,13 +93,12 @@ export function buildCandidateNodes(args: BuildCandidateNodesArgs): CandidateNod
                     const lateralFromSocket = distanceXY(socketPos, candidate);
                     if (lateralFromSocket > maxTotalLateralMm) continue;
 
-                    const segmentCollision = checkShaftCollision(current.pos, candidate, collisionRadius, mesh);
+                    const segmentCollision = checkShaftCollision(current.pos, candidate, collisionRadius, mesh, raycaster);
                     if (segmentCollision.hit) continue;
 
                     const rootTopTarget: Vec3 = { x: candidate.x, y: candidate.y, z: rootTopZ };
-                    const descentCollision = checkShaftCollision(candidate, rootTopTarget, collisionRadius, mesh);
+                    const descentCollision = checkShaftCollision(candidate, rootTopTarget, collisionRadius, mesh, raycaster);
                     const downwardProgress = descentCollision.point ? Math.max(0, blockPoint.z - descentCollision.point.z) : (candidate.z - rootTopZ + 20);
-                    const anchorPenalty = anchor === current.pos ? 0 : 2;
                     const candidateScore =
                         lateralFromSocket * 8 +
                         distance3D(current.pos, candidate) * 1.5 +

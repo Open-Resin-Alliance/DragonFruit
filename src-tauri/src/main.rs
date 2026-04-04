@@ -116,9 +116,83 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
 static SLICER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 static CANCEL_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 static STAGED_MESH: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+static STAGED_MESH_STATS: OnceLock<Mutex<StageMeshStats>> = OnceLock::new();
+static STAGED_MESH_FILE_PATH: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static STAGED_MESH_FILE_APPENDER: OnceLock<Mutex<Option<StageFileAppender>>> = OnceLock::new();
+const STAGED_MESH_PREALLOC_MIN_BYTES: usize = 16 * 1024 * 1024;
+const STAGED_MESH_PREALLOC_MAX_BYTES: usize = 1024 * 1024 * 1024;
+
+struct StageFileAppender {
+    path: String,
+    writer: std::io::BufWriter<std::fs::File>,
+    len: u64,
+}
+
+#[derive(Default)]
+struct StageMeshStats {
+    chunks_received: u64,
+    append_ns_total: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StageMeshChunkAck {
+    chunk_bytes: u64,
+    total_bytes: u64,
+    capacity_bytes: u64,
+    reserve_grew: bool,
+    chunks_received: u64,
+    append_ns: u64,
+    append_ns_total: u64,
+}
 
 fn staged_mesh() -> &'static Mutex<Option<Vec<u8>>> {
     STAGED_MESH.get_or_init(|| Mutex::new(None))
+}
+
+fn staged_mesh_stats() -> &'static Mutex<StageMeshStats> {
+    STAGED_MESH_STATS.get_or_init(|| Mutex::new(StageMeshStats::default()))
+}
+
+fn staged_mesh_file_path() -> &'static Mutex<Option<String>> {
+    STAGED_MESH_FILE_PATH.get_or_init(|| Mutex::new(None))
+}
+
+fn staged_mesh_file_appender() -> &'static Mutex<Option<StageFileAppender>> {
+    STAGED_MESH_FILE_APPENDER.get_or_init(|| Mutex::new(None))
+}
+
+fn resolve_mesh_stage_directory() -> std::path::PathBuf {
+    let configured = std::env::var("DF_MESH_STAGE_DIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from);
+
+    configured.unwrap_or_else(std::env::temp_dir)
+}
+
+fn allocate_mesh_stage_file_path() -> Result<std::path::PathBuf, String> {
+    let mut dir = resolve_mesh_stage_directory();
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Failed creating mesh stage directory '{}': {e}",
+            dir.display()
+        )
+    })?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    dir.push(format!("dragonfruit-mesh-stage-{stamp}.bin"));
+    Ok(dir)
+}
+
+fn normalize_staged_mesh_prealloc_bytes(total_bytes_hint: usize) -> usize {
+    total_bytes_hint
+        .max(STAGED_MESH_PREALLOC_MIN_BYTES)
+        .min(STAGED_MESH_PREALLOC_MAX_BYTES)
 }
 
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -156,7 +230,50 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
     }
 }
 
+fn bytes_into_f32_vec(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
+    if bytes.len() % 4 != 0 {
+        return Err(format!(
+            "Mesh binary length {} is not a multiple of 4 (f32 size)",
+            bytes.len()
+        ));
+    }
+
+    #[cfg(target_endian = "little")]
+    {
+        let ptr_addr = bytes.as_ptr() as usize;
+        let aligned_for_f32 = ptr_addr % std::mem::align_of::<f32>() == 0;
+        let capacity_bytes = bytes.capacity();
+
+        // Reinterpret in-place only when alignment and capacity permit exact Vec layout conversion.
+        if aligned_for_f32 && (capacity_bytes % 4 == 0) {
+            let mut bytes = std::mem::ManuallyDrop::new(bytes);
+            let ptr = bytes.as_mut_ptr() as *mut f32;
+            let len_f32 = bytes.len() / 4;
+            let cap_f32 = bytes.capacity() / 4;
+            let floats = unsafe { Vec::from_raw_parts(ptr, len_f32, cap_f32) };
+            return Ok(floats);
+        }
+
+        return bytes_to_f32_vec(&bytes);
+    }
+
+    #[cfg(not(target_endian = "little"))]
+    {
+        bytes_to_f32_vec(&bytes)
+    }
+}
+
 /// Metadata-only slice job (no inline triangles — those come from staged binary).
+#[derive(Deserialize)]
+struct MeshQuantizationMetadata {
+    min_x: f32,
+    min_y: f32,
+    min_z: f32,
+    max_x: f32,
+    max_y: f32,
+    max_z: f32,
+}
+
 #[derive(Deserialize)]
 struct SliceJobMetadata {
     output_format: String,
@@ -181,6 +298,10 @@ struct SliceJobMetadata {
     layer_height_mm: f32,
     total_layers: u32,
     export_thumbnail_png_base64: Option<String>,
+    #[serde(default)]
+    mesh_encoding: Option<String>,
+    #[serde(default)]
+    mesh_quantization: Option<MeshQuantizationMetadata>,
     metadata_json: String,
 }
 
@@ -204,6 +325,14 @@ struct NativeSlicerRuntimeMetrics {
     queue_buffer: u32,
 }
 
+fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+    match phase {
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+    }
+}
+
 fn slicer_pool() -> &'static ThreadPool {
     SLICER_POOL.get_or_init(|| {
         let threads = std::thread::available_parallelism()
@@ -217,23 +346,66 @@ fn slicer_pool() -> &'static ThreadPool {
     })
 }
 
+fn decode_quantized_u16_mesh(
+    bytes: &[u8],
+    quant: &MeshQuantizationMetadata,
+) -> Result<Vec<f32>, String> {
+    if bytes.len() % 2 != 0 {
+        return Err(format!(
+            "Quantized mesh binary length {} is not a multiple of 2 (u16 size)",
+            bytes.len()
+        ));
+    }
+
+    let spans = [
+        (quant.max_x - quant.min_x).max(0.0),
+        (quant.max_y - quant.min_y).max(0.0),
+        (quant.max_z - quant.min_z).max(0.0),
+    ];
+    let mins = [quant.min_x, quant.min_y, quant.min_z];
+    let values = bytes.len() / 2;
+    let mut floats = Vec::with_capacity(values);
+
+    for (index, chunk) in bytes.chunks_exact(2).enumerate() {
+        let q = u16::from_le_bytes([chunk[0], chunk[1]]);
+        let axis = index % 3;
+        let span = spans[axis];
+        if span <= 0.0 || !span.is_finite() {
+            floats.push(mins[axis]);
+            continue;
+        }
+
+        let normalized = (q as f32) / 65_535.0;
+        floats.push(mins[axis] + normalized * span);
+    }
+
+    Ok(floats)
+}
+
+fn decode_mesh_bytes(bytes: Vec<u8>, meta: &SliceJobMetadata) -> Result<Vec<f32>, String> {
+    match meta.mesh_encoding.as_deref() {
+        Some("quantized_u16") => {
+            let quant = meta
+                .mesh_quantization
+                .as_ref()
+                .ok_or("Quantized mesh encoding requires mesh_quantization metadata")?;
+            decode_quantized_u16_mesh(&bytes, quant)
+        }
+        Some("raw_f32") | None => bytes_into_f32_vec(bytes),
+        Some(other) => Err(format!("Unsupported mesh encoding: {other}")),
+    }
+}
+
 fn cancel_flag() -> &'static Arc<AtomicBool> {
     CANCEL_FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SliceProgressPayload {
     done: u32,
     total: u32,
     phase: String,
-}
-
-fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
-    match phase {
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
-    }
 }
 
 #[derive(Clone, Serialize)]
@@ -303,21 +475,255 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
     Ok(Response::new(bytes))
 }
 
-/// Receive raw mesh bytes from the frontend via efficient binary IPC.
-/// The bytes are stored in memory and consumed by the next `slice_solid_native_to_temp_path` call.
+/// Receive raw mesh bytes from the frontend via efficient binary IPC in chunks.
+/// The bytes are stored in a pre-allocated memory vector and consumed by the next `slice_solid_native_to_temp_path` call.
 #[tauri::command]
-async fn stage_mesh_binary(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
-    let bytes = match request.body() {
-        InvokeBody::Raw(bytes) => bytes.clone(),
-        InvokeBody::Json(_) => {
-            return Err("stage_mesh_binary expects raw binary body, got JSON".into())
-        }
-    };
-    let len = bytes.len() as u64;
+async fn stage_mesh_binary_start(total_bytes: usize) -> Result<(), String> {
+    let reserve_bytes = normalize_staged_mesh_prealloc_bytes(total_bytes);
     *staged_mesh()
         .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(bytes);
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? =
+        Some(Vec::with_capacity(reserve_bytes));
+
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats::default();
+
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
+
+    *staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn allocate_mesh_stage_path() -> Result<String, String> {
+    let path = allocate_mesh_stage_file_path()?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => {
+            return Err("append_mesh_stage_chunk expects raw binary body, got JSON".into())
+        }
+    };
+
+    let path_header = request
+        .headers()
+        .get("x-mesh-stage-path")
+        .ok_or("append_mesh_stage_chunk missing x-mesh-stage-path header")?;
+
+    let path_text = path_header
+        .to_str()
+        .map_err(|e| format!("Invalid x-mesh-stage-path header value: {e}"))?
+        .trim();
+
+    if path_text.is_empty() {
+        return Err("append_mesh_stage_chunk received empty x-mesh-stage-path header".into());
+    }
+
+    let path = std::path::PathBuf::from(path_text);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
+    }
+
+    let mut appender_lock = staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    let needs_new_appender = match appender_lock.as_ref() {
+        Some(existing) => existing.path != path_text,
+        None => true,
+    };
+
+    if needs_new_appender {
+        if let Some(existing) = appender_lock.as_mut() {
+            use std::io::Write;
+            let _ = existing.writer.flush();
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|err| format!("Failed opening mesh stage file for write: {err}"))?;
+
+        *appender_lock = Some(StageFileAppender {
+            path: path_text.to_string(),
+            writer: std::io::BufWriter::with_capacity(4 * 1024 * 1024, file),
+            len: 0,
+        });
+    }
+
+    let appender = appender_lock
+        .as_mut()
+        .ok_or("Failed initializing mesh stage file appender")?;
+
+    use std::io::Write;
+    appender
+        .writer
+        .write_all(bytes)
+        .map_err(|err| format!("Failed appending mesh stage bytes: {err}"))?;
+    appender.len = appender.len.saturating_add(bytes.len() as u64);
+
+    Ok(appender.len)
+}
+
+#[tauri::command]
+async fn stage_mesh_file_path(mesh_file_path: String) -> Result<u64, String> {
+    let trimmed = mesh_file_path.trim();
+    if trimmed.is_empty() {
+        return Err("stage_mesh_file_path requires a non-empty path".into());
+    }
+
+    let path = std::path::PathBuf::from(trimmed);
+    if !path.exists() {
+        return Err(format!(
+            "Mesh stage file does not exist: {}",
+            path.display()
+        ));
+    }
+
+    {
+        let mut appender_lock = staged_mesh_file_appender()
+            .lock()
+            .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+        if let Some(appender) = appender_lock.as_mut() {
+            if appender.path == trimmed {
+                use std::io::Write;
+                appender
+                    .writer
+                    .flush()
+                    .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            }
+        }
+    }
+
+    let len = std::fs::metadata(&path)
+        .map_err(|e| format!("Failed reading mesh stage file metadata: {e}"))?
+        .len();
+
+    *staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = None;
+
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? =
+        Some(path.to_string_lossy().to_string());
+
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats {
+        chunks_received: 1,
+        append_ns_total: 0,
+    };
+
     Ok(len)
+}
+
+#[tauri::command]
+async fn stage_mesh_binary_set(
+    request: tauri::ipc::Request<'_>,
+) -> Result<StageMeshChunkAck, String> {
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => {
+            return Err("stage_mesh_binary_set expects raw binary body, got JSON".into())
+        }
+    };
+
+    let reserve_bytes = normalize_staged_mesh_prealloc_bytes(bytes.len());
+    let append_start = std::time::Instant::now();
+    let mut staged = Vec::with_capacity(reserve_bytes);
+    staged.extend_from_slice(bytes);
+    let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let capacity_bytes = staged.capacity() as u64;
+    let total_bytes = staged.len() as u64;
+
+    *staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(staged);
+
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats {
+        chunks_received: 1,
+        append_ns_total: append_ns,
+    };
+
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
+
+    *staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+
+    Ok(StageMeshChunkAck {
+        chunk_bytes: total_bytes,
+        total_bytes,
+        capacity_bytes,
+        reserve_grew: capacity_bytes > reserve_bytes as u64,
+        chunks_received: 1,
+        append_ns,
+        append_ns_total: append_ns,
+    })
+}
+
+#[tauri::command]
+async fn stage_mesh_binary_chunk(
+    request: tauri::ipc::Request<'_>,
+) -> Result<StageMeshChunkAck, String> {
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => {
+            return Err("stage_mesh_binary_chunk expects raw binary body, got JSON".into())
+        }
+    };
+
+    let mut lock = staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?;
+
+    let vec = lock
+        .as_mut()
+        .ok_or("Staged mesh not started. Call stage_mesh_binary_start first")?;
+
+    let chunk_bytes = bytes.len() as u64;
+    let capacity_before = vec.capacity();
+    let append_start = std::time::Instant::now();
+    vec.extend_from_slice(bytes);
+    let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let capacity_after = vec.capacity();
+    let total_bytes = vec.len() as u64;
+
+    drop(lock);
+
+    let mut stats = staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))?;
+    stats.chunks_received = stats.chunks_received.saturating_add(1);
+    stats.append_ns_total = stats.append_ns_total.saturating_add(append_ns);
+
+    Ok(StageMeshChunkAck {
+        chunk_bytes,
+        total_bytes,
+        capacity_bytes: capacity_after as u64,
+        reserve_grew: capacity_after > capacity_before,
+        chunks_received: stats.chunks_received,
+        append_ns,
+        append_ns_total: stats.append_ns_total,
+    })
 }
 
 #[tauri::command]
@@ -326,11 +732,50 @@ async fn slice_solid_native_to_temp_path(
     job_json: String,
 ) -> Result<NativeSliceTempPathResult, String> {
     // Take the pre-staged mesh bytes (set by stage_mesh_binary)
-    let mesh_bytes = staged_mesh()
+    let staged_mesh_bytes = staged_mesh()
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-        .take()
-        .ok_or("No staged mesh binary — call stage_mesh_binary first")?;
+        .take();
+
+    let mesh_bytes = if let Some(bytes) = staged_mesh_bytes {
+        bytes
+    } else {
+        {
+            let mut appender_lock = staged_mesh_file_appender()
+                .lock()
+                .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+            if let Some(appender) = appender_lock.as_mut() {
+                use std::io::Write;
+                appender
+                    .writer
+                    .flush()
+                    .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            }
+        }
+
+        let staged_path = staged_mesh_file_path()
+            .lock()
+            .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))?
+            .take()
+            .ok_or("No staged mesh binary or file path — call stage_mesh_binary_* or stage_mesh_file_path first")?;
+
+        let path = std::path::PathBuf::from(staged_path.trim());
+        if !path.exists() {
+            return Err(format!(
+                "Staged mesh file no longer exists: {}",
+                path.display()
+            ));
+        }
+
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("Failed reading staged mesh file '{}': {e}", path.display()))?;
+
+        let _ = std::fs::remove_file(&path);
+        *staged_mesh_file_appender()
+            .lock()
+            .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+        bytes
+    };
 
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
@@ -340,7 +785,7 @@ async fn slice_solid_native_to_temp_path(
         let meta: SliceJobMetadata = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
 
-        let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
+        let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
 
         let job = dragonfruit_slicer_v3::SliceJobV3 {
             output_format: meta.output_format,
@@ -435,6 +880,332 @@ async fn slice_solid_native_to_temp_path(
 async fn cancel_slicing() -> Result<(), String> {
     cancel_flag().store(true, Ordering::SeqCst);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Native Island Scan
+// ---------------------------------------------------------------------------
+
+/// Parameters for native island scan. Field names match the JSON keys sent by
+/// nativeIslandScan.ts (snake_case).
+#[derive(Deserialize)]
+struct IslandScanParams {
+    px_mm: f64,
+    support_buffer_mm: f64,
+    #[serde(default = "default_connectivity")]
+    connectivity: u8,
+    #[serde(default = "default_min_island_area")]
+    min_island_area_mm2: f64,
+    #[serde(default = "default_overlap_px")]
+    min_overlap_px: i32,
+    #[serde(default = "default_neighborhood_px")]
+    overlap_neighborhood_px: i32,
+    layer_height_mm: f64,
+    // Bounding box from frontend (world coords after transform)
+    bbox_min_x: f64,
+    bbox_max_x: f64,
+    bbox_min_y: f64,
+    bbox_max_y: f64,
+    bbox_min_z: f64,
+    bbox_max_z: f64,
+}
+
+fn default_connectivity() -> u8 {
+    4
+}
+fn default_min_island_area() -> f64 {
+    0.01
+}
+fn default_overlap_px() -> i32 {
+    1
+}
+fn default_neighborhood_px() -> i32 {
+    1
+}
+
+/// IPC result matching the TS `ScanResults` shape so the frontend overlay/voxel
+/// rendering works unchanged.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeIslandScanResult {
+    grid: NativeGridRef,
+    islands: Vec<NativeIsland>,
+    island_labels_per_layer: Vec<NativeRleLabels>,
+    // Derived arrays the frontend overlay needs
+    first_hit: Vec<i16>,
+    last_hit: Vec<i16>,
+    base_footprint: Vec<u8>,
+    base_labels: Vec<i32>,
+    comp_base: Vec<i16>,
+    comp_top: Vec<i16>,
+    // Perf
+    rasterize_ms: f64,
+    scan_ms: f64,
+    total_ms: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeGridRef {
+    origin_x: f64,
+    origin_z: f64,
+    width: i32,
+    height: i32,
+    px_mm: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeIsland {
+    id: u32,
+    first_layer: u32,
+    last_layer: u32,
+    status: String,
+    total_area_mm2: f64,
+    per_layer_area_mm2: std::collections::HashMap<String, f64>,
+    parent_id: Option<u32>,
+    child_ids: Vec<u32>,
+    volume_mm3: Option<f64>,
+    max_area_mm2: Option<f64>,
+    max_area_layer: Option<u32>,
+    is_merged_placeholder: bool,
+    centroid: Option<NativeCentroid>,
+    last_layer_centroid: Option<NativeCentroid>,
+}
+
+#[derive(Serialize)]
+struct NativeCentroid {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Serialize)]
+struct NativeRleLabels {
+    rows: Vec<Vec<i32>>,
+    width: i32,
+    height: i32,
+}
+
+#[tauri::command]
+async fn run_island_scan_native(
+    window: tauri::Window,
+    params_json: String,
+) -> Result<NativeIslandScanResult, String> {
+    // Take staged mesh bytes
+    let mesh_bytes = staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
+        .take()
+        .ok_or("No staged mesh binary — call stage_mesh_binary first")?;
+
+    let win = window.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let params: IslandScanParams = serde_json::from_str(&params_json)
+            .map_err(|e| format!("Invalid island scan params JSON: {e}"))?;
+
+        let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
+        let triangles = dragonfruit_slicer_v3::geometry::parse_triangles(&triangles_xyz);
+
+        // Debug dump: write positions + params to temp dir for offline reproduction
+        let dump_dir = std::env::temp_dir().join("dragonfruit-island-debug");
+        let _ = std::fs::create_dir_all(&dump_dir);
+        let _ = std::fs::write(
+            dump_dir.join("params.json"),
+            &params_json,
+        );
+        // Write positions as raw f32 binary (same format as stage_mesh_binary)
+        let _ = std::fs::write(
+            dump_dir.join("positions.bin"),
+            &mesh_bytes,
+        );
+        eprintln!(
+            "[island-scan-native] triangles={} bbox=({:.4},{:.4},{:.4})-({:.4},{:.4},{:.4}) px_mm={} layer_h={} buf={} conn={} min_area={} overlap_px={} neighborhood={}",
+            triangles.len(),
+            params.bbox_min_x, params.bbox_min_y, params.bbox_min_z,
+            params.bbox_max_x, params.bbox_max_y, params.bbox_max_z,
+            params.px_mm, params.layer_height_mm, params.support_buffer_mm,
+            params.connectivity, params.min_island_area_mm2,
+            params.min_overlap_px, params.overlap_neighborhood_px,
+        );
+        eprintln!("[island-scan-native] debug dump: {}", dump_dir.display());
+
+        // Phase A: Rasterize all layers using shared module (same code as bench)
+        let total_layers;
+        let grid_width;
+        let grid_height;
+        let origin_x;
+        let origin_z;
+        let w;
+        let h;
+
+        let t_raster = std::time::Instant::now();
+        let (masks, gw, gh, num_layers, ox, oz) = slicer_pool().install(|| {
+            dragonfruit_islands::rasterize::rasterize_for_island_scan(
+                &triangles,
+                params.bbox_min_x, params.bbox_max_x,
+                params.bbox_min_y, params.bbox_max_y,
+                params.bbox_min_z, params.bbox_max_z,
+                params.px_mm,
+                params.layer_height_mm,
+            )
+        });
+        grid_width = gw;
+        grid_height = gh;
+        origin_x = ox;
+        origin_z = oz;
+        w = grid_width as usize;
+        h = grid_height as usize;
+        total_layers = num_layers as u32;
+        let rasterize_ms = t_raster.elapsed().as_secs_f64() * 1000.0;
+
+        // Phase B: Island scan pipeline (sequential tracking — progress per layer)
+        let t_scan = std::time::Instant::now();
+        let connectivity = if params.connectivity == 8 {
+            dragonfruit_islands::model::Connectivity::Eight
+        } else {
+            dragonfruit_islands::model::Connectivity::Four
+        };
+
+        let job = dragonfruit_islands::model::IslandScanJob {
+            px_mm: params.px_mm,
+            support_buffer_mm: params.support_buffer_mm,
+            connectivity,
+            min_island_area_mm2: params.min_island_area_mm2,
+            layer_height_mm: params.layer_height_mm,
+            grid: dragonfruit_islands::model::GridRef {
+                origin_x,
+                origin_z,
+                width: grid_width,
+                height: grid_height,
+                px_mm: params.px_mm,
+            },
+            num_layers: num_layers as u32,
+            min_overlap_px: params.min_overlap_px,
+            overlap_neighborhood_px: params.overlap_neighborhood_px,
+        };
+
+        let win_scan = win.clone();
+        let scan_result = slicer_pool().install(|| {
+            dragonfruit_islands::pipeline::run_island_scan(
+                &job,
+                &masks,
+                Some(&move |done: u32, total: u32| {
+                    // Map pipeline progress (0..total) to layer count (0..total_layers)
+                    // — same convention as TS ScanOrchestrator onProgress(done, numLayers)
+                    let layer = (done as u64 * total_layers as u64 / total.max(1) as u64) as u32;
+                    let _ = win_scan.emit("islandscan://progress", SliceProgressPayload {
+                        done: layer.min(total_layers),
+                        total: total_layers,
+                        phase: "Scanning".to_string(),
+                    });
+                }),
+            )
+        });
+        let scan_ms = t_scan.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = rasterize_ms + scan_ms;
+
+        let total_solid_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
+        eprintln!(
+            "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} raster={:.0}ms scan={:.0}ms",
+            grid_width, grid_height, num_layers, total_solid_px,
+            scan_result.islands.len(), rasterize_ms, scan_ms,
+        );
+
+        // Phase C: Build frontend-compatible result
+        // Compute firstHit, lastHit, baseLabels, compBase, compTop
+        let pixel_count = w * h;
+        let mut first_hit = vec![-1i16; pixel_count];
+        let mut last_hit = vec![-1i16; pixel_count];
+        let mut base_labels = vec![0i32; pixel_count];
+
+        for (l, labels) in scan_result.island_labels_per_layer.iter().enumerate() {
+            for (y, row) in labels.rows.iter().enumerate() {
+                let row_off = y * w;
+                for run in row {
+                    for j in 0..run.length {
+                        let idx = row_off + (run.start + j) as usize;
+                        if idx < pixel_count {
+                            if first_hit[idx] == -1 {
+                                first_hit[idx] = l as i16;
+                                if run.id > 0 { base_labels[idx] = run.id; }
+                            }
+                            last_hit[idx] = l as i16;
+                        }
+                    }
+                }
+            }
+        }
+
+        let base_footprint: Vec<u8> = first_hit.iter().map(|&h| if h != -1 { 1 } else { 0 }).collect();
+
+        // compBase/compTop from islands
+        let max_id = scan_result.islands.iter().map(|i| i.id.0).max().unwrap_or(0) as usize;
+        let mut comp_base = vec![-1i16; max_id + 1];
+        let mut comp_top = vec![-1i16; max_id + 1];
+        for island in &scan_result.islands {
+            let id = island.id.0 as usize;
+            if id <= max_id {
+                comp_base[id] = island.first_layer as i16;
+                comp_top[id] = island.last_layer as i16;
+            }
+        }
+
+        // Convert islands to frontend shape
+        let islands: Vec<NativeIsland> = scan_result.islands.iter().map(|i| {
+            NativeIsland {
+                id: i.id.0,
+                first_layer: i.first_layer,
+                last_layer: i.last_layer,
+                status: match i.status {
+                    dragonfruit_islands::model::IslandStatus::Active => "active".into(),
+                    dragonfruit_islands::model::IslandStatus::Complete => "complete".into(),
+                },
+                total_area_mm2: i.total_area_mm2,
+                per_layer_area_mm2: i.per_layer_area_mm2.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                parent_id: i.parent_id.map(|p| p.0),
+                child_ids: i.child_ids.iter().map(|c| c.0).collect(),
+                volume_mm3: i.volume_mm3,
+                max_area_mm2: i.max_area_mm2,
+                max_area_layer: i.max_area_layer,
+                is_merged_placeholder: i.is_merged_placeholder,
+                centroid: i.centroid.map(|c| NativeCentroid { x: c.x, y: c.y, z: c.z }),
+                last_layer_centroid: i.last_layer_centroid.map(|c| NativeCentroid { x: c.x, y: c.y, z: c.z }),
+            }
+        }).collect();
+
+        // Convert RLE labels to frontend shape (flat i32 arrays)
+        let island_labels_per_layer: Vec<NativeRleLabels> = scan_result.island_labels_per_layer.iter().map(|labels| {
+            NativeRleLabels {
+                rows: labels.rows.iter().map(|row| {
+                    let mut flat = Vec::new();
+                    for run in row { flat.push(run.start); flat.push(run.length); flat.push(run.id); }
+                    flat
+                }).collect(),
+                width: labels.width,
+                height: labels.height,
+            }
+        }).collect();
+
+        Ok::<NativeIslandScanResult, String>(NativeIslandScanResult {
+            grid: NativeGridRef { origin_x, origin_z, width: grid_width, height: grid_height, px_mm: params.px_mm },
+            islands,
+            island_labels_per_layer,
+            first_hit,
+            last_hit,
+            base_footprint,
+            base_labels,
+            comp_base,
+            comp_top,
+            rasterize_ms,
+            scan_ms,
+            total_ms,
+        })
+    })
+    .await
+    .map_err(|e| format!("Island scan task failed to join: {e}"))??;
+
+    Ok(result)
 }
 
 #[derive(Debug, Deserialize)]
@@ -876,9 +1647,15 @@ fn main() {
         }))
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
-            stage_mesh_binary,
+            stage_mesh_binary_start,
+            allocate_mesh_stage_path,
+            append_mesh_stage_chunk,
+            stage_mesh_file_path,
+            stage_mesh_binary_set,
+            stage_mesh_binary_chunk,
             slice_solid_native_to_temp_path,
             cancel_slicing,
+            run_island_scan_native,
             save_print_file,
             save_print_file_from_path,
             pick_save_path,

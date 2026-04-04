@@ -20,8 +20,9 @@ import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings } from '@/featu
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
-export function StlMesh({
+function StlMeshComponent({
   geometry,
   clipLower,
   clipUpper,
@@ -68,7 +69,7 @@ export function StlMesh({
   outOfBoundsMax,
   outOfBoundsStripeColor,
   suppressModelInteraction,
-  externalHoveredModelId,
+  isExternallyHovered,
   deferExternalTransformUpdates,
   children,
 }: {
@@ -125,7 +126,7 @@ export function StlMesh({
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
   suppressModelInteraction?: boolean;
-  externalHoveredModelId?: string | null;
+  isExternallyHovered?: boolean;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
   deferExternalTransformUpdates?: boolean;
   children?: React.ReactNode;
@@ -134,6 +135,7 @@ export function StlMesh({
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
+  const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const { camera } = useThree();
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
@@ -141,26 +143,24 @@ export function StlMesh({
   const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
 
-  // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const ps: THREE.Plane[] = [];
+  // Build clipping planes directly from current props so clipping never lags
+  // by one frame when layer slider updates.
+  const planes = React.useMemo(() => {
+    const next: THREE.Plane[] = [];
 
     if (clipLower != null) {
       // Clip below clipLower in world space
       // Normal points up (0,0,1), hide points where world Z < clipLower
-      ps.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
+      next.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
     }
     if (clipUpper != null) {
       // Clip above clipUpper in world space
       // Normal points down (0,0,-1), hide points where world Z > clipUpper
-      ps.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
+      next.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
-    clippingPlanesRef.current = ps;
-  }, [clipLower, clipUpper]);
 
-  const planes = clippingPlanesRef.current;
+    return next;
+  }, [clipLower, clipUpper]);
 
   React.useEffect(() => {
     if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
@@ -229,12 +229,86 @@ export function StlMesh({
   const previousDisableState = React.useRef<boolean | undefined>(undefined);
 
   React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let resumeInteractionTimeoutId: number | null = null;
+
+    const clearPendingResume = () => {
+      if (resumeInteractionTimeoutId === null) return;
+      window.clearTimeout(resumeInteractionTimeoutId);
+      resumeInteractionTimeoutId = null;
+    };
+
+    const scheduleInteractionResume = (event: Event) => {
+      const resumeAfterMs = Math.max(0, Number((event as CustomEvent<{ resumeAfterMs?: number }>).detail?.resumeAfterMs ?? 0));
+      clearPendingResume();
+
+      if (resumeAfterMs <= 0) {
+        setIsOrbitInteracting(false);
+        return;
+      }
+
+      resumeInteractionTimeoutId = window.setTimeout(() => {
+        resumeInteractionTimeoutId = null;
+        setIsOrbitInteracting(false);
+      }, resumeAfterMs);
+    };
+
+    const handleOrbitStartOrChange = () => {
+      clearPendingResume();
+      setIsOrbitInteracting(true);
+    };
+    const handleOrbitEnd = (event: Event) => scheduleInteractionResume(event);
+    const handlePanStartOrChange = () => {
+      clearPendingResume();
+      setIsOrbitInteracting(true);
+    };
+    const handlePanEnd = (event: Event) => scheduleInteractionResume(event);
+    const handleZoomStartOrChange = () => {
+      clearPendingResume();
+      setIsOrbitInteracting(true);
+    };
+    const handleZoomEnd = (event: Event) => scheduleInteractionResume(event);
+
+    window.addEventListener('picking-orbit-start', handleOrbitStartOrChange);
+    window.addEventListener('picking-orbit-change', handleOrbitStartOrChange);
+    window.addEventListener('picking-orbit-end', handleOrbitEnd);
+    window.addEventListener('picking-pan-start', handlePanStartOrChange);
+    window.addEventListener('picking-pan-change', handlePanStartOrChange);
+    window.addEventListener('picking-pan-end', handlePanEnd);
+    window.addEventListener('picking-zoom-start', handleZoomStartOrChange);
+    window.addEventListener('picking-zoom-change', handleZoomStartOrChange);
+    window.addEventListener('picking-zoom-end', handleZoomEnd);
+    window.addEventListener('pointerup', handleOrbitEnd, true);
+    window.addEventListener('pointercancel', handleOrbitEnd, true);
+    window.addEventListener('blur', handleOrbitEnd);
+
+    return () => {
+      window.removeEventListener('picking-orbit-start', handleOrbitStartOrChange);
+      window.removeEventListener('picking-orbit-change', handleOrbitStartOrChange);
+      window.removeEventListener('picking-orbit-end', handleOrbitEnd);
+      window.removeEventListener('picking-pan-start', handlePanStartOrChange);
+      window.removeEventListener('picking-pan-change', handlePanStartOrChange);
+      window.removeEventListener('picking-pan-end', handlePanEnd);
+      window.removeEventListener('picking-zoom-start', handleZoomStartOrChange);
+      window.removeEventListener('picking-zoom-change', handleZoomStartOrChange);
+      window.removeEventListener('picking-zoom-end', handleZoomEnd);
+      window.removeEventListener('pointerup', handleOrbitEnd, true);
+      window.removeEventListener('pointercancel', handleOrbitEnd, true);
+      window.removeEventListener('blur', handleOrbitEnd);
+      clearPendingResume();
+    };
+  }, []);
+
+  const effectiveDisableRaycast = !!disableRaycast || isOrbitInteracting;
+
+  React.useEffect(() => {
     // Always use internalMeshRef - meshRef points to the group, not the mesh
     const mesh = internalMeshRef.current;
-    if (mesh && previousDisableState.current !== disableRaycast) {
-      previousDisableState.current = disableRaycast;
+    if (mesh && previousDisableState.current !== effectiveDisableRaycast) {
+      previousDisableState.current = effectiveDisableRaycast;
 
-      if (disableRaycast) {
+      if (effectiveDisableRaycast) {
         // Disable raycasting during camera movement (no-op function)
         console.log('[Raycast] DISABLED - performance mode active');
         mesh.raycast = () => { };
@@ -244,7 +318,7 @@ export function StlMesh({
         mesh.raycast = THREE.Mesh.prototype.raycast;
       }
     }
-  }, [disableRaycast]);
+  }, [effectiveDisableRaycast]);
 
   React.useLayoutEffect(() => {
     const group = groupRef.current;
@@ -279,10 +353,8 @@ export function StlMesh({
     || event?.nativeEvent?.shiftKey
     || event?.sourceEvent?.shiftKey
   );
-  const hasExternalHoverSource = externalHoveredModelId !== undefined;
-  const isExternallyHoveredModel = !shouldSuppressModelInteraction
-    && !!externalHoveredModelId
-    && externalHoveredModelId === modelId;
+  const hasExternalHoverSource = isExternallyHovered !== undefined;
+  const isExternallyHoveredModel = !shouldSuppressModelInteraction && !!isExternallyHovered;
   const isHoveredModelFromPicking = !shouldSuppressModelInteraction && (
     hasGpuModelHoverId
       ? hit.objectId === modelId
@@ -483,12 +555,10 @@ export function StlMesh({
         }}
         onPointerMove={(e) => {
           if (isSupportShiftGesture(e)) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
-            window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-              detail: { modelId: null },
-            }));
+            emitImmediateModelHover(null);
             if (mode === 'support' && onSupportHover) {
               onSupportHover(null);
             }
@@ -496,26 +566,25 @@ export function StlMesh({
           }
 
           if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
             return;
           }
 
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
-            schedulePointerHover(false);
+            if (!hasExternalHoverSource) schedulePointerHover(false);
             return;
           }
 
           e.stopPropagation();
 
-          schedulePointerHover(true);
+          if (!hasExternalHoverSource) schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
-          window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-            detail: { modelId },
-          }));
+          emitImmediateModelHover(modelId);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
@@ -567,12 +636,10 @@ export function StlMesh({
             return;
           }
 
-          schedulePointerHover(false);
+          if (!hasExternalHoverSource) schedulePointerHover(false);
           onModelHoverPointChange?.(null);
           onModelHoverModelChange?.(null);
-          window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
-            detail: { modelId: null },
-          }));
+          emitImmediateModelHover(null);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             setMeshSmoothingHover(null, null);
@@ -709,3 +776,6 @@ export function StlMesh({
     </group>
   );
 }
+
+export const StlMesh = React.memo(StlMeshComponent);
+StlMesh.displayName = 'StlMesh';

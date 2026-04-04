@@ -24,9 +24,9 @@ export function useHighlight({
     isSelected = false,
     suppressHover = false,
     externalHover = false,
-    baseColor = '#ff8800',
+    baseColor = '#c8752a',
     selectedColor = '#80fffd',
-    hoverColor = '#ffffff'
+    hoverColor = '#efd8c2'
 }: HighlightOptions) {
     
     // Register with picking system and track hover
@@ -43,7 +43,7 @@ export function useHighlight({
     // Calculate visual properties
     const color = isSelected ? selectedColor : baseColor;
     const emissive = isHighlighted ? hoverColor : '#000000';
-    const emissiveIntensity = isHighlighted ? 0.3 : 0;
+    const emissiveIntensity = isHighlighted ? 0.16 : 0;
 
     return {
         pickRef,

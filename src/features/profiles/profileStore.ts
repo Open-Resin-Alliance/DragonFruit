@@ -1679,7 +1679,7 @@ export function importPrinterBundle(payload: unknown): string {
 
   const sourceMaterials = Array.isArray(bundle.materials) ? (bundle.materials as unknown[]) : [];
   const importedMaterials: MaterialProfile[] = sourceMaterials
-    .filter((item): item is Partial<MaterialProfile> => Boolean(item) && typeof item === 'object')
+    .filter((item): item is MaterialProfile => Boolean(item) && typeof item === 'object')
     .map((material, index) => ({
       id: createId('material'),
       printerProfileId: importedPrinterId,
