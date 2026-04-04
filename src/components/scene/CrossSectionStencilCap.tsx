@@ -126,6 +126,104 @@ function StaticInstancedStencilPass({
   );
 }
 
+const StaticInstancedStencilPassMemo = React.memo(
+  StaticInstancedStencilPass,
+  (prev, next) => (
+    prev.geometry === next.geometry
+    && prev.capacity === next.capacity
+    && prev.matrixElements === next.matrixElements
+    && prev.backMaterial === next.backMaterial
+    && prev.frontMaterial === next.frontMaterial
+    && prev.backRenderOrder === next.backRenderOrder
+    && prev.frontRenderOrder === next.frontRenderOrder
+  ),
+);
+StaticInstancedStencilPassMemo.displayName = 'StaticInstancedStencilPassMemo';
+
+function ModelStencilPass({
+  entry,
+  backMaterial,
+  frontMaterial,
+}: {
+  entry: ModelStencilPassEntry;
+  backMaterial: THREE.Material;
+  frontMaterial: THREE.Material;
+}) {
+  return (
+    <group key={`stencil-cap-${entry.id}`}>
+      <group matrix={entry.matrix} matrixAutoUpdate={false}>
+        <mesh
+          geometry={entry.geometry}
+          position={entry.offset}
+          material={backMaterial}
+          renderOrder={990.1}
+          frustumCulled
+          raycast={() => null}
+        />
+        <mesh
+          geometry={entry.geometry}
+          position={entry.offset}
+          material={frontMaterial}
+          renderOrder={990.2}
+          frustumCulled
+          raycast={() => null}
+        />
+      </group>
+    </group>
+  );
+}
+
+const ModelStencilPassMemo = React.memo(
+  ModelStencilPass,
+  (prev, next) => (
+    prev.entry === next.entry
+    && prev.backMaterial === next.backMaterial
+    && prev.frontMaterial === next.frontMaterial
+  ),
+);
+ModelStencilPassMemo.displayName = 'ModelStencilPassMemo';
+
+function StaticSingleStencilPass({
+  entry,
+  backMaterial,
+  frontMaterial,
+}: {
+  entry: StaticStencilMeshEntry;
+  backMaterial: THREE.Material;
+  frontMaterial: THREE.Material;
+}) {
+  return (
+    <group key={`stencil-source-pass-${entry.key}`}>
+      <group matrix={entry.matrix} matrixAutoUpdate={false}>
+        <mesh
+          geometry={entry.geometry}
+          material={backMaterial}
+          renderOrder={990.3}
+          frustumCulled
+          raycast={() => null}
+        />
+        <mesh
+          geometry={entry.geometry}
+          material={frontMaterial}
+          renderOrder={990.4}
+          frustumCulled
+          raycast={() => null}
+        />
+      </group>
+    </group>
+  );
+}
+
+const StaticSingleStencilPassMemo = React.memo(
+  StaticSingleStencilPass,
+  (prev, next) => (
+    prev.entry === next.entry
+    && prev.backMaterial === next.backMaterial
+    && prev.frontMaterial === next.frontMaterial
+  ),
+);
+StaticSingleStencilPassMemo.displayName = 'StaticSingleStencilPassMemo';
+
 function materialContributesToStencil(material: THREE.Material): boolean {
   const mat = material as THREE.Material & {
     opacity?: number;
@@ -158,6 +256,8 @@ function composeTransformMatrix(transform: ModelTransform): THREE.Matrix4 {
   );
 }
 
+const worldBoundsScratch = new THREE.Box3();
+
 function getGeometryWorldZBounds(geometry: THREE.BufferGeometry, matrixWorld: THREE.Matrix4): { min: number; max: number } | null {
   let boundingBox = geometry.boundingBox;
   if (!boundingBox) {
@@ -167,26 +267,9 @@ function getGeometryWorldZBounds(geometry: THREE.BufferGeometry, matrixWorld: TH
 
   if (!boundingBox) return null;
 
-  const corners = [
-    new THREE.Vector3(boundingBox.min.x, boundingBox.min.y, boundingBox.min.z),
-    new THREE.Vector3(boundingBox.min.x, boundingBox.min.y, boundingBox.max.z),
-    new THREE.Vector3(boundingBox.min.x, boundingBox.max.y, boundingBox.min.z),
-    new THREE.Vector3(boundingBox.min.x, boundingBox.max.y, boundingBox.max.z),
-    new THREE.Vector3(boundingBox.max.x, boundingBox.min.y, boundingBox.min.z),
-    new THREE.Vector3(boundingBox.max.x, boundingBox.min.y, boundingBox.max.z),
-    new THREE.Vector3(boundingBox.max.x, boundingBox.max.y, boundingBox.min.z),
-    new THREE.Vector3(boundingBox.max.x, boundingBox.max.y, boundingBox.max.z),
-  ];
-
-  let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
-  for (const corner of corners) {
-    corner.applyMatrix4(matrixWorld);
-    min = Math.min(min, corner.z);
-    max = Math.max(max, corner.z);
-  }
-
-  return { min, max };
+  worldBoundsScratch.copy(boundingBox);
+  worldBoundsScratch.applyMatrix4(matrixWorld);
+  return { min: worldBoundsScratch.min.z, max: worldBoundsScratch.max.z };
 }
 
 function composeCenteredGeometryMatrix(matrix: THREE.Matrix4, center: THREE.Vector3): THREE.Matrix4 {
@@ -197,6 +280,8 @@ function composeCenteredGeometryMatrix(matrix: THREE.Matrix4, center: THREE.Vect
 function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
   return clipZ >= minZ - 1e-4 && clipZ <= maxZ + 1e-4;
 }
+
+const INSTANCED_STENCIL_Z_BUCKET_MM = 6;
 
 function CrossSectionStencilCapInner({
   entries,
@@ -291,8 +376,8 @@ function CrossSectionStencilCapInner({
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
         const initialCount = maybeInstancedMesh.count;
         const matrixElements = new Float32Array(initialCount * 16);
-        let minZ = Number.POSITIVE_INFINITY;
-        let maxZ = Number.NEGATIVE_INFINITY;
+        const minBounds = new Float32Array(initialCount);
+        const maxBounds = new Float32Array(initialCount);
         let acceptedCount = 0;
 
         for (let i = 0; i < initialCount; i += 1) {
@@ -302,8 +387,8 @@ function CrossSectionStencilCapInner({
           if (!bounds) continue;
 
           worldInstanceMatrix.toArray(matrixElements, acceptedCount * 16);
-          minZ = Math.min(minZ, bounds.min);
-          maxZ = Math.max(maxZ, bounds.max);
+          minBounds[acceptedCount] = bounds.min;
+          maxBounds[acceptedCount] = bounds.max;
           acceptedCount += 1;
         }
 
@@ -313,15 +398,79 @@ function CrossSectionStencilCapInner({
           ? matrixElements
           : matrixElements.slice(0, acceptedCount * 16);
 
-        results.push({
-          kind: 'instanced',
-          key: `${mesh.uuid}:instanced`,
-          geometry,
-          count: acceptedCount,
-          matrixElements: compactMatrixElements,
-          minZ,
-          maxZ,
-        });
+        const compactMinBounds = acceptedCount === initialCount
+          ? minBounds
+          : minBounds.slice(0, acceptedCount);
+        const compactMaxBounds = acceptedCount === initialCount
+          ? maxBounds
+          : maxBounds.slice(0, acceptedCount);
+
+        const bucketSize = Math.max(0.1, INSTANCED_STENCIL_Z_BUCKET_MM);
+        const buckets = new Map<number, {
+          matrixValues: number[];
+          minZ: number;
+          maxZ: number;
+          count: number;
+        }>();
+
+        for (let instanceIndex = 0; instanceIndex < acceptedCount; instanceIndex += 1) {
+          const minZ = compactMinBounds[instanceIndex];
+          const maxZ = compactMaxBounds[instanceIndex];
+          const centerZ = (minZ + maxZ) * 0.5;
+          const bucketKey = Math.floor(centerZ / bucketSize);
+
+          let bucket = buckets.get(bucketKey);
+          if (!bucket) {
+            bucket = {
+              matrixValues: [],
+              minZ,
+              maxZ,
+              count: 0,
+            };
+            buckets.set(bucketKey, bucket);
+          }
+
+          bucket.minZ = Math.min(bucket.minZ, minZ);
+          bucket.maxZ = Math.max(bucket.maxZ, maxZ);
+          bucket.count += 1;
+
+          const matrixOffset = instanceIndex * 16;
+          for (let elementIndex = 0; elementIndex < 16; elementIndex += 1) {
+            bucket.matrixValues.push(compactMatrixElements[matrixOffset + elementIndex]);
+          }
+        }
+
+        if (buckets.size <= 1) {
+          let minZ = Number.POSITIVE_INFINITY;
+          let maxZ = Number.NEGATIVE_INFINITY;
+          for (let i = 0; i < acceptedCount; i += 1) {
+            minZ = Math.min(minZ, compactMinBounds[i]);
+            maxZ = Math.max(maxZ, compactMaxBounds[i]);
+          }
+
+          results.push({
+            kind: 'instanced',
+            key: `${mesh.uuid}:instanced`,
+            geometry,
+            count: acceptedCount,
+            matrixElements: compactMatrixElements,
+            minZ,
+            maxZ,
+          });
+          return;
+        }
+
+        for (const [bucketKey, bucket] of buckets) {
+          results.push({
+            kind: 'instanced',
+            key: `${mesh.uuid}:instanced:zbucket:${bucketKey}`,
+            geometry,
+            count: bucket.count,
+            matrixElements: new Float32Array(bucket.matrixValues),
+            minZ: bucket.minZ,
+            maxZ: bucket.maxZ,
+          });
+        }
         return;
       }
 
@@ -342,21 +491,69 @@ function CrossSectionStencilCapInner({
     return results;
   }, [sourceObject, sourceObjectVersion]);
 
-  const modelStencilEntries = React.useMemo(() => {
-    return entries.map<ModelStencilPassEntry | null>((entry) => {
-      const matrix = composeTransformMatrix(entry.transform);
-      const worldMatrix = composeCenteredGeometryMatrix(matrix, entry.center);
-      const bounds = getGeometryWorldZBounds(entry.geometry, worldMatrix);
-      if (!bounds) return null;
-      return {
+  const modelStencilEntryCacheRef = React.useRef<Map<string, {
+    signature: string;
+    item: ModelStencilPassEntry;
+  }>>(new Map());
+
+  const modelStencilEntries = React.useMemo<ModelStencilPassEntry[]>(() => {
+    const cache = modelStencilEntryCacheRef.current;
+    const liveIds = new Set<string>();
+    const next: ModelStencilPassEntry[] = [];
+
+    for (const entry of entries) {
+      liveIds.add(entry.id);
+      const { transform, center, geometry } = entry;
+      const signature = [
+        geometry.uuid,
+        center.x.toFixed(5),
+        center.y.toFixed(5),
+        center.z.toFixed(5),
+        transform.position.x.toFixed(5),
+        transform.position.y.toFixed(5),
+        transform.position.z.toFixed(5),
+        transform.rotation.x.toFixed(5),
+        transform.rotation.y.toFixed(5),
+        transform.rotation.z.toFixed(5),
+        transform.scale.x.toFixed(5),
+        transform.scale.y.toFixed(5),
+        transform.scale.z.toFixed(5),
+      ].join('|');
+
+      const cached = cache.get(entry.id);
+      if (cached && cached.signature === signature) {
+        next.push(cached.item);
+        continue;
+      }
+
+      const matrix = composeTransformMatrix(transform);
+      const worldMatrix = composeCenteredGeometryMatrix(matrix, center);
+      const bounds = getGeometryWorldZBounds(geometry, worldMatrix);
+      if (!bounds) continue;
+
+      const rebuilt: ModelStencilPassEntry = {
         id: entry.id,
-        geometry: entry.geometry,
+        geometry,
         matrix,
-        offset: new THREE.Vector3(-entry.center.x, -entry.center.y, -entry.center.z),
+        offset: new THREE.Vector3(-center.x, -center.y, -center.z),
         minZ: bounds.min,
         maxZ: bounds.max,
       };
-    }).filter((entry): entry is ModelStencilPassEntry => entry !== null);
+
+      cache.set(entry.id, {
+        signature,
+        item: rebuilt,
+      });
+      next.push(rebuilt);
+    }
+
+    for (const cachedId of cache.keys()) {
+      if (!liveIds.has(cachedId)) {
+        cache.delete(cachedId);
+      }
+    }
+
+    return next;
   }, [entries]);
 
   const visibleModelStencilEntries = React.useMemo(() => {
@@ -405,55 +602,29 @@ function CrossSectionStencilCapInner({
 
   const modelStencilPassNodes = React.useMemo(() => {
     return visibleModelStencilEntries.map((entry) => (
-      <group key={`stencil-cap-${entry.id}`}>
-        <group matrix={entry.matrix} matrixAutoUpdate={false}>
-          <mesh
-            geometry={entry.geometry}
-            position={entry.offset}
-            material={stencilBack}
-            renderOrder={990.1}
-            frustumCulled
-            raycast={() => null}
-          />
-          <mesh
-            geometry={entry.geometry}
-            position={entry.offset}
-            material={stencilFront}
-            renderOrder={990.2}
-            frustumCulled
-            raycast={() => null}
-          />
-        </group>
-      </group>
+      <ModelStencilPassMemo
+        key={`stencil-cap-${entry.id}`}
+        entry={entry}
+        backMaterial={stencilBack}
+        frontMaterial={stencilFront}
+      />
     ));
   }, [stencilBack, stencilFront, visibleModelStencilEntries]);
 
   const staticSingleStencilPassNodes = React.useMemo(() => {
     return visibleStaticSingleEntries.map((entry) => (
-      <group key={`stencil-source-pass-${entry.key}`}>
-        <group matrix={entry.matrix} matrixAutoUpdate={false}>
-          <mesh
-            geometry={entry.geometry}
-            material={stencilBack}
-            renderOrder={990.3}
-            frustumCulled
-            raycast={() => null}
-          />
-          <mesh
-            geometry={entry.geometry}
-            material={stencilFront}
-            renderOrder={990.4}
-            frustumCulled
-            raycast={() => null}
-          />
-        </group>
-      </group>
+      <StaticSingleStencilPassMemo
+        key={`stencil-source-pass-${entry.key}`}
+        entry={entry}
+        backMaterial={stencilBack}
+        frontMaterial={stencilFront}
+      />
     ));
   }, [stencilBack, stencilFront, visibleStaticSingleEntries]);
 
   const staticInstancedStencilPassNodes = React.useMemo(() => {
     return visibleStaticInstancedEntries.map((entry) => (
-      <StaticInstancedStencilPass
+      <StaticInstancedStencilPassMemo
         key={`stencil-source-instanced-pass-${entry.key}`}
         geometry={entry.geometry}
         capacity={entry.capacity}
