@@ -3657,31 +3657,31 @@ export default function Home() {
     );
   }, [printingMonitorActionBusy, printingMonitorControlPendingAction, printingMonitoringAdapter.operations]);
   const printingMonitorDisplayProgressPct = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return 0;
+    if (!printingMonitorHasActivePrint) return null;
     const totalRaw = printingMonitorSnapshot?.totalLayers;
     const currentRaw = printingMonitorSnapshot?.currentLayer;
     const totalNumeric = Number(totalRaw);
     const currentNumeric = Number(currentRaw);
-    if (!Number.isFinite(totalNumeric) || !Number.isFinite(currentNumeric)) return 0;
+    if (!Number.isFinite(totalNumeric) || !Number.isFinite(currentNumeric)) return null;
 
     const total = Math.max(0, Math.round(totalNumeric));
     const current = Math.max(0, Math.round(currentNumeric));
-    if (total <= 0) return 0;
+    if (total <= 0) return null;
 
     const completedLayers = Math.max(0, Math.min(total, current - 1));
     return (completedLayers / total) * 100;
   }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer, printingMonitorSnapshot?.totalLayers]);
   const printingMonitorDisplayCurrentLayer = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return 0;
+    if (!printingMonitorHasActivePrint) return null;
     const raw = printingMonitorSnapshot?.currentLayer;
-    if (raw == null || !Number.isFinite(raw) || raw < 0) return 0;
+    if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
     return Math.max(0, Math.round(raw));
   }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer]);
   const printingMonitorDisplayTotalLayers = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return 0;
+    if (!printingMonitorHasActivePrint) return null;
     const raw = printingMonitorSnapshot?.totalLayers;
-    if (raw == null || !Number.isFinite(raw) || raw < 0) return 0;
-    return Math.max(0, Math.round(raw));
+    if (raw == null || !Number.isFinite(raw) || raw <= 0) return null;
+    return Math.round(raw);
   }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.totalLayers]);
   const printingMonitorDisplayMaterialProfile = React.useMemo(() => {
     if (!printingMonitorHasActivePrint) return '—';
@@ -12910,14 +12910,20 @@ export default function Home() {
                       const isIdle = !isOffline && !isPrinting && !isPaused;
                       const stateText = isOffline ? 'Offline' : (snapshot?.stateText?.trim() || 'Status unavailable');
                       const hasActivePrint = !isOffline && (isPrinting || isPaused);
-                      const currentLayer = Number.isFinite(Number(snapshot?.currentLayer)) ? Math.max(0, Math.round(Number(snapshot?.currentLayer))) : 0;
-                      const totalLayers = Number.isFinite(Number(snapshot?.totalLayers)) ? Math.max(0, Math.round(Number(snapshot?.totalLayers))) : 0;
-                      const progressPct = totalLayers > 0
+                      const currentLayer = Number.isFinite(Number(snapshot?.currentLayer)) ? Math.max(0, Math.round(Number(snapshot?.currentLayer))) : null;
+                      const totalLayersRaw = Number.isFinite(Number(snapshot?.totalLayers)) ? Math.round(Number(snapshot?.totalLayers)) : null;
+                      const totalLayers = totalLayersRaw != null && totalLayersRaw > 0 ? totalLayersRaw : null;
+                      const progressPct = totalLayers != null && currentLayer != null
                         ? Math.max(0, Math.min(100, ((Math.max(0, currentLayer - 1)) / totalLayers) * 100))
-                        : 0;
-                      const displayCurrentLayer = hasActivePrint ? currentLayer : 0;
-                      const displayTotalLayers = hasActivePrint ? totalLayers : 0;
-                      const displayProgressPct = hasActivePrint ? progressPct : 0;
+                        : null;
+                      const displayCurrentLayer = hasActivePrint ? currentLayer : null;
+                      const displayTotalLayers = hasActivePrint ? totalLayers : null;
+                      const displayProgressPct = hasActivePrint ? progressPct : null;
+                      const displayLayerText = hasActivePrint
+                        ? (displayTotalLayers != null
+                          ? `${displayCurrentLayer ?? '—'}/${displayTotalLayers}`
+                          : (displayCurrentLayer != null ? `${displayCurrentLayer}` : '—'))
+                        : '-/-';
                       const brandColor = '#baf72e';
                       const idleColor = '#60a5fa';
                       const pausedColor = '#f59e0b';
@@ -13080,15 +13086,15 @@ export default function Home() {
                                 <div
                                   className="h-full rounded-full transition-[width] duration-200 ease-out"
                                   style={{
-                                    width: `${displayProgressPct.toFixed(1)}%`,
+                                    width: `${(displayProgressPct ?? 0).toFixed(1)}%`,
                                     background: hasActivePrint ? progressFill : 'color-mix(in srgb, var(--text-muted), transparent 78%)',
                                   }}
                                 />
                               </div>
                               <div className="text-[10px] flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                                <span>Layer {hasActivePrint ? `${displayCurrentLayer}/${displayTotalLayers}` : '-/-'}</span>
+                                <span>Layer {displayLayerText}</span>
                                 <span className="font-semibold" style={{ color: hasActivePrint ? progressTextColor : 'var(--text-muted)' }}>
-                                  {hasActivePrint ? `${displayProgressPct.toFixed(0)}%` : '-'}
+                                  {hasActivePrint && displayProgressPct != null ? `${displayProgressPct.toFixed(0)}%` : '-'}
                                 </span>
                               </div>
                             </div>
@@ -13202,63 +13208,65 @@ export default function Home() {
                 style={printingMonitorUsesTwoColumnDetailLayout
                   ? ({
                       '--printing-monitor-detail-columns': printingMonitorDetailWebcamExpanded
-                        ? 'minmax(0,0fr) minmax(420px,1fr)'
+                        ? 'minmax(0,1fr)'
                         : 'minmax(340px,1fr) minmax(420px,1fr)',
                     } as React.CSSProperties)
                   : undefined}
               >
+                {!printingMonitorDetailWebcamExpanded && (
                 <section
                   ref={printingMonitorLeftColumnRef}
-                  className={`grid gap-3 grid-rows-[auto_1fr] overflow-hidden transition-[opacity,transform] duration-140 ease-out motion-reduce:transition-none ${printingMonitorDetailWebcamExpanded ? 'pointer-events-none opacity-0 -translate-y-1' : 'opacity-100 translate-y-0'}`}
-                  aria-hidden={printingMonitorDetailWebcamExpanded ? true : undefined}
+                  className="grid gap-3 grid-rows-[auto_1fr] overflow-hidden transition-[opacity,transform] duration-140 ease-out motion-reduce:transition-none opacity-100 translate-y-0"
                 >
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
-                  <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
+                  <div className={`grid min-h-[34px] items-center gap-2 px-1 ${printingMonitorHasActivePrint ? 'grid-cols-[1fr_auto]' : 'grid-cols-[1fr_auto_1fr]'}`}>
                     <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Print Files
+                      {printingMonitorHasActivePrint ? 'Print Details' : 'Print Files'}
                     </div>
-                    <div
-                      className="relative inline-flex h-9 w-[132px] items-center rounded-lg border p-1 justify-self-center overflow-hidden"
-                      style={{
-                        borderColor: 'var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--surface-1), #000 12%)',
-                        boxShadow: 'inset 0 1px 0 color-mix(in srgb, #ffffff, transparent 94%)',
-                      }}
-                      aria-label="Print file source"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-md border transition-transform duration-200 ease-out"
+                    {!printingMonitorHasActivePrint && (
+                      <div
+                        className="relative inline-flex h-9 w-[132px] items-center rounded-lg border p-1 justify-self-center overflow-hidden"
                         style={{
-                          width: 'calc(50% - 4px)',
-                          transform: printingMonitorPlatesStoragePath === '/usb/' ? 'translateX(100%)' : 'translateX(0)',
-                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-1), #000 12%)',
+                          boxShadow: 'inset 0 1px 0 color-mix(in srgb, #ffffff, transparent 94%)',
                         }}
-                      />
-                      <button
-                        type="button"
-                        className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
-                        style={{
-                          color: printingMonitorPlatesStoragePath === '/local/' ? 'var(--text-strong)' : 'var(--text-muted)',
-                        }}
-                        onClick={() => handlePrintingMonitorStoragePathChange('/local/')}
-                        title="Show print files from local storage"
+                        aria-label="Print file source"
                       >
-                        Local
-                      </button>
-                      <button
-                        type="button"
-                        className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
-                        style={{
-                          color: printingMonitorPlatesStoragePath === '/usb/' ? 'var(--text-strong)' : 'var(--text-muted)',
-                        }}
-                        onClick={() => handlePrintingMonitorStoragePathChange('/usb/')}
-                        title="Show print files from USB storage"
-                      >
-                        USB
-                      </button>
-                    </div>
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-md border transition-transform duration-200 ease-out"
+                          style={{
+                            width: 'calc(50% - 4px)',
+                            transform: printingMonitorPlatesStoragePath === '/usb/' ? 'translateX(100%)' : 'translateX(0)',
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
+                          style={{
+                            color: printingMonitorPlatesStoragePath === '/local/' ? 'var(--text-strong)' : 'var(--text-muted)',
+                          }}
+                          onClick={() => handlePrintingMonitorStoragePathChange('/local/')}
+                          title="Show print files from local storage"
+                        >
+                          Local
+                        </button>
+                        <button
+                          type="button"
+                          className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
+                          style={{
+                            color: printingMonitorPlatesStoragePath === '/usb/' ? 'var(--text-strong)' : 'var(--text-muted)',
+                          }}
+                          onClick={() => handlePrintingMonitorStoragePathChange('/usb/')}
+                          title="Show print files from USB storage"
+                        >
+                          USB
+                        </button>
+                      </div>
+                    )}
                     <IconButton
                       onClick={() => {
                         void refreshPrintingMonitorRecentPlates();
@@ -13272,9 +13280,9 @@ export default function Home() {
                     </IconButton>
                   </div>
                   <div className="mt-1.5 w-full min-w-0 max-w-full rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
-                    <div className="aspect-[4/3] w-full">
+                    <div className="h-[clamp(220px,30vh,320px)] w-full">
                       {printingMonitorHasActivePrint && (printingMonitorThumbnailDisplayUrl || printingMonitorThumbnailUrl) ? (
-                        <div className="relative h-full w-full">
+                        <div className="relative h-full w-full overflow-hidden">
                           {!isPrintingMonitorThumbnailLoaded && (
                             <div className="absolute inset-0 flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                               <div className="w-[74%]">
@@ -13294,8 +13302,12 @@ export default function Home() {
                           <img
                             src={printingMonitorThumbnailDisplayUrl ?? printingMonitorThumbnailUrl ?? undefined}
                             alt="Active print thumbnail"
-                            className="block h-full w-full object-contain transition-opacity duration-150"
-                            style={{ opacity: isPrintingMonitorThumbnailLoaded ? 1 : 0 }}
+                            className="absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-150"
+                            style={{
+                              opacity: isPrintingMonitorThumbnailLoaded ? 1 : 0,
+                              maxWidth: '100%',
+                              maxHeight: '100%',
+                            }}
                             loading="eager"
                             decoding="async"
                             fetchPriority="high"
@@ -13421,13 +13433,13 @@ export default function Home() {
                         <div
                           className="h-full rounded-full transition-[width] duration-200 ease-out"
                           style={{
-                            width: `${printingMonitorDisplayProgressPct.toFixed(2)}%`,
+                            width: `${(printingMonitorDisplayProgressPct ?? 0).toFixed(2)}%`,
                             background: 'linear-gradient(90deg, #60a5fa, #22d3ee)',
                           }}
                         />
                       </div>
                       <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        Progress {printingMonitorDisplayProgressPct.toFixed(1)}%
+                        Progress {printingMonitorDisplayProgressPct != null ? `${printingMonitorDisplayProgressPct.toFixed(1)}%` : '—'}
                       </div>
                     </>
                   ) : (
@@ -13440,7 +13452,9 @@ export default function Home() {
                     <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                       Layer:{' '}
                       <span style={{ color: 'var(--text-strong)' }}>
-                        {`${printingMonitorDisplayCurrentLayer}/${printingMonitorDisplayTotalLayers}`}
+                        {printingMonitorDisplayTotalLayers != null
+                          ? `${printingMonitorDisplayCurrentLayer ?? '—'}/${printingMonitorDisplayTotalLayers}`
+                          : (printingMonitorDisplayCurrentLayer != null ? `${printingMonitorDisplayCurrentLayer}` : '—')}
                       </span>
                     </div>
                     <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -13545,6 +13559,7 @@ export default function Home() {
 
                 </div>
                 </section>
+                )}
 
                 {printingMonitorHasCamera && (
                 <section
