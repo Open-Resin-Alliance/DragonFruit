@@ -11,6 +11,8 @@ import { getBoxCorners } from './SceneCanvasGeometry';
 const EXPORT_THUMBNAIL_WIDTH = 1600;
 const EXPORT_THUMBNAIL_HEIGHT = 960;
 const EXPORT_THUMBNAIL_MARGIN = 1.1;
+const EXPORT_THUMBNAIL_YAW_RIGHT_DEG = -20;
+const EXPORT_THUMBNAIL_PITCH_SCALE = 0.72;
 
 type DefaultCameraSpec = {
   position: [number, number, number];
@@ -174,6 +176,21 @@ export function useExportThumbnailCapture({
     }
     introDirection.normalize();
 
+    const baseYaw = Math.atan2(introDirection.y, introDirection.x);
+    const basePitch = Math.atan2(introDirection.z, Math.hypot(introDirection.x, introDirection.y));
+    const adjustedYaw = baseYaw - THREE.MathUtils.degToRad(EXPORT_THUMBNAIL_YAW_RIGHT_DEG);
+    const adjustedPitch = THREE.MathUtils.clamp(
+      basePitch * EXPORT_THUMBNAIL_PITCH_SCALE,
+      THREE.MathUtils.degToRad(-75),
+      THREE.MathUtils.degToRad(75),
+    );
+    const cosPitch = Math.cos(adjustedPitch);
+    introDirection.set(
+      Math.cos(adjustedYaw) * cosPitch,
+      Math.sin(adjustedYaw) * cosPitch,
+      Math.sin(adjustedPitch),
+    ).normalize();
+
     const worldUp = new THREE.Vector3(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]).normalize();
     const viewForward = introDirection.clone();
     const viewRight = new THREE.Vector3().crossVectors(worldUp, viewForward);
@@ -216,6 +233,17 @@ export function useExportThumbnailCapture({
         }
       : null;
     const visibilityRestores: Array<{ node: THREE.Object3D; visible: boolean }> = [];
+    const helperOriginalVisibility = new WeakMap<THREE.Object3D, boolean>();
+    const buildPlateHelperNodes: THREE.Object3D[] = [];
+    const gridHelperNodes: THREE.Object3D[] = [];
+
+    const hideHelperForFit = (node: THREE.Object3D) => {
+      if (!helperOriginalVisibility.has(node)) {
+        helperOriginalVisibility.set(node, node.visible);
+        visibilityRestores.push({ node, visible: node.visible });
+      }
+      node.visible = false;
+    };
 
     const restoreCamera = () => {
       renderer.setRenderTarget(prevRenderTarget);
@@ -508,24 +536,22 @@ export function useExportThumbnailCapture({
 
       sceneGraph.traverse((node) => {
         const helperType = (node.userData as Record<string, unknown> | undefined)?.thumbnailHelperType;
-        if (helperType === 'buildPlate' && !includeBuildPlate) {
-          visibilityRestores.push({ node, visible: node.visible });
-          node.visible = false;
+        if (helperType === 'buildPlate') {
+          buildPlateHelperNodes.push(node);
+          hideHelperForFit(node);
           return;
         }
-        if (helperType === 'grid' && !includeGrid) {
-          visibilityRestores.push({ node, visible: node.visible });
-          node.visible = false;
+        if (helperType === 'grid') {
+          gridHelperNodes.push(node);
+          hideHelperForFit(node);
           return;
         }
         if (helperType === 'footprintBorder') {
-          visibilityRestores.push({ node, visible: node.visible });
-          node.visible = false;
+          hideHelperForFit(node);
           return;
         }
         if (helperType === 'buildVolumeOverlay') {
-          visibilityRestores.push({ node, visible: node.visible });
-          node.visible = false;
+          hideHelperForFit(node);
         }
       });
 
@@ -549,11 +575,15 @@ export function useExportThumbnailCapture({
       analysisCanvas.height = EXPORT_THUMBNAIL_HEIGHT;
       const analysisContext = analysisCanvas.getContext('2d', { willReadFrequently: true });
 
-      const measureRenderedSubjectNdcBounds = (pixels: Uint8ClampedArray) => {
+      const measureRenderedSubjectNdcBounds = () => {
         if (!analysisContext) return null;
 
         const width = EXPORT_THUMBNAIL_WIDTH;
         const height = EXPORT_THUMBNAIL_HEIGHT;
+        analysisContext.clearRect(0, 0, width, height);
+        analysisContext.drawImage(renderer.domElement, 0, 0, width, height);
+        const pixels = analysisContext.getImageData(0, 0, width, height).data;
+
         const topLeft = 0;
         const topRight = (width - 1) * 4;
         const bottomLeft = ((height - 1) * width) * 4;
@@ -562,10 +592,12 @@ export function useExportThumbnailCapture({
         const bgG = Math.round((pixels[topLeft + 1] + pixels[topRight + 1] + pixels[bottomLeft + 1] + pixels[bottomRight + 1]) * 0.25);
         const bgB = Math.round((pixels[topLeft + 2] + pixels[topRight + 2] + pixels[bottomLeft + 2] + pixels[bottomRight + 2]) * 0.25);
 
-        let minX = width;
-        let minY = height;
-        let maxX = -1;
-        let maxY = -1;
+        const bounds = {
+          minX: Number.POSITIVE_INFINITY,
+          maxX: Number.NEGATIVE_INFINITY,
+          minY: Number.POSITIVE_INFINITY,
+          maxY: Number.NEGATIVE_INFINITY,
+        };
 
         const colorDeltaThreshold = 30;
         for (let y = 0; y < height; y += 1) {
@@ -578,33 +610,25 @@ export function useExportThumbnailCapture({
             const delta = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
             if (delta <= colorDeltaThreshold) continue;
 
-            if (x < minX) minX = x;
-            if (y < minY) minY = y;
-            if (x > maxX) maxX = x;
-            if (y > maxY) maxY = y;
+            const ndcX = ((x / width) * 2) - 1;
+            const ndcY = 1 - ((y / height) * 2);
+            bounds.minX = Math.min(bounds.minX, ndcX);
+            bounds.maxX = Math.max(bounds.maxX, ndcX);
+            bounds.minY = Math.min(bounds.minY, ndcY);
+            bounds.maxY = Math.max(bounds.maxY, ndcY);
           }
         }
 
-        if (maxX < minX || maxY < minY) return null;
+        if (
+          !Number.isFinite(bounds.minX)
+          || !Number.isFinite(bounds.maxX)
+          || !Number.isFinite(bounds.minY)
+          || !Number.isFinite(bounds.maxY)
+        ) {
+          return null;
+        }
 
-        const ndcMinX = ((minX / width) * 2) - 1;
-        const ndcMaxX = (((maxX + 1) / width) * 2) - 1;
-        const ndcMaxY = 1 - ((minY / height) * 2);
-        const ndcMinY = 1 - (((maxY + 1) / height) * 2);
-
-        return {
-          minX: ndcMinX,
-          maxX: ndcMaxX,
-          minY: ndcMinY,
-          maxY: ndcMaxY,
-        };
-      };
-
-      const capturePixelsFromViewport = () => {
-        if (!analysisContext) return new Uint8ClampedArray();
-        analysisContext.clearRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
-        analysisContext.drawImage(renderer.domElement, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
-        return analysisContext.getImageData(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT).data;
+        return bounds;
       };
 
       renderer.setRenderTarget(null);
@@ -648,7 +672,7 @@ export function useExportThumbnailCapture({
         renderer.clear(true, true, true);
         renderer.render(sceneGraph, camera);
 
-        const ndcBounds = measureRenderedSubjectNdcBounds(capturePixelsFromViewport());
+        const ndcBounds = measureRenderedSubjectNdcBounds();
         if (!ndcBounds) break;
 
         const ndcCenterX = (ndcBounds.minX + ndcBounds.maxX) * 0.5;
@@ -708,6 +732,15 @@ export function useExportThumbnailCapture({
         }
 
         if (!changed) break;
+      }
+
+      for (const node of buildPlateHelperNodes) {
+        const originalVisible = helperOriginalVisibility.get(node) ?? true;
+        node.visible = originalVisible && includeBuildPlate;
+      }
+      for (const node of gridHelperNodes) {
+        const originalVisible = helperOriginalVisibility.get(node) ?? true;
+        node.visible = originalVisible && includeGrid;
       }
 
       if (camera instanceof THREE.PerspectiveCamera && captureCamera instanceof THREE.PerspectiveCamera) {
