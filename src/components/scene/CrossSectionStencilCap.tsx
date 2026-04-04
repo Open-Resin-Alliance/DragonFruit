@@ -38,8 +38,6 @@ type StaticStencilInstancedEntry = {
   geometry: THREE.BufferGeometry;
   count: number;
   matrixElements: Float32Array;
-  minZByInstance: Float32Array;
-  maxZByInstance: Float32Array;
   minZ: number;
   maxZ: number;
 };
@@ -51,7 +49,6 @@ type VisibleStaticStencilInstancedEntry = {
   geometry: THREE.BufferGeometry;
   capacity: number;
   matrixElements: Float32Array;
-  visibleIndices: Uint32Array;
 };
 
 type StencilZBoundsEntry<T> = {
@@ -73,7 +70,6 @@ function StaticInstancedStencilPass({
   geometry,
   capacity,
   matrixElements,
-  visibleIndices,
   backMaterial,
   frontMaterial,
   backRenderOrder,
@@ -82,7 +78,6 @@ function StaticInstancedStencilPass({
   geometry: THREE.BufferGeometry;
   capacity: number;
   matrixElements: Float32Array;
-  visibleIndices: Uint32Array;
   backMaterial: THREE.Material;
   frontMaterial: THREE.Material;
   backRenderOrder: number;
@@ -97,23 +92,17 @@ function StaticInstancedStencilPass({
     if (!back || !front) return;
 
     const tempMatrix = new THREE.Matrix4();
-
-    for (let i = 0; i < visibleIndices.length; i += 1) {
-      const sourceIndex = visibleIndices[i];
-      tempMatrix.fromArray(matrixElements, sourceIndex * 16);
+    for (let i = 0; i < capacity; i += 1) {
+      tempMatrix.fromArray(matrixElements, i * 16);
       back.setMatrixAt(i, tempMatrix);
       front.setMatrixAt(i, tempMatrix);
     }
 
-    back.count = visibleIndices.length;
-    front.count = visibleIndices.length;
+    back.count = capacity;
+    front.count = capacity;
     back.instanceMatrix.needsUpdate = true;
     front.instanceMatrix.needsUpdate = true;
-    (back as THREE.InstancedMesh & { computeBoundingSphere?: () => void }).computeBoundingSphere?.();
-    (front as THREE.InstancedMesh & { computeBoundingSphere?: () => void }).computeBoundingSphere?.();
-  }, [matrixElements, visibleIndices]);
-
-  if (visibleIndices.length === 0) return null;
+  }, [capacity, matrixElements]);
 
   return (
     <>
@@ -122,7 +111,7 @@ function StaticInstancedStencilPass({
         args={[geometry, undefined, capacity]}
         material={backMaterial}
         renderOrder={backRenderOrder}
-        frustumCulled
+        frustumCulled={false}
         raycast={() => null}
       />
       <instancedMesh
@@ -130,7 +119,7 @@ function StaticInstancedStencilPass({
         args={[geometry, undefined, capacity]}
         material={frontMaterial}
         renderOrder={frontRenderOrder}
-        frustumCulled
+        frustumCulled={false}
         raycast={() => null}
       />
     </>
@@ -302,8 +291,6 @@ function CrossSectionStencilCapInner({
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
         const initialCount = maybeInstancedMesh.count;
         const matrixElements = new Float32Array(initialCount * 16);
-        const minZByInstance = new Float32Array(initialCount);
-        const maxZByInstance = new Float32Array(initialCount);
         let minZ = Number.POSITIVE_INFINITY;
         let maxZ = Number.NEGATIVE_INFINITY;
         let acceptedCount = 0;
@@ -315,8 +302,6 @@ function CrossSectionStencilCapInner({
           if (!bounds) continue;
 
           worldInstanceMatrix.toArray(matrixElements, acceptedCount * 16);
-          minZByInstance[acceptedCount] = bounds.min;
-          maxZByInstance[acceptedCount] = bounds.max;
           minZ = Math.min(minZ, bounds.min);
           maxZ = Math.max(maxZ, bounds.max);
           acceptedCount += 1;
@@ -327,12 +312,6 @@ function CrossSectionStencilCapInner({
         const compactMatrixElements = acceptedCount === initialCount
           ? matrixElements
           : matrixElements.slice(0, acceptedCount * 16);
-        const compactMinZ = acceptedCount === initialCount
-          ? minZByInstance
-          : minZByInstance.slice(0, acceptedCount);
-        const compactMaxZ = acceptedCount === initialCount
-          ? maxZByInstance
-          : maxZByInstance.slice(0, acceptedCount);
 
         results.push({
           kind: 'instanced',
@@ -340,8 +319,6 @@ function CrossSectionStencilCapInner({
           geometry,
           count: acceptedCount,
           matrixElements: compactMatrixElements,
-          minZByInstance: compactMinZ,
-          maxZByInstance: compactMaxZ,
           minZ,
           maxZ,
         });
@@ -403,20 +380,11 @@ function CrossSectionStencilCapInner({
       if (entry.kind !== 'instanced') continue;
       if (!intersectsMinMaxZ(entry.minZ, entry.maxZ, y)) continue;
 
-      const visibleIndices: number[] = [];
-      for (let i = 0; i < entry.count; i += 1) {
-        if (!intersectsMinMaxZ(entry.minZByInstance[i], entry.maxZByInstance[i], y)) continue;
-        visibleIndices.push(i);
-      }
-
-      if (visibleIndices.length === 0) continue;
-
       visibleInstanced.push({
         key: entry.key,
         geometry: entry.geometry,
         capacity: entry.count,
         matrixElements: entry.matrixElements,
-        visibleIndices: Uint32Array.from(visibleIndices),
       });
     }
 
@@ -490,7 +458,6 @@ function CrossSectionStencilCapInner({
         geometry={entry.geometry}
         capacity={entry.capacity}
         matrixElements={entry.matrixElements}
-        visibleIndices={entry.visibleIndices}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
         backRenderOrder={990.3}

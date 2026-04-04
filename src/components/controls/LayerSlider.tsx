@@ -19,12 +19,14 @@ type LayerSliderProps = {
   docked?: boolean;
   embedded?: boolean;
   expandToContainer?: boolean;
+  dragBatchMode?: 'raf' | 'immediate';
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf' }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const valueRef = React.useRef(value);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
   const [showError, setShowError] = React.useState(false);
   const [isShiftHeld, setIsShiftHeld] = React.useState(false);
@@ -38,12 +40,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   // Update input value when slider value changes externally
   React.useEffect(() => {
+    valueRef.current = value;
     const roundedValue = String(Math.round(value));
-    // Only update if the value actually changed
-    if (inputValue !== roundedValue) {
-      setInputValue(roundedValue);
-    }
-  }, [value, inputValue]);
+    setInputValue((previous) => (previous === roundedValue ? previous : roundedValue));
+  }, [value]);
 
   // Cleanup timeout on unmount
   React.useEffect(() => {
@@ -60,26 +60,33 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     return Math.round(v / s) * s;
   }, [step]);
 
+  const emitChange = React.useCallback((rawNext: number) => {
+    const next = clamp(snap(rawNext));
+    if (next === valueRef.current) return;
+    onChange(next);
+  }, [clamp, onChange, snap]);
+
   const setByClientY = React.useCallback((clientY: number, shiftKey: boolean = false) => {
     const el = containerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const rel = (clientY - rect.top) / rect.height; // 0 at top, 1 at bottom
     const inv = 1 - rel; // 0 bottom, 1 top -> we want 0..1 bottom->top
+    const span = Math.max(1e-6, max - min);
     
     if (shiftKey) {
       // Fine-grained control: reduce sensitivity by 10x
-      const currentPercent = (value - min) / (max - min);
+      const currentPercent = (valueRef.current - min) / span;
       const delta = (inv - currentPercent) * 0.1; // 10x slower movement
       const newPercent = currentPercent + delta;
-      const v = min + newPercent * (max - min);
-      onChange(clamp(snap(v)));
+      const v = min + newPercent * span;
+      emitChange(v);
     } else {
       // Normal control
-      const v = min + inv * (max - min);
-      onChange(clamp(snap(v)));
+      const v = min + inv * span;
+      emitChange(v);
     }
-  }, [min, max, value, clamp, onChange, snap]);
+  }, [emitChange, max, min]);
 
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -90,6 +97,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     dragShiftModeRef.current = e.shiftKey;
     setIsShiftHeld(e.shiftKey);
     setByClientY(e.clientY, e.shiftKey);
+
+    let rafId: number | null = null;
+    let pendingClientY = e.clientY;
+
+    const flushMove = () => {
+      rafId = null;
+      setByClientY(pendingClientY, dragShiftModeRef.current);
+    };
     
     const onMove = (ev: MouseEvent) => {
       // Allow shift to be turned ON during drag, but once on it stays on
@@ -97,13 +112,25 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         dragShiftModeRef.current = true;
         setIsShiftHeld(true);
       }
-      setByClientY(ev.clientY, dragShiftModeRef.current);
+
+      if (dragBatchMode === 'immediate') {
+        setByClientY(ev.clientY, dragShiftModeRef.current);
+        return;
+      }
+
+      pendingClientY = ev.clientY;
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(flushMove);
     };
 
     let settled = false;
     const settleDrag = () => {
       if (settled) return;
       settled = true;
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       // Only reset on mouse up
       setIsDraggingThumb(false);
       dragShiftModeRef.current = false;
@@ -121,13 +148,12 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [onScrubEnd, onScrubStart, setByClientY]);
+  }, [dragBatchMode, onScrubEnd, onScrubStart, setByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
-    const next = clamp(value + dir * s);
-    onChange(snap(next));
-  }, [value, step, clamp, snap, onChange]);
+    emitChange(valueRef.current + dir * s);
+  }, [emitChange, step]);
 
   // Use native wheel event listener with passive: false to allow preventDefault
   React.useEffect(() => {
@@ -141,8 +167,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       if (e.shiftKey) {
         // Fine-grained control: move by 0.1 steps
         const fineStep = (step || 1) * 0.1;
-        const next = clamp(value + dir * fineStep);
-        onChange(snap(next));
+        emitChange(valueRef.current + dir * fineStep);
       } else {
         nudge(dir);
       }
@@ -150,7 +175,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [nudge, step, value, clamp, onChange, snap]);
+  }, [emitChange, nudge, step]);
 
   const onKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
@@ -184,7 +209,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       // If above max, force to max and show error indicator
       if (parsed > max) {
         setInputValue(String(max));
-        onChange(clamp(snap(max)));
+        emitChange(max);
         setShowError(true);
         // Clear error after 1 second
         errorTimeoutRef.current = setTimeout(() => {
@@ -193,11 +218,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         }, 1000);
       } else {
         setInputValue(newValue);
-        onChange(clamp(snap(parsed)));
+        emitChange(parsed);
         setShowError(false);
       }
     }
-  }, [max, clamp, snap, onChange]);
+  }, [emitChange, max]);
 
   const handleInputBlur = React.useCallback(() => {
     // On blur, ensure we have a valid value

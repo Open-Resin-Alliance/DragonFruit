@@ -78,12 +78,13 @@ export function ModelAttachedSupportLayer({
   bracePlacementPreview = null,
   kickstandPlacementPreview = null,
 }: ModelAttachedSupportLayerProps) {
-  const useUltraLazyPrepareSupports = mode === 'prepare';
+  const useUltraLazySupports = mode === 'prepare' || mode === 'printing';
+  const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
 
   return (
     <>
-      {!hideRaftPrimitives && useUltraLazyPrepareSupports && (
+      {!hideRaftPrimitives && useUltraLazySupports && (
         <RaftProxyMeshLayer
           clipLower={clipLower}
           clipUpper={clipUpper}
@@ -96,7 +97,7 @@ export function ModelAttachedSupportLayer({
           ghostOpacity={ghostOpacity}
           ghostRenderOrder={ghostRenderOrder}
           onModelPointerSelect={onModelPointerSelect}
-          enablePointerSelection={!navigationLodActive && !disableSelectionAndHover && !passive}
+          enablePointerSelection={proxyPointerSelectionEnabled}
           colorized={raftColorized}
           hoverized={raftHoverized}
           navigationLodActive={navigationLodActive}
@@ -104,7 +105,7 @@ export function ModelAttachedSupportLayer({
         />
       )}
 
-      {!hideRaftPrimitives && !useUltraLazyPrepareSupports && (
+      {!hideRaftPrimitives && !useUltraLazySupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}
@@ -141,7 +142,7 @@ export function ModelAttachedSupportLayer({
         </>
       )}
 
-      {useUltraLazyPrepareSupports ? (
+      {useUltraLazySupports ? (
         <SupportProxyMeshLayer
           mode={mode}
           clipLower={clipLower}
@@ -158,7 +159,7 @@ export function ModelAttachedSupportLayer({
           modelDropOffsetsById={modelDropOffsetsById}
           ghostOpacity={ghostOpacity}
           onModelPointerSelect={onModelPointerSelect}
-          enablePointerSelection={!navigationLodActive && !disableSelectionAndHover && !passive}
+          enablePointerSelection={proxyPointerSelectionEnabled}
           includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
         />
       ) : (

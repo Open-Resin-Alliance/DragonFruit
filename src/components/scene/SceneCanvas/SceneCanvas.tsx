@@ -781,6 +781,19 @@ export function SceneCanvas({
     resetSupportDragGroupNow,
   ]);
 
+  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
+    return models
+      .filter((model) => model.visible)
+      .map((model) => ({
+        id: model.id,
+        geometry: model.geometry.geometry,
+        center: model.geometry.center,
+        transform: model.id === activeModelId && transform
+          ? transform
+          : model.transform,
+      }));
+  }, [activeModelId, models, transform]);
+
   React.useEffect(() => {
     return () => {
       liveDragTransformRef.current = null;
@@ -2731,19 +2744,6 @@ export function SceneCanvas({
     models,
     transform,
   ]);
-
-  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
-    return models
-      .filter((model) => model.visible)
-      .map((model) => ({
-        id: model.id,
-        geometry: model.geometry.geometry,
-        center: model.geometry.center,
-        transform: model.id === activeModelId && transform
-          ? transform
-          : model.transform,
-      }));
-  }, [activeModelId, models, transform]);
 
   const crossSectionStencilSourceVersion = React.useMemo(() => ({
     supportRenderRefreshNonce,

@@ -6175,23 +6175,39 @@ export default function Home() {
     if (!Number.isFinite(nextLayer)) return;
     const clamped = clampPrintingLayer(nextLayer);
 
-    const currentOrPending = pendingPrintingSelectedLayerRef.current ?? printingSelectedLayerRef.current;
-    if (currentOrPending === clamped) {
-      return;
-    }
-
-    pendingPrintingSelectedLayerRef.current = clamped;
-
-    if (printingSelectedLayerRafRef.current !== null) return;
-
-    printingSelectedLayerRafRef.current = window.requestAnimationFrame(() => {
-      printingSelectedLayerRafRef.current = null;
+    const flushPendingLayer = () => {
       const pending = pendingPrintingSelectedLayerRef.current;
       pendingPrintingSelectedLayerRef.current = null;
       if (pending == null) return;
+
+      printingSelectedLayerRef.current = pending;
       setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
-    });
-  }, [clampPrintingLayer, schedulePrintingPreviewSettle]);
+    };
+
+    if (isPrintingLayerScrubbing) {
+      const currentOrPending = pendingPrintingSelectedLayerRef.current ?? printingSelectedLayerRef.current;
+      if (currentOrPending === clamped) return;
+
+      pendingPrintingSelectedLayerRef.current = clamped;
+
+      if (printingSelectedLayerRafRef.current !== null) return;
+
+      printingSelectedLayerRafRef.current = window.requestAnimationFrame(() => {
+        printingSelectedLayerRafRef.current = null;
+        flushPendingLayer();
+      });
+      return;
+    }
+
+    if (printingSelectedLayerRafRef.current !== null) {
+      window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
+      printingSelectedLayerRafRef.current = null;
+    }
+
+    pendingPrintingSelectedLayerRef.current = null;
+    printingSelectedLayerRef.current = clamped;
+    setPrintingSelectedLayer((previous) => (previous === clamped ? previous : clamped));
+  }, [clampPrintingLayer, isPrintingLayerScrubbing]);
 
   const handlePrintingLayerScrubStart = React.useCallback(() => {
     setIsPrintingLayerScrubbing(true);
@@ -6199,15 +6215,22 @@ export default function Home() {
   }, [schedulePrintingPreviewSettle]);
 
   const handlePrintingLayerScrubEnd = React.useCallback(() => {
+    const flushPendingLayer = () => {
+      const pending = pendingPrintingSelectedLayerRef.current;
+      pendingPrintingSelectedLayerRef.current = null;
+      if (pending == null) return null;
+
+      printingSelectedLayerRef.current = pending;
+      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+      return pending;
+    };
+
     if (printingSelectedLayerRafRef.current !== null) {
       window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
       printingSelectedLayerRafRef.current = null;
     }
-    const pending = pendingPrintingSelectedLayerRef.current;
-    pendingPrintingSelectedLayerRef.current = null;
-    if (pending != null) {
-      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
-    }
+
+    const pending = flushPendingLayer();
     setIsPrintingLayerScrubbing(false);
     // Switch display target to the released layer immediately.
     // If that layer PNG is not loaded yet, UI falls back to cross-section preview
@@ -7810,7 +7833,7 @@ export default function Home() {
     }
   }, [scene.mode, printingArtifactIsInvalid, printingArtifact]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (scene.mode !== 'printing') return;
     const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
 
@@ -11288,7 +11311,7 @@ export default function Home() {
 
             <div className="h-full min-h-0 min-w-0 p-3 flex flex-col gap-2 overflow-hidden">
               <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Layer PNG Preview
+                Layer Preview
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                 Layer {Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/{Math.max(1, printingPreviewTotalLayers)}
@@ -11332,22 +11355,29 @@ export default function Home() {
                         willChange: 'transform',
                       }}
                     >
-                      {/* GPU preview layer (always visible during scrub or when PNG not loaded) */}
-                      <div className="absolute inset-0">
-                        <PrintingLayerGpuPreview
-                          models={scene.models}
-                          clipZ={printingSelectedLayer * slicing.layerHeightMm}
-                          buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
-                          buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
-                          viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
-                          viewportHeightMm={printingPreviewTargetResolution?.viewportHeight}
-                          supportGroupRef={supportDragGroupRef as React.RefObject<THREE.Group>}
-                          supportVersion={supportRenderRefreshNonce}
-                          mirrorX={activePrinterProfile?.display?.mirrorX === true}
-                          mirrorY={activePrinterProfile?.display?.mirrorY === true}
-                          className="block w-full h-full rounded"
-                        />
-                      </div>
+                      {/* Fast scrub preview: cached cross-section while dragging / waiting for PNG */}
+                      {shouldShowScrubPreview && (
+                        <div className="absolute inset-0">
+                          <PrintingLayerGpuPreview
+                            models={scene.models}
+                            clipZ={printingSelectedLayer * slicing.layerHeightMm}
+                            buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
+                            buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                            viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
+                            viewportHeightMm={printingPreviewTargetResolution?.viewportHeight}
+                            supportGroupRef={supportDragGroupRef as React.RefObject<THREE.Group>}
+                            supportVersion={supportRenderRefreshNonce}
+                            mirrorX={activePrinterProfile?.display?.mirrorX === true}
+                            mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                            className="block w-full h-full rounded"
+                            style={{
+                              transform: printingPreviewScrubUpscaleTransform || 'none',
+                              transformOrigin: 'center center',
+                              willChange: 'transform',
+                            }}
+                          />
+                        </div>
+                      )}
 
                       {/* PNG layer on top (fades in when loaded, hidden during active scrub) */}
                       {selectedPrintingLayerPreviewUrl && !isPrintingLayerScrubbing && (
