@@ -1756,7 +1756,7 @@ export default function Home() {
       printingPreviewSettleTimeoutRef.current = null;
       printingPreviewSettledRef.current = true;
       setIsPrintingPreviewSettled(true);
-    }, 1000);
+    }, 180);
   }, []);
 
   const queuePrintingPreviewPan = React.useCallback((nextPan: { x: number; y: number }) => {
@@ -1774,6 +1774,33 @@ export default function Home() {
       });
     });
   }, []);
+
+  const clampPrintingPreviewPan = React.useCallback((
+    nextPan: { x: number; y: number },
+    zoom: number,
+    viewportWidthPx: number,
+    viewportHeightPx: number,
+  ) => {
+    if (!Number.isFinite(zoom) || zoom <= 1.0001) {
+      return { x: 0, y: 0 };
+    }
+
+    const safeWidth = Math.max(1, viewportWidthPx);
+    const safeHeight = Math.max(1, viewportHeightPx);
+    const maxPanX = Math.max(0, ((zoom - 1) * safeWidth) * 0.5);
+    const maxPanY = Math.max(0, ((zoom - 1) * safeHeight) * 0.5);
+
+    return {
+      x: Math.max(-maxPanX, Math.min(maxPanX, nextPan.x)),
+      y: Math.max(-maxPanY, Math.min(maxPanY, nextPan.y)),
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (printingPreviewZoom <= 1.0001) {
+      queuePrintingPreviewPan({ x: 0, y: 0 });
+    }
+  }, [printingPreviewZoom, queuePrintingPreviewPan]);
 
   const clampPrintingLayer = React.useCallback((nextLayer: number) => {
     const rounded = Math.round(nextLayer);
@@ -1946,13 +1973,18 @@ export default function Home() {
   const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     if (printingPreviewTotalLayers <= 0) return;
     event.preventDefault();
-    schedulePrintingPreviewSettle();
 
     const previousZoom = printingPreviewZoomRef.current;
+    if (previousZoom <= 1.0001 && event.deltaY > 0) {
+      return;
+    }
+
     const factor = Math.exp(-event.deltaY * 0.0015);
     const nextZoom = Math.max(1, Math.min(32, previousZoom * factor));
 
     if (Math.abs(nextZoom - previousZoom) < 1e-5) return;
+
+    schedulePrintingPreviewSettle();
 
     const viewportRect = printingPreviewViewportRef.current?.getBoundingClientRect();
     if (!viewportRect) {
@@ -1973,9 +2005,16 @@ export default function Home() {
           y: pointerY - (contentY * nextZoom),
         };
 
+    const clampedPan = clampPrintingPreviewPan(
+      nextPan,
+      nextZoom,
+      viewportRect.width,
+      viewportRect.height,
+    );
+
     setPrintingPreviewZoom(nextZoom);
-    queuePrintingPreviewPan(nextPan);
-  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
+    queuePrintingPreviewPan(clampedPan);
+  }, [clampPrintingPreviewPan, queuePrintingPreviewPan, schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
 
   const handlePrintingPreviewPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (printingPreviewTotalLayers <= 0) return;
@@ -2005,9 +2044,14 @@ export default function Home() {
       x: drag.originX + (event.clientX - drag.startClientX),
       y: drag.originY + (event.clientY - drag.startClientY),
     };
-    queuePrintingPreviewPan(nextPan);
+    const viewportRect = printingPreviewViewportRef.current?.getBoundingClientRect();
+    const clampedPan = viewportRect
+      ? clampPrintingPreviewPan(nextPan, printingPreviewZoomRef.current, viewportRect.width, viewportRect.height)
+      : nextPan;
+
+    queuePrintingPreviewPan(clampedPan);
     schedulePrintingPreviewSettle();
-  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle]);
+  }, [clampPrintingPreviewPan, queuePrintingPreviewPan, schedulePrintingPreviewSettle]);
 
   const handlePrintingPreviewPointerEnd = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = printingPreviewDragRef.current;
@@ -11400,9 +11444,15 @@ export default function Home() {
                         willChange: 'transform',
                       }}
                     >
-                      {/* Fast scrub preview: cached cross-section while dragging / waiting for PNG */}
-                      {shouldShowScrubPreview && (
-                        <div className="absolute inset-0">
+                      {/* Fast scrub preview: keep mounted to avoid first-use GPU warmup hitch. */}
+                      {printingPreviewTotalLayers > 0 && (
+                        <div
+                          className="absolute inset-0 transition-opacity duration-100"
+                          style={{
+                            opacity: shouldShowScrubPreview ? 1 : 0,
+                            pointerEvents: 'none',
+                          }}
+                        >
                           <PrintingLayerGpuPreview
                             models={scene.models}
                             clipZ={slicing.currentHeightMm}
@@ -11425,7 +11475,7 @@ export default function Home() {
                       )}
 
                       {/* PNG layer on top (fades in when loaded, hidden during active scrub) */}
-                      {selectedPrintingLayerPreviewUrl && !isPrintingLayerScrubbing && (
+                      {selectedPrintingLayerPreviewUrl && !shouldShowScrubPreview && (
                         <div 
                           className="absolute inset-0 transition-opacity duration-150" 
                           style={{ opacity: isPrintingPngLoaded ? 1 : 0 }}
