@@ -40,6 +40,7 @@ type UseExportThumbnailCaptureArgs = {
   defaultCamera: DefaultCameraSpec;
   orbitControlsRef: React.RefObject<{
     target: THREE.Vector3;
+    update?: () => void;
   } | null>;
   rendererRef: React.RefObject<THREE.WebGLRenderer | null>;
   sceneRef: React.RefObject<THREE.Scene | null>;
@@ -209,6 +210,8 @@ export function useExportThumbnailCapture({
     const prevScissor = renderer.getScissor(new THREE.Vector4());
     const prevScissorTest = renderer.getScissorTest();
     const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
+    const orbitControls = orbitControlsRef.current;
+    const prevOrbitTarget = orbitControls?.target.clone() ?? null;
     const prevCameraPosition = camera.position.clone();
     const prevCameraQuaternion = camera.quaternion.clone();
     const prevCameraUp = camera.up.clone();
@@ -273,6 +276,10 @@ export function useExportThumbnailCapture({
         camera.updateProjectionMatrix();
       }
       camera.updateMatrixWorld(true);
+      if (orbitControls && prevOrbitTarget) {
+        orbitControls.target.copy(prevOrbitTarget);
+        orbitControls.update?.();
+      }
       if (buildVolumeBoundsOverlayRef.current && prevBuildVolumeOverlayVisible != null) {
         buildVolumeBoundsOverlayRef.current.visible = prevBuildVolumeOverlayVisible;
       }
@@ -531,8 +538,8 @@ export function useExportThumbnailCapture({
       }
       camera.updateMatrixWorld(true);
 
-      const includeBuildPlate = exportThumbnailRenderOptions?.includeBuildPlate ?? true;
-      const includeGrid = exportThumbnailRenderOptions?.includeGrid ?? true;
+      const includeBuildPlate = exportThumbnailRenderOptions?.includeBuildPlate ?? false;
+      const includeGrid = exportThumbnailRenderOptions?.includeGrid ?? false;
 
       sceneGraph.traverse((node) => {
         const helperType = (node.userData as Record<string, unknown> | undefined)?.thumbnailHelperType;
@@ -820,14 +827,19 @@ export function useExportThumbnailCapture({
         context.restore();
       }
 
-      const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
-      });
-      if (!blob) {
+      const dataUrl = canvas.toDataURL('image/png');
+      const commaIndex = dataUrl.indexOf(',');
+      if (commaIndex < 0) {
         return null;
       }
+      const base64 = dataUrl.slice(commaIndex + 1);
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
 
-      return new Uint8Array(await blob.arrayBuffer());
+      return bytes;
     } finally {
       restoreCamera();
     }
@@ -848,11 +860,11 @@ export function useExportThumbnailCapture({
   ]);
 
   const includeHelpersGridDuringCapture = React.useMemo(
-    () => exportThumbnailRenderOptions?.includeGrid ?? true,
+    () => exportThumbnailRenderOptions?.includeGrid ?? false,
     [exportThumbnailRenderOptions?.includeGrid],
   );
   const includeBuildPlateDuringCapture = React.useMemo(
-    () => exportThumbnailRenderOptions?.includeBuildPlate ?? true,
+    () => exportThumbnailRenderOptions?.includeBuildPlate ?? false,
     [exportThumbnailRenderOptions?.includeBuildPlate],
   );
 
