@@ -1738,9 +1738,6 @@ export default function Home() {
       if (printingPreviewPanRafRef.current !== null) {
         window.cancelAnimationFrame(printingPreviewPanRafRef.current);
       }
-      if (printingDisplayedLayerRafRef.current !== null) {
-        window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
-      }
       if (printingPreviewSettleTimeoutRef.current !== null) {
         window.clearTimeout(printingPreviewSettleTimeoutRef.current);
       }
@@ -1807,10 +1804,13 @@ export default function Home() {
 
     setPrintingPreviewTotalLayers(payload.totalLayers);
     setPrintingSelectedLayer((previous) => {
-      if (!Number.isFinite(previous) || previous <= 0) {
-        return Math.max(1, Math.min(payload.totalLayers, payload.layerIndex + 1));
-      }
-      return Math.max(1, Math.min(payload.totalLayers, previous));
+      const nextSelected = !Number.isFinite(previous) || previous <= 0
+        ? Math.max(1, Math.min(payload.totalLayers, payload.layerIndex + 1))
+        : Math.max(1, Math.min(payload.totalLayers, previous));
+
+      printingSelectedLayerRef.current = nextSelected;
+      setPrintingDisplayedLayer((current) => (current === nextSelected ? current : nextSelected));
+      return nextSelected;
     });
   }, []);
 
@@ -1819,7 +1819,7 @@ export default function Home() {
     setPrintingPreviewTotalLayers(totalLayers);
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
-    printingDisplayedLayerTargetRef.current = 1;
+    printingSelectedLayerRef.current = 1;
     scene.setMode('printing');
   }, [scene]);
 
@@ -1829,7 +1829,7 @@ export default function Home() {
     setPrintingPreviewTotalLayers(0);
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
-    printingDisplayedLayerTargetRef.current = 1;
+    printingSelectedLayerRef.current = 1;
     setPrintingArtifact(null);
     setPrintingArtifactIsInvalid(false);
     slicedArtifactProfileFingerprintRef.current = null;
@@ -2167,53 +2167,6 @@ export default function Home() {
     }
     schedulePrintingPreviewSettle();
   }, [scene.mode, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
-
-  // Refs to batch displayed layer updates and avoid expensive re-renders during scrubbing
-  const printingDisplayedLayerTargetRef = React.useRef(1);
-  const printingSelectedLayerHasUrlRef = React.useRef(false);
-  const printingDisplayedLayerRafRef = React.useRef<number | null>(null);
-
-  // Track if selected layer has a URL available (without depending on whole array)
-  React.useEffect(() => {
-    printingSelectedLayerHasUrlRef.current = Boolean(printingLayerPreviewUrls[printingSelectedLayer - 1]);
-  }, [printingSelectedLayer, printingLayerPreviewUrls]);
-
-  // Sync displayed layer: during scrub prefer available previews;
-  // once scrub ends, switch to selected layer immediately.
-  React.useEffect(() => {
-    if (isPrintingLayerScrubbing) {
-      // During scrubbing: prefer selected layer if available, else keep current
-      const nextTarget = printingSelectedLayerHasUrlRef.current ? printingSelectedLayer : printingDisplayedLayerTargetRef.current;
-      
-      if (printingDisplayedLayerTargetRef.current !== nextTarget) {
-        printingDisplayedLayerTargetRef.current = nextTarget;
-        
-        // Batch updates to avoid excessive re-renders during rapid scrubbing
-        if (printingDisplayedLayerRafRef.current !== null) {
-          window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
-        }
-        printingDisplayedLayerRafRef.current = window.requestAnimationFrame(() => {
-          printingDisplayedLayerRafRef.current = null;
-          setPrintingDisplayedLayer(nextTarget);
-        });
-      }
-    } else {
-      // Not scrubbing: switch to selected layer immediately so we don't keep
-      // showing the previous layer while waiting for settle/load.
-      if (printingDisplayedLayerRafRef.current !== null) {
-        window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
-        printingDisplayedLayerRafRef.current = null;
-      }
-      if (printingDisplayedLayerTargetRef.current !== printingSelectedLayer) {
-        printingDisplayedLayerTargetRef.current = printingSelectedLayer;
-        setPrintingDisplayedLayer(printingSelectedLayer);
-      }
-    }
-  }, [
-    isPrintingLayerScrubbing,
-    isPrintingPreviewSettled,
-    printingSelectedLayer,
-  ]);
 
   React.useEffect(() => {
     setIsPrintingSettledCanvasReady(false);
@@ -6182,6 +6135,7 @@ export default function Home() {
 
       printingSelectedLayerRef.current = pending;
       setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+      setPrintingDisplayedLayer((previous) => (previous === pending ? previous : pending));
     };
 
     if (isPrintingLayerScrubbing) {
@@ -6207,6 +6161,7 @@ export default function Home() {
     pendingPrintingSelectedLayerRef.current = null;
     printingSelectedLayerRef.current = clamped;
     setPrintingSelectedLayer((previous) => (previous === clamped ? previous : clamped));
+    setPrintingDisplayedLayer((previous) => (previous === clamped ? previous : clamped));
   }, [clampPrintingLayer, isPrintingLayerScrubbing]);
 
   const handlePrintingLayerScrubStart = React.useCallback(() => {
@@ -6222,6 +6177,7 @@ export default function Home() {
 
       printingSelectedLayerRef.current = pending;
       setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+      setPrintingDisplayedLayer((previous) => (previous === pending ? previous : pending));
       return pending;
     };
 
@@ -7582,25 +7538,112 @@ export default function Home() {
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
+  const projectedZRangeCacheRef = React.useRef<Map<string, { min: number; max: number }>>(new Map());
+  const projectedZRangeCacheKey = React.useMemo(() => {
+    const visibleSignature = scene.models
+      .filter((model) => model.visible)
+      .map((model) => {
+        const t = model.transform;
+        return [
+          model.id,
+          model.geometry.geometry.uuid,
+          t.position.x.toFixed(3),
+          t.position.y.toFixed(3),
+          t.position.z.toFixed(3),
+          t.rotation.x.toFixed(3),
+          t.rotation.y.toFixed(3),
+          t.rotation.z.toFixed(3),
+          t.scale.x.toFixed(3),
+          t.scale.y.toFixed(3),
+          t.scale.z.toFixed(3),
+        ].join('|');
+      })
+      .join(';');
+
+    return [
+      visibleSignature,
+      `support-refresh:${supportRenderRefreshNonce}`,
+      `raft-mode:${raftSettingsSnapshot.bottomMode}`,
+      `roots:${Object.keys(supportStateSnapshot.roots).length}`,
+      `trunks:${Object.keys(supportStateSnapshot.trunks).length}`,
+      `branches:${Object.keys(supportStateSnapshot.branches).length}`,
+      `leaves:${Object.keys(supportStateSnapshot.leaves).length}`,
+      `twigs:${Object.keys(supportStateSnapshot.twigs).length}`,
+      `sticks:${Object.keys(supportStateSnapshot.sticks).length}`,
+      `braces:${Object.keys(supportStateSnapshot.braces).length}`,
+      `kickstands:${Object.keys(kickstandStateSnapshot.kickstands).length}`,
+    ].join('||');
+  }, [
+    kickstandStateSnapshot.kickstands,
+    raftSettingsSnapshot.bottomMode,
+    scene.models,
+    supportRenderRefreshNonce,
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
+  ]);
+
   useEffect(() => {
-    // Projected world-triangle bounds are expensive and only required for analysis/printing.
-    const needsAccurateZRange = scene.mode === 'printing' || scene.mode === 'analysis';
+    // Projected world-triangle bounds are expensive.
+    // Analysis can run on fallback bounds to keep mode-entry instant.
+    // Printing still needs accurate support/raft-aware bounds.
+    const needsAccurateZRange = scene.mode === 'printing';
     
     if (needsAccurateZRange) {
-      // Defer expensive calculation to prevent blocking mode switch UI
-      const timeoutId = setTimeout(() => {
+      const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
+      if (cached) {
+        setSceneZRange(cached);
+        return;
+      }
+
+      // Defer expensive calculation to idle time to avoid RAF stalls on mode entry.
+      let cancelled = false;
+      let timeoutId: number | null = null;
+      let idleId: number | null = null;
+
+      const run = () => {
+        if (cancelled) return;
         const projected = buildProjectedCrossSectionZRange(scene.models);
-        setSceneZRange(projected ?? fallbackZRange);
+        const nextRange = projected ?? fallbackZRange;
+        projectedZRangeCacheRef.current.set(projectedZRangeCacheKey, nextRange);
+        if (projectedZRangeCacheRef.current.size > 8) {
+          const oldest = projectedZRangeCacheRef.current.keys().next().value;
+          if (oldest != null) projectedZRangeCacheRef.current.delete(oldest);
+        }
+        setSceneZRange(nextRange);
+      };
+
+      timeoutId = window.setTimeout(() => {
+        const win = window as Window & {
+          requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+        };
+        if (typeof win.requestIdleCallback === 'function') {
+          idleId = win.requestIdleCallback(() => run(), { timeout: 250 });
+        } else {
+          run();
+        }
       }, 0);
-      return () => clearTimeout(timeoutId);
+
+      return () => {
+        cancelled = true;
+        if (timeoutId !== null) window.clearTimeout(timeoutId);
+        if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+          window.cancelIdleCallback(idleId);
+        }
+      };
     } else {
       // Use fast fallback for prepare/support/export modes
       setSceneZRange(fallbackZRange);
     }
   }, [
+    fallbackZRange,
+    projectedZRangeCacheKey,
     scene.mode,
     scene.models,
-    fallbackZRange,
   ]);
 
   const slicing = useSlicingManager({
@@ -7710,7 +7753,7 @@ export default function Home() {
       // Printing preview should always begin at the first layer.
       setPrintingSelectedLayer(1);
       setPrintingDisplayedLayer(1);
-      printingDisplayedLayerTargetRef.current = 1;
+      printingSelectedLayerRef.current = 1;
     } else if (previousMode === 'printing' && currentMode !== 'printing') {
       // Restore general slider state so printing scrub position does not leak across modes.
       const preserved = preservedNonPrintingLayerIndexRef.current;
@@ -11302,6 +11345,7 @@ export default function Home() {
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
                 crossSectionMode={slicing.crossSectionMode}
+                dragBatchMode="raf"
                 docked
                 embedded
                 expandToContainer
@@ -11360,7 +11404,7 @@ export default function Home() {
                         <div className="absolute inset-0">
                           <PrintingLayerGpuPreview
                             models={scene.models}
-                            clipZ={printingSelectedLayer * slicing.layerHeightMm}
+                            clipZ={slicing.currentHeightMm}
                             buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
                             buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
                             viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
