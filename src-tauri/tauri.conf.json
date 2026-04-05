@@ -28,6 +28,11 @@
       "icons/icon.png"
     ]
   },
+  "plugins": {
+    "macos-fps": {
+      "enabled": true
+    }
+  },
   "app": {
     "windows": [
       {
