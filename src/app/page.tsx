@@ -372,7 +372,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
 const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
-const REMOTE_OFFLINE_LAYER_HEIGHT_STORAGE_KEY_PREFIX = 'dragonfruit.slicing.remoteOfflineLayerHeightMm.';
+const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
 const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
@@ -3043,14 +3043,6 @@ export default function Home() {
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
   );
-  const remoteOfflineLayerHeightStorageKey = React.useMemo(() => {
-    if (!activePrinterProfile) return null;
-    const printerKey = activePrinterProfile.id?.trim()
-      || activePrinterProfile.officialPresetId?.trim()
-      || activePrinterProfile.name?.trim()
-      || 'default';
-    return `${REMOTE_OFFLINE_LAYER_HEIGHT_STORAGE_KEY_PREFIX}${printerKey}`;
-  }, [activePrinterProfile?.id, activePrinterProfile?.name, activePrinterProfile?.officialPresetId]);
   const selectedSliceDeviceId = React.useMemo(() => {
     const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
     if (directId) return directId;
@@ -3075,10 +3067,10 @@ export default function Home() {
   const remoteOfflineSlicedLayerHeightMm = (() => {
     if (!activeNetworkUiAdapter) return null;
     if (!shouldUseRemoteOfflineLayerHeight) return null;
-    if (typeof window === 'undefined' || !remoteOfflineLayerHeightStorageKey) return null;
+    if (typeof window === 'undefined') return null;
 
-    const raw = window.localStorage.getItem(remoteOfflineLayerHeightStorageKey)
-      ?? window.sessionStorage.getItem(remoteOfflineLayerHeightStorageKey);
+    const raw = window.localStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
     if (raw == null || raw.trim().length === 0) return null;
 
     const parsed = Number(raw);
