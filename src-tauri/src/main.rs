@@ -1717,29 +1717,6 @@ fn main() {
 
             let _window = builder.build()?;
 
-            // Hide the native traffic-light buttons on macOS since the app
-            // provides its own custom window controls in the TopBar.
-            #[cfg(target_os = "macos")]
-            #[allow(deprecated)]
-            {
-                use cocoa::appkit::{NSView, NSWindow, NSWindowButton};
-                use cocoa::base::{id, nil};
-
-                let ns_win = _window.ns_window().unwrap() as id;
-                unsafe {
-                    for btn in [
-                        NSWindowButton::NSWindowCloseButton,
-                        NSWindowButton::NSWindowMiniaturizeButton,
-                        NSWindowButton::NSWindowZoomButton,
-                    ] {
-                        let button: id = ns_win.standardWindowButton_(btn);
-                        if button != nil {
-                            button.setHidden_(true);
-                        }
-                    }
-                }
-            }
-
             Ok(())
         })
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
