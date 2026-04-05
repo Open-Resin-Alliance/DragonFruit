@@ -1693,25 +1693,19 @@ fn main() {
 
     tauri::Builder::default()
         .setup(|app| {
-            use tauri::{WebviewUrl, WebviewWindowBuilder};
+            use tauri::WebviewWindowBuilder;
 
-            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("DragonFruit")
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(960.0, 600.0)
-                .maximized(true)
-                .resizable(true);
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .expect("Missing 'main' window config in tauri.conf.json");
 
-            // On macOS, use an overlay titlebar so maximize extends fully to the top.
-            // On other platforms, disable decorations for the custom titlebar.
-            #[cfg(target_os = "macos")]
-            let builder = {
-                use tauri::TitleBarStyle;
-                builder
-                    .title_bar_style(TitleBarStyle::Overlay)
-                    .hidden_title(true)
-            };
+            let builder = WebviewWindowBuilder::from_config(app, window_config)?;
 
+            // Keep custom titlebar behavior on non-macOS.
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
 
