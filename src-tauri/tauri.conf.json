@@ -29,19 +29,7 @@
     ]
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "DragonFruit",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 960,
-        "minHeight": 600,
-        "maximized": true,
-        "decorations": false,
-        "resizable": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null,
       "capabilities": ["default"]

@@ -1692,6 +1692,55 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .setup(|app| {
+            use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                .title("DragonFruit")
+                .inner_size(1280.0, 800.0)
+                .min_inner_size(960.0, 600.0)
+                .maximized(true)
+                .resizable(true);
+
+            // On macOS, use an overlay titlebar so maximize extends fully to the top.
+            // On other platforms, disable decorations for the custom titlebar.
+            #[cfg(target_os = "macos")]
+            let builder = {
+                use tauri::TitleBarStyle;
+                builder
+                    .title_bar_style(TitleBarStyle::Overlay)
+                    .hidden_title(true)
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let builder = builder.decorations(false);
+
+            let _window = builder.build()?;
+
+            // Hide the native traffic-light buttons on macOS since the app
+            // provides its own custom window controls in the TopBar.
+            #[cfg(target_os = "macos")]
+            {
+                use cocoa::appkit::{NSView, NSWindow, NSWindowButton};
+                use cocoa::base::id;
+
+                let ns_win = _window.ns_window().unwrap() as id;
+                unsafe {
+                    for btn in [
+                        NSWindowButton::NSWindowCloseButton,
+                        NSWindowButton::NSWindowMiniaturizeButton,
+                        NSWindowButton::NSWindowZoomButton,
+                    ] {
+                        let button: id = ns_win.standardWindowButton_(btn);
+                        if button != cocoa::base::nil {
+                            NSView::setHidden_(button, true);
+                        }
+                    }
+                }
+            }
+
+            Ok(())
+        })
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
             emit_scene_file_handoff(app, &argv, "single-instance");
