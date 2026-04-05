@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "fs";
+import { resolve } from "path";
+
+const { version: packageVersion } = JSON.parse(
+  readFileSync(resolve(__dirname, "package.json"), "utf-8")
+) as { version: string };
 
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_APP_VERSION: packageVersion,
+  },
   reactCompiler: true,
   allowedDevOrigins: ['127.0.0.1', '::1'],
   devIndicators: {

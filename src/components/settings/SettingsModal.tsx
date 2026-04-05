@@ -86,7 +86,7 @@ const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
 const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
-const DRAGONFRUIT_VERSION = '0.1.0';
+const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const ORA_LOGO_DARK_URL = 'https://raw.githubusercontent.com/Open-Resin-Alliance/Orion/athena_public_beta/assets/images/ora/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
@@ -640,23 +640,28 @@ export function SettingsModal({
                   const Icon = meta.icon;
                   const active = activeTab === tab;
                   const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+                  const tabDisabled = tab === 'backups';
 
                   return (
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setActiveTab(tab)}
+                      aria-disabled={tabDisabled}
+                      onClick={tabDisabled ? undefined : () => setActiveTab(tab)}
                       className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
-                      style={active
-                        ? {
-                          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                        }
-                        : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                        }}
+                      style={{
+                        ...(active
+                          ? {
+                            borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
+                            background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
+                            boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
+                          }
+                          : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                          }),
+                        ...(tabDisabled ? { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' } : {}),
+                      }}
                     >
                       <div className="flex items-start gap-2.5">
                         <span
