@@ -371,6 +371,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 };
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
 const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
@@ -740,6 +741,10 @@ export default function Home() {
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
+  const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
+  const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
+  const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
+  const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
@@ -1081,6 +1086,105 @@ export default function Home() {
       JSON.stringify(exportThumbnailRenderOptions),
     );
   }, [exportThumbnailRenderOptions]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = window.localStorage.getItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY);
+      setSuppressLysImportWarning(stored === '1');
+    } catch {
+      setSuppressLysImportWarning(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (lysImportWarningPendingResolveRef.current) {
+        const resolve = lysImportWarningPendingResolveRef.current;
+        lysImportWarningPendingResolveRef.current = null;
+        resolve(false);
+      }
+    };
+  }, []);
+
+  const hasLysSceneFile = React.useCallback((filesInput: FileList | File[]) => {
+    const files = Array.from(filesInput);
+    return files.some((file) => file.name.trim().toLowerCase().endsWith('.lys'));
+  }, []);
+
+  const maybeConfirmLysImportWarning = React.useCallback(async (filesInput: FileList | File[]) => {
+    if (suppressLysImportWarning) return true;
+    if (!hasLysSceneFile(filesInput)) return true;
+
+    if (lysImportWarningPendingResolveRef.current) {
+      const pendingResolve = lysImportWarningPendingResolveRef.current;
+      lysImportWarningPendingResolveRef.current = null;
+      pendingResolve(false);
+    }
+
+    setLysImportWarningSkipFuture(false);
+    setShowLysImportWarningModal(true);
+    return await new Promise<boolean>((resolve) => {
+      lysImportWarningPendingResolveRef.current = resolve;
+    });
+  }, [hasLysSceneFile, suppressLysImportWarning]);
+
+  const resolveLysImportWarning = React.useCallback((proceed: boolean) => {
+    const resolve = lysImportWarningPendingResolveRef.current;
+    lysImportWarningPendingResolveRef.current = null;
+    setLysImportWarningSkipFuture(false);
+    setShowLysImportWarningModal(false);
+    resolve?.(proceed);
+  }, []);
+
+  const handleCancelLysImportWarning = React.useCallback(() => {
+    resolveLysImportWarning(false);
+  }, [resolveLysImportWarning]);
+
+  const handleContinueLysImportWarning = React.useCallback(() => {
+    if (lysImportWarningSkipFuture) {
+      setSuppressLysImportWarning(true);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY, '1');
+        } catch {
+          // Ignore persistence failure and still proceed.
+        }
+      }
+    }
+    resolveLysImportWarning(true);
+  }, [lysImportWarningSkipFuture, resolveLysImportWarning]);
+
+  const importSceneFilesWithLysWarning = React.useCallback(async (filesInput: FileList | File[]) => {
+    const sceneFiles = Array.from(filesInput);
+    if (sceneFiles.length === 0) return;
+
+    const proceed = await maybeConfirmLysImportWarning(sceneFiles);
+    if (!proceed) return;
+
+    await scene.importSceneFiles(sceneFiles);
+  }, [maybeConfirmLysImportWarning, scene]);
+
+  const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    void importSceneFilesWithLysWarning(files);
+    e.target.value = '';
+  }, [importSceneFilesWithLysWarning]);
+
+  const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
+    const entry = scene.recentOpenedFiles.find((item) => item.id === entryId);
+    if (!entry) return false;
+
+    if (entry.kind === 'scene' && entry.name.trim().toLowerCase().endsWith('.lys')) {
+      const proceed = await maybeConfirmLysImportWarning([
+        new File([], entry.name, { type: 'application/octet-stream' }),
+      ]);
+      if (!proceed) return false;
+    }
+
+    return await scene.reopenRecentOpenedFile(entryId);
+  }, [maybeConfirmLysImportWarning, scene.recentOpenedFiles, scene.reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -5827,14 +5931,14 @@ export default function Home() {
     const nativeFiles = await pickFilesWithNativeDialog('scene', true);
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      await scene.importSceneFiles(nativeFiles);
+      await importSceneFilesWithLysWarning(nativeFiles);
       return;
     }
 
     const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
     if (webFiles.length === 0) return;
-    await scene.importSceneFiles(webFiles);
-  }, [pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    await importSceneFilesWithLysWarning(webFiles);
+  }, [importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -5862,9 +5966,9 @@ export default function Home() {
     }
 
     if (files.length === 0) return false;
-    await scene.importSceneFiles(files);
+    await importSceneFilesWithLysWarning(files);
     return true;
-  }, [scene]);
+  }, [importSceneFilesWithLysWarning]);
 
   const importSceneFromPaths = React.useCallback(async (paths: string[]): Promise<boolean> => {
     if (!paths || paths.length === 0) return false;
@@ -6941,7 +7045,7 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      await scene.importSceneFiles(sceneFiles);
+      await importSceneFilesWithLysWarning(sceneFiles);
       return;
     }
 
@@ -6950,7 +7054,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [scene]);
+  }, [importSceneFilesWithLysWarning, scene]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -11252,7 +11356,7 @@ export default function Home() {
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onLoadMeshChange={scene.onFileChange}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={scene.onImportLysChange}
+              onImportSceneChange={handleImportSceneInputChange}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -11865,10 +11969,10 @@ export default function Home() {
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onFileChange={scene.onFileChange}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={scene.onImportLysChange}
+              onImportSceneChange={handleImportSceneInputChange}
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
-              onReopenRecentFile={scene.reopenRecentOpenedFile}
+              onReopenRecentFile={handleReopenRecentFile}
               isLoading={showEmptyStateLoading}
               loadingLabel={importOverlayState.label}
               loadingDetail={importOverlayState.detail}
@@ -12318,6 +12422,107 @@ export default function Home() {
         onCancel={handleCancelDestructiveTransform}
         onConfirm={handleConfirmDestructiveTransform}
       />
+
+      {showLysImportWarningModal && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              handleCancelLysImportWarning();
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="LYS import experimental warning"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    LYS Import is Experimental
+                  </h2>
+                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Unforeseen results are possible when importing `.lys` scenes.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close LYS import warning"
+                onClick={handleCancelLysImportWarning}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Geometry, support placement, and transforms may import differently across `.lys` scene variants.
+              </p>
+
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <label className="inline-flex items-center gap-2 text-xs select-none" style={{ color: 'var(--text-muted)' }}>
+                  <input
+                    type="checkbox"
+                    checked={lysImportWarningSkipFuture}
+                    onChange={(event) => setLysImportWarningSkipFuture(event.target.checked)}
+                    className="h-3.5 w-3.5 rounded border"
+                    style={{ accentColor: '#f59e0b' }}
+                  />
+                  <span>Do not remind again</span>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    onClick={handleCancelLysImportWarning}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button !h-9 px-3 text-xs"
+                    style={{
+                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                      color: '#fde68a',
+                    }}
+                    onClick={handleContinueLysImportWarning}
+                  >
+                    Continue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {printingMonitorPendingConfirmation && (
         <div
