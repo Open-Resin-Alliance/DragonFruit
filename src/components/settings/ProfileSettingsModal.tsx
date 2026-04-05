@@ -559,6 +559,20 @@ export function ProfileSettingsModal({
     return selectedPrinter.buildDimensionMode === 'auto' ? 'auto' : 'manual';
   }, [selectedPrinter]);
 
+  const selectedPrinterSafetyMargins = React.useMemo(() => {
+    return {
+      front: clampNonNegativeNumber(selectedPrinter?.safetyMarginMm?.front ?? 0),
+      back: clampNonNegativeNumber(selectedPrinter?.safetyMarginMm?.back ?? 0),
+      left: clampNonNegativeNumber(selectedPrinter?.safetyMarginMm?.left ?? 0),
+      right: clampNonNegativeNumber(selectedPrinter?.safetyMarginMm?.right ?? 0),
+    };
+  }, [
+    selectedPrinter?.safetyMarginMm?.front,
+    selectedPrinter?.safetyMarginMm?.back,
+    selectedPrinter?.safetyMarginMm?.left,
+    selectedPrinter?.safetyMarginMm?.right,
+  ]);
+
   const applyAutoBuildDimensions = React.useCallback((printer: PrinterProfile, overrides?: {
     resolutionX?: number;
     resolutionY?: number;
@@ -4174,6 +4188,53 @@ export function ProfileSettingsModal({
                         buildVolumeMm: {
                           ...selectedPrinter.buildVolumeMm,
                           height: value,
+                        },
+                      })}
+                    />
+                  </div>
+
+                  <div className="mt-2.5 grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                    <LabeledNumberInput
+                      label="Front Margin (mm)"
+                      disabled={isSelectedPrinterOfficial}
+                      value={selectedPrinterSafetyMargins.front}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        safetyMarginMm: {
+                          ...selectedPrinterSafetyMargins,
+                          front: value,
+                        },
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Back Margin (mm)"
+                      disabled={isSelectedPrinterOfficial}
+                      value={selectedPrinterSafetyMargins.back}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        safetyMarginMm: {
+                          ...selectedPrinterSafetyMargins,
+                          back: value,
+                        },
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Left Margin (mm)"
+                      disabled={isSelectedPrinterOfficial}
+                      value={selectedPrinterSafetyMargins.left}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        safetyMarginMm: {
+                          ...selectedPrinterSafetyMargins,
+                          left: value,
+                        },
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Right Margin (mm)"
+                      disabled={isSelectedPrinterOfficial}
+                      value={selectedPrinterSafetyMargins.right}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        safetyMarginMm: {
+                          ...selectedPrinterSafetyMargins,
+                          right: value,
                         },
                       })}
                     />
