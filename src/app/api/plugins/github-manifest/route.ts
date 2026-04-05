@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
-import { normalizeFormatVersion, normalizeOutputFormat, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
+import { normalizeFormatVersion, normalizeOutputFormat, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
 
 type GithubRepoRef = {
   owner: string;
@@ -86,6 +86,10 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
       outputFormat: parseOutputFormat((value as any).display?.outputFormat),
       formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
       settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
+      webcamRotationDeg: normalizeWebcamRotationDeg(
+        (value as any).display?.webcamRotationDeg ?? (value as any).display?.webcamOrientation,
+        DEFAULT_WEBCAM_ROTATION_DEG,
+      ),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,
@@ -467,7 +471,7 @@ async function sanitizeManifest(manifest: any, baseRawDir: string) {
     : [];
 
   const fetchedPrinterPresetEntries = await Promise.all(
-    presetPathEntries.map(async (relativePath) => {
+    presetPathEntries.map(async (relativePath: string) => {
       const rawUrl = `${baseRawDir}/${relativePath}`;
       const sourceBaseRawDir = rawUrl.includes('/')
         ? rawUrl.slice(0, rawUrl.lastIndexOf('/'))

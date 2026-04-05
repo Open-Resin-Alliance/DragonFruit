@@ -289,7 +289,6 @@ export function BezierRenderer({
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
                     onPointerOut={handlePointerOut}
                     onPointerLeave={enableSegmentInteraction ? handlePointerLeave : undefined}
-                    userData={{ segmentId: id }}
                 >
                     <primitive object={pickGeometry} attach="geometry" />
                     <meshBasicMaterial transparent opacity={0} depthWrite={false} />

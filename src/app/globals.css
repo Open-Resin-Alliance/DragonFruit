@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 :root {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
   /* App theme foundation (dark first) */
   --background: #0b0f14;
   --foreground: #e6ebf2;

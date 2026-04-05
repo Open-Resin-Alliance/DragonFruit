@@ -48,6 +48,12 @@ tsc_output.txt
 # platform/deployment
 .vercel
 
+src-tauri/gen/
+src-tauri/frontend-dist/**
+conversion/
+
+**/target/
+
 # misc
 *.pem
 .DS_Store
