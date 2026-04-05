@@ -10,7 +10,7 @@ import type {
 } from '@/features/plugins/complexPluginContracts';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
-import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
+import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
@@ -216,15 +216,27 @@ const MAX_MATERIAL_TEMPLATES = 512;
 
 function shouldUseBundledAssetPaths(): boolean {
   if (typeof window === 'undefined') return false;
+  if (process.env.NODE_ENV !== 'production') return false;
   const protocol = window.location?.protocol ?? '';
   const hostname = window.location?.hostname ?? '';
-  return protocol === 'file:' || protocol === 'tauri:' || hostname === 'tauri.localhost';
+  const hasTauriInternals = typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+  return protocol === 'file:' || protocol === 'tauri:' || hostname === 'tauri.localhost' || hasTauriInternals;
 }
 
 function resolveRuntimeAssetPath(value: string): string {
-  if (!value.startsWith('/api/profile-assets/')) return value;
-  if (!shouldUseBundledAssetPaths()) return value;
-  return `/${value.slice('/api/profile-assets/'.length)}`;
+  const isBundledRuntime = shouldUseBundledAssetPaths();
+
+  if (value.startsWith('/api/profile-assets/')) {
+    if (!isBundledRuntime) return value;
+    return `/${value.slice('/api/profile-assets/'.length)}`;
+  }
+
+  if (value.startsWith('/plugins/') || value.startsWith('/printers/')) {
+    if (isBundledRuntime) return value;
+    return `/api/profile-assets${value}`;
+  }
+
+  return value;
 }
 
 function boundedString(value: unknown, max = 120): string {
@@ -265,7 +277,13 @@ function sanitizeImageAssetPath(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
 
-  if (trimmed.startsWith('/api/profile-assets/')) return resolveRuntimeAssetPath(trimmed);
+  if (
+    trimmed.startsWith('/api/profile-assets/')
+    || trimmed.startsWith('/plugins/')
+    || trimmed.startsWith('/printers/')
+  ) {
+    return resolveRuntimeAssetPath(trimmed);
+  }
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (trimmed.startsWith('data:')) return undefined;
 
@@ -361,6 +379,10 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
       formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
       settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
+      webcamRotationDeg: normalizeWebcamRotationDeg(
+        (value as any).display?.webcamRotationDeg ?? (value as any).display?.webcamOrientation,
+        DEFAULT_WEBCAM_ROTATION_DEG,
+      ),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,

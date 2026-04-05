@@ -1,5 +1,6 @@
 import athenaPrinters from './printers/printers.json';
 import type { PrinterPreset } from '../../src/features/profiles/profileStore';
+import { normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '../../src/features/profiles/outputFormatUtils';
 
 /**
  * Athena built-in profile pack manifest.
@@ -167,6 +168,10 @@ export const ATHENA_PLUGIN_MANIFEST = {
     const mirrorY = typeof (preset as any).display?.mirrorY === 'boolean'
       ? (preset as any).display.mirrorY
       : undefined;
+    const webcamRotationDeg = normalizeWebcamRotationDeg(
+      (preset as any).display?.webcamRotationDeg ?? (preset as any).display?.webcamOrientation,
+      DEFAULT_WEBCAM_ROTATION_DEG,
+    );
 
     return {
       presetId: String((preset as any).presetId),
@@ -201,6 +206,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
         resolutionX,
         resolutionY,
         outputFormat,
+        webcamRotationDeg,
         mirrorX,
         mirrorY,
       },

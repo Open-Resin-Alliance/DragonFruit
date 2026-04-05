@@ -21,6 +21,7 @@ base64 = "0.22"
 sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "fs"] }
 dragonfruit-slicer-v3 = { path = "../rust/dragonfruit-slicer-v3" }
+dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 flate2 = "1.1.9"
 

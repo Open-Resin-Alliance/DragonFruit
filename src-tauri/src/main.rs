@@ -1669,7 +1669,8 @@ fn main() {
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,
-            network::plugin_network_request
+            network::plugin_network_request,
+            network::ensure_rtsp_relay
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");

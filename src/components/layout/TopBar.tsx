@@ -591,7 +591,7 @@ export function TopBar({
     >
       <div
         className={`flex w-[430px] items-center gap-2.5 pl-0 pr-4 py-1.5 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}
-        data-no-window-drag="true"
+        data-no-window-drag="false"
         aria-disabled={topbarActionsDisabled}
       >
         <button

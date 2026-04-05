@@ -91,6 +91,9 @@ export type PluginMonitoringSnapshotContract = {
   plateId: number | null;
   jobName: string | null;
   etaSec: number | null;
+  thumbnailPath?: string | null;
+  taskId?: string | null;
+  taskStatus?: number | null;
 };
 
 export type PluginMonitoringWebcamInfoContract = {
