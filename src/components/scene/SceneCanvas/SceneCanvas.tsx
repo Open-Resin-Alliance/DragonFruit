@@ -1231,9 +1231,15 @@ export function SceneCanvas({
     const minX = activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -width * 0.5;
     const minY = activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
 
+    const sm = activeBuildVolumeSettings.safetyMarginMm;
+    const marginFront = sm?.front ?? 0;
+    const marginBack = sm?.back ?? 0;
+    const marginLeft = sm?.left ?? 0;
+    const marginRight = sm?.right ?? 0;
+
     return new THREE.Box3(
-      new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, activeBuildVolumeSettings.maxZMm),
+      new THREE.Vector3(minX + marginLeft, minY + marginFront, 0),
+      new THREE.Vector3(minX + width - marginRight, minY + depth - marginBack, activeBuildVolumeSettings.maxZMm),
     );
   }, [activeBuildVolumeSettings]);
 
@@ -1385,15 +1391,15 @@ export function SceneCanvas({
   }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeTransformOverrideModelId, computeModelWorldBounds, modelWorldBounds, models, outOfBoundsModelIds, transform]);
 
   const buildVolumeBoxGeometry = React.useMemo(() => {
-    if (!activeBuildVolumeSettings?.enabled) return null;
+    if (!activeBuildVolumeSettings?.enabled || !buildVolumeBounds) return null;
 
     const geometry = new THREE.BoxGeometry(
-      activeBuildVolumeSettings.widthMm,
-      activeBuildVolumeSettings.depthMm,
+      buildVolumeBounds.max.x - buildVolumeBounds.min.x,
+      buildVolumeBounds.max.y - buildVolumeBounds.min.y,
       activeBuildVolumeSettings.maxZMm,
     );
     return geometry;
-  }, [activeBuildVolumeSettings]);
+  }, [activeBuildVolumeSettings, buildVolumeBounds]);
 
   const buildVolumeEdgeGeometry = React.useMemo(() => {
     if (!buildVolumeBoxGeometry) return null;
@@ -4164,13 +4170,14 @@ export function SceneCanvas({
           headlightIntensity={headlightIntensity ?? 1.0}
         />
         <Helpers
-          gridWidthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.widthMm : undefined}
-          gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
-          originMinX={buildVolumeBounds?.min.x}
-          originMinY={buildVolumeBounds?.min.y}
+          gridWidthMm={activeBuildVolumeSettings.widthMm}
+          gridDepthMm={activeBuildVolumeSettings.depthMm}
+          originMinX={activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -activeBuildVolumeSettings.widthMm * 0.5}
+          originMinY={activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -activeBuildVolumeSettings.depthMm * 0.5}
           buildPlateOpacity={(!thumbnailCaptureActive || includeBuildPlateDuringCapture) ? buildPlateOpacity : 0}
           showGrid={!thumbnailCaptureActive || includeHelpersGridDuringCapture}
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
+          safetyMarginMm={activeBuildVolumeSettings.safetyMarginMm}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null} />
         <CameraProvider cameraRef={cameraRef} />
@@ -4347,6 +4354,10 @@ export function SceneCanvas({
                             raftHoverized={raftHoverized}
                             passive
                             supportRenderRefreshNonce={supportRenderRefreshNonce}
+                            showOutOfBoundsOverlay={showOutOfBoundsOverlay}
+                            outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
+                            outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
+                            outOfBoundsStripeColor={outOfBoundsStripeColor}
                           />
                         </group>
                       )}
@@ -4638,6 +4649,10 @@ export function SceneCanvas({
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  showOutOfBoundsOverlay={!!activeBuildVolumeSettings?.enabled && outOfBoundsModelIds.size > 0}
+                  outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
+                  outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
+                  outOfBoundsStripeColor={outOfBoundsStripeColor}
                   trunkPlacementPreview={trunkPlacementPreviewForRenderer}
                   branchPlacementPreview={branchPlacementPreviewForRenderer}
                   leafPlacementPreview={leafPlacementPreviewForRenderer}

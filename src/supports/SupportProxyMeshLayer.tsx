@@ -29,6 +29,10 @@ interface SupportProxyMeshLayerProps {
   excludeModelIds?: string[];
   modelDropOffsetsById?: Record<string, number>;
   ghostOpacity?: number;
+  showOutOfBoundsOverlay?: boolean;
+  outOfBoundsMin?: THREE.Vector3 | null;
+  outOfBoundsMax?: THREE.Vector3 | null;
+  outOfBoundsStripeColor?: string;
   onModelPointerSelect?: (modelId: string) => void;
   enablePointerSelection?: boolean;
   includeDetailedPrimitives?: boolean;
@@ -114,6 +118,10 @@ export function SupportProxyMeshLayer({
   excludeModelIds = [],
   modelDropOffsetsById,
   ghostOpacity = 1,
+  showOutOfBoundsOverlay = false,
+  outOfBoundsMin = null,
+  outOfBoundsMax = null,
+  outOfBoundsStripeColor,
   onModelPointerSelect,
   enablePointerSelection = true,
   includeDetailedPrimitives = true,
@@ -155,6 +163,65 @@ export function SupportProxyMeshLayer({
     if (clipUpper != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     return planes.length > 0 ? planes : null;
   }, [clipLower, clipUpper]);
+
+  const outOfBoundsMaterial = React.useMemo(() => {
+    if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
+
+    return new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      uniforms: {
+        boundsMin: { value: outOfBoundsMin.clone() },
+        boundsMax: { value: outOfBoundsMax.clone() },
+        stripeFreq: { value: 0.22 },
+        stripeAlpha: { value: 0.42 },
+        stripeColor: { value: new THREE.Color(outOfBoundsStripeColor ?? '#b6ff2e') },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        uniform vec3 boundsMin;
+        uniform vec3 boundsMax;
+        uniform float stripeFreq;
+        uniform float stripeAlpha;
+        uniform vec3 stripeColor;
+
+        void main() {
+          bool outside =
+            vWorldPos.x < boundsMin.x || vWorldPos.x > boundsMax.x ||
+            vWorldPos.y < boundsMin.y || vWorldPos.y > boundsMax.y ||
+            vWorldPos.z < boundsMin.z || vWorldPos.z > boundsMax.z;
+
+          if (!outside) discard;
+
+          float stripeSeed = (vWorldPos.x + vWorldPos.y + vWorldPos.z) * stripeFreq;
+          float band = step(0.5, fract(stripeSeed));
+          vec3 colorA = stripeColor;
+          vec3 colorB = vec3(1.0, 1.0, 1.0);
+          vec3 color = mix(colorA, colorB, band);
+
+          gl_FragColor = vec4(color, stripeAlpha);
+        }
+      `,
+    });
+  }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
+
+  React.useEffect(() => {
+    return () => {
+      outOfBoundsMaterial?.dispose();
+    };
+  }, [outOfBoundsMaterial]);
 
   const baseProxyByModel = React.useMemo(() => {
     if (
@@ -879,6 +946,7 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               radialSegments={10}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
               onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
               onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -891,6 +959,7 @@ export function SupportProxyMeshLayer({
               transparent={proxyTransparent}
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
               onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
               onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -903,6 +972,7 @@ export function SupportProxyMeshLayer({
               transparent={proxyTransparent}
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
               onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
               onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -915,6 +985,7 @@ export function SupportProxyMeshLayer({
               transparent={proxyTransparent}
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
               onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
               onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -933,6 +1004,7 @@ export function SupportProxyMeshLayer({
               opacity={proxyOpacity}
               radialSegments={10}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
               onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
               onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -945,6 +1017,7 @@ export function SupportProxyMeshLayer({
               transparent={proxyTransparent}
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
               onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
               onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -957,6 +1030,7 @@ export function SupportProxyMeshLayer({
               transparent={proxyTransparent}
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
               onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
               onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
@@ -969,6 +1043,7 @@ export function SupportProxyMeshLayer({
               transparent={proxyTransparent}
               opacity={proxyOpacity}
               clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
               onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
               onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
               onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
