@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "dragonfruit-islands",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicer-v3"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "base64 0.22.1",
