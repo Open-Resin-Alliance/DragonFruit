@@ -245,6 +245,7 @@ export function SlicingPanel({
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
   const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(0.05);
+  const [remoteOfflineLayerHeightDraft, setRemoteOfflineLayerHeightDraft] = useState<string | null>(null);
   const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
   const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
@@ -555,6 +556,28 @@ export function SlicingPanel({
   const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
     setRemoteOfflineLayerHeightMm((previous) => clampLayerHeightMm(value, previous));
   }, []);
+
+  const beginRemoteOfflineLayerHeightEdit = useCallback(() => {
+    setRemoteOfflineLayerHeightDraft(String(remoteOfflineLayerHeightMm));
+  }, [remoteOfflineLayerHeightMm]);
+
+  const cancelRemoteOfflineLayerHeightEdit = useCallback(() => {
+    setRemoteOfflineLayerHeightDraft(null);
+  }, []);
+
+  const commitRemoteOfflineLayerHeightEdit = useCallback(() => {
+    if (remoteOfflineLayerHeightDraft == null) return;
+
+    const trimmed = remoteOfflineLayerHeightDraft.trim();
+    if (trimmed.length > 0) {
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        setClampedRemoteOfflineLayerHeightMm(parsed);
+      }
+    }
+
+    setRemoteOfflineLayerHeightDraft(null);
+  }, [remoteOfflineLayerHeightDraft, setClampedRemoteOfflineLayerHeightMm]);
 
   useEffect(() => {
     if (!antiAliasingAvailable) {
@@ -1255,8 +1278,24 @@ export function SlicingPanel({
                       min={0.001}
                       max={1}
                       step={0.005}
-                      value={remoteOfflineLayerHeightMm}
-                      onChange={(event) => setClampedRemoteOfflineLayerHeightMm(Number(event.target.value))}
+                      value={remoteOfflineLayerHeightDraft ?? String(remoteOfflineLayerHeightMm)}
+                      onFocus={beginRemoteOfflineLayerHeightEdit}
+                      onChange={(event) => setRemoteOfflineLayerHeightDraft(event.target.value)}
+                      onBlur={commitRemoteOfflineLayerHeightEdit}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          commitRemoteOfflineLayerHeightEdit();
+                          event.currentTarget.blur();
+                          return;
+                        }
+
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelRemoteOfflineLayerHeightEdit();
+                          event.currentTarget.blur();
+                        }
+                      }}
                       onWheel={(event) => {
                         event.preventDefault();
                         setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + (event.deltaY < 0 ? 0.005 : -0.005));
