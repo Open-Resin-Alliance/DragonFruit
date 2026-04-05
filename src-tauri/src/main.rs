@@ -1713,6 +1713,7 @@ fn main() {
 
             Ok(())
         })
+        .plugin(tauri_plugin_macos_fps::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
             emit_scene_file_handoff(app, &argv, "single-instance");
