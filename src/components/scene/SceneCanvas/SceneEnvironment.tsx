@@ -191,11 +191,11 @@ function SafetyStripeMaterial({
       vertexShader={SAFETY_STRIPE_VERTEX_SHADER}
       fragmentShader={SAFETY_STRIPE_FRAGMENT_SHADER}
       transparent
-      depthTest={false}
+      depthTest
       depthWrite={false}
       polygonOffset
-      polygonOffsetFactor={-3}
-      polygonOffsetUnits={-3}
+      polygonOffsetFactor={-2}
+      polygonOffsetUnits={-2}
       side={THREE.DoubleSide}
       toneMapped={false}
     />
@@ -703,12 +703,12 @@ export function Helpers({
 
       {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes */}
       {shouldShowBuildPlate && hasSafetyMargins && clampedBuildPlateOpacity > 0.001 && (
-        <group position={[0, 0, 0.2]} userData={{ thumbnailHelperType: 'buildPlate' }}>
+        <group position={[0, 0, plateLogoZ]} userData={{ thumbnailHelperType: 'buildPlate' }}>
           {/* Front strip */}
           {marginFront > 0 && (
             <mesh
               position={[buildVolumeCenterX, resolvedOriginMinY + marginFront * 0.5, 0]}
-              renderOrder={18}
+              renderOrder={20}
               raycast={nullRaycast}
             >
               {frontStripGeometry && <primitive object={frontStripGeometry} attach="geometry" />}
@@ -724,7 +724,7 @@ export function Helpers({
           {marginBack > 0 && (
             <mesh
               position={[buildVolumeCenterX, resolvedOriginMinY + depth - marginBack * 0.5, 0]}
-              renderOrder={18}
+              renderOrder={20}
               raycast={nullRaycast}
             >
               {backStripGeometry && <primitive object={backStripGeometry} attach="geometry" />}
@@ -740,7 +740,7 @@ export function Helpers({
           {marginLeft > 0 && (
             <mesh
               position={[resolvedOriginMinX + marginLeft * 0.5, buildVolumeCenterY, 0]}
-              renderOrder={18}
+              renderOrder={20}
               raycast={nullRaycast}
             >
               {leftStripGeometry && <primitive object={leftStripGeometry} attach="geometry" />}
@@ -756,7 +756,7 @@ export function Helpers({
           {marginRight > 0 && (
             <mesh
               position={[resolvedOriginMinX + width - marginRight * 0.5, buildVolumeCenterY, 0]}
-              renderOrder={18}
+              renderOrder={20}
               raycast={nullRaycast}
             >
               {rightStripGeometry && <primitive object={rightStripGeometry} attach="geometry" />}
