@@ -1,6 +1,7 @@
 {
   "name": "dragonfruit",
   "version": "0.1.1",
+  "buildChannel": "beta",
   "private": true,
   "scripts": {
     "generate:builtin-simple-plugins": "node scripts/generate-builtin-simple-plugins.mjs",
@@ -16,7 +17,7 @@
     "build:tauri": "next build && node scripts/prepare-tauri-frontend.mjs",
     "start": "next start",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:build": "cross-env RUSTFLAGS=\"-C target-cpu=native\" tauri build",
     "tauri:bundle": "node scripts/tauri-bundle-all.mjs",
     "tauri:bundle:windows": "tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis",
     "tauri:bundle:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage",
