@@ -21,6 +21,7 @@ interface InstancedJointGroupProps {
     clippingPlanes?: THREE.Plane[] | null;
     widthSegments?: number;
     heightSegments?: number;
+    outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onJointClick?: (joint: InstancedJoint, event: ThreeEvent<MouseEvent>) => void;
     onJointPointerMove?: (joint: InstancedJoint, event: ThreeEvent<PointerEvent>) => void;
     onJointPointerOut?: (joint: InstancedJoint | null, event: ThreeEvent<PointerEvent>) => void;
@@ -36,19 +37,24 @@ export function InstancedJointGroup({
     clippingPlanes = null,
     widthSegments = 12,
     heightSegments = 10,
+    outOfBoundsMaterial = null,
     onJointClick,
     onJointPointerMove,
     onJointPointerOut,
 }: InstancedJointGroupProps) {
     const meshRef = useRef<THREE.InstancedMesh>(null);
+    const overlayMeshRef = useRef<THREE.InstancedMesh>(null);
     const lastHoveredJointRef = useRef<InstancedJoint | null>(null);
 
     const validJoints = useMemo(() => {
         return joints.filter((joint) => Number.isFinite(joint.diameter) && joint.diameter > 0.001);
     }, [joints]);
 
+    const hasOverlay = !!outOfBoundsMaterial;
+
     useLayoutEffect(() => {
         const mesh = meshRef.current;
+        const overlayMesh = overlayMeshRef.current;
         if (!mesh) return;
 
         const tempObject = new THREE.Object3D();
@@ -62,11 +68,16 @@ export function InstancedJointGroup({
             tempObject.scale.set(radius, radius, radius);
             tempObject.updateMatrix();
             mesh.setMatrixAt(i, tempObject.matrix);
+            if (overlayMesh) overlayMesh.setMatrixAt(i, tempObject.matrix);
         }
 
         mesh.count = validJoints.length;
         mesh.instanceMatrix.needsUpdate = true;
-    }, [validJoints]);
+        if (overlayMesh) {
+            overlayMesh.count = validJoints.length;
+            overlayMesh.instanceMatrix.needsUpdate = true;
+        }
+    }, [validJoints, hasOverlay]);
 
     if (validJoints.length === 0) return null;
 
@@ -100,24 +111,38 @@ export function InstancedJointGroup({
     };
 
     return (
-        <instancedMesh
-            ref={meshRef}
-            args={[undefined, undefined, validJoints.length]}
-            frustumCulled={false}
-            onClick={onJointClick ? handleClick : undefined}
-            onPointerMove={onJointPointerMove ? handlePointerMove : undefined}
-            onPointerOut={onJointPointerOut ? handlePointerOut : undefined}
-        >
-            <sphereGeometry args={[1, widthSegments, heightSegments]} />
-            <meshStandardMaterial
-                color={color}
-                emissive={emissive}
-                emissiveIntensity={emissiveIntensity}
-                transparent={transparent}
-                opacity={opacity}
-                depthWrite={!transparent}
-                clippingPlanes={clippingPlanes ?? undefined}
-            />
-        </instancedMesh>
+        <>
+            <instancedMesh
+                ref={meshRef}
+                args={[undefined, undefined, validJoints.length]}
+                frustumCulled={false}
+                onClick={onJointClick ? handleClick : undefined}
+                onPointerMove={onJointPointerMove ? handlePointerMove : undefined}
+                onPointerOut={onJointPointerOut ? handlePointerOut : undefined}
+            >
+                <sphereGeometry args={[1, widthSegments, heightSegments]} />
+                <meshStandardMaterial
+                    color={color}
+                    emissive={emissive}
+                    emissiveIntensity={emissiveIntensity}
+                    transparent={transparent}
+                    opacity={opacity}
+                    depthWrite={!transparent}
+                    clippingPlanes={clippingPlanes ?? undefined}
+                />
+            </instancedMesh>
+            {outOfBoundsMaterial && (
+                <instancedMesh
+                    ref={overlayMeshRef}
+                    args={[undefined, undefined, validJoints.length]}
+                    frustumCulled={false}
+                    raycast={() => null}
+                    renderOrder={3}
+                    material={outOfBoundsMaterial}
+                >
+                    <sphereGeometry args={[1, widthSegments, heightSegments]} />
+                </instancedMesh>
+            )}
+        </>
     );
 }

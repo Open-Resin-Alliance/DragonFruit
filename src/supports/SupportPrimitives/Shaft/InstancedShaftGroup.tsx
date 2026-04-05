@@ -21,6 +21,7 @@ interface InstancedShaftGroupProps {
     opacity?: number;
     clippingPlanes?: THREE.Plane[] | null;
     radialSegments?: number;
+    outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onShaftClick?: (shaft: InstancedShaft, event: ThreeEvent<MouseEvent>) => void;
     onShaftPointerMove?: (shaft: InstancedShaft, event: ThreeEvent<PointerEvent>) => void;
     onShaftPointerOut?: (shaft: InstancedShaft | null, event: ThreeEvent<PointerEvent>) => void;
@@ -37,11 +38,13 @@ export function InstancedShaftGroup({
     opacity = 1,
     clippingPlanes = null,
     radialSegments = 12,
+    outOfBoundsMaterial = null,
     onShaftClick,
     onShaftPointerMove,
     onShaftPointerOut,
 }: InstancedShaftGroupProps) {
     const meshRef = useRef<THREE.InstancedMesh>(null);
+    const overlayMeshRef = useRef<THREE.InstancedMesh>(null);
     const lastHoveredShaftRef = useRef<InstancedShaft | null>(null);
 
     const validShafts = useMemo(() => {
@@ -54,8 +57,11 @@ export function InstancedShaftGroup({
         });
     }, [shafts]);
 
+    const hasOverlay = !!outOfBoundsMaterial;
+
     useLayoutEffect(() => {
         const mesh = meshRef.current;
+        const overlayMesh = overlayMeshRef.current;
         if (!mesh) return;
 
         const tempObject = new THREE.Object3D();
@@ -82,11 +88,16 @@ export function InstancedShaftGroup({
             tempObject.scale.set(shaft.diameter, length, shaft.diameter);
             tempObject.updateMatrix();
             mesh.setMatrixAt(i, tempObject.matrix);
+            if (overlayMesh) overlayMesh.setMatrixAt(i, tempObject.matrix);
         }
 
         mesh.count = validShafts.length;
         mesh.instanceMatrix.needsUpdate = true;
-    }, [validShafts]);
+        if (overlayMesh) {
+            overlayMesh.count = validShafts.length;
+            overlayMesh.instanceMatrix.needsUpdate = true;
+        }
+    }, [validShafts, hasOverlay]);
 
     if (validShafts.length === 0) return null;
 
@@ -119,24 +130,38 @@ export function InstancedShaftGroup({
     };
 
     return (
-        <instancedMesh
-            ref={meshRef}
-            args={[undefined, undefined, validShafts.length]}
-            frustumCulled={false}
-            onClick={onShaftClick ? handleClick : undefined}
-            onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
-            onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
-        >
-            <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, false]} />
-            <meshStandardMaterial
-                color={color}
-                emissive={emissive}
-                emissiveIntensity={emissiveIntensity}
-                transparent={transparent}
-                opacity={opacity}
-                depthWrite={!transparent}
-                clippingPlanes={clippingPlanes ?? undefined}
-            />
-        </instancedMesh>
+        <>
+            <instancedMesh
+                ref={meshRef}
+                args={[undefined, undefined, validShafts.length]}
+                frustumCulled={false}
+                onClick={onShaftClick ? handleClick : undefined}
+                onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
+                onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
+            >
+                <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, false]} />
+                <meshStandardMaterial
+                    color={color}
+                    emissive={emissive}
+                    emissiveIntensity={emissiveIntensity}
+                    transparent={transparent}
+                    opacity={opacity}
+                    depthWrite={!transparent}
+                    clippingPlanes={clippingPlanes ?? undefined}
+                />
+            </instancedMesh>
+            {outOfBoundsMaterial && (
+                <instancedMesh
+                    ref={overlayMeshRef}
+                    args={[undefined, undefined, validShafts.length]}
+                    frustumCulled={false}
+                    raycast={() => null}
+                    renderOrder={3}
+                    material={outOfBoundsMaterial}
+                >
+                    <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, false]} />
+                </instancedMesh>
+            )}
+        </>
     );
 }

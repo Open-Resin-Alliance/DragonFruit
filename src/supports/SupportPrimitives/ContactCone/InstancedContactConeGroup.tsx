@@ -25,6 +25,7 @@ interface InstancedContactConeGroupProps {
     transparent?: boolean;
     opacity?: number;
     clippingPlanes?: THREE.Plane[] | null;
+    outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onConeClick?: (cone: InstancedContactCone, event: ThreeEvent<MouseEvent>) => void;
     onConePointerMove?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerOut?: (cone: InstancedContactCone | null, event: ThreeEvent<PointerEvent>) => void;
@@ -64,6 +65,7 @@ function ConeBucketMesh({
     transparent,
     opacity,
     clippingPlanes,
+    outOfBoundsMaterial,
     onConeClick,
     onConePointerMove,
     onConePointerOut,
@@ -76,6 +78,7 @@ function ConeBucketMesh({
     transparent: boolean;
     opacity: number;
     clippingPlanes: THREE.Plane[] | null;
+    outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onConeClick?: (cone: InstancedContactCone, event: ThreeEvent<MouseEvent>) => void;
     onConePointerMove?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerOut?: (cone: InstancedContactCone | null, event: ThreeEvent<PointerEvent>) => void;
@@ -83,7 +86,12 @@ function ConeBucketMesh({
     const diskRef = useRef<THREE.InstancedMesh>(null);
     const bodyRef = useRef<THREE.InstancedMesh>(null);
     const tipSphereRef = useRef<THREE.InstancedMesh>(null);
+    const overlayDiskRef = useRef<THREE.InstancedMesh>(null);
+    const overlayBodyRef = useRef<THREE.InstancedMesh>(null);
+    const overlayTipSphereRef = useRef<THREE.InstancedMesh>(null);
     const lastHoveredRef = useRef<InstancedContactCone | null>(null);
+
+    const hasOverlay = !!outOfBoundsMaterial;
 
     const resolveDiskThickness = (cone: InstancedContactCone) => {
         if (cone.profile.type !== 'disk') return 0;
@@ -152,7 +160,49 @@ function ConeBucketMesh({
                 quaternion: getDiskRotation(effectiveSurfaceNormal),
             };
         });
-    }, [bucket, diskThicknessByCone]);
+
+        // Overlay meshes share the same transforms
+        setInstanceMatrices(overlayBodyRef.current, (cone) => {
+            const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
+            const primitiveThickness = bucket.profileType === 'disk' ? resolveDiskThickness(cone) : 0;
+            const coneStart = {
+                x: cone.pos.x + effectiveSurfaceNormal.x * primitiveThickness,
+                y: cone.pos.y + effectiveSurfaceNormal.y * primitiveThickness,
+                z: cone.pos.z + effectiveSurfaceNormal.z * primitiveThickness,
+            };
+            const center = getConeCenterPosition(coneStart, cone.normal, cone.profile);
+            return {
+                position: new THREE.Vector3(center.x, center.y, center.z),
+                quaternion: getConeQuaternion(cone.normal),
+            };
+        });
+
+        setInstanceMatrices(overlayTipSphereRef.current, (cone) => {
+            const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
+            const primitiveThickness = bucket.profileType === 'disk' ? resolveDiskThickness(cone) : 0;
+            const coneStart = new THREE.Vector3(
+                cone.pos.x + effectiveSurfaceNormal.x * primitiveThickness,
+                cone.pos.y + effectiveSurfaceNormal.y * primitiveThickness,
+                cone.pos.z + effectiveSurfaceNormal.z * primitiveThickness,
+            );
+            return { position: coneStart, quaternion: new THREE.Quaternion() };
+        });
+
+        setInstanceMatrices(overlayDiskRef.current, (cone) => {
+            const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
+            const thickness = resolveDiskThickness(cone);
+            const center = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
+            const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            return {
+                position: new THREE.Vector3(
+                    center.x - effectiveSurfaceNormal.x * (penetration / 2),
+                    center.y - effectiveSurfaceNormal.y * (penetration / 2),
+                    center.z - effectiveSurfaceNormal.z * (penetration / 2),
+                ),
+                quaternion: getDiskRotation(effectiveSurfaceNormal),
+            };
+        });
+    }, [bucket, diskThicknessByCone, hasOverlay]);
 
     const resolveCone = (instanceId: number | undefined | null) => {
         if (instanceId == null) return null;
@@ -249,6 +299,43 @@ function ConeBucketMesh({
                     clippingPlanes={clippingPlanes ?? undefined}
                 />
             </instancedMesh>
+
+            {outOfBoundsMaterial && (
+                <>
+                    <instancedMesh
+                        ref={overlayBodyRef}
+                        args={[undefined, undefined, bucket.cones.length]}
+                        frustumCulled={false}
+                        raycast={() => null}
+                        renderOrder={3}
+                        material={outOfBoundsMaterial}
+                    >
+                        <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
+                    </instancedMesh>
+                    <instancedMesh
+                        ref={overlayTipSphereRef}
+                        args={[undefined, undefined, bucket.cones.length]}
+                        frustumCulled={false}
+                        raycast={() => null}
+                        renderOrder={3}
+                        material={outOfBoundsMaterial}
+                    >
+                        <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
+                    </instancedMesh>
+                    {bucket.profileType === 'disk' && (
+                        <instancedMesh
+                            ref={overlayDiskRef}
+                            args={[undefined, undefined, bucket.cones.length]}
+                            frustumCulled={false}
+                            raycast={() => null}
+                            renderOrder={3}
+                            material={outOfBoundsMaterial}
+                        >
+                            <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
+                        </instancedMesh>
+                    )}
+                </>
+            )}
         </group>
     );
 }
@@ -261,6 +348,7 @@ export function InstancedContactConeGroup({
     transparent = false,
     opacity = 1,
     clippingPlanes = null,
+    outOfBoundsMaterial = null,
     onConeClick,
     onConePointerMove,
     onConePointerOut,
@@ -338,6 +426,7 @@ export function InstancedContactConeGroup({
                     transparent={transparent}
                     opacity={opacity}
                     clippingPlanes={clippingPlanes}
+                    outOfBoundsMaterial={outOfBoundsMaterial}
                     onConeClick={onConeClick}
                     onConePointerMove={onConePointerMove}
                     onConePointerOut={onConePointerOut}

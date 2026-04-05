@@ -37,6 +37,10 @@ export type ModelAttachedSupportLayerProps = {
   supportRendererRef?: React.Ref<THREE.Group>;
   supportRenderRefreshNonce?: number;
   supportProxyIncludeDetailedPrimitives?: boolean;
+  showOutOfBoundsOverlay?: boolean;
+  outOfBoundsMin?: THREE.Vector3 | null;
+  outOfBoundsMax?: THREE.Vector3 | null;
+  outOfBoundsStripeColor?: string;
   trunkPlacementPreview?: SupportData | null;
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
@@ -72,6 +76,10 @@ export function ModelAttachedSupportLayer({
   supportRendererRef,
   supportRenderRefreshNonce = 0,
   supportProxyIncludeDetailedPrimitives = true,
+  showOutOfBoundsOverlay,
+  outOfBoundsMin,
+  outOfBoundsMax,
+  outOfBoundsStripeColor,
   trunkPlacementPreview = null,
   branchPlacementPreview = null,
   leafPlacementPreview = null,
@@ -160,6 +168,10 @@ export function ModelAttachedSupportLayer({
           excludeModelIds={excludeModelIds}
           modelDropOffsetsById={modelDropOffsetsById}
           ghostOpacity={ghostOpacity}
+          showOutOfBoundsOverlay={showOutOfBoundsOverlay}
+          outOfBoundsMin={outOfBoundsMin}
+          outOfBoundsMax={outOfBoundsMax}
+          outOfBoundsStripeColor={outOfBoundsStripeColor}
           onModelPointerSelect={onModelPointerSelect}
           enablePointerSelection={proxyPointerSelectionEnabled}
           includeDetailedPrimitives={proxyIncludeDetailedPrimitives}

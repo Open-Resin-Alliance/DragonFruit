@@ -4354,6 +4354,10 @@ export function SceneCanvas({
                             raftHoverized={raftHoverized}
                             passive
                             supportRenderRefreshNonce={supportRenderRefreshNonce}
+                            showOutOfBoundsOverlay={showOutOfBoundsOverlay}
+                            outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
+                            outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
+                            outOfBoundsStripeColor={outOfBoundsStripeColor}
                           />
                         </group>
                       )}
@@ -4645,6 +4649,10 @@ export function SceneCanvas({
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  showOutOfBoundsOverlay={!!activeBuildVolumeSettings?.enabled && outOfBoundsModelIds.size > 0}
+                  outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
+                  outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
+                  outOfBoundsStripeColor={outOfBoundsStripeColor}
                   trunkPlacementPreview={trunkPlacementPreviewForRenderer}
                   branchPlacementPreview={branchPlacementPreviewForRenderer}
                   leafPlacementPreview={leafPlacementPreviewForRenderer}
