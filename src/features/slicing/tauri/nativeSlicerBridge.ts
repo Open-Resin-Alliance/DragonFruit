@@ -279,6 +279,14 @@ export type NativeSlicerRuntimeMetrics = {
   poolThreads: number;
   maxConcurrent: number;
   queueBuffer: number;
+  buildProfile?: 'debug' | 'release' | string;
+  artifactDir?: string;
+  meshStageDir?: string;
+  metadataParseNs?: number;
+  meshDecodeNs?: number;
+  artifactMetadataNs?: number;
+  wrapperTotalNs?: number;
+  wrapperOverheadNs?: number;
 };
 
 /**
