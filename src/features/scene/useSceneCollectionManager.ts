@@ -989,6 +989,7 @@ export function useSceneCollectionManager() {
       maxZMm: activePrinterProfile.buildVolumeMm.height,
       screenWidthPx: activePrinterProfile.display.resolutionX,
       screenHeightPx: activePrinterProfile.display.resolutionY,
+      safetyMarginMm: activePrinterProfile.safetyMarginMm,
     });
   }, [activePrinterProfile, storedView3dSettings]);
 

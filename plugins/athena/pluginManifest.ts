@@ -183,6 +183,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
         : undefined,
       imageAssetPath: (preset as any).imageAssetPath,
       antiAliasing: typeof (preset as any).antiAliasing === 'boolean' ? (preset as any).antiAliasing : undefined,
+      hasCamera: typeof (preset as any).hasCamera === 'boolean' ? (preset as any).hasCamera : undefined,
       platformBadge: (preset as any).platformBadge,
       pixelSize: (preset as any).pixelSize,
       bitDepth: (preset as any).bitDepth,
@@ -213,6 +214,14 @@ export const ATHENA_PLUGIN_MANIFEST = {
       networkSupport: (preset as any).networkSupport === 'nanodlp' ? 'nanodlp' as const : undefined,
       networkFilter: typeof (preset as any).networkFilter === 'string' && (preset as any).networkFilter.trim().length > 0
         ? (preset as any).networkFilter.trim()
+        : undefined,
+      safetyMarginMm: (preset as any).safetyMarginMm != null
+        ? {
+          front: Number((preset as any).safetyMarginMm.front) || 0,
+          back: Number((preset as any).safetyMarginMm.back) || 0,
+          left: Number((preset as any).safetyMarginMm.left) || 0,
+          right: Number((preset as any).safetyMarginMm.right) || 0,
+        }
         : undefined,
     };
   }) as PrinterPreset[],

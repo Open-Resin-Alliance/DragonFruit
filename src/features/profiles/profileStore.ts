@@ -87,6 +87,12 @@ export type PrinterPreset = {
     depth: number;
     height: number;
   };
+  safetyMarginMm?: {
+    front: number;
+    back: number;
+    left: number;
+    right: number;
+  };
   display: {
     resolutionX: number;
     resolutionY: number;
@@ -116,6 +122,12 @@ export type PrinterProfile = {
   officialPresetVersion?: number;
   isOfficial?: boolean;
   isCustom?: boolean;
+  safetyMarginMm?: {
+    front: number;
+    back: number;
+    left: number;
+    right: number;
+  };
   buildVolumeMm: {
     width: number;
     depth: number;
@@ -566,6 +578,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   isOfficial: true,
   isCustom: false,
   buildVolumeMm: preset.buildVolumeMm,
+  safetyMarginMm: sanitizeSafetyMarginMm((preset as any).safetyMarginMm),
   display: preset.display,
   network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
@@ -585,6 +598,17 @@ function resolveOfficialPresetId(profile: Partial<PrinterProfile>): string | und
   ));
 
   return matchedPreset?.presetId;
+}
+
+function resolveSafetyMarginForProfile(profile: Partial<PrinterProfile>): PrinterProfile['safetyMarginMm'] {
+  const explicit = sanitizeSafetyMarginMm((profile as any).safetyMarginMm);
+  if (explicit) return explicit;
+
+  const presetId = resolveOfficialPresetId(profile);
+  if (!presetId) return undefined;
+
+  const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
+  return sanitizeSafetyMarginMm((preset as any)?.safetyMarginMm);
 }
 
 function resolveNetworkSupport(profile: Partial<PrinterProfile>): PrinterNetworkSupport | undefined {
@@ -607,6 +631,21 @@ function isOfficialProfileByHeuristic(profile: Partial<PrinterProfile>): boolean
 function normalizeMirrorFlag(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value;
   return fallback;
+}
+
+function sanitizeSafetyMarginMm(input: unknown): PrinterProfile['safetyMarginMm'] {
+  if (!input || typeof input !== 'object') return undefined;
+  const src = input as Record<string, unknown>;
+  const clampEdge = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  return {
+    front: clampEdge(src.front),
+    back: clampEdge(src.back),
+    left: clampEdge(src.left),
+    right: clampEdge(src.right),
+  };
 }
 
 function normalizeProfileVersion(value: unknown, fallback = 1): number {
@@ -687,6 +726,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
         const fallbackBuildVolume = matchedPreset?.buildVolumeMm;
         const fallbackDisplay = matchedPreset?.display;
         const fallbackOfficialPresetVersion = normalizeProfileVersion((matchedPreset as any)?.profileVersion, 1);
+        const fallbackSafetyMargin = sanitizeSafetyMarginMm((matchedPreset as any)?.safetyMarginMm);
+        const explicitSafetyMargin = sanitizeSafetyMarginMm((profile as any).safetyMarginMm);
         const resolvedPixelSize = sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize);
         const explicitBuildDimensionMode = normalizeBuildDimensionMode((profile as any).buildDimensionMode)
           ?? normalizeBuildDimensionMode((matchedPreset as any)?.buildDimensionMode);
@@ -731,6 +772,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             depth: Number(rawBuildVolume?.depth) || fallbackBuildVolume?.depth || 89,
             height: Number(rawBuildVolume?.height) || fallbackBuildVolume?.height || 175,
           },
+          safetyMarginMm: explicitSafetyMargin ?? fallbackSafetyMargin,
           display: {
             resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
             resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
@@ -1057,6 +1099,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
     buildVolumeMm: partial?.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
+    safetyMarginMm: sanitizeSafetyMarginMm(partial?.safetyMarginMm),
     display: {
       resolutionX: partial?.display?.resolutionX ?? 2560,
       resolutionY: partial?.display?.resolutionY ?? 1620,
@@ -1127,6 +1170,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     isOfficial: true,
     isCustom: false,
     buildVolumeMm: preset.buildVolumeMm,
+    safetyMarginMm: sanitizeSafetyMarginMm((preset as any).safetyMarginMm),
     display: {
       resolutionX: preset.display.resolutionX,
       resolutionY: preset.display.resolutionY,
@@ -1314,6 +1358,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       isOfficial: profile.isOfficial,
       isCustom: profile.isCustom,
       buildVolumeMm: appliedUpdates.buildVolumeMm ?? profile.buildVolumeMm,
+      safetyMarginMm: appliedUpdates.safetyMarginMm !== undefined
+        ? sanitizeSafetyMarginMm(appliedUpdates.safetyMarginMm)
+        : profile.safetyMarginMm,
       display: appliedUpdates.display
         ? {
           resolutionX: Number(appliedUpdates.display.resolutionX) || profile.display.resolutionX,
@@ -1652,6 +1699,7 @@ export function importPrinterBundle(payload: unknown): string {
     isOfficial: false,
     isCustom: true,
     buildVolumeMm: sourcePrinter.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
+    safetyMarginMm: sanitizeSafetyMarginMm(sourcePrinter.safetyMarginMm),
     display: {
       resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
       resolutionY: sourcePrinter.display?.resolutionY ?? 1620,
@@ -1954,11 +2002,18 @@ export function removePrinterNetworkDevice(printerProfileId: string, deviceId: s
 
 export function getActivePrinterProfile(stateOverride?: ProfileStoreState): PrinterProfile | null {
   const snapshot = stateOverride ?? state;
-  return (
-    snapshot.printerProfiles.find((profile) => profile.id === snapshot.activePrinterProfileId)
+  const profile = (
+    snapshot.printerProfiles.find((entry) => entry.id === snapshot.activePrinterProfileId)
     ?? snapshot.printerProfiles[0]
     ?? null
   );
+
+  if (!profile) return null;
+
+  return {
+    ...profile,
+    safetyMarginMm: resolveSafetyMarginForProfile(profile),
+  };
 }
 
 export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): MaterialProfile | null {
@@ -2078,6 +2133,7 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
           isOfficial: true,
           isCustom: false,
           buildVolumeMm: preset.buildVolumeMm,
+          safetyMarginMm: sanitizeSafetyMarginMm((preset as any).safetyMarginMm),
           display: {
             resolutionX: preset.display.resolutionX,
             resolutionY: preset.display.resolutionY,

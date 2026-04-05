@@ -22,6 +22,7 @@ interface InstancedRootsGroupProps {
     transparent?: boolean;
     opacity?: number;
     clippingPlanes?: THREE.Plane[] | null;
+    outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onRootClick?: (root: InstancedRoot, event: ThreeEvent<MouseEvent>) => void;
     onRootPointerMove?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerOut?: (root: InstancedRoot | null, event: ThreeEvent<PointerEvent>) => void;
@@ -59,6 +60,7 @@ function RootBucketMesh({
     transparent,
     opacity,
     clippingPlanes,
+    outOfBoundsMaterial,
     onRootClick,
     onRootPointerMove,
     onRootPointerOut,
@@ -70,6 +72,7 @@ function RootBucketMesh({
     transparent: boolean;
     opacity: number;
     clippingPlanes: THREE.Plane[] | null;
+    outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onRootClick?: (root: InstancedRoot, event: ThreeEvent<MouseEvent>) => void;
     onRootPointerMove?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerOut?: (root: InstancedRoot | null, event: ThreeEvent<PointerEvent>) => void;
@@ -77,7 +80,12 @@ function RootBucketMesh({
     const diskRef = useRef<THREE.InstancedMesh>(null);
     const coneRef = useRef<THREE.InstancedMesh>(null);
     const sphereRef = useRef<THREE.InstancedMesh>(null);
+    const overlayDiskRef = useRef<THREE.InstancedMesh>(null);
+    const overlayConeRef = useRef<THREE.InstancedMesh>(null);
+    const overlaySphereRef = useRef<THREE.InstancedMesh>(null);
     const lastHoveredRootRef = useRef<InstancedRoot | null>(null);
+
+    const hasOverlay = !!outOfBoundsMaterial;
 
     useLayoutEffect(() => {
         const tempObject = new THREE.Object3D();
@@ -101,36 +109,29 @@ function RootBucketMesh({
             mesh.instanceMatrix.needsUpdate = true;
         };
 
-        updateMesh(
-            diskRef.current,
-            (root) => ({
-                x: root.basePos.x,
-                y: root.basePos.y,
-                z: root.basePos.z + (root.effectiveDiskHeight / 2),
-            }),
-            ROOT_ROTATION,
-        );
+        const diskCenter = (root: InstancedRoot) => ({
+            x: root.basePos.x,
+            y: root.basePos.y,
+            z: root.basePos.z + (root.effectiveDiskHeight / 2),
+        });
+        const coneCenter = (root: InstancedRoot) => ({
+            x: root.basePos.x,
+            y: root.basePos.y,
+            z: root.basePos.z + root.effectiveDiskHeight + (root.coneHeight / 2),
+        });
+        const sphereCenter = (root: InstancedRoot) => ({
+            x: root.basePos.x,
+            y: root.basePos.y,
+            z: root.basePos.z + root.effectiveDiskHeight + root.coneHeight,
+        });
 
-        updateMesh(
-            coneRef.current,
-            (root) => ({
-                x: root.basePos.x,
-                y: root.basePos.y,
-                z: root.basePos.z + root.effectiveDiskHeight + (root.coneHeight / 2),
-            }),
-            ROOT_ROTATION,
-        );
-
-        updateMesh(
-            sphereRef.current,
-            (root) => ({
-                x: root.basePos.x,
-                y: root.basePos.y,
-                z: root.basePos.z + root.effectiveDiskHeight + root.coneHeight,
-            }),
-            new THREE.Quaternion(),
-        );
-    }, [bucket]);
+        updateMesh(diskRef.current, diskCenter, ROOT_ROTATION);
+        updateMesh(coneRef.current, coneCenter, ROOT_ROTATION);
+        updateMesh(sphereRef.current, sphereCenter, new THREE.Quaternion());
+        updateMesh(overlayDiskRef.current, diskCenter, ROOT_ROTATION);
+        updateMesh(overlayConeRef.current, coneCenter, ROOT_ROTATION);
+        updateMesh(overlaySphereRef.current, sphereCenter, new THREE.Quaternion());
+    }, [bucket, hasOverlay]);
 
     const resolveRootFromEvent = (instanceId: number | undefined | null) => {
         if (instanceId == null) return null;
@@ -226,6 +227,45 @@ function RootBucketMesh({
                     />
                 </instancedMesh>
             )}
+
+            {outOfBoundsMaterial && (
+                <>
+                    <instancedMesh
+                        ref={overlayDiskRef}
+                        args={[undefined, undefined, bucket.roots.length]}
+                        frustumCulled={false}
+                        raycast={() => null}
+                        renderOrder={3}
+                        material={outOfBoundsMaterial}
+                    >
+                        <cylinderGeometry args={[bucket.diskRadius, bucket.diskRadius, bucket.diskHeight, 10]} />
+                    </instancedMesh>
+                    {bucket.coneHeight > 0 && (
+                        <instancedMesh
+                            ref={overlayConeRef}
+                            args={[undefined, undefined, bucket.roots.length]}
+                            frustumCulled={false}
+                            raycast={() => null}
+                            renderOrder={3}
+                            material={outOfBoundsMaterial}
+                        >
+                            <cylinderGeometry args={[bucket.coneTopRadius, bucket.coneBottomRadius, bucket.coneHeight, 10]} />
+                        </instancedMesh>
+                    )}
+                    {bucket.coneHeight > 0 && (
+                        <instancedMesh
+                            ref={overlaySphereRef}
+                            args={[undefined, undefined, bucket.roots.length]}
+                            frustumCulled={false}
+                            raycast={() => null}
+                            renderOrder={3}
+                            material={outOfBoundsMaterial}
+                        >
+                            <sphereGeometry args={[bucket.sphereRadius, 10, 8]} />
+                        </instancedMesh>
+                    )}
+                </>
+            )}
         </group>
     );
 }
@@ -238,6 +278,7 @@ export function InstancedRootsGroup({
     transparent = false,
     opacity = 1,
     clippingPlanes = null,
+    outOfBoundsMaterial = null,
     onRootClick,
     onRootPointerMove,
     onRootPointerOut,
@@ -286,6 +327,7 @@ export function InstancedRootsGroup({
                     transparent={transparent}
                     opacity={opacity}
                     clippingPlanes={clippingPlanes}
+                    outOfBoundsMaterial={outOfBoundsMaterial}
                     onRootClick={onRootClick}
                     onRootPointerMove={onRootPointerMove}
                     onRootPointerOut={onRootPointerOut}

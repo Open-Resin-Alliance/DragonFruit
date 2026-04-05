@@ -12,6 +12,12 @@ export type View3DSettings = {
   showSliceSatBoundingMeshForAllModels: boolean;
   sliceSatBoundingMeshMode: 'accurate_hull' | 'experimental_slice';
   experimentalSliceSatBoundingMeshRenderMode: 'shaded' | 'wireframe';
+  safetyMarginMm?: {
+    front: number;
+    back: number;
+    left: number;
+    right: number;
+  };
 };
 
 export const VIEW3D_SETTINGS_STORAGE_KEY = 'app-3d-view-settings';
@@ -109,6 +115,15 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
       candidate.experimentalSliceSatBoundingMeshRenderMode ?? inferredExperimentalRenderFromLegacy,
       DEFAULT_VIEW3D_SETTINGS.experimentalSliceSatBoundingMeshRenderMode,
     ),
+    safetyMarginMm: (() => {
+      const src = candidate.safetyMarginMm;
+      if (!src || typeof src !== 'object') return undefined;
+      const clampEdge = (v: unknown) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 0 ? n : 0;
+      };
+      return { front: clampEdge(src.front), back: clampEdge(src.back), left: clampEdge(src.left), right: clampEdge(src.right) };
+    })(),
   };
 }
 
