@@ -1720,9 +1720,10 @@ fn main() {
             // Hide the native traffic-light buttons on macOS since the app
             // provides its own custom window controls in the TopBar.
             #[cfg(target_os = "macos")]
+            #[allow(deprecated)]
             {
                 use cocoa::appkit::{NSView, NSWindow, NSWindowButton};
-                use cocoa::base::id;
+                use cocoa::base::{id, nil};
 
                 let ns_win = _window.ns_window().unwrap() as id;
                 unsafe {
@@ -1732,8 +1733,8 @@ fn main() {
                         NSWindowButton::NSWindowZoomButton,
                     ] {
                         let button: id = ns_win.standardWindowButton_(btn);
-                        if button != cocoa::base::nil {
-                            NSView::setHidden_(button, true);
+                        if button != nil {
+                            button.setHidden_(true);
                         }
                     }
                 }
