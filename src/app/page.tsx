@@ -12433,7 +12433,7 @@ export default function Home() {
           }}
         >
           <div
-            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
             style={{
               background: 'var(--surface-0)',
               borderColor: 'var(--border-subtle)',
@@ -12443,10 +12443,10 @@ export default function Home() {
             aria-modal="true"
             aria-label="LYS import experimental warning"
           >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5">
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
                 <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
                     borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
                     background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
@@ -12455,19 +12455,20 @@ export default function Home() {
                 >
                   <AlertTriangle className="h-4 w-4" />
                 </span>
-                <div>
-                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
                     LYS Import is Experimental
                   </h2>
-                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    Unforeseen results are possible when importing `.lys` scenes.
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    This feature is still under development.
                   </p>
                 </div>
               </div>
 
               <button
                 type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
                 style={{
                   borderColor: 'var(--border-subtle)',
                   background: 'var(--surface-1)',
@@ -12480,12 +12481,12 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="p-4 space-y-3">
+            <div className="space-y-4 p-5">
               <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Geometry, support placement, and transforms may import differently across `.lys` scene variants.
+                Geometry, support placement, and transforms can import differently across `.lys` scene variants, so unforeseen results are still possible.
               </p>
 
-              <div className="flex items-center justify-between gap-3 pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <label className="inline-flex items-center gap-2 text-xs select-none" style={{ color: 'var(--text-muted)' }}>
                   <input
                     type="checkbox"
@@ -12497,7 +12498,7 @@ export default function Home() {
                   <span>Do not remind again</span>
                 </label>
 
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
                     className="ui-button ui-button-secondary !h-9 px-3 text-xs"
