@@ -4525,7 +4525,7 @@ export function ProfileSettingsModal({
                       <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Current</div>
                       <div className="px-2.5 py-2">Update</div>
                     </div>
-                    <div className="divide-y" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="divide-y divide-[var(--border-subtle)]">
                       {selectedPrinterUpdateDiffItems.map((item) => (
                         <div key={item.label} className="grid grid-cols-[170px_minmax(0,1fr)_minmax(0,1fr)] text-xs">
                           <div className="px-2.5 py-2 font-semibold" style={{ color: 'var(--text-strong)', borderRight: '1px solid var(--border-subtle)' }}>{item.label}</div>

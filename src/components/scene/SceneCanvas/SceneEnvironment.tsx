@@ -127,6 +127,81 @@ export function SceneMoodOverlay() {
   );
 }
 
+const SAFETY_STRIPE_VERTEX_SHADER = `
+  varying vec2 vUv;
+
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SAFETY_STRIPE_FRAGMENT_SHADER = `
+  varying vec2 vUv;
+
+  uniform float uWidthMm;
+  uniform float uHeightMm;
+  uniform float uBleedXMm;
+  uniform float uBleedYMm;
+  uniform float uStripePeriodMm;
+  uniform float uOpacity;
+  uniform vec3 uBaseColor;
+  uniform vec3 uStripeColor;
+
+  void main() {
+    float x = mix(-uBleedXMm, uWidthMm + uBleedXMm, vUv.x);
+    float y = mix(-uBleedYMm, uHeightMm + uBleedYMm, vUv.y);
+    float period = max(0.001, uStripePeriodMm);
+    float band = fract((x + y) / period);
+    float stripeMask = step(0.5, band);
+    vec3 color = mix(uBaseColor, uStripeColor, stripeMask);
+
+    gl_FragColor = vec4(color, uOpacity);
+  }
+`;
+
+function SafetyStripeMaterial({
+  widthMm,
+  heightMm,
+  bleedXMm = 0,
+  bleedYMm = 0,
+  opacity,
+}: {
+  widthMm: number;
+  heightMm: number;
+  bleedXMm?: number;
+  bleedYMm?: number;
+  opacity: number;
+}) {
+  const uniforms = React.useMemo(() => ({
+    uWidthMm: { value: widthMm },
+    uHeightMm: { value: heightMm },
+    uBleedXMm: { value: bleedXMm },
+    uBleedYMm: { value: bleedYMm },
+    uStripePeriodMm: { value: 8 },
+    uOpacity: { value: opacity },
+    uBaseColor: { value: new THREE.Color('#ffdddd') },
+    uStripeColor: { value: new THREE.Color('#a23846') },
+  }), [bleedXMm, bleedYMm, heightMm, opacity, widthMm]);
+
+  return (
+    <shaderMaterial
+      attach="material"
+      uniforms={uniforms}
+      vertexShader={SAFETY_STRIPE_VERTEX_SHADER}
+      fragmentShader={SAFETY_STRIPE_FRAGMENT_SHADER}
+      transparent
+      depthTest={false}
+      depthWrite={false}
+      polygonOffset
+      polygonOffsetFactor={-3}
+      polygonOffsetUnits={-3}
+      side={THREE.DoubleSide}
+      toneMapped={false}
+    />
+  );
+}
+
 export function Helpers({
   gridWidthMm,
   gridDepthMm,
@@ -135,6 +210,7 @@ export function Helpers({
   buildPlateOpacity,
   showGrid,
   showBuildPlate,
+  safetyMarginMm,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -143,6 +219,7 @@ export function Helpers({
   buildPlateOpacity?: number;
   showGrid?: boolean;
   showBuildPlate?: boolean;
+  safetyMarginMm?: { front: number; back: number; left: number; right: number };
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -373,6 +450,142 @@ export function Helpers({
     };
   }, [buildPlateGeometry]);
 
+  const makeBleedPlaneGeometry = React.useCallback((
+    planeWidthMm: number,
+    planeHeightMm: number,
+    opts?: {
+      bleedXMm?: number;
+      bleedYMm?: number;
+      outwardSide?: 'top' | 'bottom' | 'left' | 'right';
+      outwardCornerRadiusMm?: number;
+    },
+  ) => {
+    const halfW = planeWidthMm * 0.5;
+    const halfH = planeHeightMm * 0.5;
+
+    const outwardCornerRadius = Math.max(0, opts?.outwardCornerRadiusMm ?? 0);
+    const maxRadius = Math.max(0, Math.min(outwardCornerRadius, halfW - 0.01, halfH - 0.01));
+    const outwardSide = opts?.outwardSide;
+
+    const rTL = outwardSide === 'top' || outwardSide === 'left' ? maxRadius : 0;
+    const rTR = outwardSide === 'top' || outwardSide === 'right' ? maxRadius : 0;
+    const rBR = outwardSide === 'bottom' || outwardSide === 'right' ? maxRadius : 0;
+    const rBL = outwardSide === 'bottom' || outwardSide === 'left' ? maxRadius : 0;
+
+    const shape = new THREE.Shape();
+    shape.moveTo(-halfW + rBL, -halfH);
+    shape.lineTo(halfW - rBR, -halfH);
+    if (rBR > 0) {
+      shape.absarc(halfW - rBR, -halfH + rBR, rBR, -Math.PI * 0.5, 0, false);
+    } else {
+      shape.lineTo(halfW, -halfH);
+    }
+
+    shape.lineTo(halfW, halfH - rTR);
+    if (rTR > 0) {
+      shape.absarc(halfW - rTR, halfH - rTR, rTR, 0, Math.PI * 0.5, false);
+    } else {
+      shape.lineTo(halfW, halfH);
+    }
+
+    shape.lineTo(-halfW + rTL, halfH);
+    if (rTL > 0) {
+      shape.absarc(-halfW + rTL, halfH - rTL, rTL, Math.PI * 0.5, Math.PI, false);
+    } else {
+      shape.lineTo(-halfW, halfH);
+    }
+
+    shape.lineTo(-halfW, -halfH + rBL);
+    if (rBL > 0) {
+      shape.absarc(-halfW + rBL, -halfH + rBL, rBL, Math.PI, Math.PI * 1.5, false);
+    } else {
+      shape.lineTo(-halfW, -halfH);
+    }
+    shape.closePath();
+
+    const geometry = new THREE.ShapeGeometry(shape, 18);
+    const position = geometry.getAttribute('position');
+    const uv = geometry.getAttribute('uv');
+    const bleedX = Math.max(0, opts?.bleedXMm ?? 0);
+    const bleedY = Math.max(0, opts?.bleedYMm ?? 0);
+    const virtualWidth = Math.max(planeWidthMm, planeWidthMm + bleedX * 2);
+    const virtualHeight = Math.max(planeHeightMm, planeHeightMm + bleedY * 2);
+    const minU = bleedX / virtualWidth;
+    const maxU = 1 - minU;
+    const minV = bleedY / virtualHeight;
+    const maxV = 1 - minV;
+
+    for (let i = 0; i < uv.count; i += 1) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const u = THREE.MathUtils.clamp((x + halfW) / Math.max(planeWidthMm, 1e-6), 0, 1);
+      const v = THREE.MathUtils.clamp((y + halfH) / Math.max(planeHeightMm, 1e-6), 0, 1);
+      uv.setXY(
+        i,
+        THREE.MathUtils.lerp(minU, maxU, u),
+        THREE.MathUtils.lerp(minV, maxV, v),
+      );
+    }
+
+    uv.needsUpdate = true;
+    return geometry;
+  }, []);
+
+  const marginFront = Math.max(0, safetyMarginMm?.front ?? 0);
+  const marginBack = Math.max(0, safetyMarginMm?.back ?? 0);
+  const marginLeft = Math.max(0, safetyMarginMm?.left ?? 0);
+  const marginRight = Math.max(0, safetyMarginMm?.right ?? 0);
+  const hasSafetyMargins = marginFront > 0 || marginBack > 0 || marginLeft > 0 || marginRight > 0;
+  const stripeEdgeBleedMm = buildPlateOversizeEachSideMm;
+  const safetyStripOutwardCornerRadiusMm = 2;
+
+  const frontStripGeometry = React.useMemo(
+    () => (marginFront > 0 ? makeBleedPlaneGeometry(width, marginFront, {
+      bleedXMm: stripeEdgeBleedMm,
+      outwardSide: 'bottom',
+      outwardCornerRadiusMm: safetyStripOutwardCornerRadiusMm,
+    }) : null),
+    [makeBleedPlaneGeometry, width, marginFront, stripeEdgeBleedMm, safetyStripOutwardCornerRadiusMm],
+  );
+  const backStripGeometry = React.useMemo(
+    () => (marginBack > 0 ? makeBleedPlaneGeometry(width, marginBack, {
+      bleedXMm: stripeEdgeBleedMm,
+      outwardSide: 'top',
+      outwardCornerRadiusMm: safetyStripOutwardCornerRadiusMm,
+    }) : null),
+    [makeBleedPlaneGeometry, width, marginBack, stripeEdgeBleedMm, safetyStripOutwardCornerRadiusMm],
+  );
+  const leftStripGeometry = React.useMemo(
+    () => (marginLeft > 0 ? makeBleedPlaneGeometry(marginLeft, depth, {
+      bleedYMm: stripeEdgeBleedMm,
+      outwardSide: 'left',
+      outwardCornerRadiusMm: safetyStripOutwardCornerRadiusMm,
+    }) : null),
+    [makeBleedPlaneGeometry, marginLeft, depth, stripeEdgeBleedMm, safetyStripOutwardCornerRadiusMm],
+  );
+  const rightStripGeometry = React.useMemo(
+    () => (marginRight > 0 ? makeBleedPlaneGeometry(marginRight, depth, {
+      bleedYMm: stripeEdgeBleedMm,
+      outwardSide: 'right',
+      outwardCornerRadiusMm: safetyStripOutwardCornerRadiusMm,
+    }) : null),
+    [makeBleedPlaneGeometry, marginRight, depth, stripeEdgeBleedMm, safetyStripOutwardCornerRadiusMm],
+  );
+
+  React.useEffect(() => {
+    return () => {
+      frontStripGeometry?.dispose();
+      backStripGeometry?.dispose();
+      leftStripGeometry?.dispose();
+      rightStripGeometry?.dispose();
+    };
+  }, [
+    frontStripGeometry,
+    backStripGeometry,
+    leftStripGeometry,
+    rightStripGeometry,
+  ]);
+
   return (
     <>
       {/* Primitive mock build plate under grid */}
@@ -486,6 +699,76 @@ export function Helpers({
           </mesh>
         )}
       </group>
+      )}
+
+      {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes */}
+      {shouldShowBuildPlate && hasSafetyMargins && clampedBuildPlateOpacity > 0.001 && (
+        <group position={[0, 0, 0.2]} userData={{ thumbnailHelperType: 'buildPlate' }}>
+          {/* Front strip */}
+          {marginFront > 0 && (
+            <mesh
+              position={[buildVolumeCenterX, resolvedOriginMinY + marginFront * 0.5, 0]}
+              renderOrder={18}
+              raycast={nullRaycast}
+            >
+              {frontStripGeometry && <primitive object={frontStripGeometry} attach="geometry" />}
+              <SafetyStripeMaterial
+                widthMm={width}
+                heightMm={marginFront}
+                bleedXMm={stripeEdgeBleedMm}
+                opacity={0.42 * clampedBuildPlateOpacity}
+              />
+            </mesh>
+          )}
+          {/* Back strip */}
+          {marginBack > 0 && (
+            <mesh
+              position={[buildVolumeCenterX, resolvedOriginMinY + depth - marginBack * 0.5, 0]}
+              renderOrder={18}
+              raycast={nullRaycast}
+            >
+              {backStripGeometry && <primitive object={backStripGeometry} attach="geometry" />}
+              <SafetyStripeMaterial
+                widthMm={width}
+                heightMm={marginBack}
+                bleedXMm={stripeEdgeBleedMm}
+                opacity={0.42 * clampedBuildPlateOpacity}
+              />
+            </mesh>
+          )}
+          {/* Left strip */}
+          {marginLeft > 0 && (
+            <mesh
+              position={[resolvedOriginMinX + marginLeft * 0.5, buildVolumeCenterY, 0]}
+              renderOrder={18}
+              raycast={nullRaycast}
+            >
+              {leftStripGeometry && <primitive object={leftStripGeometry} attach="geometry" />}
+              <SafetyStripeMaterial
+                widthMm={marginLeft}
+                heightMm={depth}
+                bleedYMm={stripeEdgeBleedMm}
+                opacity={0.42 * clampedBuildPlateOpacity}
+              />
+            </mesh>
+          )}
+          {/* Right strip */}
+          {marginRight > 0 && (
+            <mesh
+              position={[resolvedOriginMinX + width - marginRight * 0.5, buildVolumeCenterY, 0]}
+              renderOrder={18}
+              raycast={nullRaycast}
+            >
+              {rightStripGeometry && <primitive object={rightStripGeometry} attach="geometry" />}
+              <SafetyStripeMaterial
+                widthMm={marginRight}
+                heightMm={depth}
+                bleedYMm={stripeEdgeBleedMm}
+                opacity={0.42 * clampedBuildPlateOpacity}
+              />
+            </mesh>
+          )}
+        </group>
       )}
     </>
   );

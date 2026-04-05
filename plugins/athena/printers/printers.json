@@ -1,7 +1,7 @@
 [
   {
     "presetId": "concepts3d-athena1-8k-nanodlp",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Concepts3D",
     "family": "Athena",
     "name": "Athena 8K",
@@ -22,12 +22,14 @@
     },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
+    "safetyMarginMm": { "front": 0, "back": 3, "left": 0, "right": 0 },
+    "hasCamera": false,
     "networkSupport": "nanodlp",
     "networkFilter": "Athena 8K"
   },
   {
     "presetId": "concepts3d-athena1-12k-nanodlp",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Concepts3D",
     "family": "Athena",
     "name": "Athena 12K",
@@ -48,12 +50,14 @@
     },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
+    "safetyMarginMm": { "front": 0, "back": 3, "left": 0, "right": 0 },
+    "hasCamera": false,
     "networkSupport": "nanodlp",
     "networkFilter": "Athena 12K"
   },
   {
     "presetId": "concepts3d-athena2-12k-nanodlp",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 12K",
@@ -74,12 +78,14 @@
     },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
+    "safetyMarginMm": { "front": 0, "back": 0, "left": 0, "right": 0 },
+    "hasCamera": true,
     "networkSupport": "nanodlp",
     "networkFilter": "Athena2 12K"
   },
   {
     "presetId": "concepts3d-athena2-16k3b-nanodlp",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 16K · 3-bit",
@@ -100,12 +106,14 @@
     },
     "antiAliasing": false,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
+    "safetyMarginMm": { "front": 0, "back": 0, "left": 0, "right": 0 },
+    "hasCamera": true,
     "networkSupport": "nanodlp",
     "networkFilter": "Athena2 16K"
   },
   {
     "presetId": "concepts3d-athena2-16k8b-nanodlp",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 16K",
@@ -126,12 +134,14 @@
     },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
+    "safetyMarginMm": { "front": 0, "back": 0, "left": 0, "right": 0 },
+    "hasCamera": true,
     "networkSupport": "nanodlp",
     "networkFilter": "Athena2 16K"
   },
   {
     "presetId": "concepts3d-athena2-16k8b-odyssey",
-    "profileVersion": 3,
+    "profileVersion": 4,
     "manufacturer": "Open Resin Alliance",
     "family": "Open Resin Alliance - Testing Only",
     "name": "Athena II 16K",
@@ -152,6 +162,8 @@
     },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
+    "safetyMarginMm": { "front": 0, "back": 0, "left": 0, "right": 0 },
+    "hasCamera": true,
     "networkSupport": "odyssey"
   }
 ]
