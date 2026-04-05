@@ -164,7 +164,7 @@ function formatElapsedClock(ms: number): string {
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
-const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_STORAGE_KEY_PREFIX = 'dragonfruit.slicing.remoteOfflineLayerHeightMm.';
+const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 
 function clampLayerHeightMm(value: number, fallback = 0.05): number {
   const numeric = Number(value);
@@ -244,7 +244,14 @@ export function SlicingPanel({
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
-  const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(0.05);
+  const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0.05;
+    const raw = window.localStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
+    if (raw == null || raw.trim().length === 0) return 0.05;
+    const parsed = Number(raw);
+    return (Number.isFinite(parsed) && parsed > 0) ? clampLayerHeightMm(parsed) : 0.05;
+  });
   const [remoteOfflineLayerHeightDraft, setRemoteOfflineLayerHeightDraft] = useState<string | null>(null);
   const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
   const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
@@ -361,14 +368,6 @@ export function SlicingPanel({
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
-  const remoteOfflineLayerHeightStorageKey = useMemo(() => {
-    if (!activePrinterProfile) return null;
-    const printerKey = activePrinterProfile.id?.trim()
-      || activePrinterProfile.officialPresetId?.trim()
-      || activePrinterProfile.name?.trim()
-      || 'default';
-    return `${SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_STORAGE_KEY_PREFIX}${printerKey}`;
-  }, [activePrinterProfile]);
 
   const progressPercent = useMemo(() => {
     const total = Math.max(1, progressTotal);
@@ -553,9 +552,21 @@ export function SlicingPanel({
     setMinimumAaAlphaPercent(Math.max(0, Math.min(100, Math.round(next))));
   }, []);
 
-  const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
-    setRemoteOfflineLayerHeightMm((previous) => clampLayerHeightMm(value, previous));
+  const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
+    if (typeof window === 'undefined') return;
+
+    const serialized = String(clampLayerHeightMm(value));
+    window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
   }, []);
+
+  const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
+    setRemoteOfflineLayerHeightMm((previous) => {
+      const next = clampLayerHeightMm(value, previous);
+      persistRemoteOfflineLayerHeight(next);
+      return next;
+    });
+  }, [persistRemoteOfflineLayerHeight]);
 
   const beginRemoteOfflineLayerHeightEdit = useCallback(() => {
     setRemoteOfflineLayerHeightDraft(String(remoteOfflineLayerHeightMm));
@@ -618,33 +629,12 @@ export function SlicingPanel({
   }, [enableMinimumAaAlphaOverride]);
 
   useEffect(() => {
-    const fallback = clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05);
-    if (typeof window === 'undefined') {
-      setRemoteOfflineLayerHeightMm(fallback);
-      return;
-    }
+    if (typeof window === 'undefined') return;
 
-    if (!remoteOfflineLayerHeightStorageKey) {
-      setRemoteOfflineLayerHeightMm(fallback);
-      return;
-    }
-
-    const stored = window.localStorage.getItem(remoteOfflineLayerHeightStorageKey)
-      ?? window.sessionStorage.getItem(remoteOfflineLayerHeightStorageKey);
-    if (stored == null || stored.trim().length === 0) {
-      setRemoteOfflineLayerHeightMm(fallback);
-      return;
-    }
-
-    setRemoteOfflineLayerHeightMm(clampLayerHeightMm(Number(stored), fallback));
-  }, [activeMaterialProfile?.layerHeightMm, remoteOfflineLayerHeightStorageKey]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !remoteOfflineLayerHeightStorageKey) return;
     const serialized = String(clampLayerHeightMm(remoteOfflineLayerHeightMm));
-    window.localStorage.setItem(remoteOfflineLayerHeightStorageKey, serialized);
-    window.sessionStorage.setItem(remoteOfflineLayerHeightStorageKey, serialized);
-  }, [remoteOfflineLayerHeightMm, remoteOfflineLayerHeightStorageKey]);
+    window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+  }, [remoteOfflineLayerHeightMm]);
 
   const resolvedMaterialLabel = useMemo(() => {
     if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
