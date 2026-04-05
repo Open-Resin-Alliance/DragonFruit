@@ -3051,9 +3051,30 @@ export default function Home() {
       || 'default';
     return `${REMOTE_OFFLINE_LAYER_HEIGHT_STORAGE_KEY_PREFIX}${printerKey}`;
   }, [activePrinterProfile?.id, activePrinterProfile?.name, activePrinterProfile?.officialPresetId]);
+  const selectedSliceDeviceId = React.useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedSliceDeviceReachability = selectedSliceDeviceId
+    ? (printerReachabilityByDeviceId[selectedSliceDeviceId] ?? null)
+    : null;
+  const shouldUseRemoteOfflineLayerHeight = Boolean(activeNetworkUiAdapter) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedSliceDeviceReachability === false
+  );
   const remoteOfflineSlicedLayerHeightMm = (() => {
     if (!activeNetworkUiAdapter) return null;
-    if (activePrinterProfile?.networkConnection?.connected === true) return null;
+    if (!shouldUseRemoteOfflineLayerHeight) return null;
     if (typeof window === 'undefined' || !remoteOfflineLayerHeightStorageKey) return null;
 
     const raw = window.localStorage.getItem(remoteOfflineLayerHeightStorageKey)

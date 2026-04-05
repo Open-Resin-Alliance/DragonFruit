@@ -10,6 +10,11 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
 import { getProfileLocalMaterialSettingsAdapter, getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import {
   runSliceExportOrchestrator,
@@ -261,6 +266,11 @@ export function SlicingPanel({
   const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const networkUiAdapter = useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
@@ -272,6 +282,18 @@ export function SlicingPanel({
     if (!activePrinterProfile) return activeMaterialProfile;
     if (!networkUiAdapter) return activeMaterialProfile;
     if (activePrinterProfile.networkConnection?.connected !== true) return activeMaterialProfile;
+
+    const activeDeviceId = (
+      activePrinterProfile.activeNetworkDeviceId?.trim()
+      || (activePrinterProfile.networkFleet ?? []).find((device) => (
+        (device.ipAddress || '').trim().toLowerCase()
+        === (activePrinterProfile.networkConnection?.ipAddress || '').trim().toLowerCase()
+      ))?.id
+      || ''
+    );
+    if (activeDeviceId && printerReachabilityByDeviceId[activeDeviceId] === false) {
+      return activeMaterialProfile;
+    }
 
     const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
     if (!selectedMaterialId) return activeMaterialProfile;
@@ -298,7 +320,7 @@ export function SlicingPanel({
         ? selectedBottomLayerCount
         : activeMaterialProfile.bottomLayerCount,
     };
-  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter]);
+  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter, printerReachabilityByDeviceId]);
 
   const selectedFormat = useMemo(() => {
     if (!activePrinterProfile || !effectiveMaterialProfile) return null;
@@ -309,12 +331,32 @@ export function SlicingPanel({
   }, [activePrinterProfile, effectiveMaterialProfile]);
 
   const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const selectedNetworkDeviceId = useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedNetworkDeviceReachability = selectedNetworkDeviceId
+    ? (printerReachabilityByDeviceId[selectedNetworkDeviceId] ?? null)
+    : null;
+  const isRemoteNetworkUnavailable = Boolean(networkUiAdapter) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedNetworkDeviceReachability === false
+  );
   // Respect printer-profile capability: explicit `false` means AA must be disabled.
   const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
   const minimumAaControlsDisabled = !antiAliasingAvailable;
-  const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter)
-    && activePrinterProfile?.networkConnection?.connected === true;
-  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter) && !isRemoteMaterialSyncConnected;
+  const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter) && !isRemoteNetworkUnavailable;
+  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter) && isRemoteNetworkUnavailable;
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
