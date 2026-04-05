@@ -29,7 +29,26 @@
     ]
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "DragonFruit",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "maximized": true,
+        "resizable": true,
+        "decorations": true,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": {
+          "x": 10000,
+          "y": 10000
+        }
+      }
+    ],
     "security": {
       "csp": null,
       "capabilities": ["default"]
