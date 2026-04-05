@@ -1691,7 +1691,7 @@ fn main() {
         }
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .setup(|app| {
             use tauri::WebviewWindowBuilder;
 
@@ -1713,7 +1713,6 @@ fn main() {
 
             Ok(())
         })
-        .plugin(tauri_plugin_macos_fps::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
             emit_scene_file_handoff(app, &argv, "single-instance");
@@ -1724,7 +1723,12 @@ fn main() {
             if has_scene_files {
                 focus_main_window(app);
             }
-        }))
+        }));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_macos_fps::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
             stage_mesh_binary_start,
