@@ -11,6 +11,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use std::io::{Seek, Write};
 use std::path::Path;
+use std::sync::Arc;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -415,9 +416,9 @@ fn encode_layer_png(
 
     match job.x_packing_mode.as_str() {
         "rgb8_div3" => {
-            // RLE runs span the full physical resolution (source_width_px).
-            // The custom deflate encoder maps them directly into a Truecolor
-            // PNG at width/3, with pHYs 3:1. No pixel expansion needed.
+            // RLE runs are at logical resolution (width_px = source/3).
+            // The encoder expands each grayscale V to RGB (V,V,V) and emits
+            // a Truecolor PNG at logical width with pHYs 3:1.
             crate::encode::encode_truecolor_png_from_rle(width, height, runs, 3)
         }
         _ => {
@@ -457,6 +458,22 @@ impl RleStreamEncoder for AthenaRleStreamEncoder {
 
     fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
         self.area_stats = stats;
+    }
+
+    fn parallel_encode_fn(
+        &self,
+    ) -> Option<
+        Arc<dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
+    > {
+        let job = self.job.clone();
+        let binary_png = self.binary_png;
+        Some(Arc::new(move |runs: &[crate::rle::RleRun]| {
+            encode_layer_png(&job, runs, binary_png)
+        }))
+    }
+
+    fn store_encoded_layer(&mut self, layer_index: u32, bytes: Vec<u8>) {
+        self.pngs[layer_index as usize] = bytes;
     }
 
     fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {

@@ -4,7 +4,7 @@ use crate::encoders::registry::{find_encoder, supported_output_formats};
 use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
-use crate::pipeline::{render_layers_bounded, render_layers_rle};
+use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
@@ -115,7 +115,22 @@ pub fn slice_with_progress_v3(
                 }) as ProgressCallbackV3
             });
 
-            let (_rendered_layers, layer_area_stats, mut perf) = {
+            // Parallel-encode path: rasterize + encode PNG in rayon workers.
+            let (_rendered_layers, layer_area_stats, mut perf) = if let Some(encode_fn) =
+                rle_enc.parallel_encode_fn()
+            {
+                let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
+                    rle_enc.store_encoded_layer(idx, bytes);
+                    Ok(())
+                };
+                slice_and_rasterize_rle_encoded_v3(
+                    job,
+                    encode_fn,
+                    &mut store_sink,
+                    slicing_progress,
+                    cancel_flag,
+                )?
+            } else {
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
                 slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
@@ -289,6 +304,36 @@ pub fn slice_and_rasterize_rle_v3(
     Ok((rendered_layers, layer_area_stats, perf))
 }
 
+/// Fast raster stage that encodes RLE runs into layer bytes in parallel rayon workers.
+pub fn slice_and_rasterize_rle_encoded_v3(
+    job: &SliceJobV3,
+    encode_fn: Arc<dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
+    on_encoded_layer: impl FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    validate_job(job)?;
+
+    let mut triangles = parse_triangles(&job.triangles_xyz);
+    project_triangles_inplace(&mut triangles, job);
+    let index_start = std::time::Instant::now();
+    let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
+    let index_ns = index_start.elapsed().as_nanos() as u64;
+
+    let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle_encoded(
+        job,
+        &triangles,
+        &layer_index,
+        encode_fn,
+        on_encoded_layer,
+        on_progress,
+        cancel_flag,
+    )?;
+    perf.index_build_ns = index_ns;
+
+    Ok((rendered_layers, layer_area_stats, perf))
+}
+
 /// Format-agnostic geometry/index/raster stage that outputs layer PNG bytes.
 pub fn slice_and_rasterize_v3(
     job: &SliceJobV3,
@@ -408,7 +453,21 @@ pub fn slice_with_progress_v3_to_path(
                 }) as ProgressCallbackV3
             });
 
-            let (_rendered_layers, layer_area_stats, mut perf) = {
+            let (_rendered_layers, layer_area_stats, mut perf) = if let Some(encode_fn) =
+                rle_enc.parallel_encode_fn()
+            {
+                let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
+                    rle_enc.store_encoded_layer(idx, bytes);
+                    Ok(())
+                };
+                slice_and_rasterize_rle_encoded_v3(
+                    job,
+                    encode_fn,
+                    &mut store_sink,
+                    slicing_progress,
+                    cancel_flag,
+                )?
+            } else {
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
                 slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?

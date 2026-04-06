@@ -497,34 +497,74 @@ pub fn encode_grayscale_png_from_rle(
     Ok(out)
 }
 
-/// Encode a Truecolor (RGB) PNG directly from RLE runs for NanoDLP `rgb8_div3`
-/// packing.
+/// Walk grayscale RLE runs and produce a Truecolor byte stream by tripling
+/// each grayscale value (R=G=B=value) with interspersed PNG filter bytes.
 ///
-/// The rasteriser works at the full physical sub-pixel resolution
-/// (`source_width_px`), so each byte in the run stream corresponds to one
-/// physical sub-pixel.  Three consecutive sub-pixels are mapped to the R, G, B
-/// channels of a single Truecolor pixel, giving PNG IHDR width =
-/// `source_width_px / 3`.
+/// Input runs are at logical width (e.g. 3840 for a 12 K printer with div3).
+/// Each grayscale pixel V becomes 3 bytes (V, V, V), so the PNG row stride
+/// is `logical_width × 3`.  This is equivalent to rasterising at full
+/// sub-pixel resolution, but avoids 3× the rasterisation work.
+fn intersperse_filter_runs_rgb_expand(
+    runs: &[crate::rle::RleRun],
+    logical_width: u64,
+    height: u64,
+) -> Vec<(u64, u8)> {
+    let mut out: Vec<(u64, u8)> = Vec::with_capacity(runs.len() + height as usize);
+    let mut run_idx: usize = 0;
+    let mut run_offset: u64 = 0;
+
+    for _row in 0..height {
+        // Filter byte (value 0, length 1).
+        push_run(&mut out, 1, 0);
+
+        // Emit `logical_width` grayscale pixels, tripled to RGB bytes.
+        let mut remaining = logical_width;
+        while remaining > 0 && run_idx < runs.len() {
+            let run = &runs[run_idx];
+            let avail = run.length as u64 - run_offset;
+            let take = remaining.min(avail);
+
+            // Grayscale V → (V, V, V) per pixel = 3× byte run.
+            push_run(&mut out, take * 3, run.value);
+
+            remaining -= take;
+            run_offset += take;
+            if run_offset >= run.length as u64 {
+                run_idx += 1;
+                run_offset = 0;
+            }
+        }
+        if remaining > 0 {
+            push_run(&mut out, remaining * 3, 0);
+        }
+    }
+
+    out
+}
+
+/// Encode a Truecolor (RGB) PNG directly from **grayscale** RLE runs for
+/// NanoDLP `rgb8_div3` packing.
 ///
-/// A `pHYs` chunk with `phys_x : 1` aspect ratio is emitted so the firmware
-/// can reconstruct the original sub-pixel layout.
+/// Runs are at logical resolution (`width_px`, e.g. 3840).  Each grayscale
+/// pixel V is expanded to an RGB triplet (V, V, V) at encode time, giving
+/// PNG IHDR width = `logical_width`, color_type = Truecolor.
+///
+/// A `pHYs` chunk with `phys_x_pixels_per_logical : 1` aspect ratio is
+/// emitted so the firmware maps each PNG pixel to the correct number of
+/// physical sub-pixels.
 ///
 /// Encoding time is **O(num_runs + height)** — no pixel buffer is materialised.
-/// The fixed-Huffman output is intentionally left for the ZIP container to
-/// further compress (matching mslicer's approach).
 pub fn encode_truecolor_png_from_rle(
-    source_width_px: u32,
+    logical_width: u32,
     height: u32,
     runs: &[crate::rle::RleRun],
     phys_x_pixels_per_logical: u32,
 ) -> Result<Vec<u8>, SlicerV3Error> {
-    let png_width = source_width_px / phys_x_pixels_per_logical;
-    // Bytes per PNG row = png_width * 3 channels = source_width_px.
-    let row_bytes = source_width_px as u64;
+    let png_width = logical_width;
     let h = height as u64;
 
-    // Step 1 — intersperse filter bytes (filter=None) at row boundaries.
-    let isp = intersperse_filter_runs(runs, row_bytes, h);
+    // Step 1 — grayscale RLE → RGB byte stream with filter bytes.
+    let isp = intersperse_filter_runs_rgb_expand(runs, logical_width as u64, h);
 
     // Step 2 — single pass: Adler-32 + LZ77 + fixed-Huffman bitstream.
     let mut adler = Adler32State::new();

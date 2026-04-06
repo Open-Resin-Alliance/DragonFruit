@@ -58,6 +58,24 @@ pub trait RleStreamEncoder: Send {
         std::fs::write(output_path, bytes)?;
         Ok(())
     }
+
+    /// Optionally return a thread-safe function that encodes RLE runs into
+    /// layer bytes (e.g. PNG).  When provided, the pipeline will call this
+    /// inside parallel rayon workers instead of encoding serially in the
+    /// drain loop.
+    fn parallel_encode_fn(
+        &self,
+    ) -> Option<
+        std::sync::Arc<
+            dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+        >,
+    > {
+        None
+    }
+
+    /// Store a pre-encoded layer produced by `parallel_encode_fn`.
+    /// Only called when `parallel_encode_fn` returns Some.
+    fn store_encoded_layer(&mut self, _layer_index: u32, _bytes: Vec<u8>) {}
 }
 
 /// Trait implemented by concrete output format encoders.
