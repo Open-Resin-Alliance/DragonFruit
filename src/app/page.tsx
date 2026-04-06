@@ -30,7 +30,7 @@ import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuP
 import { SupportSidebar } from '@/supports/Settings';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
-import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
+import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
@@ -820,6 +820,9 @@ export default function Home() {
   const triggerSliceExportRef = React.useRef<(() => void) | null>(null);
   const modeBeforePrintingRef = React.useRef<typeof scene.mode>('prepare');
   const shouldReturnToPrintingAfterSliceRef = React.useRef(false);
+  const sliceIntentRef = React.useRef<SliceIntent>('file');
+  const pendingPostSliceActionRef = React.useRef<'upload' | 'print' | null>(null);
+  const pendingAutoStartPrintRef = React.useRef(false);
   const printingPreviewDragRef = React.useRef<{
     pointerId: number;
     startClientX: number;
@@ -2437,8 +2440,48 @@ export default function Home() {
       shouldReturnToPrintingAfterSliceRef.current = false;
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
+      return;
     }
-  }, []);
+
+    // Dispatch slice intent action with the fresh artifact
+    const intent = sliceIntentRef.current;
+    if (intent === 'upload' || intent === 'print') {
+      pendingPostSliceActionRef.current = intent;
+      setShouldAutoSliceOnExportEntry(false);
+      scene.setMode('printing');
+    } else {
+      // 'file': trigger save dialog immediately with the fresh artifact
+      const downloadDirect = async (a: SliceExportArtifact) => {
+        const nativePath = a.nativeTempPath?.trim() || '';
+        if (nativePath) {
+          try { await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName); return; } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err ?? '');
+            if (msg.toLowerCase().includes('cancel')) return;
+          }
+        }
+        try {
+          const bytes = a.blob
+            ? new Uint8Array(await a.blob.arrayBuffer())
+            : (nativePath ? await readPrintArtifactBytesFromPath(nativePath) : null);
+          if (!bytes) throw new Error('No artifact bytes');
+          await savePrintArtifactWithNativeDialog(bytes, a.outputName);
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err ?? '');
+          if (msg.toLowerCase().includes('cancel')) return;
+        }
+        if (!a.blob) return;
+        const url = URL.createObjectURL(a.blob);
+        const anchor = document.createElement('a');
+        anchor.href = url; anchor.download = a.outputName; anchor.rel = 'noopener'; anchor.style.display = 'none';
+        document.body?.appendChild(anchor);
+        anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+      void downloadDirect(artifact);
+    }
+  }, [scene]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -3364,6 +3407,9 @@ export default function Home() {
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
   );
+  // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
+  const canSliceAndUpload = Boolean(activeNetworkUiAdapter && printableConnectedPrinterFleet.length > 0);
+  const canSliceAndPrint = canSliceAndUpload && Boolean(printingMonitoringAdapter.operations?.start);
   const requiresRemoteMaterialSelectionForUpload = Boolean(
     activeNetworkUiAdapter
     && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false,
@@ -8720,6 +8766,25 @@ export default function Home() {
     }
   }, [printingArtifactIsInvalid, printingArtifact, scene.mode, scene]);
 
+  // Auto-trigger upload/print when entering printing workspace via a Slice & Upload / Slice & Print intent
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    if (!printingArtifact) return;
+    const action = pendingPostSliceActionRef.current;
+    if (!action) return;
+    pendingPostSliceActionRef.current = null;
+    if (action === 'print') pendingAutoStartPrintRef.current = true;
+    void handleSendToPrinter();
+  }, [scene.mode, printingArtifact, handleSendToPrinter]);
+
+  // After a Slice & Print upload, auto-start print when plate is ready
+  React.useEffect(() => {
+    if (!pendingAutoStartPrintRef.current) return;
+    if (!printingReadyPlateId || !printingTargetDevice?.connected) return;
+    pendingAutoStartPrintRef.current = false;
+    void handlePrintNow();
+  }, [printingReadyPlateId, printingTargetDevice?.connected, handlePrintNow]);
+
   React.useLayoutEffect(() => {
     if (scene.mode !== 'printing') return;
     const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
@@ -11731,6 +11796,9 @@ export default function Home() {
               shouldAutoSlice={shouldAutoSliceOnExportEntry}
               skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
               onSlicingBusyChange={setIsSlicingBusy}
+              canUpload={canSliceAndUpload}
+              canPrint={canSliceAndPrint}
+              onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
             />
           </>
 
