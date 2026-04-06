@@ -509,8 +509,9 @@ pub fn encode_grayscale_png_from_rle(
 /// A `pHYs` chunk with `phys_x : 1` aspect ratio is emitted so the firmware
 /// can reconstruct the original sub-pixel layout.
 ///
-/// Encoding time is **O(num_runs + height)**, identical to the grayscale
-/// variant.
+/// Encoding time is **O(num_runs + height)** — no pixel buffer is materialised.
+/// The fixed-Huffman output is intentionally left for the ZIP container to
+/// further compress (matching mslicer's approach).
 pub fn encode_truecolor_png_from_rle(
     source_width_px: u32,
     height: u32,
@@ -522,7 +523,7 @@ pub fn encode_truecolor_png_from_rle(
     let row_bytes = source_width_px as u64;
     let h = height as u64;
 
-    // Step 1 — intersperse filter bytes (row stride = source_width_px).
+    // Step 1 — intersperse filter bytes (filter=None) at row boundaries.
     let isp = intersperse_filter_runs(runs, row_bytes, h);
 
     // Step 2 — single pass: Adler-32 + LZ77 + fixed-Huffman bitstream.

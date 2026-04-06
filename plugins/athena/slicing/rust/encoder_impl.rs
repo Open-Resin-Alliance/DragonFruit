@@ -264,7 +264,8 @@ fn write_nanodlp_archive<W: Write + Seek>(
 
     let half_w = (job.build_width_mm as f64) * 0.5;
     let half_h = (job.build_depth_mm as f64) * 0.5;
-    let x_pixel_size_mm = (job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64);
+    let x_pixel_size_mm =
+        (job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64);
     let y_pixel_size_mm = (job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64);
 
     let (x_min, x_max, y_min, y_max) = if pix_min_x == i32::MAX {
@@ -300,10 +301,14 @@ fn write_nanodlp_archive<W: Write + Seek>(
             job.container_compression_level,
         )));
 
-    // Layer PNGs are already deflate-compressed by the encoder.  Using Stored
-    // avoids double-compression overhead and the sequential CPU cost of ZIP
-    // deflating 1,000+ layers.
-    let layer_opt = FileOptions::default().compression_method(CompressionMethod::Stored);
+    // Layer PNGs use a lightweight fixed-Huffman deflate internally (fast to
+    // produce, O(num_runs)).  The resulting bitstream is highly repetitive
+    // (the same 13-bit distance-1 match pattern repeated thousands of times),
+    // so a second ZIP deflate pass compresses it dramatically — matching the
+    // approach used by mslicer's `FileOptions::DEFAULT`.
+    let layer_opt = FileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .compression_level(Some(1));
 
     let meta_json = json!({
         "format_version": 3,
@@ -413,12 +418,7 @@ fn encode_layer_png(
             // RLE runs span the full physical resolution (source_width_px).
             // The custom deflate encoder maps them directly into a Truecolor
             // PNG at width/3, with pHYs 3:1. No pixel expansion needed.
-            crate::encode::encode_truecolor_png_from_rle(
-                width,
-                height,
-                runs,
-                3,
-            )
+            crate::encode::encode_truecolor_png_from_rle(width, height, runs, 3)
         }
         _ => {
             // Grayscale: expand RLE and use libdeflate.

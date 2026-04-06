@@ -164,7 +164,8 @@ pub fn render_layers_bounded(
     let render_wall_start = std::time::Instant::now();
     let total_layers = job.total_layers;
 
-    let layer_pixels = (job.effective_render_width_px() as usize).saturating_mul(job.source_height_px as usize);
+    let layer_pixels =
+        (job.effective_render_width_px() as usize).saturating_mul(job.source_height_px as usize);
     let mut max_concurrent = choose_max_concurrent();
 
     let need_raw_masks = emit_raw_mask_layers || on_raw_mask_layer.is_some();
@@ -200,7 +201,8 @@ pub fn render_layers_bounded(
     let progress = AtomicU32::new(0);
     let raster_ns = AtomicU64::new(0);
     let png_ns = AtomicU64::new(0);
-    let layer_pixels_len = (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
+    let layer_pixels_len =
+        (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
     let binary_png_expected = job.anti_aliasing_level.trim() == "Off";
 
     let empty_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
