@@ -669,7 +669,8 @@ export function SlicingPanel({
       if (!mounted) return;
       setDisplayProgressPercent((prev) => {
         const target = progressPercent;
-        if (Math.abs(target - prev) < 0.2) return target;
+        // Snap immediately when complete or nearly there to avoid stale bar.
+        if (target >= 100 || Math.abs(target - prev) < 0.2) return target;
         return prev + ((target - prev) * 0.16);
       });
       rafId = window.requestAnimationFrame(animate);

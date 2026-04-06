@@ -414,6 +414,60 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
     CANCEL_FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
+/// Build a progress callback that throttles `window.emit` to at most ~60 fps.
+///
+/// The first event, any phase change, and the final event (done == total) are
+/// always emitted immediately.  Intermediate updates are skipped if fewer than
+/// 16 ms have elapsed since the last emit.
+fn make_throttled_progress_cb(
+    win: tauri::Window,
+) -> dragonfruit_slicer_v3::types::ProgressCallbackV3 {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    struct State {
+        last_emit: Instant,
+        last_phase: String,
+    }
+
+    let state = Arc::new(Mutex::new(State {
+        last_emit: Instant::now(),
+        last_phase: String::new(),
+    }));
+
+    Arc::new(
+        move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+            let phase = phase_to_label(update.phase).to_string();
+            let is_final = update.done >= update.total;
+
+            let should_emit = {
+                let mut s = state.lock().unwrap();
+                let phase_changed = s.last_phase != phase;
+                let elapsed = s.last_emit.elapsed().as_millis() >= 16;
+
+                if is_final || phase_changed || elapsed {
+                    s.last_emit = Instant::now();
+                    s.last_phase = phase.clone();
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if should_emit {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase,
+                    },
+                );
+            }
+        },
+    )
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SliceProgressPayload {
@@ -488,18 +542,7 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
         let job: dragonfruit_slicer_v3::types::SliceJobV3 = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 = std::sync::Arc::new(
-            move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
-                let _ = win.emit(
-                    "slicer://progress",
-                    SliceProgressPayload {
-                        done: update.done,
-                        total: update.total,
-                        phase: phase_to_label(update.phase).to_string(),
-                    },
-                );
-            },
-        );
+        let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
             let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
@@ -859,17 +902,7 @@ async fn slice_solid_native_to_temp_path(
             metadata_json: meta.metadata_json,
         };
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
-                let _ = win.emit(
-                    "slicer://progress",
-                    SliceProgressPayload {
-                        done: update.done,
-                        total: update.total,
-                        phase: phase_to_label(update.phase).to_string(),
-                    },
-                );
-            });
+        let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {

@@ -560,6 +560,18 @@ pub fn render_layers_rle(
                 Err(e) => pipeline_error = Err(e),
                 Ok((layer, runs, stats)) => {
                     pending[layer as usize] = Some((runs, stats));
+\
+                    // Report on arrival so progress reflects actual work done,
+                    // not just the contiguous drain position.
+                    let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(ref cb) = on_progress {
+                        cb(SliceProgressUpdateV3 {
+                            done,
+                            total: total_layers,
+                            phase: SliceProgressPhaseV3::Slicing,
+                        });
+                    }
+
                     while next < total_layers {
                         let Some((runs, stats)) = pending[next as usize].take() else {
                             break;
@@ -569,14 +581,6 @@ pub fn render_layers_rle(
                             break;
                         }
                         area_stats[next as usize] = stats;
-                        let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
-                        if let Some(ref cb) = on_progress {
-                            cb(SliceProgressUpdateV3 {
-                                done,
-                                total: total_layers,
-                                phase: SliceProgressPhaseV3::Slicing,
-                            });
-                        }
                         if cancel_flag
                             .map(|flag| flag.load(Ordering::Relaxed))
                             .unwrap_or(false)
@@ -699,6 +703,18 @@ pub fn render_layers_rle_encoded(
                 Err(e) => pipeline_error = Err(e),
                 Ok((layer, bytes, stats)) => {
                     pending[layer as usize] = Some((bytes, stats));
+
+                    // Report on arrival so progress reflects actual work done,
+                    // not just the contiguous drain position.
+                    let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(ref cb) = on_progress {
+                        cb(SliceProgressUpdateV3 {
+                            done,
+                            total: total_layers,
+                            phase: SliceProgressPhaseV3::Slicing,
+                        });
+                    }
+
                     while next < total_layers {
                         let Some((bytes, stats)) = pending[next as usize].take() else {
                             break;
@@ -708,14 +724,6 @@ pub fn render_layers_rle_encoded(
                             break;
                         }
                         area_stats[next as usize] = stats;
-                        let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
-                        if let Some(ref cb) = on_progress {
-                            cb(SliceProgressUpdateV3 {
-                                done,
-                                total: total_layers,
-                                phase: SliceProgressPhaseV3::Slicing,
-                            });
-                        }
                         if cancel_flag
                             .map(|flag| flag.load(Ordering::Relaxed))
                             .unwrap_or(false)
