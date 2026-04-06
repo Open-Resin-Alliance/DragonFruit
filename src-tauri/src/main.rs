@@ -339,11 +339,11 @@ fn duration_ns_u64(duration: std::time::Duration) -> u64 {
     duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
-fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+fn phase_to_label(phase: dragonfruit_slicing_engine::types::SliceProgressPhaseV3) -> &'static str {
     match phase {
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
     }
 }
 
@@ -353,7 +353,7 @@ fn slicer_pool() -> &'static ThreadPool {
             .map(|n| n.get())
             .unwrap_or(1);
         ThreadPoolBuilder::new()
-            .thread_name(|i| format!("dragonfruit-slicer-v3-{i}"))
+            .thread_name(|i| format!("dragonfruit-slicing-engine-{i}"))
             .num_threads(threads)
             .build()
             .expect("failed to create slicer rayon thread pool")
@@ -421,7 +421,7 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
 /// 16 ms have elapsed since the last emit.
 fn make_throttled_progress_cb(
     win: tauri::Window,
-) -> dragonfruit_slicer_v3::types::ProgressCallbackV3 {
+) -> dragonfruit_slicing_engine::types::ProgressCallbackV3 {
     use std::sync::Mutex;
     use std::time::Instant;
 
@@ -436,7 +436,7 @@ fn make_throttled_progress_cb(
     }));
 
     Arc::new(
-        move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+        move |update: dragonfruit_slicing_engine::types::SliceProgressUpdateV3| {
             let phase = phase_to_label(update.phase).to_string();
             let is_final = update.done >= update.total;
 
@@ -539,13 +539,13 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
 
     let win = window.clone();
     let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let job: dragonfruit_slicer_v3::types::SliceJobV3 = serde_json::from_str(&job_json)
+        let job: dragonfruit_slicing_engine::types::SliceJobV3 = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
         let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
-            let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
+            let artifact = dragonfruit_slicing_engine::slice_with_progress_v3(
                 &job,
                 Some(progress_cb),
                 Some(flag.as_ref()),
@@ -878,7 +878,7 @@ async fn slice_solid_native_to_temp_path(
         let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
         let mesh_decode_ns = duration_ns_u64(mesh_decode_start.elapsed());
 
-        let job = dragonfruit_slicer_v3::SliceJobV3 {
+        let job = dragonfruit_slicing_engine::SliceJobV3 {
             output_format: meta.output_format,
             format_version: meta.format_version,
             source_width_px: meta.source_width_px,
@@ -915,7 +915,7 @@ async fn slice_solid_native_to_temp_path(
             };
             let path = temp_artifact_path(ext);
 
-            let perf_raw = dragonfruit_slicer_v3::engine::slice_with_progress_v3_to_path(
+            let perf_raw = dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path(
                 &job,
                 &path,
                 Some(progress_cb),
@@ -1099,7 +1099,7 @@ async fn run_island_scan_native(
             .map_err(|e| format!("Invalid island scan params JSON: {e}"))?;
 
         let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
-        let triangles = dragonfruit_slicer_v3::geometry::parse_triangles(&triangles_xyz);
+        let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&triangles_xyz);
 
         // Debug dump: write positions + params to temp dir for offline reproduction
         let dump_dir = std::env::temp_dir().join("dragonfruit-island-debug");

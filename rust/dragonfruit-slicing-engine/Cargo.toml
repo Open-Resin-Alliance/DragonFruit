@@ -1,10 +1,10 @@
 [package]
-name = "dragonfruit-slicer-v3"
-version = "0.1.2"
+name = "dragonfruit-slicing-engine"
+version = "3.1.0"
 edition = "2021"
 
 [lib]
-name = "dragonfruit_slicer_v3"
+name = "dragonfruit_slicing_engine"
 path = "src/lib.rs"
 
 [dependencies]

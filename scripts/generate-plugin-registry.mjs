@@ -11,7 +11,7 @@ const tsGeneratedPath = path.join(repoRoot, 'src', 'features', 'plugins', 'gener
 const tsGeneratedNetworkHandlersPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginNetworkHandlers.ts');
 const tsGeneratedUploadHandlersPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
 const rustGeneratedPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
-const rustSlicerGeneratedEncodersPath = path.join(repoRoot, 'rust', 'dragonfruit-slicer-v3', 'src', 'encoders', 'generated_plugin_encoders.rs');
+const rustSlicerGeneratedEncodersPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'src', 'encoders', 'generated_plugin_encoders.rs');
 const cargoAuditPath = path.join(repoRoot, 'src-tauri', 'generated_crate_requirements.toml');
 
 function toImportAlias(pluginId) {
@@ -246,7 +246,7 @@ function buildCargoAuditFile(discovered, mergedCargoDeps) {
 
 // Merge plugin cargo dependencies into dragonfruit-slicer-v3/Cargo.toml
 async function mergePluginCratesIntoCargoToml(mergedCargoDeps) {
-      const cargoTomlPath = path.join(repoRoot, 'rust', 'dragonfruit-slicer-v3', 'Cargo.toml');
+      const cargoTomlPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'Cargo.toml');
       let content = await fs.readFile(cargoTomlPath, 'utf8');
 
       // Find the [dependencies] section

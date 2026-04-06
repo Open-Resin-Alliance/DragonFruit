@@ -60,5 +60,5 @@ jobs:
           git diff -- src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts
           git diff -- src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts
           git diff -- src-tauri/src/generated_builtin_plugins.rs
-          git diff -- rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs
-          git diff --exit-code -- src/features/plugins/generatedBuiltinComplexPlugins.ts src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts src-tauri/src/generated_builtin_plugins.rs rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs
+          git diff -- rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs
+          git diff --exit-code -- src/features/plugins/generatedBuiltinComplexPlugins.ts src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts src-tauri/src/generated_builtin_plugins.rs rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs

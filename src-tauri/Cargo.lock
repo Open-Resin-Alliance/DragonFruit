@@ -1051,7 +1051,7 @@ dependencies = [
  "base64 0.22.1",
  "dragonfruit-islands",
  "dragonfruit-rtsp-relay",
- "dragonfruit-slicer-v3",
+ "dragonfruit-slicing-engine",
  "flate2",
  "if-addrs",
  "rayon",
@@ -1074,7 +1074,7 @@ name = "dragonfruit-islands"
 version = "0.1.0"
 dependencies = [
  "clap",
- "dragonfruit-slicer-v3",
+ "dragonfruit-slicing-engine",
  "indexmap 2.13.0",
  "rayon",
  "serde",
@@ -1093,8 +1093,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dragonfruit-slicer-v3"
-version = "0.1.2"
+name = "dragonfruit-slicing-engine"
+version = "3.1.0"
 dependencies = [
  "aes",
  "base64 0.22.1",
