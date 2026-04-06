@@ -560,7 +560,6 @@ pub fn render_layers_rle(
                 Err(e) => pipeline_error = Err(e),
                 Ok((layer, runs, stats)) => {
                     pending[layer as usize] = Some((runs, stats));
-\
                     // Report on arrival so progress reflects actual work done,
                     // not just the contiguous drain position.
                     let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
