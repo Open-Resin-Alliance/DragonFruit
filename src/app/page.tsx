@@ -98,7 +98,7 @@ import {
   getWorkspaceCameraSettingsSnapshot,
   subscribeToWorkspaceCameraSettings,
 } from '@/components/settings/workspaceCameraPreferences';
-import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import { openProfileSettingsModal, PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT } from '@/components/settings/profileModalEvents';
 import {
   getProfileMonitoringUiAdapter,
   getProfileNetworkUiAdapter,
@@ -8689,12 +8689,36 @@ export default function Home() {
     }
   }, [scene.models.length, scene.mode, scene, printingArtifact]);
 
-  // Show re-slice modal when entering printing with invalid artifact
+  // Track whether the profile settings modal is currently open so we can
+  // defer the printing-workspace kick until after the user closes it.
+  const isProfileModalOpenRef = React.useRef(false);
+  const pendingPrintingKickRef = React.useRef(false);
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const isOpen = (e as CustomEvent<{ isOpen: boolean }>).detail.isOpen;
+      isProfileModalOpenRef.current = isOpen;
+      if (!isOpen && pendingPrintingKickRef.current) {
+        pendingPrintingKickRef.current = false;
+        scene.setMode('prepare');
+        setShowPrintingResliceModal(true);
+      }
+    };
+    window.addEventListener(PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT, handler);
+    return () => window.removeEventListener(PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT, handler);
+  }, [scene]);
+
+  // If artifact becomes invalid while already in printing workspace, kick back and show modal.
+  // If the profile settings modal is currently open, defer until it closes.
   React.useEffect(() => {
     if (scene.mode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
-      setShowPrintingResliceModal(true);
+      if (isProfileModalOpenRef.current) {
+        pendingPrintingKickRef.current = true;
+      } else {
+        scene.setMode('prepare');
+        setShowPrintingResliceModal(true);
+      }
     }
-  }, [scene.mode, printingArtifactIsInvalid, printingArtifact]);
+  }, [printingArtifactIsInvalid, printingArtifact, scene.mode, scene]);
 
   React.useLayoutEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -8733,8 +8757,12 @@ export default function Home() {
     if (nextMode === 'printing' && !hasPrintingWorkspaceData) {
       return;
     }
+    if (nextMode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
+      setShowPrintingResliceModal(true);
+      return;
+    }
     scene.setMode(nextMode);
-  }, [hasPrintingWorkspaceData, scene]);
+  }, [hasPrintingWorkspaceData, printingArtifact, printingArtifactIsInvalid, scene]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
