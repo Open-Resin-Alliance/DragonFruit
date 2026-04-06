@@ -125,11 +125,13 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
+  pickSavePathWithNativeDialog,
   pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
   savePrintArtifactWithNativeDialog,
+  writeBytesToNativePath,
 } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
@@ -823,6 +825,10 @@ export default function Home() {
   const sliceIntentRef = React.useRef<SliceIntent>('file');
   const pendingPostSliceActionRef = React.useRef<'upload' | 'print' | null>(null);
   const pendingAutoStartPrintRef = React.useRef(false);
+  const preSliceFileDestinationPathRef = React.useRef<string | null>(null);
+  const preSliceUploadSelectionRef = React.useRef<{ deviceId: string; materialId?: string } | null>(null);
+  const preSliceTargetPickerResolverRef = React.useRef<((selection: { deviceId: string; materialId?: string } | null) => void) | null>(null);
+  const preSlicePrintConfirmResolverRef = React.useRef<((confirmed: boolean) => void) | null>(null);
   const printingPreviewDragRef = React.useRef<{
     pointerId: number;
     startClientX: number;
@@ -853,6 +859,7 @@ export default function Home() {
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
   const [printingTargetPickerOpen, setPrintingTargetPickerOpen] = React.useState(false);
+  const [printingTargetPickerMode, setPrintingTargetPickerMode] = React.useState<'post-slice' | 'pre-slice-upload' | 'pre-slice-print'>('post-slice');
   const [printingTargetDeviceId, setPrintingTargetDeviceId] = React.useState<string | null>(null);
   const [printingTargetMaterialId, setPrintingTargetMaterialId] = React.useState<string>('');
   const [printingTargetMaterialOptions, setPrintingTargetMaterialOptions] = React.useState<FleetUploadMaterialOption[]>([]);
@@ -886,6 +893,7 @@ export default function Home() {
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
   const [isPrintingMonitorWebcamSnapshotSaving, setIsPrintingMonitorWebcamSnapshotSaving] = React.useState(false);
   const [printingMonitorWebcamExpanded, setPrintingMonitorWebcamExpanded] = React.useState(false);
+  const [preSlicePrintConfirmOpen, setPreSlicePrintConfirmOpen] = React.useState(false);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
   const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
@@ -2450,8 +2458,26 @@ export default function Home() {
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
     } else {
-      // 'file': trigger save dialog immediately with the fresh artifact
+      // 'file': write to pre-selected destination when available, then fallback to save dialog.
       const downloadDirect = async (a: SliceExportArtifact) => {
+        const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
+        preSliceFileDestinationPathRef.current = null;
+        if (destinationPath) {
+          try {
+            const nativePathForWrite = a.nativeTempPath?.trim() || '';
+            const bytes = a.blob
+              ? new Uint8Array(await a.blob.arrayBuffer())
+              : (nativePathForWrite ? await readPrintArtifactBytesFromPath(nativePathForWrite) : null);
+            if (!bytes) {
+              throw new Error('No artifact bytes available for write.');
+            }
+            await writeBytesToNativePath(destinationPath, bytes);
+            return;
+          } catch (error) {
+            console.warn('[Slicing] Failed writing pre-selected save path, falling back to save dialog.', error);
+          }
+        }
+
         const nativePath = a.nativeTempPath?.trim() || '';
         if (nativePath) {
           try { await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName); return; } catch (err) {
@@ -3414,10 +3440,102 @@ export default function Home() {
     activeNetworkUiAdapter
     && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false,
   );
+  const suggestedSliceOutputFilename = React.useMemo(() => {
+    const base = (activePrinterProfile?.name ?? 'slice_export')
+      .trim()
+      .replace(/[<>:"/\\|?*]+/g, '_')
+      .replace(/\s+/g, '_');
+    const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
+    const ext = outputFormat.length > 0
+      ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
+      : '.print';
+    return `${base || 'slice_export'}${ext}`;
+  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name]);
+  const isPreSliceTargetPicker = printingTargetPickerMode !== 'post-slice';
   const canPrintNow = Boolean(
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
   );
+
+  const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
+    if (shouldReturnToPrintingAfterSliceRef.current) {
+      return true;
+    }
+
+    preSliceFileDestinationPathRef.current = null;
+    preSliceUploadSelectionRef.current = null;
+
+    if (intent === 'file') {
+      try {
+        const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
+        if (!destinationPath || destinationPath.trim().length === 0) {
+          return false;
+        }
+        preSliceFileDestinationPathRef.current = destinationPath.trim();
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) {
+          return false;
+        }
+        // If native picker isn't available (web runtime), keep current post-slice fallback behavior.
+        console.warn('[Slicing] Pre-slice save picker unavailable; falling back to post-slice save flow.', error);
+        return true;
+      }
+    }
+
+    if (!activeNetworkUiAdapter || printableConnectedPrinterFleet.length === 0) {
+      setPrintingSendStatusText('No connected printer is available for upload.');
+      return false;
+    }
+
+    const shouldOpenTargetPicker = printableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
+    if (shouldOpenTargetPicker) {
+      setPrintingTargetPickerMode(intent === 'print' ? 'pre-slice-print' : 'pre-slice-upload');
+      setPrintingTargetPickerOpen(true);
+      const selection = await new Promise<{ deviceId: string; materialId?: string } | null>((resolve) => {
+        preSliceTargetPickerResolverRef.current = resolve;
+      });
+      preSliceTargetPickerResolverRef.current = null;
+      if (!selection) {
+        preSliceUploadSelectionRef.current = null;
+        return false;
+      }
+      preSliceUploadSelectionRef.current = selection;
+    } else {
+      const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
+      if (!selectedTarget) {
+        setPrintingSendStatusText('No connected printer is available for upload.');
+        return false;
+      }
+      preSliceUploadSelectionRef.current = {
+        deviceId: selectedTarget.id,
+        materialId: requiresRemoteMaterialSelectionForUpload
+          ? ((selectedTarget.selectedMaterialId ?? '').trim() || undefined)
+          : undefined,
+      };
+    }
+
+    if (intent === 'print') {
+      setPreSlicePrintConfirmOpen(true);
+      const confirmed = await new Promise<boolean>((resolve) => {
+        preSlicePrintConfirmResolverRef.current = resolve;
+      });
+      preSlicePrintConfirmResolverRef.current = null;
+      if (!confirmed) {
+        preSliceUploadSelectionRef.current = null;
+        return false;
+      }
+    }
+
+    return true;
+  }, [
+    activeNetworkUiAdapter,
+    printableConnectedPrinterFleet,
+    printingTargetDevice,
+    requiresRemoteMaterialSelectionForUpload,
+    suggestedSliceOutputFilename,
+  ]);
 
   const printingDialogStageLabel = React.useMemo(() => {
     if (printingSendStageText && printingSendStageText.trim().length > 0) {
@@ -4276,6 +4394,15 @@ export default function Home() {
         window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
         printingUploadProcessingHandoffTimeoutRef.current = null;
       }
+
+      if (preSliceTargetPickerResolverRef.current) {
+        preSliceTargetPickerResolverRef.current(null);
+        preSliceTargetPickerResolverRef.current = null;
+      }
+      if (preSlicePrintConfirmResolverRef.current) {
+        preSlicePrintConfirmResolverRef.current(false);
+        preSlicePrintConfirmResolverRef.current = null;
+      }
     };
   }, []);
 
@@ -4357,28 +4484,39 @@ export default function Home() {
 
     const cacheKey = `${activeNetworkUiAdapter.pluginId}:${host.toLowerCase()}`;
     const applyResolvedMaterials = (parsed: FleetUploadMaterialOption[]) => {
-      let matching = parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
+      const materialChoices = isPreSliceTargetPicker
+        ? parsed
+        : parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
 
-      if (matching.length === 0 && (printingTargetDevice.selectedMaterialId?.trim() ?? '').length > 0 && isLayerHeightMatch(printingTargetDevice.selectedMaterialLayerHeightMm ?? null)) {
-        matching = [{
-          id: printingTargetDevice.selectedMaterialId!.trim(),
-          name: printingTargetDevice.selectedMaterialName?.trim() || printingTargetDevice.selectedMaterialId!.trim(),
+      const selectedDeviceMaterialId = (printingTargetDevice.selectedMaterialId ?? '').trim();
+      if (
+        materialChoices.length === 0
+        && selectedDeviceMaterialId.length > 0
+        && (isPreSliceTargetPicker || isLayerHeightMatch(printingTargetDevice.selectedMaterialLayerHeightMm ?? null))
+      ) {
+        materialChoices.push({
+          id: selectedDeviceMaterialId,
+          name: printingTargetDevice.selectedMaterialName?.trim() || selectedDeviceMaterialId,
           layerHeightMm: printingTargetDevice.selectedMaterialLayerHeightMm ?? null,
-        }];
+        });
       }
 
-      setPrintingTargetMaterialOptions(matching);
+      setPrintingTargetMaterialOptions(materialChoices);
 
       setPrintingTargetMaterialId((previousId) => {
         const preferredId = previousId.trim();
-        const fallbackId = matching.find((material) => material.id === (printingTargetDevice.selectedMaterialId ?? '').trim())?.id
-          ?? matching[0]?.id
+        const fallbackId = materialChoices.find((material) => material.id === selectedDeviceMaterialId)?.id
+          ?? materialChoices[0]?.id
           ?? '';
-        return matching.some((material) => material.id === preferredId) ? preferredId : fallbackId;
+        return materialChoices.some((material) => material.id === preferredId) ? preferredId : fallbackId;
       });
 
-      if (matching.length === 0) {
-        setPrintingTargetMaterialError(`No material on this printer matches sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`);
+      if (materialChoices.length === 0) {
+        setPrintingTargetMaterialError(
+          isPreSliceTargetPicker
+            ? 'No material profiles found on this printer.'
+            : `No material on this printer matches sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`,
+        );
       } else {
         setPrintingTargetMaterialError(null);
       }
@@ -4441,6 +4579,7 @@ export default function Home() {
     };
   }, [
     activeNetworkUiAdapter,
+    isPreSliceTargetPicker,
     isLayerHeightMatch,
     printingTargetDevice,
     printingTargetPickerOpen,
@@ -6409,6 +6548,7 @@ export default function Home() {
     }
 
     if (requiresRemoteMaterialSelectionForUpload && !isLayerHeightMatch(selectedTarget.selectedMaterialLayerHeightMm ?? null)) {
+      setPrintingTargetPickerMode('post-slice');
       setPrintingTargetPickerOpen(true);
       return;
     }
@@ -8774,8 +8914,19 @@ export default function Home() {
     if (!action) return;
     pendingPostSliceActionRef.current = null;
     if (action === 'print') pendingAutoStartPrintRef.current = true;
+
+    const preselected = preSliceUploadSelectionRef.current;
+    preSliceUploadSelectionRef.current = null;
+    if (preselected) {
+      const preselectedTarget = printableConnectedPrinterFleet.find((device) => device.id === preselected.deviceId) ?? null;
+      if (preselectedTarget) {
+        void performSendToPrinter(preselectedTarget, preselected.materialId);
+        return;
+      }
+    }
+
     void handleSendToPrinter();
-  }, [scene.mode, printingArtifact, handleSendToPrinter]);
+  }, [scene.mode, printingArtifact, handleSendToPrinter, performSendToPrinter, printableConnectedPrinterFleet]);
 
   // After a Slice & Print upload, auto-start print when plate is ready
   React.useEffect(() => {
@@ -11799,6 +11950,7 @@ export default function Home() {
               canUpload={canSliceAndUpload}
               canPrint={canSliceAndPrint}
               onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
+              onBeforeSliceStart={handleBeforeSliceStart}
             />
           </>
 
@@ -11822,7 +11974,10 @@ export default function Home() {
               sendStatusText={printingSendStatusText}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
-              onOpenSendTargetPicker={() => setPrintingTargetPickerOpen(true)}
+              onOpenSendTargetPicker={() => {
+                setPrintingTargetPickerMode('post-slice');
+                setPrintingTargetPickerOpen(true);
+              }}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
             />
@@ -12838,6 +12993,126 @@ export default function Home() {
         }}
       />
 
+      {preSlicePrintConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPreSlicePrintConfirmOpen(false);
+              if (preSlicePrintConfirmResolverRef.current) {
+                preSlicePrintConfirmResolverRef.current(false);
+                preSlicePrintConfirmResolverRef.current = null;
+              }
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Print readiness confirmation"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Safety Check
+                  </div>
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Confirm printer is ready to print
+                  </h2>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close print readiness confirmation"
+                onClick={() => {
+                  setPreSlicePrintConfirmOpen(false);
+                  if (preSlicePrintConfirmResolverRef.current) {
+                    preSlicePrintConfirmResolverRef.current(false);
+                    preSlicePrintConfirmResolverRef.current = null;
+                  }
+                }}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Please verify before continuing:
+              </div>
+              <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <span>No foreign objects are on or near the build area.</span>
+                </div>
+                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <span>The build plate is clear (no previous prints/debris left).</span>
+                </div>
+                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <span>Resin vat and machine are in a safe, ready state.</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => {
+                    setPreSlicePrintConfirmOpen(false);
+                    if (preSlicePrintConfirmResolverRef.current) {
+                      preSlicePrintConfirmResolverRef.current(false);
+                      preSlicePrintConfirmResolverRef.current = null;
+                    }
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  onClick={() => {
+                    setPreSlicePrintConfirmOpen(false);
+                    if (preSlicePrintConfirmResolverRef.current) {
+                      preSlicePrintConfirmResolverRef.current(true);
+                      preSlicePrintConfirmResolverRef.current = null;
+                    }
+                  }}
+                >
+                  Continue to Slicing
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {printingTargetPickerOpen && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
           <div
@@ -12854,10 +13129,10 @@ export default function Home() {
             <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <div>
                 <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Fleet Upload
+                  {isPreSliceTargetPicker ? 'Pre-Slice Targeting' : 'Fleet Upload'}
                 </div>
                 <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Choose target printer
+                  {isPreSliceTargetPicker ? 'Choose target before slicing' : 'Choose target printer'}
                 </div>
               </div>
             </div>
@@ -12865,10 +13140,14 @@ export default function Home() {
             <div className="p-4 space-y-3.5">
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 {requiresRemoteMaterialSelectionForUpload
-                  ? 'Pick the target machine and material profile for this upload.'
-                  : 'Pick the target machine for this upload.'}
+                  ? (isPreSliceTargetPicker
+                    ? 'Pick the target machine and material profile now, then slicing will begin.'
+                    : 'Pick the target machine and material profile for this upload.')
+                  : (isPreSliceTargetPicker
+                    ? 'Pick the target machine now, then slicing will begin.'
+                    : 'Pick the target machine for this upload.')}
               </div>
-              {requiresRemoteMaterialSelectionForUpload && (
+              {requiresRemoteMaterialSelectionForUpload && !isPreSliceTargetPicker && (
                 <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                   Target layer height: <span style={{ color: 'var(--text-strong)' }}>{slicedLayerHeightMm.toFixed(3)} mm</span>
                 </div>
@@ -12953,7 +13232,7 @@ export default function Home() {
                 {requiresRemoteMaterialSelectionForUpload && (
                   <div className="rounded-md border px-3 py-2.5 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      Target material (matching sliced layer height)
+                      {isPreSliceTargetPicker ? 'Target material' : 'Target material (matching sliced layer height)'}
                     </div>
                     {isPrintingTargetMaterialsLoading ? (
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading materials from selected printer…</div>
@@ -13055,7 +13334,14 @@ export default function Home() {
                 <button
                   type="button"
                   className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => setPrintingTargetPickerOpen(false)}
+                  onClick={() => {
+                    setPrintingTargetPickerOpen(false);
+                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
+                      preSliceTargetPickerResolverRef.current(null);
+                      preSliceTargetPickerResolverRef.current = null;
+                    }
+                    setPrintingTargetPickerMode('post-slice');
+                  }}
                   disabled={printingSendBusy}
                 >
                   Cancel
@@ -13074,13 +13360,24 @@ export default function Home() {
                     if (!printingTargetDevice) return;
                     if (requiresRemoteMaterialSelectionForUpload && !printingTargetMaterialId) return;
                     setPrintingTargetPickerOpen(false);
+                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
+                      preSliceTargetPickerResolverRef.current({
+                        deviceId: printingTargetDevice.id,
+                        materialId: requiresRemoteMaterialSelectionForUpload ? printingTargetMaterialId : undefined,
+                      });
+                      preSliceTargetPickerResolverRef.current = null;
+                      setPrintingTargetPickerMode('post-slice');
+                      return;
+                    }
+
+                    setPrintingTargetPickerMode('post-slice');
                     void performSendToPrinter(
                       printingTargetDevice,
                       requiresRemoteMaterialSelectionForUpload ? printingTargetMaterialId : undefined,
                     );
                   }}
                 >
-                  Upload to Selected Printer
+                  {isPreSliceTargetPicker ? 'Continue to Slicing' : 'Upload to Selected Printer'}
                 </button>
               </div>
             </div>

@@ -58,6 +58,7 @@ interface SlicingPanelProps {
   canUpload?: boolean;
   canPrint?: boolean;
   onSliceIntentChanged?: (intent: SliceIntent) => void;
+  onBeforeSliceStart?: (intent: SliceIntent) => Promise<boolean> | boolean;
 }
 
 type LifetimeTelemetry = {
@@ -260,6 +261,7 @@ export function SlicingPanel({
   canUpload = false,
   canPrint = false,
   onSliceIntentChanged,
+  onBeforeSliceStart,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [isThumbnailDrawerOpen, setIsThumbnailDrawerOpen] = useState(false);
@@ -868,6 +870,11 @@ export function SlicingPanel({
     const visibleModels = models.filter((model) => model.visible);
     if (visibleModels.length === 0) {
       alert('No visible models available for slicing.');
+      return;
+    }
+
+    const proceed = await Promise.resolve(onBeforeSliceStart?.(effectiveSliceIntent) ?? true).catch(() => false);
+    if (!proceed) {
       return;
     }
 
