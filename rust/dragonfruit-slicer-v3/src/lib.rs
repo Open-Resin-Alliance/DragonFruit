@@ -14,6 +14,7 @@ pub mod index;
 pub mod metrics;
 pub mod pipeline;
 pub mod raster;
+pub mod rle;
 pub mod types;
 
 pub use engine::{slice_with_progress_v3, SlicerV3Error};

@@ -32,6 +32,30 @@ pub trait RawMaskStreamEncoder: Send {
     }
 }
 
+/// Stateful encoder sink that can consume RLE-compressed layer data directly
+/// during rasterization, skipping the full-image pixel buffer entirely.
+///
+/// This is the fastest possible path for formats like CTB where the native
+/// container encoding is already run-length based.
+pub trait RleStreamEncoder: Send {
+    /// Consume one rasterized layer's RLE data in display order.
+    fn consume_rle_layer(
+        &mut self,
+        layer_index: u32,
+        runs: Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error>;
+
+    /// Finalize and return encoded container bytes.
+    fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error>;
+
+    /// Finalize and write encoded container directly to disk.
+    fn finalize_to_path(self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
+        let bytes = self.finalize_to_bytes()?;
+        std::fs::write(output_path, bytes)?;
+        Ok(())
+    }
+}
+
 /// Trait implemented by concrete output format encoders.
 pub trait FormatEncoder: Send + Sync {
     /// Canonical output extension handled by this encoder.
@@ -53,6 +77,20 @@ pub trait FormatEncoder: Send + Sync {
     /// Whether this encoder needs per-layer raw raster masks.
     fn requires_raw_mask_layers(&self) -> bool {
         false
+    }
+
+    /// Optionally create a streaming RLE sink for the most efficient
+    /// rasterize+encode pipeline.
+    ///
+    /// When provided, the engine will call `rasterize_layer_rle()` instead of
+    /// the full-mask path and feed runs directly here, eliminating the 40-56 MB
+    /// per-layer pixel buffer.  Preferred over `create_raw_mask_stream_encoder`
+    /// when both are available.
+    fn create_rle_stream_encoder(
+        &self,
+        _job: &SliceJobV3,
+    ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
+        Ok(None)
     }
 
     /// Optionally create a streaming raw-mask sink for interleaved

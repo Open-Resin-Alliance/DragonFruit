@@ -3,7 +3,7 @@
 //! Uses oriented segment winding to robustly union overlapping/intersecting
 //! solids and avoid spurious bridge/void artifacts.
 
-use crate::geometry::{Triangle, Vec3};
+use crate::geometry::Triangle;
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 #[inline]
@@ -101,49 +101,18 @@ struct ScanlineSegmentIndex {
 }
 
 #[inline]
-fn mm_to_pixel_x(
-    x_mm: f32,
-    min_x_mm: f32,
-    build_width_mm: f32,
-    width_px: u32,
-    mirror_x: bool,
-) -> f32 {
-    let mut t = (x_mm - min_x_mm) / build_width_mm;
-    if mirror_x {
-        t = 1.0 - t;
-    }
-    t * ((width_px.saturating_sub(1)) as f32)
-}
-
-#[inline]
-fn mm_to_pixel_y(
-    y_mm: f32,
-    min_y_mm: f32,
-    build_depth_mm: f32,
-    height_px: u32,
-    mirror_y: bool,
-) -> f32 {
-    let mut t = (y_mm - min_y_mm) / build_depth_mm;
-    if mirror_y {
-        t = 1.0 - t;
-    }
-    (1.0 - t) * ((height_px.saturating_sub(1)) as f32)
-}
-
-#[inline]
-fn edge_plane_intersection_xy(a: Vec3, b: Vec3, z: f32) -> Option<(f32, f32)> {
-    let dz1 = a.z - z;
-    let dz2 = b.z - z;
+fn edge_plane_intersection_t(az: f32, bz: f32, z: f32) -> Option<f32> {
+    let dz1 = az - z;
+    let dz2 = bz - z;
     let crosses = (dz1 <= 0.0 && dz2 > 0.0) || (dz2 <= 0.0 && dz1 > 0.0);
     if !crosses {
         return None;
     }
-    let denom = b.z - a.z;
+    let denom = bz - az;
     if denom.abs() < 1e-8 {
         return None;
     }
-    let t = (z - a.z) / denom;
-    Some((a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
+    Some((z - az) / denom)
 }
 
 #[inline]
@@ -163,15 +132,14 @@ fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candida
 }
 
 fn build_segments_for_layer(
-    job: &SliceJobV3,
+    _job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
     layer_index: u32,
+    layer_height_mm: f32,
 ) -> Vec<Segment> {
-    let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
+    let z_mm = ((layer_index as f32) + 0.5) * layer_height_mm;
     let mut segments = Vec::with_capacity(layer_indices.len());
-    let min_x_mm = -job.build_width_mm * 0.5;
-    let min_y_mm = -job.build_depth_mm * 0.5;
 
     for tri_idx in layer_indices {
         let tri = triangles[*tri_idx];
@@ -181,14 +149,37 @@ fn build_segments_for_layer(
         let mut pts = [(0.0f32, 0.0f32); 3];
         let mut count = 0usize;
 
-        if let Some(p) = edge_plane_intersection_xy(tri.a, tri.b, z_mm) {
-            distinct_points_push(&mut pts, &mut count, p);
+        // Lerp directly in pixel space using precomputed vertex px coords.
+        // Eliminates mm_to_pixel_x/y per intersection (2 divisions per point).
+        if let Some(t) = edge_plane_intersection_t(tri.a.z, tri.b.z, z_mm) {
+            distinct_points_push(
+                &mut pts,
+                &mut count,
+                (
+                    tri.px_ax + (tri.px_bx - tri.px_ax) * t,
+                    tri.px_ay + (tri.px_by - tri.px_ay) * t,
+                ),
+            );
         }
-        if let Some(p) = edge_plane_intersection_xy(tri.b, tri.c, z_mm) {
-            distinct_points_push(&mut pts, &mut count, p);
+        if let Some(t) = edge_plane_intersection_t(tri.b.z, tri.c.z, z_mm) {
+            distinct_points_push(
+                &mut pts,
+                &mut count,
+                (
+                    tri.px_bx + (tri.px_cx - tri.px_bx) * t,
+                    tri.px_by + (tri.px_cy - tri.px_by) * t,
+                ),
+            );
         }
-        if let Some(p) = edge_plane_intersection_xy(tri.c, tri.a, z_mm) {
-            distinct_points_push(&mut pts, &mut count, p);
+        if let Some(t) = edge_plane_intersection_t(tri.c.z, tri.a.z, z_mm) {
+            distinct_points_push(
+                &mut pts,
+                &mut count,
+                (
+                    tri.px_cx + (tri.px_ax - tri.px_cx) * t,
+                    tri.px_cy + (tri.px_ay - tri.px_cy) * t,
+                ),
+            );
         }
 
         if count < 2 {
@@ -208,34 +199,10 @@ fn build_segments_for_layer(
             }
         }
 
-        let x1 = mm_to_pixel_x(
-            p0.0,
-            min_x_mm,
-            job.build_width_mm,
-            job.source_width_px,
-            job.mirror_x,
-        );
-        let y1 = mm_to_pixel_y(
-            p0.1,
-            min_y_mm,
-            job.build_depth_mm,
-            job.source_height_px,
-            job.mirror_y,
-        );
-        let x2 = mm_to_pixel_x(
-            p1.0,
-            min_x_mm,
-            job.build_width_mm,
-            job.source_width_px,
-            job.mirror_x,
-        );
-        let y2 = mm_to_pixel_y(
-            p1.1,
-            min_y_mm,
-            job.build_depth_mm,
-            job.source_height_px,
-            job.mirror_y,
-        );
+        let x1 = p0.0;
+        let y1 = p0.1;
+        let x2 = p1.0;
+        let y2 = p1.1;
 
         let dy = y2 - y1;
         if dy.abs() < 1e-8 {
@@ -438,7 +405,7 @@ pub fn rasterize_layer_with_stats(
         return (mask, stats);
     }
 
-    let segments = build_segments_for_layer(job, triangles, layer_indices, layer_index);
+    let segments = build_segments_for_layer(job, triangles, layer_indices, layer_index, job.layer_height_mm);
     if segments.is_empty() {
         return (mask, stats);
     }
@@ -688,11 +655,257 @@ pub fn rasterize_layer(
     rasterize_layer_with_stats(job, triangles, layer_indices, layer_index, false).0
 }
 
+/// Rasterize one layer directly into RLE output — no full-image mask buffer.
+///
+/// Functionally equivalent to `rasterize_layer_with_stats` but uses a single
+/// row-wide scratch buffer instead of a full WH-pixel mask.  This eliminates
+/// the dominant 40-56 MB allocation at 8 K resolution for CTB and other
+/// formats that do not need PNG.  Area stats component analysis (8-connected
+/// flood fill) is not performed; basic pixel-count bounding-box stats are
+/// still returned.
+#[allow(unused_assignments)]
+pub fn rasterize_layer_rle(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    layer_index: u32,
+) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    let width = job.source_width_px as usize;
+    let height = job.source_height_px as usize;
+    let mut rle = RleAccum::new();
+    let mut stats = LayerAreaStatsV3::default();
+
+    if layer_indices.is_empty() || width == 0 || height == 0 {
+        emit_zero_rows(&mut rle, height, width);
+        return (rle.finish(), stats);
+    }
+
+    let segments = build_segments_for_layer(job, triangles, layer_indices, layer_index, job.layer_height_mm);
+    if segments.is_empty() {
+        emit_zero_rows(&mut rle, height, width);
+        return (rle.finish(), stats);
+    }
+
+    let x_eps = 1e-6f32;
+    let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
+    let aa_steps = (aa_level_steps as usize).max(1);
+    let aa_enabled = aa_steps > 1;
+    let min_aa_alpha_u8 = if aa_enabled {
+        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8
+    } else {
+        0
+    };
+
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps) else {
+        emit_zero_rows(&mut rle, height, width);
+        return (rle.finish(), stats);
+    };
+    let scanline_starts = scanline_index.starts;
+    let y_start = scanline_index.y_start;
+    let y_end_exclusive = scanline_index.y_end_exclusive;
+
+    let first_physical_y = y_start / aa_steps;
+    // Emit zero rows before the rasterized region.
+    emit_zero_rows(&mut rle, first_physical_y, width);
+
+    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+
+    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+
+    // Single-row scratch buffer — width bytes max (7680 at 8 K).
+    let mut row_buf = vec![0u8; width];
+    let mut row_accum = vec![0u32; width];
+    let mut current_physical_y = first_physical_y;
+    // last_emitted_py: the most recent physical row fully committed to `rle`.
+    // Starts at first_physical_y - 1 (we just emitted zeros 0..first_physical_y).
+    #[allow(unused_assignments)]
+    let mut last_emitted_py = first_physical_y.wrapping_sub(1);
+
+    // Helper closure: commit `current_physical_y`'s row to `rle`, then emit
+    // zero-rows for any skipped rows up to (but not including) `next_py`.
+    macro_rules! flush_up_to {
+        ($next_py:expr) => {{
+            // Resolve AA accumulator into row_buf for the row being flushed.
+            if aa_enabled {
+                for (acc, out) in row_accum.iter_mut().zip(row_buf.iter_mut()) {
+                    if *acc > 0 {
+                        let resolved = (*acc / (aa_steps as u32)).min(255) as u8;
+                        *out = resolved.max(min_aa_alpha_u8);
+                        *acc = 0;
+                    }
+                }
+            }
+            emit_row(&mut rle, &row_buf);
+            row_buf.fill(0);
+            last_emitted_py = current_physical_y;
+
+            let next = $next_py;
+            let gap = next.saturating_sub(last_emitted_py + 1);
+            if gap > 0 {
+                emit_zero_rows(&mut rle, gap, width);
+                last_emitted_py = next - 1;
+            }
+        }};
+    }
+
+    for y in y_start..y_end_exclusive {
+        let physical_y = y / aa_steps;
+
+        if physical_y != current_physical_y {
+            flush_up_to!(physical_y);
+            current_physical_y = physical_y;
+        }
+
+        active_edges.retain(|edge| edge.end_exclusive > y);
+        if let Some(starting) = scanline_starts.get(y) {
+            if !starting.is_empty() {
+                merge_active_edges_sorted(&mut active_edges, starting, &mut merge_scratch);
+            }
+        }
+        if active_edges.is_empty() {
+            continue;
+        }
+
+        let mut winding = 0i32;
+        let mut i = 0usize;
+        while i < active_edges.len() {
+            let x0 = active_edges[i].x;
+            if !x0.is_finite() {
+                break;
+            }
+
+            let mut delta = 0i32;
+            while i < active_edges.len() {
+                let xi = active_edges[i].x;
+                if !xi.is_finite() || (xi - x0).abs() > x_eps {
+                    break;
+                }
+                delta += active_edges[i].wind;
+                i += 1;
+            }
+
+            winding += delta;
+            if winding == 0 {
+                continue;
+            }
+
+            if i >= active_edges.len() {
+                break;
+            }
+
+            let x1 = active_edges[i].x;
+            if !x1.is_finite() {
+                break;
+            }
+
+            let a = x0.min(x1).max(0.0);
+            let b = x0.max(x1).min(width as f32);
+            if b <= a {
+                continue;
+            }
+
+            let start_px = a.floor() as i32;
+            let end_px = b.ceil() as i32;
+            if end_px <= start_px || end_px <= 0 || start_px >= width as i32 {
+                continue;
+            }
+            let clamped_start = start_px.max(0) as usize;
+            let clamped_end = ((end_px - 1).min(width as i32 - 1)) as usize;
+
+            if clamped_end >= clamped_start {
+                if !aa_enabled {
+                    row_buf[clamped_start..=clamped_end].fill(255);
+                } else {
+                    let left_i = a.floor() as i32;
+                    let right_i = b.ceil() as i32 - 1;
+
+                    if left_i <= right_i {
+                        if left_i == right_i {
+                            if left_i >= 0 && left_i < width as i32 {
+                                let cov = (b - a).clamp(0.0, 1.0) * 255.0;
+                                row_accum[left_i as usize] += cov as u32;
+                            }
+                        } else {
+                            let left_cov = ((left_i as f32 + 1.0) - a).clamp(0.0, 1.0) * 255.0;
+                            let right_cov = (b - right_i as f32).clamp(0.0, 1.0) * 255.0;
+
+                            if left_i >= 0 && left_i < width as i32 {
+                                row_accum[left_i as usize] += left_cov as u32;
+                            }
+
+                            let interior_start = (left_i + 1).max(0) as usize;
+                            let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
+                            if interior_end >= interior_start {
+                                for x in interior_start..=interior_end {
+                                    row_accum[x] += 255;
+                                }
+                            }
+
+                            if right_i >= 0 && right_i < width as i32 {
+                                row_accum[right_i as usize] += right_cov as u32;
+                            }
+                        }
+                    }
+                }
+
+                let filled = (clamped_end - clamped_start + 1) as u32;
+                stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+                min_x = min_x.min(clamped_start as i32);
+                max_x = max_x.max(clamped_end as i32);
+                min_y = min_y.min(physical_y as i32);
+                max_y = max_y.max(physical_y as i32);
+            }
+        }
+
+        for edge in &mut active_edges {
+            edge.x += edge.dx_dy;
+        }
+        restore_active_edges_sorted(&mut active_edges);
+    }
+
+    // Flush the final accumulated physical row.
+    flush_up_to!(current_physical_y + 1);
+
+    // Emit remaining zero rows to fill the image height.
+    let rows_emitted = last_emitted_py + 1;
+    if rows_emitted < height {
+        emit_zero_rows(&mut rle, height - rows_emitted, width);
+    }
+
+    if aa_enabled {
+        stats.total_solid_pixels /= aa_steps as u32;
+    }
+
+    if stats.total_solid_pixels > 0 {
+        stats.min_x = min_x;
+        stats.min_y = min_y;
+        stats.max_x = max_x;
+        stats.max_y = max_y;
+
+        let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+        stats.total_solid_area_mm2 = total_area;
+        stats.largest_area_mm2 = total_area;
+        stats.smallest_area_mm2 = total_area;
+        stats.area_count = 1;
+    }
+
+    (rle.finish(), stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{rasterize_layer, rasterize_layer_with_stats};
     use crate::encoders::registry::supported_output_formats;
-    use crate::geometry::parse_triangles;
+    use crate::geometry::{parse_triangles, project_triangles_inplace};
     use crate::types::SliceJobV3;
 
     fn push_box_triangles(
@@ -796,7 +1009,8 @@ mod tests {
         push_box_triangles(&mut flat, -2.0, 0.0, 0.0, 1.0, 24.0, 24.0);
         push_box_triangles(&mut flat, 8.0, 0.0, 0.0, 1.0, 24.0, 24.0);
 
-        let triangles = parse_triangles(&flat);
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
         let indices: Vec<usize> = (0..triangles.len()).collect();
         let mask = rasterize_layer(&job, &triangles, &indices, 0);
 
@@ -820,7 +1034,8 @@ mod tests {
         push_box_triangles(&mut flat, -18.0, 0.0, 0.0, 1.0, 12.0, 12.0);
         push_box_triangles(&mut flat, 18.0, 0.0, 0.0, 1.0, 12.0, 12.0);
 
-        let triangles = parse_triangles(&flat);
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
         let indices: Vec<usize> = (0..triangles.len()).collect();
         let mask = rasterize_layer(&job, &triangles, &indices, 0);
 
@@ -846,7 +1061,8 @@ mod tests {
         // Smaller, disconnected island
         push_box_triangles(&mut flat, 20.0, 0.0, 0.0, 1.0, 8.0, 8.0);
 
-        let triangles = parse_triangles(&flat);
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
         let indices: Vec<usize> = (0..triangles.len()).collect();
         let (_mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0, true);
 

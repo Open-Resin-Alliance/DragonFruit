@@ -9,7 +9,7 @@ use crate::engine::SlicerV3Error;
 use crate::geometry::Triangle;
 use crate::index::LayerIndex;
 use crate::metrics::SlicingPerfV3;
-use crate::raster::rasterize_layer_with_stats;
+use crate::raster::{rasterize_layer_rle, rasterize_layer_with_stats};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3, SliceProgressPhaseV3,
     SliceProgressUpdateV3,
@@ -317,6 +317,7 @@ pub fn render_layers_bounded(
                                         job.source_height_px,
                                         &mask,
                                         &job.png_compression_strategy,
+                                        false,
                                     )?
                                 };
                                 png_ns.fetch_add(
@@ -434,6 +435,135 @@ pub fn render_layers_bounded(
         RenderedLayersV3 {
             png_layers: out_pngs,
             raw_mask_layers: out_masks,
+        },
+        area_stats,
+        perf,
+    ))
+}
+
+/// Parallel pipeline that calls `rasterize_layer_rle()` and delivers
+/// `Vec<RleRun>` per layer in display order — no full-image mask buffer needed.
+pub fn render_layers_rle(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_index: &LayerIndex,
+    mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    use crate::rle::RleRun;
+
+    let render_wall_start = std::time::Instant::now();
+    let total_layers = job.total_layers;
+    let max_concurrent = choose_max_concurrent();
+    // RLE output is small; allow a generous channel buffer so producers stay fed.
+    let buffer = (max_concurrent * 4).clamp(4, 64);
+
+    let raster_ns = AtomicU64::new(0);
+    let progress = AtomicU32::new(0);
+
+    let (tx, rx) = std::sync::mpsc::sync_channel::<
+        Result<(u32, Vec<RleRun>, LayerAreaStatsV3), SlicerV3Error>,
+    >(buffer);
+
+    let mut pipeline_error: Result<(), SlicerV3Error> = Ok(());
+    let mut area_stats = vec![LayerAreaStatsV3::default(); total_layers as usize];
+
+    rayon::in_place_scope(|s| {
+        s.spawn(|_| {
+            let produce = |tx: std::sync::mpsc::SyncSender<
+                Result<(u32, Vec<RleRun>, LayerAreaStatsV3), SlicerV3Error>,
+            >| {
+                (0..total_layers)
+                    .into_par_iter()
+                    .for_each_with(tx, |tx, layer| {
+                        let result =
+                            (|| -> Result<(u32, Vec<RleRun>, LayerAreaStatsV3), SlicerV3Error> {
+                                if cancel_flag
+                                    .map(|flag| flag.load(Ordering::Relaxed))
+                                    .unwrap_or(false)
+                                {
+                                    return Err(SlicerV3Error::Cancelled);
+                                }
+
+                                let layer_candidates = layer_index.candidates_for_layer(layer);
+                                let raster_start = std::time::Instant::now();
+                                let (runs, stats) =
+                                    rasterize_layer_rle(job, triangles, layer_candidates, layer);
+                                raster_ns.fetch_add(
+                                    raster_start.elapsed().as_nanos() as u64,
+                                    Ordering::Relaxed,
+                                );
+
+                                Ok((layer, runs, stats))
+                            })();
+                        let _ = tx.send(result);
+                    });
+            };
+
+            match ThreadPoolBuilder::new().num_threads(max_concurrent).build() {
+                Ok(pool) => pool.install(|| produce(tx)),
+                Err(_) => produce(tx),
+            }
+        });
+
+        let mut pending: Vec<Option<(Vec<RleRun>, LayerAreaStatsV3)>> =
+            Vec::with_capacity(total_layers as usize);
+        pending.resize_with(total_layers as usize, || None);
+        let mut next = 0u32;
+
+        for msg in &rx {
+            if pipeline_error.is_err() {
+                continue;
+            }
+            match msg {
+                Err(e) => pipeline_error = Err(e),
+                Ok((layer, runs, stats)) => {
+                    pending[layer as usize] = Some((runs, stats));
+                    while next < total_layers {
+                        let Some((runs, stats)) = pending[next as usize].take() else {
+                            break;
+                        };
+                        if let Err(e) = on_rle_layer(next, runs) {
+                            pipeline_error = Err(e);
+                            break;
+                        }
+                        area_stats[next as usize] = stats;
+                        let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                        if let Some(ref cb) = on_progress {
+                            cb(SliceProgressUpdateV3 {
+                                done,
+                                total: total_layers,
+                                phase: SliceProgressPhaseV3::Slicing,
+                            });
+                        }
+                        if cancel_flag
+                            .map(|flag| flag.load(Ordering::Relaxed))
+                            .unwrap_or(false)
+                        {
+                            pipeline_error = Err(SlicerV3Error::Cancelled);
+                            break;
+                        }
+                        next += 1;
+                    }
+                }
+            }
+        }
+    });
+
+    pipeline_error?;
+
+    let perf = SlicingPerfV3 {
+        render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
+        render_ns: raster_ns.load(Ordering::Relaxed),
+        layers: total_layers,
+        ..Default::default()
+    };
+
+    Ok((
+        RenderedLayersV3 {
+            png_layers: None,
+            raw_mask_layers: None,
         },
         area_stats,
         perf,

@@ -8,7 +8,9 @@ use std::mem::size_of;
 
 const DEFAULT_LAYER_INDEX_BUDGET_MB: u64 = 768; // Increased budget since IPC chunking prevents peak RAM spike
 const MIN_LAYER_INDEX_BUDGET_MB: u64 = 32;
-const MAX_BAND_SIZE_LAYERS: u32 = 1024;
+
+/// Fixed bin count for the ZBins index variant.
+const ZBIN_COUNT: usize = 256;
 
 #[derive(Debug, Clone)]
 pub enum LayerIndex {
@@ -16,6 +18,17 @@ pub enum LayerIndex {
     Banded {
         band_size_layers: u32,
         bands: Vec<Vec<usize>>,
+    },
+    /// Spatially-bucketed index: fixed Z-bins over the model extent.
+    ///
+    /// Used as fallback when Dense would exceed the memory budget.
+    /// Uses O(triangles × avg_bins_per_triangle) memory regardless of
+    /// total_layers, and is strictly better than Banded for tall models.
+    ZBins {
+        z_min: f32,
+        bin_height: f32,
+        layer_height_mm: f32,
+        bins: Vec<Vec<usize>>,
     },
 }
 
@@ -34,6 +47,19 @@ impl LayerIndex {
                 let band = (layer / *band_size_layers) as usize;
                 bands.get(band).map(Vec::as_slice).unwrap_or(&[])
             }
+            LayerIndex::ZBins {
+                z_min,
+                bin_height,
+                layer_height_mm,
+                bins,
+            } => {
+                let center_z = (layer as f32 + 0.5) * layer_height_mm;
+                let bin = ((center_z - z_min) / bin_height)
+                    .floor()
+                    .clamp(0.0, (bins.len().saturating_sub(1)) as f32)
+                    as usize;
+                bins.get(bin).map(Vec::as_slice).unwrap_or(&[])
+            }
         }
     }
 }
@@ -46,14 +72,6 @@ fn resolve_layer_index_budget_bytes() -> u64 {
         .unwrap_or(DEFAULT_LAYER_INDEX_BUDGET_MB);
 
     mb.saturating_mul(1024 * 1024)
-}
-
-#[inline]
-fn round_up_pow2_u32(value: u32) -> u32 {
-    if value <= 1 {
-        return 1;
-    }
-    value.next_power_of_two()
 }
 
 #[inline]
@@ -129,49 +147,70 @@ pub fn build_layer_index(
         return LayerIndex::Dense(buckets);
     }
 
-    let required_factor = ((estimated_dense_entries + max_dense_entries - 1) / max_dense_entries)
-        .clamp(1, total_layers.max(1) as u64);
-    let mut band_size_layers = round_up_pow2_u32(required_factor as u32);
-    band_size_layers = band_size_layers.clamp(1, MAX_BAND_SIZE_LAYERS.min(total_layers.max(1)));
+    build_zbin_index_from_ranges(triangles, layer_height_mm,
+        estimated_dense_entries, max_dense_entries)
+}
 
-    let band_count = ((total_layers + band_size_layers - 1) / band_size_layers) as usize;
+/// Build a Z-bin spatial index as a memory-efficient fallback when Dense is too large.
+fn build_zbin_index_from_ranges(
+    triangles: &[Triangle],
+    layer_height_mm: f32,
+    estimated_dense_entries: u64,
+    max_dense_entries: u64,
+) -> LayerIndex {
+    let z_min_model = triangles
+        .iter()
+        .map(|t| t.z_min)
+        .fold(f32::INFINITY, f32::min);
+    let z_max_model = triangles
+        .iter()
+        .map(|t| t.z_max)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let z_range = (z_max_model - z_min_model).max(layer_height_mm);
+    let bin_height = z_range / (ZBIN_COUNT as f32);
 
-    let mut band_sizes = vec![0usize; band_count];
-    for range in &ranges {
-        if let Some((start, end)) = range {
-            let band_start = (*start / band_size_layers) as usize;
-            let band_end = (*end / band_size_layers) as usize;
-            for band in band_start..=band_end {
-                band_sizes[band] += 1;
-            }
+    let mut bin_sizes = vec![0usize; ZBIN_COUNT];
+    for tri in triangles.iter() {
+        let b_start = ((tri.z_min - z_min_model) / bin_height)
+            .floor()
+            .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
+        let b_end = ((tri.z_max - z_min_model) / bin_height)
+            .floor()
+            .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
+        for b in b_start..=b_end {
+            bin_sizes[b] += 1;
         }
     }
 
-    let mut bands: Vec<Vec<usize>> = band_sizes
+    let mut bins: Vec<Vec<usize>> = bin_sizes
         .into_iter()
         .map(|sz| Vec::with_capacity(sz))
         .collect();
 
-    for (idx, range) in ranges.iter().enumerate() {
-        if let Some((start, end)) = range {
-            let band_start = (*start / band_size_layers) as usize;
-            let band_end = (*end / band_size_layers) as usize;
-            for band in band_start..=band_end {
-                bands[band].push(idx);
-            }
+    for (idx, tri) in triangles.iter().enumerate() {
+        let b_start = ((tri.z_min - z_min_model) / bin_height)
+            .floor()
+            .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
+        let b_end = ((tri.z_max - z_min_model) / bin_height)
+            .floor()
+            .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
+        for b in b_start..=b_end {
+            bins[b].push(idx);
         }
     }
 
     eprintln!(
-        "[SlicerV3] Layer index switched to banded mode: estimated_dense_entries={} max_dense_entries={} band_size_layers={} bands={}",
+        "[SlicerV3] Layer index switched to ZBins mode: estimated_dense_entries={} max_dense_entries={} bins={} bin_height_mm={:.4}",
         estimated_dense_entries,
         max_dense_entries,
-        band_size_layers,
-        band_count,
+        ZBIN_COUNT,
+        bin_height,
     );
 
-    LayerIndex::Banded {
-        band_size_layers,
-        bands,
+    LayerIndex::ZBins {
+        z_min: z_min_model,
+        bin_height,
+        layer_height_mm,
+        bins,
     }
 }

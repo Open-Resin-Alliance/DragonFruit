@@ -1,10 +1,10 @@
 //! V3 engine orchestration and validation layer.
 
 use crate::encoders::registry::{find_encoder, supported_output_formats};
-use crate::geometry::parse_triangles;
+use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
-use crate::pipeline::render_layers_bounded;
+use crate::pipeline::{render_layers_bounded, render_layers_rle};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
@@ -96,6 +96,57 @@ pub fn slice_with_progress_v3(
     let requires_area_stats = encoder.requires_area_stats();
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
+
+    // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
+    if !requires_png_layers {
+        if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
+            let total_start = std::time::Instant::now();
+            let job_total_layers = job.total_layers;
+            let progress_total = job_total_layers.saturating_add(1);
+
+            let slicing_progress = on_progress.as_ref().map(|cb| {
+                let cb = cb.clone();
+                Arc::new(move |update: SliceProgressUpdateV3| {
+                    cb(SliceProgressUpdateV3 {
+                        done: update.done.min(job_total_layers),
+                        total: progress_total,
+                        phase: SliceProgressPhaseV3::Slicing,
+                    });
+                }) as ProgressCallbackV3
+            });
+
+            let (_rendered_layers, _layer_area_stats, mut perf) = {
+                let mut rle_sink =
+                    |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
+                slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
+            };
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: job_total_layers,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            let encode_start = std::time::Instant::now();
+            let bytes = rle_enc.finalize_to_bytes()?;
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: progress_total,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+            perf.total_ns = total_start.elapsed().as_nanos() as u64;
+            perf.layers = job.total_layers;
+
+            return Ok(SliceArtifactV3 { bytes, perf });
+        }
+    }
 
     if !requires_png_layers && requires_raw_mask_layers {
         if let Some(mut stream_encoder) = encoder.create_raw_mask_stream_encoder(job)? {
@@ -208,6 +259,34 @@ pub fn slice_with_progress_v3(
     Ok(SliceArtifactV3 { bytes, perf })
 }
 
+/// Fast raster stage that produces RLE runs per layer — no pixel buffers.
+pub fn slice_and_rasterize_rle_v3(
+    job: &SliceJobV3,
+    on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    validate_job(job)?;
+
+    let mut triangles = parse_triangles(&job.triangles_xyz);
+    project_triangles_inplace(&mut triangles, job);
+    let index_start = std::time::Instant::now();
+    let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
+    let index_ns = index_start.elapsed().as_nanos() as u64;
+
+    let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle(
+        job,
+        &triangles,
+        &layer_index,
+        on_rle_layer,
+        on_progress,
+        cancel_flag,
+    )?;
+    perf.index_build_ns = index_ns;
+
+    Ok((rendered_layers, layer_area_stats, perf))
+}
+
 /// Format-agnostic geometry/index/raster stage that outputs layer PNG bytes.
 pub fn slice_and_rasterize_v3(
     job: &SliceJobV3,
@@ -220,7 +299,8 @@ pub fn slice_and_rasterize_v3(
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
-    let triangles = parse_triangles(&job.triangles_xyz);
+    let mut triangles = parse_triangles(&job.triangles_xyz);
+    project_triangles_inplace(&mut triangles, job);
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
     let index_ns = index_start.elapsed().as_nanos() as u64;
@@ -307,6 +387,57 @@ pub fn slice_with_progress_v3_to_path(
     let requires_area_stats = encoder.requires_area_stats();
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
+
+    // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
+    if !requires_png_layers {
+        if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
+            let total_start = std::time::Instant::now();
+            let job_total_layers = job.total_layers;
+            let progress_total = job_total_layers.saturating_add(1);
+
+            let slicing_progress = on_progress.as_ref().map(|cb| {
+                let cb = cb.clone();
+                Arc::new(move |update: SliceProgressUpdateV3| {
+                    cb(SliceProgressUpdateV3 {
+                        done: update.done.min(job_total_layers),
+                        total: progress_total,
+                        phase: SliceProgressPhaseV3::Slicing,
+                    });
+                }) as ProgressCallbackV3
+            });
+
+            let (_rendered_layers, _layer_area_stats, mut perf) = {
+                let mut rle_sink =
+                    |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
+                slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
+            };
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: job_total_layers,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            let encode_start = std::time::Instant::now();
+            rle_enc.finalize_to_path(output_path)?;
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: progress_total,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+            perf.total_ns = total_start.elapsed().as_nanos() as u64;
+            perf.layers = job.total_layers;
+
+            return Ok(perf);
+        }
+    }
 
     if !requires_png_layers && requires_raw_mask_layers {
         if let Some(mut stream_encoder) = encoder.create_raw_mask_stream_encoder(job)? {
@@ -418,12 +549,6 @@ pub fn slice_with_progress_v3_to_path(
     perf.layers = job.total_layers;
 
     Ok(perf)
-}
-
-impl From<png::EncodingError> for SlicerV3Error {
-    fn from(value: png::EncodingError) -> Self {
-        Self::Png(value.to_string())
-    }
 }
 
 impl From<zip::result::ZipError> for SlicerV3Error {
