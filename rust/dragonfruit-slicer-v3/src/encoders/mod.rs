@@ -45,6 +45,10 @@ pub trait RleStreamEncoder: Send {
         runs: Vec<crate::rle::RleRun>,
     ) -> Result<(), SlicerV3Error>;
 
+    /// Optionally receive per-layer area stats computed by the rasterizer.
+    /// Called after all layers are consumed but before finalize.
+    fn set_area_stats(&mut self, _stats: Vec<crate::types::LayerAreaStatsV3>) {}
+
     /// Finalize and return encoded container bytes.
     fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error>;
 

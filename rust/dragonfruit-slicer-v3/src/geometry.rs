@@ -94,7 +94,7 @@ pub fn parse_triangles(flat: &[f32]) -> Vec<Triangle> {
 pub fn project_triangles_inplace(triangles: &mut [Triangle], job: &SliceJobV3) {
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
-    let max_px_x = job.source_width_px.saturating_sub(1) as f32;
+    let max_px_x = job.effective_render_width_px().saturating_sub(1) as f32;
     let max_px_y = job.source_height_px.saturating_sub(1) as f32;
 
     // Precompute linear transform: mm → [0..max_px]

@@ -3,7 +3,7 @@
 //! This file is compiled by the V3 crate via a path-based module include,
 //! which keeps encoder source ownership with the Athena plugin.
 
-use crate::encoders::FormatEncoder;
+use crate::encoders::{FormatEncoder, RleStreamEncoder};
 use crate::engine::SlicerV3Error;
 use crate::types::{LayerAreaStatsV3, RenderedLayersV3, SliceJobV3};
 use base64::engine::general_purpose;
@@ -264,7 +264,7 @@ fn write_nanodlp_archive<W: Write + Seek>(
 
     let half_w = (job.build_width_mm as f64) * 0.5;
     let half_h = (job.build_depth_mm as f64) * 0.5;
-    let x_pixel_size_mm = (job.build_width_mm as f64) / (job.source_width_px.max(1) as f64);
+    let x_pixel_size_mm = (job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64);
     let y_pixel_size_mm = (job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64);
 
     let (x_min, x_max, y_min, y_max) = if pix_min_x == i32::MAX {
@@ -300,14 +300,10 @@ fn write_nanodlp_archive<W: Write + Seek>(
             job.container_compression_level,
         )));
 
-    // We used to use Stored for layers because PNGs are already compressed.
-    // However, when using fast PNG compression, a light ZIP Deflate pass
-    // across the archive can still squeeze out significant redundant data.
-    let layer_opt = FileOptions::default()
-        .compression_method(CompressionMethod::Deflated)
-        .compression_level(Some(normalize_container_compression_level(
-            job.container_compression_level,
-        )));
+    // Layer PNGs are already deflate-compressed by the encoder.  Using Stored
+    // avoids double-compression overhead and the sequential CPU cost of ZIP
+    // deflating 1,000+ layers.
+    let layer_opt = FileOptions::default().compression_method(CompressionMethod::Stored);
 
     let meta_json = json!({
         "format_version": 3,
@@ -372,6 +368,104 @@ fn write_nanodlp_archive<W: Write + Seek>(
     Ok(())
 }
 
+/// Streaming RLE encoder for the Athena NanoDLP format.
+///
+/// During the render pipeline, `consume_rle_layer` simply stores the raw RLE
+/// runs for each layer.  All PNG encoding happens in `finalize_to_bytes` using
+/// Streaming RLE encoder for the Athena NanoDLP format.
+///
+/// Encodes each layer's PNG **immediately** in `consume_rle_layer` using
+/// libdeflate, then discards the raw RLE runs.  This bounds peak memory to
+/// a single layer's pixel/filter buffer (~40 MB at 12 K) plus the growing
+/// accumulated compressed PNGs — far lower than storing all raw RLE runs for
+/// all 800 layers simultaneously (which can exceed 30 GB for complex prints).
+///
+/// PNG format is selected from the job's `x_packing_mode`:
+/// - `rgb8_div3`: Truecolor (RGB) PNG, width = width_px, pHYs 3:1.
+/// - other modes: 8-bit grayscale PNG at effective_render_width_px.
+///
+/// Layer PNGs are Stored (not Deflated) in the ZIP because they are already
+/// deflate-compressed by libdeflate.
+struct AthenaRleStreamEncoder {
+    job: SliceJobV3,
+    pngs: Vec<Vec<u8>>,
+    area_stats: Vec<LayerAreaStatsV3>,
+    binary_png: bool,
+}
+
+/// Encode one layer's RLE runs to a PNG byte vector.
+///
+/// For `rgb8_div3` mode, encodes the RLE runs directly into a Truecolor PNG
+/// using the custom fixed-Huffman deflate encoder — O(num_runs + height),
+/// no pixel buffer materialised.
+///
+/// For other modes, expands RLE → flat pixels and delegates to libdeflate.
+fn encode_layer_png(
+    job: &SliceJobV3,
+    runs: &[crate::rle::RleRun],
+    binary_png: bool,
+) -> Result<Vec<u8>, SlicerV3Error> {
+    let width = job.effective_render_width_px();
+    let height = job.source_height_px;
+
+    match job.x_packing_mode.as_str() {
+        "rgb8_div3" => {
+            // RLE runs span the full physical resolution (source_width_px).
+            // The custom deflate encoder maps them directly into a Truecolor
+            // PNG at width/3, with pHYs 3:1. No pixel expansion needed.
+            crate::encode::encode_truecolor_png_from_rle(
+                width,
+                height,
+                runs,
+                3,
+            )
+        }
+        _ => {
+            // Grayscale: expand RLE and use libdeflate.
+            let total_pixels = (width as usize).saturating_mul(height as usize);
+            let mut pixels = Vec::with_capacity(total_pixels);
+            for run in runs {
+                let len = run.length as usize;
+                let end = (pixels.len() + len).min(total_pixels);
+                let fill = end - pixels.len();
+                pixels.extend(std::iter::repeat(run.value).take(fill));
+            }
+            pixels.resize(total_pixels, 0);
+
+            crate::encode::encode_grayscale_png(
+                width,
+                height,
+                &pixels,
+                &job.png_compression_strategy,
+                binary_png,
+            )
+        }
+    }
+}
+
+impl RleStreamEncoder for AthenaRleStreamEncoder {
+    fn consume_rle_layer(
+        &mut self,
+        layer_index: u32,
+        runs: Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        // Encode immediately so the raw runs can be dropped right away.
+        let png = encode_layer_png(&self.job, &runs, self.binary_png)?;
+        self.pngs[layer_index as usize] = png;
+        Ok(())
+    }
+
+    fn set_area_stats(&mut self, stats: Vec<LayerAreaStatsV3>) {
+        self.area_stats = stats;
+    }
+
+    fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error> {
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+        write_nanodlp_archive(&mut cursor, &self.job, &self.pngs, &self.area_stats, None)?;
+        Ok(cursor.into_inner())
+    }
+}
+
 impl FormatEncoder for AthenaPluginEncoder {
     fn output_format(&self) -> &'static str {
         ".nanodlp"
@@ -379,6 +473,23 @@ impl FormatEncoder for AthenaPluginEncoder {
 
     fn requires_area_stats(&self) -> bool {
         false
+    }
+
+    fn requires_png_layers(&self) -> bool {
+        false
+    }
+
+    fn create_rle_stream_encoder(
+        &self,
+        job: &SliceJobV3,
+    ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
+        let binary_png = job.anti_aliasing_level.trim() == "Off";
+        Ok(Some(Box::new(AthenaRleStreamEncoder {
+            job: job.clone(),
+            pngs: vec![Vec::new(); job.total_layers as usize],
+            area_stats: vec![LayerAreaStatsV3::default(); job.total_layers as usize],
+            binary_png,
+        })))
     }
 
     fn estimate_encode_progress_units(&self, rendered_layers: &RenderedLayersV3) -> u32 {

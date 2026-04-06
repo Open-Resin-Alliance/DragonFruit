@@ -115,11 +115,13 @@ pub fn slice_with_progress_v3(
                 }) as ProgressCallbackV3
             });
 
-            let (_rendered_layers, _layer_area_stats, mut perf) = {
+            let (_rendered_layers, layer_area_stats, mut perf) = {
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
                 slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
             };
+
+            rle_enc.set_area_stats(layer_area_stats);
 
             if let Some(cb) = on_progress.as_ref() {
                 cb(SliceProgressUpdateV3 {
@@ -406,11 +408,13 @@ pub fn slice_with_progress_v3_to_path(
                 }) as ProgressCallbackV3
             });
 
-            let (_rendered_layers, _layer_area_stats, mut perf) = {
+            let (_rendered_layers, layer_area_stats, mut perf) = {
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
                 slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
             };
+
+            rle_enc.set_area_stats(layer_area_stats);
 
             if let Some(cb) = on_progress.as_ref() {
                 cb(SliceProgressUpdateV3 {
