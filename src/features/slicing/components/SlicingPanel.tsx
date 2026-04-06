@@ -365,10 +365,9 @@ export function SlicingPanel({
   const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
   const minimumAaControlsDisabled = !antiAliasingAvailable;
   const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter) && !isRemoteNetworkUnavailable;
-  const localMaterialHasLayerHeight = activeMaterialProfile != null
-    && Number.isFinite(activeMaterialProfile.layerHeightMm)
-    && activeMaterialProfile.layerHeightMm > 0;
-  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter) && isRemoteNetworkUnavailable && !localMaterialHasLayerHeight;
+  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter)
+    && isRemoteNetworkUnavailable
+    && networkUiAdapter?.supportsRemoteMaterialProfiles !== false;
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
