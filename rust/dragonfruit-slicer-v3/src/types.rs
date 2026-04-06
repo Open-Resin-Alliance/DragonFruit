@@ -25,6 +25,10 @@ fn default_false() -> bool {
     false
 }
 
+fn default_x_packing_mode() -> String {
+    "none".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -38,6 +42,15 @@ pub struct SliceJobV3 {
     /// Optional logical/output dimensions retained for metadata parity.
     pub width_px: u32,
     pub height_px: u32,
+    /// X-axis pixel packing mode (`none`, `rgb8_div3`, `gray3_div2`).
+    ///
+    /// - `none` (default): raw grayscale at source resolution.
+    /// - `rgb8_div3`: 3 physical sub-pixels packed into 1 RGB pixel; render
+    ///   at `width_px × height_px` and write Truecolor PNG with pHYs 3:1.
+    /// - `gray3_div2`: 2 physical sub-pixels packed into 1 grayscale pixel;
+    ///   render at `width_px × height_px` and write grayscale PNG with pHYs 2:1.
+    #[serde(default = "default_x_packing_mode")]
+    pub x_packing_mode: String,
     /// Build plate dimensions in millimeters.
     pub build_width_mm: f32,
     pub build_depth_mm: f32,
@@ -73,6 +86,18 @@ pub struct SliceJobV3 {
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.
     pub metadata_json: String,
+}
+
+impl SliceJobV3 {
+    /// Effective render width in pixels.
+    ///
+    /// Rasterisation always operates at the full physical sub-pixel resolution
+    /// (`source_width_px`).  For packed formats the sub-pixel → pixel mapping
+    /// is handled at PNG encoding time, not at rasterisation time.
+    #[inline]
+    pub fn effective_render_width_px(&self) -> u32 {
+        self.source_width_px
+    }
 }
 
 #[derive(Debug, Clone)]

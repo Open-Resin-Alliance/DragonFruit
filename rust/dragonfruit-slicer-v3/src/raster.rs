@@ -396,7 +396,7 @@ pub fn rasterize_layer_with_stats(
     layer_index: u32,
     compute_area_stats: bool,
 ) -> (Vec<u8>, LayerAreaStatsV3) {
-    let width = job.source_width_px as usize;
+    let width = job.effective_render_width_px() as usize;
     let height = job.source_height_px as usize;
     let mut mask = crate::pipeline::get_recycled_mask(width * height);
     let mut stats = LayerAreaStatsV3::default();
@@ -672,7 +672,7 @@ pub fn rasterize_layer_rle(
 ) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
-    let width = job.source_width_px as usize;
+    let width = job.effective_render_width_px() as usize;
     let height = job.source_height_px as usize;
     let mut rle = RleAccum::new();
     let mut stats = LayerAreaStatsV3::default();
@@ -710,7 +710,7 @@ pub fn rasterize_layer_rle(
     // Emit zero rows before the rasterized region.
     emit_zero_rows(&mut rle, first_physical_y, width);
 
-    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
+    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64))
         * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
 
     let mut min_x = i32::MAX;
@@ -982,6 +982,7 @@ mod tests {
             mirror_y: false,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            x_packing_mode: "none".to_string(),
         }
     }
 

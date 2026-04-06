@@ -86,6 +86,7 @@ type NativeSolidSliceMetadataPayload = {
   source_height_px: number;
   width_px: number;
   height_px: number;
+  x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
@@ -204,6 +205,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
     height_px: job.heightPx,
+    x_packing_mode: job.xPackingMode,
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,

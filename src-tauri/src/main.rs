@@ -283,6 +283,8 @@ struct SliceJobMetadata {
     source_height_px: u32,
     width_px: u32,
     height_px: u32,
+    #[serde(default)]
+    x_packing_mode: Option<String>,
     png_compression_strategy: String,
     anti_aliasing_level: String,
     aa_on_supports: bool,
@@ -840,6 +842,7 @@ async fn slice_solid_native_to_temp_path(
             source_height_px: meta.source_height_px,
             width_px: meta.width_px,
             height_px: meta.height_px,
+            x_packing_mode: meta.x_packing_mode.unwrap_or_else(|| "none".to_string()),
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
             aa_on_supports: meta.aa_on_supports,

@@ -164,11 +164,19 @@ pub fn render_layers_bounded(
     let render_wall_start = std::time::Instant::now();
     let total_layers = job.total_layers;
 
-    // For high-resolution renders, reduce thread count to avoid memory explosion
-    // when multiple workers simultaneously allocate large rasterization buffers.
-    let layer_pixels = (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
+    let layer_pixels = (job.effective_render_width_px() as usize).saturating_mul(job.source_height_px as usize);
     let mut max_concurrent = choose_max_concurrent();
-    if layer_pixels > 12_000_000 && max_concurrent > 2 {
+
+    let need_raw_masks = emit_raw_mask_layers || on_raw_mask_layer.is_some();
+    // When PNG layers are needed but raw pixel masks are not, we can take the
+    // fast path: `rasterize_layer_rle` (O(width) memory) + direct deflate
+    // PNG encoder, avoiding the 56 MB full-frame pixel buffer entirely.
+    let use_rle_png_path = emit_png_layers && !need_raw_masks;
+
+    // For high-resolution renders that materialise full pixel masks, reduce
+    // thread count to avoid memory explosion.  The RLE-PNG path never
+    // allocates these masks, so it can use all available cores.
+    if !use_rle_png_path && layer_pixels > 12_000_000 && max_concurrent > 2 {
         // 12M pixels ≈ 4000x3000. For each extra concurrent worker with a 56MB
         // mask (plus potential PNG encoding), memory usage grows rapidly.
         max_concurrent = max_concurrent / 2;
@@ -178,10 +186,13 @@ pub fn render_layers_bounded(
     max_concurrent =
         cap_concurrency_for_mask_bytes(max_concurrent, layer_pixels, streaming_raw_mask_sink);
 
-    // When streaming raw masks directly to encoder, minimize buffer to avoid
-    // accumulating large masks in memory: use buffer of 2 instead of max_concurrent.
+    // RLE-PNG path produces tiny channel messages (small Vec<u8> PNGs), so it
+    // can use a generous buffer matching render_layers_rle.  Streaming raw
+    // masks need a tight buffer to avoid accumulating 56MB masks.
     let buffer = if streaming_raw_mask_sink {
         choose_streaming_buffer_depth_for_mask_bytes(layer_pixels)
+    } else if use_rle_png_path {
+        (max_concurrent * 4).clamp(4, 64)
     } else {
         (max_concurrent * 2).clamp(2, 16)
     };
@@ -189,13 +200,12 @@ pub fn render_layers_bounded(
     let progress = AtomicU32::new(0);
     let raster_ns = AtomicU64::new(0);
     let png_ns = AtomicU64::new(0);
-    let layer_pixels_len = (job.source_width_px as usize) * (job.source_height_px as usize);
+    let layer_pixels_len = (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
     let binary_png_expected = job.anti_aliasing_level.trim() == "Off";
 
     let empty_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
     let full_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
 
-    let need_raw_masks = emit_raw_mask_layers || on_raw_mask_layer.is_some();
     let progress_on_drain = streaming_raw_mask_sink;
 
     let mut out_pngs = emit_png_layers.then(|| vec![Vec::<u8>::new(); total_layers as usize]);
@@ -232,7 +242,7 @@ pub fn render_layers_bounded(
                                 let png = if emit_png_layers {
                                     let png_start = std::time::Instant::now();
                                     let bytes = encode_uniform_png_cached(
-                                        job.source_width_px,
+                                        job.effective_render_width_px(),
                                         job.source_height_px,
                                         &job.png_compression_strategy,
                                         0,
@@ -265,6 +275,34 @@ pub fn render_layers_bounded(
                                 return Ok((layer, png, raw_mask, stats));
                             }
 
+                            // ── Fast path: RLE rasteriser + streaming PNG ──
+                            if use_rle_png_path {
+                                let raster_start = std::time::Instant::now();
+                                let (runs, stats) = rasterize_layer_rle(
+                                    job,
+                                    triangles,
+                                    layer_candidates,
+                                    layer,
+                                );
+                                raster_ns.fetch_add(
+                                    raster_start.elapsed().as_nanos() as u64,
+                                    Ordering::Relaxed,
+                                );
+                                let png_start = std::time::Instant::now();
+                                let png = crate::encode::encode_grayscale_png_from_rle(
+                                    job.effective_render_width_px(),
+                                    job.source_height_px,
+                                    &runs,
+                                    &job.png_compression_strategy,
+                                    binary_png_expected,
+                                )?;
+                                png_ns.fetch_add(
+                                    png_start.elapsed().as_nanos() as u64,
+                                    Ordering::Relaxed,
+                                );
+                                return Ok((layer, Some(png), None, stats));
+                            }
+
                             let raster_start = std::time::Instant::now();
                             let (mask, stats) = rasterize_layer_with_stats(
                                 job,
@@ -286,7 +324,7 @@ pub fn render_layers_bounded(
 
                                 let png = if is_all_black {
                                     encode_uniform_png_cached(
-                                        job.source_width_px,
+                                        job.effective_render_width_px(),
                                         job.source_height_px,
                                         &job.png_compression_strategy,
                                         0,
@@ -296,7 +334,7 @@ pub fn render_layers_bounded(
                                     )?
                                 } else if is_all_white {
                                     encode_uniform_png_cached(
-                                        job.source_width_px,
+                                        job.effective_render_width_px(),
                                         job.source_height_px,
                                         &job.png_compression_strategy,
                                         255,
@@ -306,14 +344,14 @@ pub fn render_layers_bounded(
                                     )?
                                 } else if binary_png_expected {
                                     encode_binary_grayscale_png_1bit(
-                                        job.source_width_px,
+                                        job.effective_render_width_px(),
                                         job.source_height_px,
                                         &mask,
                                         &job.png_compression_strategy,
                                     )?
                                 } else {
                                     encode_grayscale_png(
-                                        job.source_width_px,
+                                        job.effective_render_width_px(),
                                         job.source_height_px,
                                         &mask,
                                         &job.png_compression_strategy,

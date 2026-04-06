@@ -143,6 +143,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         mirror_y: false,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
+        x_packing_mode: "none".to_string(),
     };
 
     let artifact = slice_with_progress_v3(&job, None, None)?;
