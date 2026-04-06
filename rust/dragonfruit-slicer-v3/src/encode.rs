@@ -619,3 +619,78 @@ pub fn encode_truecolor_png_from_rle(
     write_chunk(&mut out, b"IEND", &[]);
     Ok(out)
 }
+
+/// Encode a Truecolor (RGB) PNG by packing physical-resolution grayscale RLE
+/// runs.
+///
+/// Runs are at **physical** resolution (e.g. 11520 pixels wide).  Every group
+/// of `phys_x_pixels_per_logical` adjacent grayscale bytes is packed into one
+/// RGB pixel, preserving independent sub-pixel exposure values.  The PNG IHDR
+/// width is `logical_width` with `color_type = 2` (Truecolor), and a `pHYs`
+/// chunk records the `phys_x_pixels_per_logical : 1` ratio.
+///
+/// Because `logical_width × 3` bytes per row equals `physical_width × 1` byte
+/// per row, the raw grayscale bytes map directly to Truecolor pixel data with
+/// no reordering.
+///
+/// Encoding time is **O(num_runs + height)**.
+pub fn encode_truecolor_packed_png_from_rle(
+    logical_width: u32,
+    height: u32,
+    runs: &[crate::rle::RleRun],
+    phys_x_pixels_per_logical: u32,
+) -> Result<Vec<u8>, SlicerV3Error> {
+    let physical_width = (logical_width * phys_x_pixels_per_logical) as u64;
+    let h = height as u64;
+
+    // Step 1 — intersperse filter bytes at physical-row boundaries.
+    // physical_width grayscale bytes = logical_width * 3 Truecolor bytes.
+    let isp = intersperse_filter_runs(runs, physical_width, h);
+
+    // Step 2 — Adler-32 + LZ77 + fixed-Huffman bitstream.
+    let mut adler = Adler32State::new();
+    let mut bw = BitWriter::new(isp.len() * 4 + 64);
+
+    bw.bytes.push(0x78);
+    bw.bytes.push(0x01);
+    bw.bits_lsb(0b011, 3);
+
+    for &(length, value) in &isp {
+        adler.update_run(length, value);
+        huffman_sym(&mut bw, value as u32);
+
+        let mut rem = length - 1;
+        while rem >= 3 {
+            let m = rem.min(258) as u16;
+            rem -= m as u64;
+            emit_match(&mut bw, m);
+        }
+        for _ in 0..rem {
+            huffman_sym(&mut bw, value as u32);
+        }
+    }
+
+    huffman_sym(&mut bw, 256);
+    let mut idat = bw.finish();
+    idat.extend_from_slice(&adler.finish().to_be_bytes());
+
+    // Step 3 — assemble PNG: IHDR (Truecolor) + pHYs + IDAT + IEND.
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&logical_width.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+    ihdr[8] = 8;
+    ihdr[9] = 2; // Truecolor
+
+    let mut phys = [0u8; 9];
+    phys[0..4].copy_from_slice(&phys_x_pixels_per_logical.to_be_bytes());
+    phys[4..8].copy_from_slice(&1u32.to_be_bytes());
+    phys[8] = 0;
+
+    let mut out = Vec::with_capacity(8 + 25 + 21 + 12 + idat.len() + 12);
+    out.extend_from_slice(&PNG_SIG);
+    write_chunk(&mut out, b"IHDR", &ihdr);
+    write_chunk(&mut out, b"pHYs", &phys);
+    write_chunk(&mut out, b"IDAT", &idat);
+    write_chunk(&mut out, b"IEND", &[]);
+    Ok(out)
+}

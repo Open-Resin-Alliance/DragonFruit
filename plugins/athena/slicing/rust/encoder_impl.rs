@@ -416,10 +416,11 @@ fn encode_layer_png(
 
     match job.x_packing_mode.as_str() {
         "rgb8_div3" => {
-            // RLE runs are at logical resolution (width_px = source/3).
-            // The encoder expands each grayscale V to RGB (V,V,V) and emits
-            // a Truecolor PNG at logical width with pHYs 3:1.
-            crate::encode::encode_truecolor_png_from_rle(width, height, runs, 3)
+            // RLE runs are at physical resolution (source_width_px = 11520).
+            // Pack every 3 adjacent grayscale sub-pixels into one RGB pixel,
+            // preserving sub-pixel spatial accuracy.
+            let logical_width = job.width_px;
+            crate::encode::encode_truecolor_packed_png_from_rle(logical_width, height, runs, 3)
         }
         _ => {
             // Grayscale: expand RLE and use libdeflate.
@@ -462,9 +463,8 @@ impl RleStreamEncoder for AthenaRleStreamEncoder {
 
     fn parallel_encode_fn(
         &self,
-    ) -> Option<
-        Arc<dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
-    > {
+    ) -> Option<Arc<dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>
+    {
         let job = self.job.clone();
         let binary_png = self.binary_png;
         Some(Arc::new(move |runs: &[crate::rle::RleRun]| {
