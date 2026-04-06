@@ -1,115 +1,106 @@
-# Architecture
+# Architecture (V3.1)
 
-## Purpose
+## Intent
 
-`dragonfruit-slicer-v3` provides a deterministic, native slicing pipeline for DragonFruit Desktop. The crate is intentionally split into small modules with explicit responsibilities, so performance and correctness can be tuned without collapsing boundaries.
+`dragonfruit-slicing-engine` is designed as a deterministic, high-throughput native slicer with strict module boundaries and plugin-owned output containers.
 
-## Design goals
+## Core goals
 
-- **Deterministic behavior** for identical geometry/job inputs.
-- **Clear stage boundaries** (parse/index/raster/encode).
-- **Bounded memory pressure** during parallel rendering.
-- **Cancelable jobs** with low coordination overhead.
-- **Pluggable container formats** via encoder registry.
+- deterministic output for equivalent input
+- predictable memory behavior under heavy concurrency
+- fast cancellation/progress responsiveness
+- format extensibility without engine branching
 
-## High-level flow
+## System flow
 
 ```text
 SliceJobV3
   -> validate_job (engine)
   -> parse_triangles (geometry)
   -> build_layer_index (index)
-  -> render_layers_bounded (pipeline + raster + encode)
-  -> dispatch_encode_by_format (encoders)
-  -> SliceArtifactV3
+  -> render pipeline (raster + encode)
+  -> encoder finalize (encoders)
+  -> SliceArtifactV3 / output path
 ```
 
-## Module responsibilities
+## Module boundaries
 
 ### `types`
 
-Defines all major contracts:
-
-- `SliceJobV3`
-- `RenderedLayersV3`
-- `LayerAreaStatsV3`
-- `SliceArtifactV3`
-- `ProgressCallbackV3`
-
-This module is the primary ABI-like contract between app/runtime and slicer logic.
+Shared job/result/progress contracts and render payload structs.
 
 ### `engine`
 
-Owns orchestration and input validation.
+Orchestrator and error boundary:
 
-- Exposes `slice_with_progress_v3` and path-based variant.
-- Selects encoder and derives required payload capabilities.
-- Aggregates stage timings into `SlicingPerfV3`.
-- Defines crate-level error enum: `SlicerV3Error`.
+- validates jobs
+- selects encoder from registry
+- chooses rendering path based on encoder capabilities
+- aggregates `SlicingPerfV3`
 
 ### `geometry`
 
-Parses flat packed triangle buffers (`[x,y,z,...]`) into typed `Triangle`s and precomputes fields needed by rasterization (e.g., directional terms).
+Packed float triangle buffer parsing into typed geometry.
 
 ### `index`
 
-Builds per-layer triangle candidate buckets using z-range overlap math.
+Per-layer triangle candidate index for efficient layer traversal.
 
 ### `raster`
 
-Converts layer plane intersections into grayscale masks using winding-based scanline filling to robustly union overlapping/intersecting solids.
+Scanline-based rasterization to RLE runs:
 
-Optional behavior:
+- robust winding union behavior
+- binary output when AA is off
+- grayscale accumulation path when AA is on
 
-- connected-component area stats (`LayerAreaStatsV3`)
-- simple anti-aliasing coverage quantization
+### `rle`
+
+Hot-path run-length accumulation and row/zero-row emit helpers.
 
 ### `pipeline`
 
-Runs layer rendering in bounded parallel mode:
+Bounded parallel execution with cancellation and progress:
 
-- configurable max concurrency (`DF_V3_MAX_CONCURRENT`)
-- ordered output assembly despite out-of-order worker completion
-- progress callbacks
-- cooperative cancellation checks
-- optional PNG and/or raw mask emission
+- `render_layers_rle_encoded` (preferred V3.1 path)
+- `render_layers_rle` (fallback RLE path)
+- legacy layer materialization path (for older capability contracts)
 
 ### `encode`
 
-Contains PNG utility encoding for grayscale layers and compression strategy mapping.
+RLE-first PNG encoders and packing transforms:
+
+- grayscale fixed-Huffman encode
+- truecolor packed encode (`rgb8_div3`)
+- grayscale averaged packed encode (`gray3_div2`)
 
 ### `encoders`
 
-Defines `FormatEncoder` trait and runtime registry.
+Runtime format abstraction:
 
-- `encoders/registry.rs` lazily initializes registered encoders (`OnceLock`).
-- `encoders/generated_plugin_encoders.rs` is generated from allowlisted plugin definitions.
+- `FormatEncoder`
+- `RleStreamEncoder`
+- generated plugin registry
 
-### `benchmark` and `bin/benchmark`
+### `benchmark`
 
-Synthetic scene generation + throughput measurements for local profiling.
+Synthetic benchmark scaffolding and CLI.
 
-## Concurrency model
+## V3.1 architecture highlights
 
-- Work distribution: Rayon parallel iterators.
-- Backpressure: bounded `sync_channel`.
-- Ordering: reorder buffer drained by layer index.
-- Progress: updated on completion arrival (not delayed drain), reducing UI burstiness.
+1. **Parallel encode contract**: encoders can expose `parallel_encode_fn` and `store_encoded_layer`.
+2. **O(num_runs) encoding**: no full-size pixel buffer on primary paths.
+3. **Encode-time packing**: sub-pixel physical data preserved until encode phase.
+4. **Progress-on-arrival**: worker completion drives smoother progress reporting.
 
-## Error model
+## Error semantics
 
-The orchestration boundary uses typed errors (`SlicerV3Error`) for:
+`SlicerV3Error` is the unified boundary error type. External/library errors are translated into typed variants before leaving engine orchestration.
 
-- invalid jobs
-- unsupported output format
-- cancellation
-- encoding/IO/JSON failures
-- payload capability mismatches
+## Extensibility rule
 
-Errors from third-party libs are translated into this unified enum.
+New output formats must be implemented as encoders and registered through generated plugin registry artifacts; avoid hardcoded format dispatch in engine code.
 
-## Extension model
+## Acknowledgment
 
-New output formats are added through `FormatEncoder` implementations and generated registry wiring, not through hardcoded engine branches.
-
-See [`ENCODERS.md`](./ENCODERS.md) and [`DEVELOPMENT_GUIDE.md`](./DEVELOPMENT_GUIDE.md).
+Many thanks to **mslicer** for inspirational algorithmic patterns and practical methods that informed DragonFruit V3.1 architecture decisions.

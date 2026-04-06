@@ -1,39 +1,43 @@
-# dragonfruit-slicer-v3
+# dragonfruit-slicing-engine
 
-Native Slicer V3 for DragonFruit Desktop.
+Native Rust slicing backend for DragonFruit Desktop (Tauri), currently at **V3.1.0**.
 
-This crate is the **active production slicer backend** used by the Tauri desktop app.
+This crate is the production slicing engine that converts triangle geometry into printer-ready layer containers (currently `.nanodlp` via plugin encoder registry).
 
-## What this crate does
+## What changed in V3.1
 
-For each slicing job, V3 runs a deterministic pipeline:
+V3.1 is a significant architecture and throughput upgrade:
 
-1. Parse packed triangle buffers into typed geometry.
-2. Build a per-layer triangle index.
-3. Rasterize layers in parallel with bounded in-flight work.
-4. Encode grayscale PNG layers.
-5. Package output into `.nanodlp` archive format.
-6. Emit progress callbacks and honor cancellation.
+- **Crate rename** from `dragonfruit-slicer-v3` to `dragonfruit-slicing-engine`
+- **Parallel rasterize + encode pipeline** (`render_layers_rle_encoded`)
+- **O(num_runs) fixed-Huffman PNG encoding** from RLE runs (no full pixel buffer materialization)
+- **Encode-time sub-pixel packing** for `rgb8_div3` and `gray3_div2`
+- **Progress-on-arrival semantics** for smoother real-time UI progress
+- **Cooperative cancellation** maintained across all paths
 
-## Public API
+## End-to-end flow
 
-- `slice_with_progress_v3(job, on_progress, cancel_flag)`
-- `SliceJobV3`, `SliceArtifactV3`, `ProgressCallbackV3`
+1. Validate `SliceJobV3`
+2. Parse packed geometry into typed triangles
+3. Build per-layer triangle index
+4. Rasterize each layer to RLE (`rasterize_layer_rle`)
+5. Encode layers in parallel when encoder supports `RleStreamEncoder::parallel_encode_fn`
+6. Finalize container bytes/path through format encoder
 
-Primary exports are in:
+## Core API
+
+- `slice_with_progress_v3(...) -> Result<SliceArtifactV3, SlicerV3Error>`
+- `slice_with_progress_v3_to_path(...) -> Result<SlicingPerfV3, SlicerV3Error>`
+
+Primary public contracts live in:
 
 - `src/lib.rs`
 - `src/engine.rs`
 - `src/types.rs`
 
-## Full documentation
-
-This crate now has a dedicated docs set under:
+## Documentation map
 
 - `docs/README.md`
-
-Quick links:
-
 - `docs/ARCHITECTURE.md`
 - `docs/API.md`
 - `docs/PIPELINE.md`
@@ -43,34 +47,19 @@ Quick links:
 - `docs/TROUBLESHOOTING.md`
 - `docs/DEVELOPMENT_GUIDE.md`
 
-## Integration in DragonFruit
+## Integration notes
 
-- `src-tauri` depends on this crate directly.
-- Desktop commands `slice_solid_native` and `slice_solid_native_to_temp_path` execute this pipeline.
-- `cancel_slicing` is cooperative via an atomic cancel flag.
+- `src-tauri` depends on crate `dragonfruit-slicing-engine` (lib: `dragonfruit_slicing_engine`).
+- Slicing runs inside a dedicated Rayon pool.
+- Progress is throttled in Tauri bridge code for UI smoothness.
+- Cancellation is atomic and cooperative.
 
-## Performance behavior
+## Environment controls
 
-- Layer rendering uses bounded concurrency.
-- Worker count defaults to available CPU parallelism.
-- You can cap concurrency with:
+- `DF_V3_MAX_CONCURRENT=<N>` — caps in-flight parallel layer work.
 
-`DF_V3_MAX_CONCURRENT=<N>`
+## Acknowledgment
 
-## Current output target
+With genuine appreciation: **many thanks to the mslicer project and contributors** for inspiration on slicing/rasterization algorithms and practical methods that helped shape DragonFruit’s V3.1 design direction.
 
-- Supported: `.nanodlp`
-- Unsupported formats return a typed `UnsupportedOutput` error.
-
-## Design principles
-
-- Predictable and testable pipeline stages.
-- Explicit error types and validation at the engine boundary.
-- Stable rasterization behavior for intersecting/overlapping solids.
-- Memory-aware parallelism (bounded channel + ordered drain).
-
-## Inspiration & acknowledgment
-
-Huge shoutout to **mslicer** for algorithmic inspiration around robust slicing/rasterization ideas.
-
-Implementation in this crate is DragonFruit’s V3-native code path and is maintained as part of this repository.
+DragonFruit’s implementation is fully integrated and maintained in this repository.

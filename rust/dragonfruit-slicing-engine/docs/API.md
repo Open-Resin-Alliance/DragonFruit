@@ -1,43 +1,61 @@
-# API Reference
+# API Reference (V3.1)
 
-## Public exports
+## Public re-exports
 
-`src/lib.rs` re-exports:
+From `src/lib.rs`:
 
 - `slice_with_progress_v3`
+- `slice_with_progress_v3_to_path`
 - `SlicerV3Error`
 - `SlicingPerfV3`
 - `SliceJobV3`
 - `SliceArtifactV3`
 - `ProgressCallbackV3`
 
-## Core types
+## Entrypoints
 
-### `SliceJobV3`
+### In-memory output
 
-Input contract for a slice operation.
+`slice_with_progress_v3(job, on_progress, cancel_flag)`
 
-Key fields:
+Use when the caller needs final container bytes returned directly.
 
-- Geometry: `triangles_xyz`
-- Layering: `layer_height_mm`, `total_layers`
-- Pixel dimensions: `source_width_px`, `source_height_px`, `width_px`, `height_px`
-- Build volume: `build_width_mm`, `build_depth_mm`
-- Output format: `output_format`
-- Raster options: `anti_aliasing_level`, `mirror_x`, `mirror_y`
-- Compression hints: `png_compression_strategy`, `container_compression_level`
-- App metadata passthrough: `metadata_json`
+### Path output
+
+`slice_with_progress_v3_to_path(job, output_path, on_progress, cancel_flag)`
+
+Use when writing directly to disk/temp path to avoid extra large byte copies across boundaries.
+
+## Core job contract: `SliceJobV3`
+
+Important fields:
+
+- geometry: `triangles_xyz`
+- layering: `layer_height_mm`, `total_layers`
+- raster dims: `source_width_px`, `source_height_px`
+- logical output dims: `width_px`, `height_px`
+- packing mode: `x_packing_mode` (`none`, `rgb8_div3`, `gray3_div2`)
+- build volume: `build_width_mm`, `build_depth_mm`
+- output selection: `output_format`
+- AA controls: `anti_aliasing_level`, `minimum_aa_alpha_percent`, `aa_on_supports`
+- transforms: `mirror_x`, `mirror_y`
+- encode hints: `png_compression_strategy`, `container_compression_level`
+- metadata passthrough: `metadata_json`
+
+### Physical-width rasterization rule
+
+`effective_render_width_px()` returns `source_width_px`, so rasterization happens at physical sub-pixel width even when output PNG width is logically reduced by packing.
+
+## Result types
 
 ### `SliceArtifactV3`
 
-Successful result for in-memory encoding path.
-
-- `bytes: Vec<u8>` — final container bytes
-- `perf: SlicingPerfV3` — stage timing counters
+- `bytes: Vec<u8>`
+- `perf: SlicingPerfV3`
 
 ### `SlicingPerfV3`
 
-Performance counters in nanoseconds:
+Timing counters (ns):
 
 - `total_ns`
 - `index_build_ns`
@@ -47,47 +65,21 @@ Performance counters in nanoseconds:
 - `archive_encode_ns`
 - `layers`
 
-Convenience methods:
+Helpers: `total_s()`, `layers_per_second()`.
 
-- `total_s()`
-- `layers_per_second()`
+## Progress model
 
-## Main entrypoints
+`ProgressCallbackV3` receives `SliceProgressUpdateV3 { done, total, phase }`, where phase is one of:
 
-### `slice_with_progress_v3`
+- `Slicing`
+- `Encoding`
+- `Finalizing`
 
-```rust
-pub fn slice_with_progress_v3(
-    job: &SliceJobV3,
-    on_progress: Option<ProgressCallbackV3>,
-    cancel_flag: Option<&AtomicBool>,
-) -> Result<SliceArtifactV3, SlicerV3Error>
-```
+V3.1 reports progress on worker arrival, then the Tauri bridge throttles UI emits (~8ms) while always emitting first/final/phase-change updates.
 
-Use when you need final bytes returned in-memory.
+## Error model (`SlicerV3Error`)
 
-### `slice_with_progress_v3_to_path`
-
-```rust
-pub fn slice_with_progress_v3_to_path(
-    job: &SliceJobV3,
-    output_path: &Path,
-    on_progress: Option<ProgressCallbackV3>,
-    cancel_flag: Option<&AtomicBool>,
-) -> Result<SlicingPerfV3, SlicerV3Error>
-```
-
-Use when you want direct file output and reduced boundary copy overhead.
-
-## Internal-but-important entrypoints
-
-These are public within crate API surface and used by orchestration/integration layers:
-
-- `slice_and_rasterize_v3`
-- `dispatch_encode_by_format`
-- `dispatch_encode_by_format_to_path`
-
-## Error semantics (`SlicerV3Error`)
+Primary variants:
 
 - `Cancelled`
 - `UnsupportedOutput(String)`
@@ -100,20 +92,19 @@ These are public within crate API surface and used by orchestration/integration 
 - `Json(String)`
 - `MissingRenderedLayerPayload(String)`
 
-## Supported output formats
+## Format support lookup
 
-Resolved dynamically from encoder registry:
+Supported extensions are runtime-resolved from encoder registry:
 
 - `encoders::registry::supported_output_formats()`
 
-If requested `output_format` is absent, engine returns `UnsupportedOutput` with the current supported set.
+If no encoder matches `output_format`, engine returns `UnsupportedOutput` with a supported list.
 
-## Job validation rules
+## Validation rules
 
-`validate_job` enforces:
+`validate_job` checks:
 
-- pixel dimensions are non-zero
-- `layer_height_mm > 0` and finite
+- all pixel dimensions > 0
+- finite and positive layer/build settings
 - `total_layers > 0`
-- build volume dimensions are finite and > 0
-- triangle buffer length is a multiple of 9
+- `triangles_xyz.len() % 9 == 0`

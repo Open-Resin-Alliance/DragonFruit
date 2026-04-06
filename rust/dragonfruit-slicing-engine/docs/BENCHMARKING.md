@@ -1,14 +1,18 @@
-# Benchmarking
+# Benchmarking V3.1
 
-## Benchmark module
+## What benchmark covers
 
-`src/benchmark.rs` provides a synthetic benchmark runner that:
+`src/benchmark.rs` runs synthetic slicing workloads through core pipeline stages:
 
-- generates procedural box geometry
-- executes full V3 slicing path
-- reports coarse stage timing and throughput
+- geometry generation
+- indexing
+- rasterization
+- PNG encode
+- container finalization
 
-Returned metrics (`BenchmarkResultV3`):
+## Output metrics
+
+`BenchmarkResultV3` includes:
 
 - `artifact_bytes`
 - `total_s`
@@ -17,33 +21,37 @@ Returned metrics (`BenchmarkResultV3`):
 - `png_s`
 - `archive_s`
 
-## CLI benchmark binary
+## CLI usage
 
-`src/bin/benchmark.rs` exposes quick local runs.
+Benchmark binary: `src/bin/benchmark.rs`
 
-Example arguments:
+Key flags:
 
 - `--layers`
-- `--srcw`, `--srch`
-- `--outw`, `--outh`
+- `--srcw`
+- `--srch`
+- `--outw`
+- `--outh`
 - `--cubes`
 
-## Interpreting results
+Typical 16K-style run:
 
-- `render_s` isolates raster stage cost.
-- `png_s` highlights compression overhead.
-- `archive_s` highlights container write/zip overhead.
-- `layers_per_second` is useful for high-level trend tracking.
+`cargo run --bin benchmark --release -- --layers 400 --srcw 15360 --srch 8640 --outw 7680 --outh 8640 --cubes 8`
 
-## Practical benchmark hygiene
+## Reading results in V3.1 context
 
-- Keep machine load low during comparison runs.
-- Use same concurrency settings (`DF_V3_MAX_CONCURRENT`) when comparing branches.
-- Compare multiple runs and look at trend, not single outlier.
-- Validate outputs still pass correctness expectations when tuning for speed.
+- `layers_per_second` is the top-level throughput signal.
+- `render_s` + `png_s` should benefit from parallel overlap in main path.
+- unexpectedly high `png_s` often means fallback path or non-optimal build profile.
+- `artifact_bytes` helps validate packing/compression behavior.
 
-## Environment controls
+## Benchmark hygiene
 
-- `DF_V3_MAX_CONCURRENT=<N>` caps pipeline worker concurrency.
+- compare branches under similar machine load
+- pin `DF_V3_MAX_CONCURRENT` when making apples-to-apples comparisons
+- run multiple times and inspect spread/outliers
+- validate output correctness alongside speed
 
-This can help evaluate memory-vs-throughput tradeoffs and avoid over-parallelization on constrained systems.
+## Concurrency control
+
+`DF_V3_MAX_CONCURRENT=<N>` caps in-flight parallel work and is useful for scaling studies and memory/throughput balancing.

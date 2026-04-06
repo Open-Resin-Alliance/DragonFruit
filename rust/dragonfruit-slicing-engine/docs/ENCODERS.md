@@ -1,57 +1,59 @@
-# Encoders and Output Registry
+# Encoders and Registry
 
-## Overview
+## Purpose
 
-The V3 slicer is format-agnostic at core pipeline level. Final output behavior is owned by implementations of `FormatEncoder`.
+The core engine is format-agnostic. Container output is owned by encoder implementations.
 
-## `FormatEncoder` contract
+## Encoder interfaces
 
-Defined in `src/encoders/mod.rs`.
+### `FormatEncoder`
 
-Required method:
+Base contract for format-specific output:
 
-- `output_format() -> &'static str`
+- `output_format()`
+- capability flags (`requires_*`)
+- bytes/path container output methods
 
-Optional capability flags:
+### `RleStreamEncoder`
 
-- `requires_area_stats()`
-- `requires_png_layers()`
-- `requires_raw_mask_layers()`
+V3.1 performance-oriented contract for streaming encoded layers:
 
-Encoding entrypoints:
+- `consume_rle_layer(...)`
+- `parallel_encode_fn() -> Option<Arc<...>>`
+- `store_encoded_layer(layer_index, bytes)`
+- `finalize_to_bytes()` / `finalize_to_path(...)`
 
-- `encode_container_from_rendered_layers(...) -> Result<Vec<u8>, SlicerV3Error>`
-- `encode_container_to_path(...) -> Result<(), SlicerV3Error>`
-- legacy PNG-only fallback: `encode_container(...)`
+If `parallel_encode_fn()` is `Some`, pipeline uses the preferred V3.1 rasterize+encode worker path.
 
-## Registry model
+## Registry behavior
 
-`src/encoders/registry.rs` uses `OnceLock<Vec<Box<dyn FormatEncoder>>>`.
+Registry initialization is lazy (`OnceLock`) and sourced from generated plugin encoder wiring.
 
-- lazy initialization: `build_generated_plugin_encoders()`
-- lookup by extension: `find_encoder(output_format)`
-- diagnostics: `supported_output_formats()`
+Common operations:
 
-## Generated encoder wiring
+- find encoder by extension
+- list supported extensions
 
-`src/encoders/generated_plugin_encoders.rs` is generated and should not be manually edited.
+## Generated wiring
 
-The generator is driven by plugin allowlist and plugin capabilities, ensuring encoder registration remains declarative and consistent with plugin definitions.
+`src/encoders/generated_plugin_encoders.rs` is generated. Do not manually edit it.
 
-## Current format support
+Plugin registry scripts own this artifact and should be rerun when plugin encoder metadata changes.
 
-The generated registry currently includes plugin-owned Athena `.nanodlp` output (`plugins/athena/slicing/rust/encoder_impl.rs`).
+## Current production path
 
-## Adding a new encoder
+Athena NanoDLP encoder is the primary production implementation and uses V3.1 RLE streaming and packed PNG strategies.
 
-1. Implement `FormatEncoder` in plugin-owned or crate-owned module.
-2. Ensure capability flags reflect actual payload requirements.
-3. Add/allowlist plugin definition so generator emits encoder entry.
-4. Regenerate plugin registry artifacts.
-5. Verify `supported_output_formats()` includes expected extension.
+## Adding a new format
 
-## Common pitfalls
+1. Implement encoder in plugin-owned Rust module.
+2. Set capability flags accurately.
+3. Register via generated plugin registry flow.
+4. Validate both bytes and path output methods.
+5. Confirm `supported_output_formats()` includes the new extension.
 
-- Returning PNG-only logic while declaring `requires_png_layers() == false`.
-- Declaring raw-mask requirement without implementing decode/packaging path.
-- Bypassing generated registry and introducing hardcoded format branches.
+## Common mistakes
+
+- capability flags that do not match actual payload consumption
+- returning `None` from `parallel_encode_fn` unintentionally (silent perf fallback)
+- adding hardcoded format branches in `engine` instead of registry-based resolution

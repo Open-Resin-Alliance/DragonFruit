@@ -1,52 +1,49 @@
-# DragonFruit Slicer V3 Documentation
+# DragonFruit Slicing Engine — V3.1 Docs
 
-This directory contains the full technical documentation for `dragonfruit-slicer-v3`.
+This folder is the canonical technical documentation for `dragonfruit-slicing-engine`.
 
-## What this crate is
+## Quick context
 
-`dragonfruit-slicer-v3` is the active native slicing backend used by DragonFruit Desktop (Tauri). It turns triangle geometry into per-layer rasters and delegates final container output to registered format encoders.
+`dragonfruit-slicing-engine` is DragonFruit Desktop’s native Rust slicer backend. It turns packed triangle data into per-layer outputs and delegates final container assembly to plugin-driven encoders.
 
-At a high level, each job runs:
+V3.1 focuses on throughput, deterministic behavior, and memory efficiency:
 
-1. Input validation (`engine`)
-2. Triangle parsing (`geometry`)
-3. Per-layer triangle indexing (`index`)
-4. Bounded parallel rasterization (`pipeline` + `raster`)
-5. Format-specific container encoding (`encoders`)
+- parallel rasterize+encode pipeline
+- O(num_runs) PNG encoding from RLE
+- encode-time sub-pixel packing (`rgb8_div3`, `gray3_div2`)
+- smooth progress semantics for UI integration
 
-## Documentation map
+## Read these first
 
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-  - System design, module boundaries, and data flow.
-- [`API.md`](./API.md)
-  - Public API reference and call patterns.
-- [`PIPELINE.md`](./PIPELINE.md)
-  - Detailed stage-by-stage execution model.
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — design and module boundaries
+- [`PIPELINE.md`](./PIPELINE.md) — execution path details
+- [`API.md`](./API.md) — public API and error semantics
+
+## Full document index
+
 - [`ENCODERS.md`](./ENCODERS.md)
-  - Encoder trait contract, registry behavior, and plugin-owned formats.
 - [`INTEGRATION_TAURI.md`](./INTEGRATION_TAURI.md)
-  - How DragonFruit Desktop integrates this crate.
 - [`BENCHMARKING.md`](./BENCHMARKING.md)
-  - Benchmark module and CLI usage.
 - [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)
-  - Common failures, diagnostics, and fixes.
 - [`DEVELOPMENT_GUIDE.md`](./DEVELOPMENT_GUIDE.md)
-  - How to safely extend or modify V3.
 
-## Source module map
+## Module map
 
-- `src/lib.rs` — crate exports and module wiring
-- `src/types.rs` — typed input/output contracts
-- `src/engine.rs` — orchestration and error boundary
-- `src/geometry.rs` — packed triangle parsing
-- `src/index.rs` — layer-to-triangle indexing
-- `src/raster.rs` — scanline rasterization + optional component stats
-- `src/pipeline.rs` — bounded parallel layer rendering, cancellation, progress
-- `src/encode.rs` — PNG layer encoding utility
-- `src/encoders/` — format encoder trait + generated registry
-- `src/benchmark.rs` — synthetic benchmark runner
-- `src/bin/benchmark.rs` — benchmark CLI
+- `src/lib.rs` — exports
+- `src/types.rs` — contracts / job model
+- `src/engine.rs` — orchestration / validation / errors
+- `src/geometry.rs` — triangle parsing
+- `src/index.rs` — layer triangle lookup index
+- `src/raster.rs` — scanline rasterization (AA + non-AA)
+- `src/rle.rs` — run-length building utilities
+- `src/pipeline.rs` — bounded parallel work + progress + cancellation
+- `src/encode.rs` — RLE-to-PNG encoders
+- `src/encoders/` — format registry + encoder traits
 
-## Versioning and ownership
+## Documentation policy
 
-This docs set is intended to evolve with the crate on the `plugins_v2` architecture path. When changing pipeline semantics, error types, or encoder behavior, update these docs in the same PR.
+Any change to pipeline semantics, public types, encoder contracts, or packing behavior should update docs in the same PR.
+
+## Acknowledgment
+
+Many thanks to **mslicer** for the inspiration behind several algorithmic ideas and practical slicing methods that informed DragonFruit V3.1.

@@ -1,79 +1,97 @@
-# Pipeline Details
+# Pipeline (V3.1)
 
-## Stage 1: Validation (`engine::validate_job`)
+## 1) Job validation
 
-The engine rejects malformed jobs before any heavy work starts.
+`engine::validate_job` rejects malformed requests up front:
 
-Primary checks:
-
-- dimensions > 0
-- finite + positive build dimensions
-- finite + positive layer height
+- positive pixel dimensions
+- positive, finite layer/build settings
 - non-zero layer count
-- triangle buffer length `% 9 == 0`
+- triangle buffer length multiple of 9
 
-## Stage 2: Geometry parse (`geometry::parse_triangles`)
+## 2) Geometry parse
 
-Converts packed float buffer into typed triangles with precomputed:
+`geometry::parse_triangles` converts packed f32 data into typed triangles used downstream by index and raster stages.
 
-- `z_min`, `z_max`
-- in-plane direction hints (`dir_x`, `dir_y`) for stable scanline segment orientation
+## 3) Layer index build
 
-## Stage 3: Layer index (`index::build_layer_index`)
+`index::build_layer_index` maps triangles to candidate layer ranges using z-overlap, avoiding full-triangle scans per layer.
 
-Computes candidate triangle lists per layer via z-overlap range calculation.
+## 4) Encoder capability selection
 
-This avoids scanning all triangles on every layer.
+Engine resolves `output_format` via registry and selects one of these paths:
 
-## Stage 4: Bounded parallel render (`pipeline::render_layers_bounded`)
+- **preferred**: RLE stream + parallel encode (`render_layers_rle_encoded`)
+- **fallback**: RLE stream + serial encode drain (`render_layers_rle`)
+- **legacy**: pre-rendered PNG/raw mask materialization path
 
-### Worker scheduling
+## 5) Preferred V3.1 path: `render_layers_rle_encoded`
 
-- Layers processed via Rayon parallel iterator.
-- Results sent through bounded `sync_channel`.
-- Concurrency cap: `DF_V3_MAX_CONCURRENT` (clamped to hardware parallelism).
+### Worker side (Rayon)
 
-### Output ordering
+For each layer:
 
-Workers complete out-of-order; pipeline maintains deterministic ordered output using a pending/reorder buffer keyed by layer index.
+1. `rasterize_layer_rle(...)`
+2. encoder closure from `parallel_encode_fn(layer_index, &runs)`
+3. send `(layer_index, encoded_bytes)` to bounded channel
 
-### Progress semantics
+### Drain side (serial)
 
-Progress callback increments on completion arrival, not delayed in-order drain, avoiding large UI jumps.
+As results arrive out-of-order:
 
-### Cancellation
+- call `store_encoded_layer(layer_index, bytes)`
+- report progress on arrival
+- check cancellation
 
-Cooperative cancellation uses `AtomicBool` checks in workers and drain loop.
+This preserves low memory pressure and smooth progress behavior.
 
-## Stage 5: Rasterization (`raster::rasterize_layer_with_stats`)
+## 6) Fallback RLE path: `render_layers_rle`
 
-Key behaviors:
+Workers emit `(layer_index, runs)`, and serial drain calls `consume_rle_layer`.
 
-- Intersects triangle edges against layer plane.
-- Builds active edge scanline index.
-- Uses winding accumulation to fill unioned spans robustly.
-- Optional anti-aliasing via cheap per-span coverage quantization.
-- Optional connected-component area stats (8-connected) for metadata consumers.
+This path is still bounded/cancelable and useful for encoders not exposing parallel encode closures.
 
-## Stage 6: PNG encoding (`encode::encode_grayscale_png`)
+## 7) Rasterization details
 
-If PNG payloads are requested by encoder capabilities:
+`raster::rasterize_layer_rle` uses scanline winding unions:
 
-- grayscale 8-bit PNG generated per layer
-- compression/filter based on strategy hint (`fastest`, `balanced`, `smallest`, `optimal`)
+- handles overlapping/intersecting solids robustly
+- AA off => strict binary 0/255 writes
+- AA on => subscanline coverage accumulation to grayscale
+- output is row-major `Vec<RleRun>`
 
-Pipeline also caches uniform black/white PNG payloads to avoid redundant re-encoding.
+## 8) O(num_runs) PNG encode details
 
-## Stage 7: Container encoding (`engine::dispatch_encode_by_format`)
+Encode functions in `encode.rs` operate from runs directly:
 
-Delegates final packaging to selected `FormatEncoder` implementation.
+- `encode_grayscale_png_from_rle`
+- `encode_truecolor_packed_png_from_rle` (`rgb8_div3`)
+- `encode_grayscale_averaged_png_from_rle` (`gray3_div2`)
 
-The encoder decides whether it needs:
+Shared implementation ideas:
 
-- PNG layers
-- raw masks
-- area stats
+- row filter bytes interspersed into run stream
+- fixed-Huffman single-block deflate
+- Adler-32 appended to zlib stream
+- PNG chunk assembly (IHDR/IDAT/IEND, plus pHYs for packed modes)
 
-## Perf counters
+## 9) Finalization
 
-`SlicingPerfV3` captures stage timing and can be surfaced to desktop diagnostics and profiling UIs.
+Encoder finalization (`finalize_to_bytes` / `finalize_to_path`) assembles format-specific archives.
+
+## 10) Progress + cancellation semantics
+
+- progress reported per layer completion arrival
+- first/final/phase updates emitted immediately by integration throttler
+- cancellation is cooperative and checked in both worker and drain loops
+
+## 11) Perf counters
+
+`SlicingPerfV3` provides stage-oriented timings for diagnostics and tuning:
+
+- `index_build_ns`
+- `render_wall_ns`
+- `render_ns`
+- `png_encode_ns`
+- `archive_encode_ns`
+- `total_ns`

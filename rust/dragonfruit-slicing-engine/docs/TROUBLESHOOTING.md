@@ -1,66 +1,63 @@
 # Troubleshooting
 
-## Unsupported output format
+## `UnsupportedOutput(...)`
 
-Symptom:
+Check:
 
-- `UnsupportedOutput(...)`
+1. `SliceJobV3.output_format` is exact (including leading `.`)
+2. registry contains the extension (`supported_output_formats()`)
+3. plugin registry artifacts are regenerated after plugin changes
 
-Checks:
+## Validation errors
 
-1. Confirm requested `SliceJobV3.output_format` matches encoder extension exactly.
-2. Inspect runtime-supported list from `supported_output_formats()`.
-3. Regenerate plugin registry artifacts and rebuild desktop + slicer crates.
-
-## Invalid job input errors
-
-Possible errors:
+Likely variants:
 
 - `InvalidDimensions`
 - `InvalidLayerSettings`
 - `InvalidBuildVolume`
 - `InvalidTriangleBuffer`
 
-Checks:
+Verify dimensions/settings are positive and finite, and triangle buffer length is divisible by 9.
 
-- ensure non-zero dimensions
-- ensure finite, positive build sizes and layer height
-- ensure `triangles_xyz.len() % 9 == 0`
+## `MissingRenderedLayerPayload(...)`
 
-## Missing rendered payload errors
+Usually a capability mismatch between encoder trait flags and what the encoder actually reads. Align `requires_*` with implementation behavior.
 
-Symptom:
+## “AA is off but I still see gray/color edges”
 
-- `MissingRenderedLayerPayload(...)`
+Expected for packed modes:
 
-Cause:
+- `gray3_div2`: physical binary pairs are averaged into one logical grayscale pixel
+- `rgb8_div3`: physical sub-pixels map into RGB channels and can show channel fringing
 
-Encoder capability flags and implementation expectations are inconsistent (e.g., encoder expects PNG layers but declared otherwise).
+Rasterization remains binary at physical sub-pixel resolution when AA is off.
 
-Fix:
+## Encode path unexpectedly slow
 
-Align encoder capability methods with actual encoding implementation.
+Check:
 
-## Slow rendering or high memory pressure
+1. encoder returns `Some(...)` for `parallel_encode_fn`
+2. dev profile keeps `dragonfruit-slicing-engine` optimized
+3. `DF_V3_MAX_CONCURRENT` is not unintentionally low
+4. benchmark output to isolate stage regressions
 
-Checks:
+## Memory usage spikes
 
-- tune `DF_V3_MAX_CONCURRENT`
-- verify benchmark trend after each change
-- inspect perf counters (`render_wall_ns`, `render_ns`, `png_encode_ns`, `archive_encode_ns`)
+Potential causes:
 
-## Cancellation seems delayed
+- fallback/legacy path using layer materialization
+- very high concurrency for very large layers
 
-Notes:
+Tune with `DF_V3_MAX_CONCURRENT`.
 
-Cancellation is cooperative. Long-running work segments must hit cancellation checks before exiting. This is expected behavior for non-preemptive cancellation.
+## Cancellation appears delayed
 
-## Build/link irregularities in dev
+Cancellation is cooperative, not preemptive. Delay can occur during heavy per-layer work before next flag check boundary.
 
-If odd unresolved symbols appear after major generated-registry or module changes:
+## Stale build issues
+
+If symbols/types seem inconsistent after major changes:
 
 - clean/rebuild affected crates
-- regenerate plugin registry
-- restart Tauri dev pipeline
-
-(These issues are often stale artifact/state related in local dev loops.)
+- regenerate plugin registry artifacts
+- restart dev runtime/tooling

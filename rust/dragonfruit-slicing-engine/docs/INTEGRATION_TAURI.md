@@ -1,61 +1,60 @@
-# Tauri Integration Guide
+# Tauri Integration (Desktop)
 
-## Where this crate is used
+## Dependency + crate identity
 
-DragonFruit Desktop (`src-tauri`) consumes `dragonfruit-slicer-v3` as a path dependency.
+`src-tauri` depends on:
 
-Primary integration responsibilities in desktop layer:
+- package: `dragonfruit-slicing-engine`
+- library target: `dragonfruit_slicing_engine`
+- path: `rust/dragonfruit-slicing-engine`
 
-- construct `SliceJobV3` from app-side slice requests
-- provide progress callback bridge to frontend
-- wire cancellation token (`AtomicBool`)
-- choose in-memory vs path-based output mode
-- map `SlicerV3Error` to command/IPC-safe errors
+## Command-level responsibilities
 
-## Recommended integration pattern
+Desktop layer should:
 
-1. Resolve printer/output settings into `SliceJobV3`.
-2. Create per-job cancellation flag and store handle for cancellation commands.
-3. Run `slice_with_progress_v3` or `slice_with_progress_v3_to_path`.
-4. Stream progress `(done,total)` to UI.
-5. On completion, return artifact bytes/path + perf counters.
+1. build `SliceJobV3` from UI/profile state
+2. create/store cancellation flag (`Arc<AtomicBool>`)
+3. run slicing in `spawn_blocking` + dedicated Rayon pool
+4. bridge progress updates to frontend
+5. map `SlicerV3Error` to user-facing diagnostics
 
-## Choosing output mode
+## Dedicated Rayon pool
 
-### In-memory mode
+Slicing runs inside a named pool (`dragonfruit-slicing-engine-{i}`) so heavy work stays separate from async runtime concerns.
 
-Use `slice_with_progress_v3` when caller needs bytes immediately in process.
+## Progress behavior in V3.1
 
-### Path mode
+- engine reports progress on worker completion arrival
+- Tauri bridge throttles emits (~8ms gate)
+- first/final/phase-change updates bypass throttle
 
-Use `slice_with_progress_v3_to_path` for larger outputs to reduce copy pressure at IPC boundaries.
+This combination avoids event floods while keeping UI movement smooth and responsive.
 
-## Cancellation behavior
+## Output mode choices
+
+### In-memory bytes
+
+`slice_with_progress_v3` — useful when bytes must be returned directly over IPC.
+
+### Path output
+
+`slice_with_progress_v3_to_path` — preferred for large outputs to avoid extra copy overhead.
+
+## Cancellation semantics
 
 Cancellation is cooperative:
 
-- set `AtomicBool` from external cancel command
-- running job exits with `SlicerV3Error::Cancelled`
+- flag set by cancel command
+- checked by worker loop and drain loop
+- exits as `SlicerV3Error::Cancelled`
 
-No abrupt thread kill or panic path is used.
+## Error mapping guidance
 
-## Progress behavior
+- treat `Cancelled` as expected user action
+- surface validation errors as input/config issues
+- include supported formats for `UnsupportedOutput`
+- preserve low-level details for `Png`/`Zip`/`Json`/payload mismatch errors for diagnostics
 
-Progress callback is invoked as worker results complete (not only strict in-order flush), producing smoother frontend updates under out-of-order parallel completion.
+## Build profile note
 
-## Error translation
-
-At Tauri command boundary, map `SlicerV3Error` variants to user-facing categories:
-
-- input validation errors
-- unsupported format/config errors
-- cancellation
-- encoding/IO runtime failures
-
-Preserve original error string for diagnostics.
-
-## Build/runtime notes
-
-- Encoder availability depends on generated plugin registry artifacts.
-- If output format suddenly appears unsupported, regenerate plugin registry and rebuild.
-- For local dev performance consistency, ensure desktop and slicer crates use intended profile settings.
+Keep `[profile.dev.package.dragonfruit-slicing-engine] opt-level = 3` in desktop crate for representative dev throughput.

@@ -1,109 +1,82 @@
 # Development Guide
 
-## Contribution philosophy
+## Engineering principles
 
-When modifying V3, preserve three core properties:
+When changing `dragonfruit-slicing-engine`, preserve:
 
-1. **Correctness first** (no raster/topology regressions)
-2. **Determinism** (stable output for stable input)
-3. **Bounded resource usage** (no unbounded fan-out or buffer growth)
+1. **Correctness** (geometry/raster parity)
+2. **Determinism** (stable output for same input)
+3. **Bounded memory** (avoid unbounded queues/materialization)
+4. **Hot-path efficiency** (maintain O(num_runs) where expected)
 
-## Safe change workflow
+## Recommended change workflow
 
-1. Start from one module boundary (e.g., `raster` only).
-2. Add/update tests for behavior change.
-3. Run crate checks and benchmark sanity.
-4. Validate integration behavior from desktop commands.
-5. Update docs in this directory.
+1. scope the change to specific module boundaries
+2. update/add tests near the changed behavior
+3. run `cargo check` + `cargo test`
+4. benchmark if touching raster/encode/pipeline
+5. validate desktop integration behavior for progress/cancel
+6. update docs in same PR
 
-## Module-specific guidance
+## Module guidance
 
 ### `raster`
 
-- Keep winding union semantics intact.
-- Be careful with floating-point edge conditions (`x_eps`, scanline inclusivity).
-- Validate against overlapping/disconnected island tests.
+- preserve winding union behavior
+- keep AA-off strictly binary
+- handle scanline edge rounding carefully
+
+### `rle`
+
+- always merge adjacent same-value runs
+- keep hot helpers lightweight
+
+### `encode`
+
+- avoid full pixel buffer materialization on V3.1 fast paths
+- keep packing transforms well-tested (boundary and odd-length cases)
+- preserve PNG/pHYs correctness for packed modes
 
 ### `pipeline`
 
-- Preserve bounded channel + reorder buffer strategy.
-- Avoid introducing unbounded queues or duplicate full-layer copies.
-- Keep progress and cancellation semantics explicit.
+- preserve bounded channel architecture
+- preserve progress-on-arrival semantics
+- keep cancellation checks in both worker and drain loops
 
 ### `encoders`
 
-- Add capabilities conservatively.
-- Do not hardcode format dispatch in engine.
-- Prefer generated registry wiring.
+- use registry-driven dispatch, not engine hardcoding
+- ensure `RleStreamEncoder` capability flags match behavior
+- ensure parallel closures are thread-safe and index-safe
 
 ### `engine`
 
-- Keep validation strict and early.
-- Keep error translation clear and typed.
+- validate early and fail clearly
+- keep error variants meaningful and surfaced
 
-## Pipeline path guidance: PNG vs raw layer data
+## Adding a new packing mode
 
-V3 supports two primary payload paths from `render_layers_bounded`:
+Suggested sequence:
 
-1. **PNG-layer path** (`RenderedLayersV3.png_layers`)
-2. **Raw-mask path** (`RenderedLayersV3.raw_mask_layers`)
+1. define mode in `types`
+2. add physical→logical RLE transform in `encode`
+3. add encode wrapper with correct PNG metadata
+4. wire encoder match arm
+5. add tests for transform/encode parity
+6. document behavior in `ARCHITECTURE` and `PIPELINE`
 
-The selected path is capability-driven by the active encoder:
+## Testing checklist
 
-- `requires_png_layers()`
-- `requires_raw_mask_layers()`
-- `requires_area_stats()`
+- geometry overlap/disjoint edge cases
+- AA off/on behavior
+- packing-specific transform tests
+- encoder finalization correctness
+- benchmark throughput sanity
 
-### PNG-layer path (most current formats)
+## Docs policy
 
-Use this path when the container format stores/consumes PNG slices.
+If behavior or contract changes, docs must be updated in the same PR.
 
-Notes:
+## Acknowledgment
 
-- `encode_grayscale_png` cost is material for total runtime.
-- Uniform black/white PNG cache behavior in `pipeline` should be preserved.
-- Any compression-strategy changes (`fastest`, `balanced`, `smallest`, `optimal`) should be benchmarked.
-
-### Raw-mask path
-
-Use this path when encoder logic wants direct raster bytes and handles packing itself.
-
-Notes:
-
-- Avoid accidental PNG work when only raw masks are needed.
-- Be explicit about grayscale/threshold semantics in encoder code.
-- Validate output parity with PNG-based behavior if format expectations overlap.
-
-### Dual-path encoders
-
-Some formats may require both PNG and raw data. If so:
-
-- Justify the extra memory/CPU cost in code comments and PR notes.
-- Keep bounded in-flight behavior unchanged.
-- Verify that progress/cancellation semantics remain identical.
-
-### When changing capabilities
-
-If you change encoder capability flags, validate all of the following:
-
-1. Correct payload is emitted (PNG/raw/both).
-2. No `MissingRenderedLayerPayload` regressions.
-3. Perf counters still make sense (`render_ns`, `png_encode_ns`, `archive_encode_ns`).
-4. Desktop integration behavior is unchanged (or intentionally documented).
-
-## Testing recommendations
-
-- Unit-test edge-case geometry and raster behavior.
-- Add targeted tests for new encoder capability requirements.
-- Use benchmark runner for performance trend checks after algorithm changes.
-
-## Documentation update policy
-
-Any non-trivial change to:
-
-- stage behavior
-- API contracts
-- error semantics
-- encoder capabilities
-
-should include updates in this `docs/` directory in the same PR.
+Many thanks to **mslicer** for algorithmic inspiration that helped guide several V3.1 development decisions.
