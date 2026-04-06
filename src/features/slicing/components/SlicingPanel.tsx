@@ -669,9 +669,8 @@ export function SlicingPanel({
       if (!mounted) return;
       setDisplayProgressPercent((prev) => {
         const target = progressPercent;
-        // Snap immediately when complete or nearly there to avoid stale bar.
-        if (target >= 100 || Math.abs(target - prev) < 0.2) return target;
-        return prev + ((target - prev) * 0.16);
+        if (target >= 100 || Math.abs(target - prev) < 0.1) return target;
+        return prev + (target - prev) * 0.5;
       });
       rafId = window.requestAnimationFrame(animate);
     };
@@ -1707,8 +1706,8 @@ export function SlicingPanel({
 
               <div className="h-2.5 rounded overflow-hidden" style={{ background: 'var(--surface-2)' }}>
                 <div
-                  className="h-full transition-all duration-200"
-                  style={{ width: `${Math.round(displayProgressPercent)}%`, background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
+                  className="h-full"
+                  style={{ width: `${displayProgressPercent.toFixed(1)}%`, background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
                 />
               </div>
 

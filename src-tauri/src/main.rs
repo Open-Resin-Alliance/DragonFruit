@@ -443,7 +443,7 @@ fn make_throttled_progress_cb(
             let should_emit = {
                 let mut s = state.lock().unwrap();
                 let phase_changed = s.last_phase != phase;
-                let elapsed = s.last_emit.elapsed().as_millis() >= 16;
+                let elapsed = s.last_emit.elapsed().as_millis() >= 8;
 
                 if is_final || phase_changed || elapsed {
                     s.last_emit = Instant::now();
