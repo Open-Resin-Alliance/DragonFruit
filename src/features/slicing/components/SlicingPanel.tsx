@@ -23,7 +23,7 @@ import {
 } from '@/features/slicing/sliceExportOrchestrator';
 import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
-import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
@@ -260,6 +260,7 @@ export function SlicingPanel({
   const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
   const [lastBenchmark, setLastBenchmark] = useState<SliceBenchmarkSnapshot | null>(null);
   const [lastNativeError, setLastNativeError] = useState<string | null>(null);
+  const [slicerEngineVersion, setSlicerEngineVersion] = useState<string | null>(null);
   const [lifetimeTelemetry, setLifetimeTelemetry] = useState<LifetimeTelemetry>({
     runCount: 0,
     totalElapsedMs: 0,
@@ -364,7 +365,10 @@ export function SlicingPanel({
   const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
   const minimumAaControlsDisabled = !antiAliasingAvailable;
   const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter) && !isRemoteNetworkUnavailable;
-  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter) && isRemoteNetworkUnavailable;
+  const localMaterialHasLayerHeight = activeMaterialProfile != null
+    && Number.isFinite(activeMaterialProfile.layerHeightMm)
+    && activeMaterialProfile.layerHeightMm > 0;
+  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter) && isRemoteNetworkUnavailable && !localMaterialHasLayerHeight;
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
@@ -589,6 +593,12 @@ export function SlicingPanel({
 
     setRemoteOfflineLayerHeightDraft(null);
   }, [remoteOfflineLayerHeightDraft, setClampedRemoteOfflineLayerHeightMm]);
+
+  useEffect(() => {
+    void getSlicerEngineVersion().then((v) => {
+      if (v) setSlicerEngineVersion(v);
+    });
+  }, []);
 
   useEffect(() => {
     if (!antiAliasingAvailable) {
@@ -1236,7 +1246,7 @@ export function SlicingPanel({
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Engine</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Slicer V3
+                  {slicerEngineVersion ? `v${slicerEngineVersion}` : 'Slicer V3'}
                 </div>
               </div>
             </div>

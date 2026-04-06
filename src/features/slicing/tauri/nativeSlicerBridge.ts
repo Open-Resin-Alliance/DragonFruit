@@ -238,6 +238,12 @@ export async function isNativeSlicerAvailable(): Promise<boolean> {
   return Boolean(core);
 }
 
+export async function getSlicerEngineVersion(): Promise<string | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  return core.invoke<string>('get_slicer_engine_version');
+}
+
 export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
 
 export type NativeSliceTempPathArtifact = {
