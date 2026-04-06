@@ -1615,6 +1615,11 @@ fn focus_main_window(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn get_slicer_engine_version() -> &'static str {
+    dragonfruit_slicing_engine::ENGINE_VERSION
+}
+
+#[tauri::command]
 async fn notify_launch_scene_handoff(app: tauri::AppHandle) -> Result<(), String> {
     let args = std::env::args().collect::<Vec<_>>();
     emit_scene_file_handoff(&app, &args, "primary-launch");
@@ -1777,6 +1782,7 @@ fn main() {
             pick_save_path,
             pick_open_files,
             get_launch_scene_files,
+            get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
             write_bytes_to_path,

@@ -5,6 +5,9 @@
 //! This crate is the active native slicer backend for DragonFruit Desktop.
 //! It exposes a typed job API plus an end-to-end format-dispatched slicing entrypoint.
 
+/// Crate version, sourced from Cargo.toml at compile time.
+pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod benchmark;
 pub mod encode;
 pub mod encoders;
