@@ -9,7 +9,6 @@ mod plugin_registry;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Deserialize;
 use serde::Serialize;
-use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{InvokeBody, Response};
@@ -1645,7 +1644,11 @@ async fn read_print_file_bytes(source_path: String) -> Result<Response, String> 
 }
 
 #[tauri::command]
-async fn read_print_layer_png(source_path: String, layer_number: u32) -> Result<Response, String> {
+async fn read_print_layer_png(
+    source_path: String,
+    layer_number: u32,
+    format_hint: String,
+) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         if layer_number == 0 {
             return Err("Layer number must be >= 1".to_string());
@@ -1656,22 +1659,15 @@ async fn read_print_layer_png(source_path: String, layer_number: u32) -> Result<
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        let file = std::fs::File::open(&source)
-            .map_err(|err| format!("Failed opening print archive: {err}"))?;
-        let mut zip = zip::ZipArchive::new(file)
-            .map_err(|err| format!("Failed reading print archive: {err}"))?;
-
-        let entry_name = format!("{}.png", layer_number);
-        let mut entry = zip
-            .by_name(&entry_name)
-            .map_err(|err| format!("Failed reading layer PNG {entry_name}: {err}"))?;
-
-        let mut png_bytes = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut png_bytes)
-            .map_err(|err| format!("Failed reading layer PNG bytes: {err}"))?;
-
-        Ok(png_bytes)
+        match format_hint.trim() {
+            f if f == ".ctb" || f.starts_with("ctb") => {
+                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::ctb_encoder::read_layer_preview_png(&source, layer_number)
+            }
+            _ => {
+                // Default: NanoDLP ZIP archive (.nanodlp, athena, and any unknown format)
+                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::athena_encoder::read_layer_preview_png(&source, layer_number)
+            }
+        }
     })
     .await
     .map_err(|err| format!("Read layer task failed to join: {err}"))??;

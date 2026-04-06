@@ -202,6 +202,8 @@ export type SliceExportArtifact = {
   mimeType: string;
   byteSize: number;
   nativeTempPath: string | null;
+  /** Output format identifier, e.g. ".nanodlp" or ".ctb". Used to route layer preview decoding to the correct plugin decoder. */
+  outputFormat: string;
 };
 
 export type SliceExportResult = {
@@ -732,6 +734,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       mimeType: 'application/octet-stream',
       byteSize: encodedArtifact.byteLen,
       nativeTempPath: encodedArtifact.tempPath,
+      outputFormat: format.outputFormat,
     },
     benchmark: {
       totalElapsedMs,

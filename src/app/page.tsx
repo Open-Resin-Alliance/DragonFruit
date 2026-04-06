@@ -2055,7 +2055,7 @@ export default function Home() {
     inFlight.add(layerNumber);
 
     let cancelled = false;
-    void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber)
+    void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber, printingArtifact.outputFormat)
       .then((pngBytes: Uint8Array) => {
         if (cancelled) return;
         const previewBytes = new Uint8Array(pngBytes.length);

@@ -594,3 +594,27 @@ impl FormatEncoder for AthenaPluginEncoder {
         write_nanodlp_archive(writer, job, layer_pngs, layer_area_stats, None)
     }
 }
+
+/// Reads a single layer preview PNG from a NanoDLP archive (ZIP file).
+/// `layer_number` is 1-based.
+pub fn read_layer_preview_png(path: &Path, layer_number: u32) -> Result<Vec<u8>, String> {
+    if layer_number == 0 {
+        return Err("Layer number must be >= 1".to_string());
+    }
+
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Failed opening NanoDLP archive: {e}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("Failed reading NanoDLP archive: {e}"))?;
+
+    let entry_name = format!("{}.png", layer_number);
+    let mut entry = zip
+        .by_name(&entry_name)
+        .map_err(|e| format!("Layer PNG {entry_name} not found in archive: {e}"))?;
+
+    let mut png_bytes = Vec::with_capacity(entry.size() as usize);
+    std::io::Read::read_to_end(&mut entry, &mut png_bytes)
+        .map_err(|e| format!("Failed reading layer PNG bytes: {e}"))?;
+
+    Ok(png_bytes)
+}

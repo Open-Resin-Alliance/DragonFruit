@@ -646,6 +646,7 @@ export async function readPrintArtifactBytesFromPath(sourcePath: string): Promis
 export async function readPrintLayerPreviewPngFromPath(
   sourcePath: string,
   layerNumber: number,
+  formatHint: string,
 ): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
@@ -656,6 +657,7 @@ export async function readPrintLayerPreviewPngFromPath(
   const result = await core.invoke<ArrayBuffer>('read_print_layer_png', {
     sourcePath,
     layerNumber: safeLayerNumber,
+    formatHint,
   });
 
   return new Uint8Array(result);
