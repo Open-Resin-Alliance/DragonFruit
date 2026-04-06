@@ -694,3 +694,154 @@ pub fn encode_truecolor_packed_png_from_rle(
     write_chunk(&mut out, b"IEND", &[]);
     Ok(out)
 }
+
+/// Convert physical-width RLE runs to logical-width averaged runs for div2
+/// packing.
+///
+/// Each pair of adjacent physical pixels `(a, b)` maps to one output pixel
+/// valued `(a + b) / 2`.  Interior pairs (both pixels in the same run)
+/// produce the run's value unchanged; boundary pairs (straddling two runs)
+/// produce the integer average.
+///
+/// Time complexity: **O(num_input_runs)**.
+fn average_rle_pairs_div2(runs: &[crate::rle::RleRun]) -> Vec<crate::rle::RleRun> {
+    use crate::rle::RleRun;
+
+    fn push_n(out: &mut Vec<RleRun>, value: u8, count: u64) {
+        if count == 0 {
+            return;
+        }
+        if let Some(last) = out.last_mut() {
+            if last.value == value {
+                last.length += count as u32;
+                return;
+            }
+        }
+        out.push(RleRun {
+            value,
+            length: count as u32,
+        });
+    }
+
+    let mut out: Vec<RleRun> = Vec::with_capacity(runs.len() * 2);
+    let mut run_idx: usize = 0;
+    let mut run_rem: u64 = runs.first().map_or(0, |r| r.length as u64);
+
+    loop {
+        if run_idx >= runs.len() || run_rem == 0 {
+            break;
+        }
+
+        let val = runs[run_idx].value;
+
+        if run_rem >= 2 {
+            // Both pixels in same run → average = val.
+            let full_pairs = run_rem / 2;
+            push_n(&mut out, val, full_pairs);
+            run_rem -= full_pairs * 2;
+            // run_rem is now 0 or 1.
+            if run_rem == 0 {
+                run_idx += 1;
+                run_rem = if run_idx < runs.len() {
+                    runs[run_idx].length as u64
+                } else {
+                    0
+                };
+            }
+            // If run_rem == 1, next iteration handles the straddling case.
+        } else {
+            // run_rem == 1: pair straddles two runs.
+            let val_a = val;
+            run_idx += 1;
+            if run_idx >= runs.len() {
+                // Odd trailing pixel: average with 0.
+                push_n(&mut out, val_a >> 1, 1);
+                break;
+            }
+            let val_b = runs[run_idx].value;
+            run_rem = runs[run_idx].length as u64 - 1;
+            if run_rem == 0 {
+                run_idx += 1;
+                run_rem = if run_idx < runs.len() {
+                    runs[run_idx].length as u64
+                } else {
+                    0
+                };
+            }
+            let avg = ((val_a as u16 + val_b as u16) >> 1) as u8;
+            push_n(&mut out, avg, 1);
+        }
+    }
+
+    out
+}
+
+/// Encode a grayscale PNG by averaging pairs of physical-resolution RLE runs
+/// for NanoDLP `gray3_div2` packing.
+///
+/// Runs are at **physical** resolution (e.g. 15360 pixels wide).  Every pair
+/// of adjacent grayscale sub-pixels is averaged into one output pixel.  The
+/// PNG IHDR width is `logical_width` with `color_type = 0` (Grayscale), and
+/// a `pHYs` chunk records the `2 : 1` aspect ratio.
+///
+/// Encoding time is **O(num_runs + height)** — no pixel buffer is materialised.
+pub fn encode_grayscale_averaged_png_from_rle(
+    logical_width: u32,
+    height: u32,
+    runs: &[crate::rle::RleRun],
+) -> Result<Vec<u8>, SlicerV3Error> {
+    let h = height as u64;
+
+    // Step 1 — average pairs of physical pixels into logical-width runs.
+    let averaged = average_rle_pairs_div2(runs);
+
+    // Step 2 — intersperse filter bytes at logical-row boundaries.
+    let isp = intersperse_filter_runs(&averaged, logical_width as u64, h);
+
+    // Step 3 — Adler-32 + LZ77 + fixed-Huffman bitstream.
+    let mut adler = Adler32State::new();
+    let mut bw = BitWriter::new(isp.len() * 4 + 64);
+
+    bw.bytes.push(0x78);
+    bw.bytes.push(0x01);
+    bw.bits_lsb(0b011, 3);
+
+    for &(length, value) in &isp {
+        adler.update_run(length, value);
+        huffman_sym(&mut bw, value as u32);
+
+        let mut rem = length - 1;
+        while rem >= 3 {
+            let m = rem.min(258) as u16;
+            rem -= m as u64;
+            emit_match(&mut bw, m);
+        }
+        for _ in 0..rem {
+            huffman_sym(&mut bw, value as u32);
+        }
+    }
+
+    huffman_sym(&mut bw, 256);
+    let mut idat = bw.finish();
+    idat.extend_from_slice(&adler.finish().to_be_bytes());
+
+    // Step 4 — assemble PNG: IHDR (Grayscale) + pHYs + IDAT + IEND.
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&logical_width.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+    ihdr[8] = 8; // 8 bits per channel
+    ihdr[9] = 0; // color_type: Grayscale
+
+    let mut phys = [0u8; 9];
+    phys[0..4].copy_from_slice(&2u32.to_be_bytes()); // 2 physical pixels per logical
+    phys[4..8].copy_from_slice(&1u32.to_be_bytes());
+    phys[8] = 0; // unit: unknown (ratio only)
+
+    let mut out = Vec::with_capacity(8 + 25 + 21 + 12 + idat.len() + 12);
+    out.extend_from_slice(&PNG_SIG);
+    write_chunk(&mut out, b"IHDR", &ihdr);
+    write_chunk(&mut out, b"pHYs", &phys);
+    write_chunk(&mut out, b"IDAT", &idat);
+    write_chunk(&mut out, b"IEND", &[]);
+    Ok(out)
+}

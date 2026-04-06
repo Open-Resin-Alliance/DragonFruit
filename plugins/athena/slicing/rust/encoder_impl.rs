@@ -422,6 +422,13 @@ fn encode_layer_png(
             let logical_width = job.width_px;
             crate::encode::encode_truecolor_packed_png_from_rle(logical_width, height, runs, 3)
         }
+        "gray3_div2" => {
+            // RLE runs are at physical resolution (source_width_px).
+            // Average every 2 adjacent grayscale sub-pixels into one output
+            // pixel, producing a half-width grayscale PNG.
+            let logical_width = job.width_px;
+            crate::encode::encode_grayscale_averaged_png_from_rle(logical_width, height, runs)
+        }
         _ => {
             // Grayscale: expand RLE and use libdeflate.
             let total_pixels = (width as usize).saturating_mul(height as usize);
@@ -463,13 +470,16 @@ impl RleStreamEncoder for AthenaRleStreamEncoder {
 
     fn parallel_encode_fn(
         &self,
-    ) -> Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>
-    {
+    ) -> Option<
+        Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
+    > {
         let job = self.job.clone();
         let binary_png = self.binary_png;
-        Some(Arc::new(move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
-            encode_layer_png(&job, runs, binary_png)
-        }))
+        Some(Arc::new(
+            move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
+                encode_layer_png(&job, runs, binary_png)
+            },
+        ))
     }
 
     fn store_encoded_layer(&mut self, layer_index: u32, bytes: Vec<u8>) {
