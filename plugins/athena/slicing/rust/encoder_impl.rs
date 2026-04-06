@@ -463,11 +463,11 @@ impl RleStreamEncoder for AthenaRleStreamEncoder {
 
     fn parallel_encode_fn(
         &self,
-    ) -> Option<Arc<dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>
+    ) -> Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>
     {
         let job = self.job.clone();
         let binary_png = self.binary_png;
-        Some(Arc::new(move |runs: &[crate::rle::RleRun]| {
+        Some(Arc::new(move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
             encode_layer_png(&job, runs, binary_png)
         }))
     }

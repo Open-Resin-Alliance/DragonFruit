@@ -67,7 +67,7 @@ pub trait RleStreamEncoder: Send {
         &self,
     ) -> Option<
         std::sync::Arc<
-            dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+            dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
         >,
     > {
         None

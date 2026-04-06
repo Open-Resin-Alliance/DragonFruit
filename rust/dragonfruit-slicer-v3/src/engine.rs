@@ -307,7 +307,9 @@ pub fn slice_and_rasterize_rle_v3(
 /// Fast raster stage that encodes RLE runs into layer bytes in parallel rayon workers.
 pub fn slice_and_rasterize_rle_encoded_v3(
     job: &SliceJobV3,
-    encode_fn: Arc<dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
+    encode_fn: Arc<
+        dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+    >,
     on_encoded_layer: impl FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,

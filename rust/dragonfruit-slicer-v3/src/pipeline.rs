@@ -618,7 +618,7 @@ pub fn render_layers_rle_encoded(
     triangles: &[Triangle],
     layer_index: &LayerIndex,
     encode_fn: std::sync::Arc<
-        dyn Fn(&[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+        dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
     >,
     mut on_encoded_layer: impl FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
@@ -668,7 +668,7 @@ pub fn render_layers_rle_encoded(
                                 );
 
                                 let encode_start = std::time::Instant::now();
-                                let bytes = encode_fn(&runs)?;
+                                let bytes = encode_fn(layer, &runs)?;
                                 encode_ns.fetch_add(
                                     encode_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,
