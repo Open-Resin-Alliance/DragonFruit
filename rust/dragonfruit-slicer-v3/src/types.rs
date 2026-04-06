@@ -91,17 +91,14 @@ pub struct SliceJobV3 {
 impl SliceJobV3 {
     /// Effective render width in pixels.
     ///
-    /// For packed formats (`rgb8_div3`) the rasteriser operates at the logical
-    /// pixel resolution (`width_px`), not the full sub-pixel resolution
-    /// (`source_width_px`).  The sub-pixel expansion (grayscale → RGB
-    /// triplets where R=G=B=value) happens at PNG encoding time, matching
-    /// mslicer's approach for a ~3× rasterisation speedup.
+    /// Always uses the full physical sub-pixel resolution so that adjacent
+    /// sub-pixels carry independent exposure values.  For `rgb8_div3` the
+    /// rasteriser works at `source_width_px` (e.g. 11520) and the encoder
+    /// packs every 3 grayscale bytes into one RGB pixel at `width_px`
+    /// (e.g. 3840).
     #[inline]
     pub fn effective_render_width_px(&self) -> u32 {
-        match self.x_packing_mode.as_str() {
-            "rgb8_div3" => self.width_px,
-            _ => self.source_width_px,
-        }
+        self.source_width_px
     }
 }
 
