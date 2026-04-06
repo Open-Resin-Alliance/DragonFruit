@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { snapAngle, SNAP_COARSE, SNAP_FINE, SNAP_STORAGE_KEY } from './snapRotation';
 import type { GizmoAxis } from '../types';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
@@ -53,6 +54,15 @@ export function GizmoRotation({
   const billboardRotationRef = useRef<number>(0);
   const lastMouseAngle = useRef<number>(0);
   const shouldFlipRef = useRef(false);
+  // Snap rotation refs (object-space)
+  const rawAccumulatedAngleRef = useRef<number>(0);
+  const lastSnappedAngleRef = useRef<number>(0);
+  const prevSnapIncrementRef = useRef<number | null>(null);
+  // Callback refs to stabilize useEffect deps (prevents effect churn during drag)
+  const onDragRef = useRef(onDrag);
+  const onDragEndRef = useRef(onDragEnd);
+  onDragRef.current = onDrag;
+  onDragEndRef.current = onDragEnd;
   const rotatingArcRef = useRef<THREE.Group>(null);
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
@@ -209,6 +219,10 @@ export function GizmoRotation({
     if (allowed === false) {
       return;
     }
+    // Initialize snap refs at drag start to avoid spurious first-frame transition
+    rawAccumulatedAngleRef.current = 0;
+    lastSnappedAngleRef.current = 0;
+    prevSnapIncrementRef.current = null;
     setIsDragging(true);
   };
 
@@ -227,13 +241,6 @@ export function GizmoRotation({
     return Math.atan2(clientY - center.y, clientX - center.x);
   }, [getGizmoScreenCenter]);
 
-  const handlePointerUp = () => {
-    if (!isDragging) return;
-
-    setIsDragging(false);
-    onDragEnd();
-  };
-
   // Global pointer move and up listeners during drag
   useEffect(() => {
     if (!isDragging) return;
@@ -246,43 +253,75 @@ export function GizmoRotation({
       if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
       if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
 
-      // X and Z axes need inverted visual feedback, Y axis is correct as-is
-      let visualDelta = (axis === 'x' || axis === 'z') ? -deltaAngle : deltaAngle;
-      let objectDelta = deltaAngle;
+      // Compute sign factors for axis inversion and camera flip
+      const flipMult = shouldFlipRef.current ? -1 : 1;
+      const objectSignFactor = -flipMult;
+      const axisSign = (axis === 'x' || axis === 'z') ? -1 : 1;
 
-      // If camera has flipped to the other side, invert both visual and object rotation
-      if (shouldFlipRef.current) {
-        visualDelta = -visualDelta;
-        objectDelta = -objectDelta;
+      const rawObjectDelta = deltaAngle * objectSignFactor;
+      rawAccumulatedAngleRef.current += rawObjectDelta;
+
+      // Determine snap state from modifier keys or persistent toggle
+      let snapToggled = false;
+      try { snapToggled = localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch {}
+      const isSnapActive = e.metaKey || e.ctrlKey || snapToggled;
+      const currentIncrement = isSnapActive
+        ? (e.shiftKey ? SNAP_FINE : SNAP_COARSE)
+        : null;
+
+      // Reset accumulated on any transition (free↔snap, coarse↔fine)
+      // to prevent grid-misalignment jumps
+      if (currentIncrement !== prevSnapIncrementRef.current) {
+        rawAccumulatedAngleRef.current = lastSnappedAngleRef.current;
+      }
+      prevSnapIncrementRef.current = currentIncrement;
+
+      let emittedObjectDelta: number;
+      if (currentIncrement !== null) {
+        // Snap mode: quantize accumulated angle, emit difference
+        const snappedAngle = snapAngle(rawAccumulatedAngleRef.current, currentIncrement);
+        emittedObjectDelta = snappedAngle - lastSnappedAngleRef.current;
+        lastSnappedAngleRef.current = snappedAngle;
+      } else {
+        // Free rotation: emit raw delta
+        emittedObjectDelta = rawObjectDelta;
+        lastSnappedAngleRef.current += rawObjectDelta;
       }
 
-      // Flip both visual and object to match mouse direction (all axes)
-      visualDelta = -visualDelta;
-      objectDelta = -objectDelta;
+      // Visual delta = objectDelta * axisSign (x/z axes invert visual relative to object)
+      const visualDelta = emittedObjectDelta * axisSign;
 
       // Update handle angle for visual feedback (ref-based)
       handleAngleRef.current += visualDelta;
       targetHandleAngleRef.current = handleAngleRef.current;
 
       // Send rotation delta to parent (object rotation)
-      onDrag(objectDelta);
+      onDragRef.current(emittedObjectDelta);
+
+      // Dispatch snap readout event for DOM overlay
+      window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
+        detail: currentIncrement !== null
+          ? { active: true, angle: lastSnappedAngleRef.current, axis }
+          : { active: false },
+      }));
 
       lastMouseAngle.current = currentMouseAngle;
     };
 
     const handleGlobalPointerUp = () => {
       setIsDragging(false);
-      onDragEnd();
+      onDragEndRef.current();
+      window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail: { active: false } }));
     };
 
     window.addEventListener('pointermove', handleGlobalPointerMove);
     window.addEventListener('pointerup', handleGlobalPointerUp);
-    
+
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [isDragging, onDrag, onDragEnd, getMouseAngle, axis]);
+  }, [isDragging, getMouseAngle, axis]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);

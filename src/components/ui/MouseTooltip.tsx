@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 interface MouseTooltipProps {
     children: React.ReactNode;
@@ -7,13 +7,14 @@ interface MouseTooltipProps {
     className?: string;
 }
 
-export function MouseTooltip({ 
-    children, 
-    visible = true, 
+export function MouseTooltip({
+    children,
+    visible = true,
     offset = { x: 15, y: 15 },
     className = ""
 }: MouseTooltipProps) {
     const [pos, setPos] = useState<{ x: number, y: number } | null>(null);
+    const tooltipRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!visible) {
@@ -31,13 +32,25 @@ export function MouseTooltip({
 
     if (!visible || !pos) return null;
 
+    // Compute clamped position to keep tooltip on-screen
+    let left = pos.x + offset.x;
+    let top = pos.y + offset.y;
+    const el = tooltipRef.current;
+    if (el) {
+        const rect = el.getBoundingClientRect();
+        if (left + rect.width > window.innerWidth) {
+            left = pos.x - offset.x - rect.width;
+        }
+        if (top + rect.height > window.innerHeight) {
+            top = pos.y - offset.y - rect.height;
+        }
+    }
+
     return (
-        <div 
+        <div
+            ref={tooltipRef}
             className={`fixed pointer-events-none z-50 ${className}`}
-            style={{
-                left: pos.x + offset.x,
-                top: pos.y + offset.y,
-            }}
+            style={{ left, top }}
         >
             {children}
         </div>

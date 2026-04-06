@@ -1,6 +1,8 @@
 import React from 'react';
-import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine } from 'lucide-react';
+import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, Magnet } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
+import { usePlatformModifier } from '@/hooks/usePlatformModifier';
+import { SNAP_STORAGE_KEY } from '@/components/gizmo/rotate/snapRotation';
 
 interface TransformToolbarProps {
   mode: TransformMode;
@@ -9,6 +11,10 @@ interface TransformToolbarProps {
 
 export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) {
   const [hoveredMode, setHoveredMode] = React.useState<TransformMode | null>(null);
+  const [snapEnabled, setSnapEnabled] = React.useState(() => {
+    try { return localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch { return false; }
+  });
+  const modKey = usePlatformModifier();
 
   const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string }> = [
     { mode: 'select', label: 'Select', icon: <Hand className="w-4 h-4" />, hint: 'Select and inspect model' },
@@ -28,7 +34,10 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
 
   return (
     <div
-      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 rounded-full pointer-events-auto"
+      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 flex items-center pointer-events-auto"
+    >
+    <div
+      className="rounded-full"
       style={{
         padding: '2px',
         background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%), var(--border-subtle), color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%))',
@@ -85,6 +94,25 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
           );
         })}
       </div>
+      </div>
+
+      {/* Snap rotation toggle — outside the pill */}
+      <button
+        onClick={() => {
+          const next = !snapEnabled;
+          setSnapEnabled(next);
+          try { localStorage.setItem(SNAP_STORAGE_KEY, String(next)); } catch {}
+          window.dispatchEvent(new CustomEvent('dragonfruit:snap-toggle', { detail: { enabled: next } }));
+        }}
+        className={`ml-2 flex items-center justify-center rounded-full p-2 transition-all duration-200 ${
+          snapEnabled
+            ? 'bg-[var(--accent-secondary)] text-black shadow-[0_2px_12px_color-mix(in_srgb,var(--accent-secondary),transparent_50%)]'
+            : 'text-[var(--text-muted)] hover:text-[var(--text-strong)] hover:bg-[color-mix(in_srgb,var(--surface-2),transparent_18%)]'
+        }`}
+        title={`Rotation snap ${snapEnabled ? 'ON' : 'OFF'} • ${modKey}+Drag: 45° | +Shift: 15°`}
+      >
+        <Magnet className="w-4 h-4" />
+      </button>
     </div>
   );
 }
