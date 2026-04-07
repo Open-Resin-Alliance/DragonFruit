@@ -74,7 +74,10 @@ for (const target of targets) {
 
       const result = spawnSync(npxCmd, cmdArgs, {
             stdio: "inherit",
-            env: process.env,
+            // Use +avx2 (supported on all CPUs since ~2013) for good vectorization
+            // without the illegal-instruction crashes that "target-cpu=native" causes
+            // on older hardware (STATUS_ILLEGAL_INSTRUCTION / 0xC000001D).
+            env: { ...process.env, RUSTFLAGS: "-C target-feature=+avx2,+fma" },
       });
 
       if (result.status !== 0) {
