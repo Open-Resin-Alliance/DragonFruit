@@ -265,7 +265,13 @@ export function SlicingPanel({
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [isThumbnailDrawerOpen, setIsThumbnailDrawerOpen] = useState(false);
-  const [sliceIntent, setSliceIntent] = useState<SliceIntent>('file');
+  const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
+    const id = (getActivePrinterProfile(getProfileStoreSnapshot())?.id ?? '').trim();
+    if (!id) return 'file';
+    const remembered = readSliceIntentByPrinterProfile()[id];
+    if (remembered === 'file' || remembered === 'upload' || remembered === 'print') return remembered;
+    return 'file';
+  });
   const [sliceIntentMenuOpen, setSliceIntentMenuOpen] = useState(false);
   const [sliceIntentMenuRect, setSliceIntentMenuRect] = useState<DOMRect | null>(null);
   const sliceIntentMenuRef = useRef<HTMLDivElement | null>(null);

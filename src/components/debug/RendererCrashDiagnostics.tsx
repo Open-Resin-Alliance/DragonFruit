@@ -224,6 +224,8 @@ export function RendererCrashDiagnostics() {
     };
 
     const onWindowError = (event: ErrorEvent) => {
+      // ResizeObserver loop notifications are benign browser warnings, not real errors.
+      if (event.message?.includes('ResizeObserver loop')) return;
       addEvent({
         at: new Date().toISOString(),
         kind: 'window-error',

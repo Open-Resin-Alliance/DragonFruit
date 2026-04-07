@@ -3441,8 +3441,9 @@ export default function Home() {
     && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false,
   );
   const suggestedSliceOutputFilename = React.useMemo(() => {
-    const base = (activePrinterProfile?.name ?? 'slice_export')
-      .trim()
+    const modelName = (scene.activeModel?.name ?? scene.models[0]?.name ?? '').trim();
+    const base = (modelName || activePrinterProfile?.name || 'slice_export')
+      .replace(/\.[^.]+$/, '')
       .replace(/[<>:"/\\|?*]+/g, '_')
       .replace(/\s+/g, '_');
     const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
@@ -3450,7 +3451,7 @@ export default function Home() {
       ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
       : '.print';
     return `${base || 'slice_export'}${ext}`;
-  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name]);
+  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
   const isPreSliceTargetPicker = printingTargetPickerMode !== 'post-slice';
   const canPrintNow = Boolean(
     printingReadyPlateId
@@ -6604,6 +6605,7 @@ export default function Home() {
         setPrintingSendStageText('Print started');
         setPrintingUploadDialogStage('started');
         setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
+        setPrintingUploadDialogOpen(false);
         openPrintingMonitorForTargetDevice(printingTargetDevice.id);
       } else {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
