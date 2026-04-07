@@ -1778,10 +1778,7 @@ fn resolve_log_level_pref_path() -> std::path::PathBuf {
     #[cfg(target_os = "linux")]
     {
         let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-            format!(
-                "{}/.local/share",
-                std::env::var("HOME").unwrap_or_default()
-            )
+            format!("{}/.local/share", std::env::var("HOME").unwrap_or_default())
         });
         std::path::PathBuf::from(base)
             .join("org.openresinalliance.dragonfruit")
@@ -1801,8 +1798,8 @@ fn read_log_level_pref() -> log::LevelFilter {
     }
 }
 
-/// Persist the user's preferred log level to disk so it is picked up at the
-/// next startup (before the log plugin is initialised).
+/// Persist the user's preferred log level to disk AND apply it immediately
+/// at runtime via `log::set_max_level`. No restart required.
 #[tauri::command]
 async fn set_log_level_pref(level: String) -> Result<(), String> {
     const VALID: &[&str] = &["error", "warn", "info", "debug", "trace"];
@@ -1810,10 +1807,21 @@ async fn set_log_level_pref(level: String) -> Result<(), String> {
     if !VALID.contains(&level.as_str()) {
         return Err(format!("Invalid log level: {level}"));
     }
+    // Apply immediately — log::set_max_level is atomic and takes effect for all
+    // subsequent log macro calls without any restart.
+    let filter = match level.as_str() {
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => log::LevelFilter::Info,
+    };
+    log::set_max_level(filter);
+    // Persist for next startup.
     let path = resolve_log_level_pref_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create config dir: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {e}"))?;
     }
     std::fs::write(&path, level.as_bytes())
         .map_err(|e| format!("Failed to write log level pref: {e}"))

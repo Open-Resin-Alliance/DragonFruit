@@ -366,7 +366,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
           <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Minimum Log Level</h4>
         </div>
         <p className="text-[12px] mb-3" style={{ color: 'var(--text-muted)' }}>
-          Controls the least-significant event written to the log file. Takes effect on the next app launch.
+          Controls the least-significant event written to the log file. Changes apply immediately and persist across restarts.
         </p>
 
         <div className="flex flex-col gap-1.5">
@@ -556,9 +556,8 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
       >
         <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
         <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          The minimum log level takes effect on the <strong style={{ color: 'var(--text-strong)' }}>next app launch</strong>.
-          The viewer shows the tail of the current log file and refreshes every {POLL_INTERVAL_MS / 1000} seconds.
-          The viewer filter and noise suppression are local-only — they do not affect what is written to disk.
+          The minimum log level applies <strong style={{ color: 'var(--text-strong)' }}>immediately</strong> and is
+          also saved for next launch. The viewer filter and noise suppression are local-only — they do not affect what is written to disk.
         </p>
       </div>
     </div>
