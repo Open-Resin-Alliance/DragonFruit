@@ -301,17 +301,17 @@ export function GizmoRotation({
       // Send rotation delta to parent (object rotation)
       onDragRef.current(emittedObjectDelta);
 
-      // Dispatch snap readout event for DOM overlay
+      // Dispatch snap readout event for DOM overlay (always active while dragging)
       window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
-        detail: currentIncrement !== null
-          ? { active: true, angle: lastSnappedAngleRef.current, axis }
-          : { active: false },
+        detail: { active: true, angle: lastSnappedAngleRef.current, axis },
       }));
 
       lastMouseAngle.current = currentMouseAngle;
     };
 
     const handleGlobalPointerUp = () => {
+      // Remove pointermove synchronously so it can't re-fire active:true before React re-renders
+      window.removeEventListener('pointermove', handleGlobalPointerMove);
       setIsDragging(false);
       onDragEndRef.current();
       window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail: { active: false } }));
