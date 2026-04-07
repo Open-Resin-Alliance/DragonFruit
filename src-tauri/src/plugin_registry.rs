@@ -137,7 +137,7 @@ fn verify_generated_allowlist_integrity() -> Result<(), String> {
     );
 
     if cfg!(debug_assertions) {
-        eprintln!("[plugin-registry] WARNING: {message}");
+        log::warn!("[plugin-registry] WARNING: {message}");
         return Ok(());
     }
 

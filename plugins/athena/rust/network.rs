@@ -1,4 +1,5 @@
 use base64::Engine;
+use log::debug;
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -325,7 +326,7 @@ fn log_nanodlp_filter_debug(scope: &str, enabled: bool, details: Value) {
     if !enabled {
         return;
     }
-    eprintln!("[Athena][NanoDLP][FilterDebug][{}] {}", scope, details);
+    debug!("[Athena][NanoDLP][FilterDebug][{}] {}", scope, details);
 }
 
 fn resolve_supported_athena_model(status: &Value) -> Option<&'static str> {

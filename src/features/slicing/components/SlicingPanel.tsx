@@ -449,11 +449,27 @@ export function SlicingPanel({
 
   const visibleModels = useMemo(() => models.filter((model) => model.visible), [models]);
   const activePrinterProfileId = (activePrinterProfile?.id ?? '').trim();
+  const [isShiftHeld, setIsShiftHeld] = useState(false);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Shift') setIsShiftHeld(true); };
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Shift') setIsShiftHeld(false); };
+    const onBlur = () => setIsShiftHeld(false);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
   const effectiveSliceIntent = useMemo<SliceIntent>(() => {
+    if (isShiftHeld) return 'preview';
     if (sliceIntent === 'upload' && !canUpload) return 'file';
     if (sliceIntent === 'print' && !canPrint) return 'file';
     return sliceIntent;
-  }, [canPrint, canUpload, sliceIntent]);
+  }, [canPrint, canUpload, isShiftHeld, sliceIntent]);
   // 'preview' is always available regardless of network state
   const sliceFilenameBase = useMemo(
     () => resolveSliceFilenameBase(models, activeModel),
@@ -467,7 +483,7 @@ export function SlicingPanel({
     }
 
     const remembered = readSliceIntentByPrinterProfile()[activePrinterProfileId];
-    if (remembered === 'file' || remembered === 'upload' || remembered === 'print' || remembered === 'preview') {
+    if (remembered === 'file' || remembered === 'upload' || remembered === 'print') {
       setSliceIntent(remembered);
       return;
     }
@@ -1712,7 +1728,6 @@ export function SlicingPanel({
               { key: 'file',    label: 'Slice to File',  Icon: Download as IconType, enabled: true },
               { key: 'upload',  label: 'Slice & Upload', Icon: Printer  as IconType, enabled: canUpload },
               { key: 'print',   label: 'Slice & Print',  Icon: Play     as IconType, enabled: canPrint },
-              { key: 'preview', label: 'Just Slice',     Icon: Cpu      as IconType, enabled: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
             const CurrentIcon = current.Icon;
@@ -1724,12 +1739,12 @@ export function SlicingPanel({
                     type="button"
                     onClick={() => { void handleSliceZipExport(); }}
                     disabled={isDisabled}
-                    className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasNetworkOptions ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                    className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasNetworkOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
                     <CurrentIcon className="w-4 h-4 shrink-0" />
                     {isSlicingZip ? 'Slicing…' : current.label}
                   </button>
-                  {hasNetworkOptions && (
+                  {hasNetworkOptions && !isShiftHeld && (
                     <button
                       type="button"
                       onClick={() => {

@@ -1112,7 +1112,7 @@ async fn run_island_scan_native(
             dump_dir.join("positions.bin"),
             &mesh_bytes,
         );
-        eprintln!(
+        log::debug!(
             "[island-scan-native] triangles={} bbox=({:.4},{:.4},{:.4})-({:.4},{:.4},{:.4}) px_mm={} layer_h={} buf={} conn={} min_area={} overlap_px={} neighborhood={}",
             triangles.len(),
             params.bbox_min_x, params.bbox_min_y, params.bbox_min_z,
@@ -1121,7 +1121,7 @@ async fn run_island_scan_native(
             params.connectivity, params.min_island_area_mm2,
             params.min_overlap_px, params.overlap_neighborhood_px,
         );
-        eprintln!("[island-scan-native] debug dump: {}", dump_dir.display());
+        log::debug!("[island-scan-native] debug dump: {}", dump_dir.display());
 
         // Phase A: Rasterize all layers using shared module (same code as bench)
         let total_layers;
@@ -1199,7 +1199,7 @@ async fn run_island_scan_native(
         let total_ms = rasterize_ms + scan_ms;
 
         let total_solid_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
-        eprintln!(
+        log::info!(
             "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} raster={:.0}ms scan={:.0}ms",
             grid_width, grid_height, num_layers, total_solid_px,
             scan_result.islands.len(), rasterize_ms, scan_ms,
@@ -1715,6 +1715,191 @@ async fn cleanup_all_print_temp_files() -> Result<u32, String> {
     Ok(removed)
 }
 
+/// Open the folder containing the given path in the OS file manager.
+/// On Windows this uses `explorer /select,<path>` to highlight the file.
+/// On macOS it uses `open -R <path>`. On Linux it falls back to `xdg-open`
+/// on the parent directory.
+#[tauri::command]
+async fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Explorer: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let p = std::path::Path::new(&path);
+        let dir = p.parent().unwrap_or(p);
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open file manager: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Returns the path to the log-level preference file.
+/// This is intentionally computed with raw env vars so it can be called
+/// before the Tauri app (and its path resolver) is initialised.
+fn resolve_log_level_pref_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        std::path::PathBuf::from(appdata)
+            .join("org.openresinalliance.dragonfruit")
+            .join("loglevel")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::path::PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("org.openresinalliance.dragonfruit")
+            .join("loglevel")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+            format!(
+                "{}/.local/share",
+                std::env::var("HOME").unwrap_or_default()
+            )
+        });
+        std::path::PathBuf::from(base)
+            .join("org.openresinalliance.dragonfruit")
+            .join("loglevel")
+    }
+}
+
+fn read_log_level_pref() -> log::LevelFilter {
+    let content = std::fs::read_to_string(resolve_log_level_pref_path()).unwrap_or_default();
+    match content.trim() {
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => log::LevelFilter::Info,
+    }
+}
+
+/// Persist the user's preferred log level to disk so it is picked up at the
+/// next startup (before the log plugin is initialised).
+#[tauri::command]
+async fn set_log_level_pref(level: String) -> Result<(), String> {
+    const VALID: &[&str] = &["error", "warn", "info", "debug", "trace"];
+    let level = level.trim().to_lowercase();
+    if !VALID.contains(&level.as_str()) {
+        return Err(format!("Invalid log level: {level}"));
+    }
+    let path = resolve_log_level_pref_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config dir: {e}"))?;
+    }
+    std::fs::write(&path, level.as_bytes())
+        .map_err(|e| format!("Failed to write log level pref: {e}"))
+}
+
+/// Return the last `lines` lines of the log file for the live viewer in Settings.
+/// Returns an empty string if the file does not yet exist.
+#[tauri::command]
+async fn read_log_tail(app: tauri::AppHandle, lines: usize) -> Result<String, String> {
+    use tauri::Manager;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log dir: {e}"))?;
+    let log_file = log_dir.join("dragonfruit.log");
+    match std::fs::read_to_string(&log_file) {
+        Ok(content) => {
+            let max = lines.clamp(10, 10_000);
+            // Collect the last `max` non-empty lines without reversing the order.
+            let all: Vec<&str> = content.lines().collect();
+            let tail = if all.len() > max {
+                &all[all.len() - max..]
+            } else {
+                &all[..]
+            };
+            Ok(tail.join("\n"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("Failed to read log file: {e}")),
+    }
+}
+
+/// Open the log file in the OS default text editor / viewer.
+#[tauri::command]
+async fn open_log_file(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log dir: {e}"))?;
+    let log_file = log_dir.join("dragonfruit.log");
+    if !log_file.exists() {
+        return Err("Log file does not exist yet.".to_string());
+    }
+    let path_str = log_file.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("notepad.exe")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open log file: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-t", &path_str])
+            .spawn()
+            .map_err(|e| format!("Failed to open log file: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open log file: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Delete the log file so it starts fresh on the next write.
+#[tauri::command]
+async fn delete_log_file(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log dir: {e}"))?;
+    let log_file = log_dir.join("dragonfruit.log");
+    match std::fs::remove_file(&log_file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to delete log file: {e}")),
+    }
+}
+
 fn main() {
     // Sweep week-old stale temp artifacts on app startup.
     let _ = sweep_stale_temp_artifacts(7 * 24 * 60 * 60);
@@ -1722,13 +1907,46 @@ fn main() {
     // Initialize plugin registry and register built-in plugins
     if let Err(error) = plugin_registry::initialize_plugins() {
         if cfg!(debug_assertions) {
-            eprintln!("[plugin-registry] WARNING: {error}");
+            log::warn!("[plugin-registry] WARNING: {error}");
         } else {
             panic!("Failed to initialize plugin registry: {error}");
         }
     }
 
+    log::info!(
+        "DragonFruit {} starting (debug={})",
+        env!("CARGO_PKG_VERSION"),
+        cfg!(debug_assertions)
+    );
+
+    let log_level = read_log_level_pref();
+    let log_plugin = {
+        use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
+        LogBuilder::new()
+            .targets([
+                Target::new(TargetKind::Stdout),
+                Target::new(TargetKind::LogDir {
+                    file_name: Some("dragonfruit".to_string()),
+                }),
+                Target::new(TargetKind::Webview),
+            ])
+            .level(log_level)
+            // Suppress chatty low-level transport crates — these flood the log
+            // at DEBUG/TRACE and contain no actionable application information.
+            .level_for("tungstenite", log::LevelFilter::Warn)
+            .level_for("reqwest", log::LevelFilter::Warn)
+            .level_for("hyper", log::LevelFilter::Warn)
+            .level_for("hyper_util", log::LevelFilter::Warn)
+            .level_for("rustls", log::LevelFilter::Warn)
+            .level_for("h2", log::LevelFilter::Warn)
+            .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+            .max_file_size(5_000_000)
+            .rotation_strategy(RotationStrategy::KeepOne)
+            .build()
+    };
+
     let builder = tauri::Builder::default()
+        .plugin(log_plugin)
         .setup(|app| {
             use tauri::WebviewWindowBuilder;
 
@@ -1748,9 +1966,11 @@ fn main() {
 
             let _window = builder.build()?;
 
+            log::info!("Main window created successfully");
             Ok(())
         })
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            log::info!("Single-instance activated: second launch detected (args={argv:?})");
             let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
             emit_scene_file_handoff(app, &argv, "single-instance");
 
@@ -1791,6 +2011,11 @@ fn main() {
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,
+            reveal_in_file_manager,
+            set_log_level_pref,
+            read_log_tail,
+            open_log_file,
+            delete_log_file,
             network::plugin_network_request,
             network::ensure_rtsp_relay
         ])
