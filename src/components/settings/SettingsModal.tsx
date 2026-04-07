@@ -7,11 +7,12 @@ import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { BackupsSettingsTab } from '@/components/settings/BackupsSettingsTab';
+import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab } from '@/components/settings/PerformanceSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore } from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -135,7 +136,7 @@ type SettingsModalProps = {
   activeOutputFormat?: string | null;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -212,6 +213,7 @@ export function SettingsModal({
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
+  const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
 
   const resetDraftFromProps = React.useCallback(() => {
@@ -244,6 +246,7 @@ export function SettingsModal({
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
     setDraftSlicingPerformanceSettings(getSavedSlicingPerformanceSettings());
+    setDraftLogLevel(getSavedLogLevel());
   }, [
     ambientIntensity,
     directionalIntensity,
@@ -358,6 +361,7 @@ export function SettingsModal({
     saveView3DSettings(normalized3dView);
     onView3dSettingsChange(normalized3dView);
     onDebugPrimitivesPanelVisibleChange(draftDebugPrimitivesPanelVisible);
+    saveLogLevel(draftLogLevel);
 
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(THEME_STORAGE_KEY, draftThemePreference);
@@ -396,6 +400,7 @@ export function SettingsModal({
     draftHeatmapBlend,
     draftHeatmapContrast,
     draftHeatmapColors,
+    draftLogLevel,
     onAmbientIntensityChange,
     onClose,
     onDirectionalIntensityChange,
@@ -517,6 +522,12 @@ export function SettingsModal({
       icon: ArchiveRestore,
       tone: 'secondary',
     },
+    logging: {
+      label: 'Logging',
+      description: 'Log file location and verbosity',
+      icon: ScrollText,
+      tone: 'secondary',
+    },
     about: {
       label: 'About',
       description: 'Version info and project details',
@@ -526,7 +537,7 @@ export function SettingsModal({
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'logging', 'about'];
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
@@ -815,6 +826,12 @@ export function SettingsModal({
               )}
               {activeTab === 'plugins' && <PluginsSettingsTab />}
               {activeTab === 'backups' && <BackupsSettingsTab />}
+              {activeTab === 'logging' && (
+                <LoggingSettingsTab
+                  logLevel={draftLogLevel}
+                  onLogLevelChange={setDraftLogLevel}
+                />
+              )}
               {activeTab === 'about' && (
                 <div className="flex min-h-full flex-col gap-3.5">
                   <div
