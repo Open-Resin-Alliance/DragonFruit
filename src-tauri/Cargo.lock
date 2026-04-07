@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-desktop"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "dragonfruit-islands",
@@ -1062,6 +1062,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "tauri-plugin-macos-fps",
  "tauri-plugin-single-instance",
  "tokio",
  "tungstenite",
@@ -1093,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicer-v3"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -4490,6 +4491,19 @@ dependencies = [
  "syn 2.0.117",
  "tauri-codegen",
  "tauri-utils",
+]
+
+[[package]]
+name = "tauri-plugin-macos-fps"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11177f7c97f1322fbcb5d966ebb0378e411145d65f3f2a2f897d8389ebdba583"
+dependencies = [
+ "log",
+ "objc2",
+ "objc2-foundation",
+ "serde",
+ "tauri",
 ]
 
 [[package]]

@@ -10,6 +10,11 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
 import { getProfileLocalMaterialSettingsAdapter, getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import {
   runSliceExportOrchestrator,
@@ -159,6 +164,14 @@ function formatElapsedClock(ms: number): string {
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
+const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
+
+function clampLayerHeightMm(value: number, fallback = 0.05): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const clamped = Math.max(0.001, Math.min(1, numeric));
+  return Math.round(clamped * 1000) / 1000;
+}
 
 function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   if (typeof window === 'undefined') return 'Off';
@@ -231,6 +244,15 @@ export function SlicingPanel({
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
+  const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0.05;
+    const raw = window.localStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
+    if (raw == null || raw.trim().length === 0) return 0.05;
+    const parsed = Number(raw);
+    return (Number.isFinite(parsed) && parsed > 0) ? clampLayerHeightMm(parsed) : 0.05;
+  });
+  const [remoteOfflineLayerHeightDraft, setRemoteOfflineLayerHeightDraft] = useState<string | null>(null);
   const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
   const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
@@ -252,6 +274,11 @@ export function SlicingPanel({
   const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const networkUiAdapter = useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
@@ -263,6 +290,18 @@ export function SlicingPanel({
     if (!activePrinterProfile) return activeMaterialProfile;
     if (!networkUiAdapter) return activeMaterialProfile;
     if (activePrinterProfile.networkConnection?.connected !== true) return activeMaterialProfile;
+
+    const activeDeviceId = (
+      activePrinterProfile.activeNetworkDeviceId?.trim()
+      || (activePrinterProfile.networkFleet ?? []).find((device) => (
+        (device.ipAddress || '').trim().toLowerCase()
+        === (activePrinterProfile.networkConnection?.ipAddress || '').trim().toLowerCase()
+      ))?.id
+      || ''
+    );
+    if (activeDeviceId && printerReachabilityByDeviceId[activeDeviceId] === false) {
+      return activeMaterialProfile;
+    }
 
     const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
     if (!selectedMaterialId) return activeMaterialProfile;
@@ -289,7 +328,7 @@ export function SlicingPanel({
         ? selectedBottomLayerCount
         : activeMaterialProfile.bottomLayerCount,
     };
-  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter]);
+  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter, printerReachabilityByDeviceId]);
 
   const selectedFormat = useMemo(() => {
     if (!activePrinterProfile || !effectiveMaterialProfile) return null;
@@ -300,11 +339,32 @@ export function SlicingPanel({
   }, [activePrinterProfile, effectiveMaterialProfile]);
 
   const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const selectedNetworkDeviceId = useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedNetworkDeviceReachability = selectedNetworkDeviceId
+    ? (printerReachabilityByDeviceId[selectedNetworkDeviceId] ?? null)
+    : null;
+  const isRemoteNetworkUnavailable = Boolean(networkUiAdapter) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedNetworkDeviceReachability === false
+  );
   // Respect printer-profile capability: explicit `false` means AA must be disabled.
   const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
   const minimumAaControlsDisabled = !antiAliasingAvailable;
-  const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter)
-    && activePrinterProfile?.networkConnection?.connected === true;
+  const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter) && !isRemoteNetworkUnavailable;
+  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter) && isRemoteNetworkUnavailable;
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
@@ -361,10 +421,27 @@ export function SlicingPanel({
     return `${ml.toFixed(2)} mL`;
   }, [estimatedVolumeLabelOverride, visibleModels]);
 
-  const estimatedLayerCount = useMemo(() => {
-    if (!effectiveMaterialProfile || visibleModels.length === 0) return 0;
+  const effectiveLayerHeightMm = useMemo(() => {
+    if (showRemoteOfflineLayerHeightOverride) {
+      return clampLayerHeightMm(remoteOfflineLayerHeightMm, clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05));
+    }
+    if (!effectiveMaterialProfile) return null;
+    return clampLayerHeightMm(effectiveMaterialProfile.layerHeightMm, 0.05);
+  }, [activeMaterialProfile?.layerHeightMm, effectiveMaterialProfile, remoteOfflineLayerHeightMm, showRemoteOfflineLayerHeightOverride]);
 
-    const layerHeightMm = Math.max(0.001, effectiveMaterialProfile.layerHeightMm || 0.05);
+  const materialProfileForSlicing = useMemo(() => {
+    if (!effectiveMaterialProfile) return null;
+    if (!showRemoteOfflineLayerHeightOverride) return effectiveMaterialProfile;
+    return {
+      ...effectiveMaterialProfile,
+      layerHeightMm: effectiveLayerHeightMm ?? clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+    };
+  }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
+
+  const estimatedLayerCount = useMemo(() => {
+    if (effectiveLayerHeightMm == null || visibleModels.length === 0) return 0;
+
+    const layerHeightMm = Math.max(0.001, effectiveLayerHeightMm || 0.05);
     let maxModelHeightMm = 0;
 
     for (const model of visibleModels) {
@@ -375,7 +452,7 @@ export function SlicingPanel({
     }
 
     return Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-  }, [effectiveMaterialProfile, visibleModels]);
+  }, [effectiveLayerHeightMm, visibleModels]);
 
   const estimatedPrintTimeLabel = useMemo(() => {
     if (!effectiveMaterialProfile || estimatedLayerCount <= 0) return '—';
@@ -475,6 +552,44 @@ export function SlicingPanel({
     setMinimumAaAlphaPercent(Math.max(0, Math.min(100, Math.round(next))));
   }, []);
 
+  const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
+    if (typeof window === 'undefined') return;
+
+    const serialized = String(clampLayerHeightMm(value));
+    window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+  }, []);
+
+  const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
+    setRemoteOfflineLayerHeightMm((previous) => {
+      const next = clampLayerHeightMm(value, previous);
+      persistRemoteOfflineLayerHeight(next);
+      return next;
+    });
+  }, [persistRemoteOfflineLayerHeight]);
+
+  const beginRemoteOfflineLayerHeightEdit = useCallback(() => {
+    setRemoteOfflineLayerHeightDraft(String(remoteOfflineLayerHeightMm));
+  }, [remoteOfflineLayerHeightMm]);
+
+  const cancelRemoteOfflineLayerHeightEdit = useCallback(() => {
+    setRemoteOfflineLayerHeightDraft(null);
+  }, []);
+
+  const commitRemoteOfflineLayerHeightEdit = useCallback(() => {
+    if (remoteOfflineLayerHeightDraft == null) return;
+
+    const trimmed = remoteOfflineLayerHeightDraft.trim();
+    if (trimmed.length > 0) {
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        setClampedRemoteOfflineLayerHeightMm(parsed);
+      }
+    }
+
+    setRemoteOfflineLayerHeightDraft(null);
+  }, [remoteOfflineLayerHeightDraft, setClampedRemoteOfflineLayerHeightMm]);
+
   useEffect(() => {
     if (!antiAliasingAvailable) {
       if (antiAliasingLevel !== 'Off') {
@@ -512,6 +627,14 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY, serialized);
     window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY, serialized);
   }, [enableMinimumAaAlphaOverride]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const serialized = String(clampLayerHeightMm(remoteOfflineLayerHeightMm));
+    window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+  }, [remoteOfflineLayerHeightMm]);
 
   const resolvedMaterialLabel = useMemo(() => {
     if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
@@ -658,7 +781,7 @@ export function SlicingPanel({
       return;
     }
 
-    if (!effectiveMaterialProfile) {
+    if (!materialProfileForSlicing) {
       alert('Select a material profile first.');
       return;
     }
@@ -722,7 +845,7 @@ export function SlicingPanel({
       const result = await runSliceExportOrchestrator({
         models: visibleModels,
         printerProfile: activePrinterProfile,
-        materialProfile: effectiveMaterialProfile,
+        materialProfile: materialProfileForSlicing,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         antiAliasingLevel: effectiveAntiAliasingLevel,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
@@ -1095,7 +1218,7 @@ export function SlicingPanel({
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {effectiveMaterialProfile ? `${effectiveMaterialProfile.layerHeightMm.toFixed(3)} mm` : '—'}
+                  {effectiveLayerHeightMm != null ? `${effectiveLayerHeightMm.toFixed(3)} mm` : '—'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -1117,6 +1240,76 @@ export function SlicingPanel({
                 </div>
               </div>
             </div>
+
+            {showRemoteOfflineLayerHeightOverride && (
+              <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                <div className="space-y-0.5 text-center">
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
+                    Offline Layer Height
+                  </div>
+                  <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    No remote material profile is loaded right now.
+                  </div>
+                </div>
+
+                <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="flex min-w-0 items-center gap-1">
+                    <IconButton
+                      className="!h-8 !w-8 shrink-0 !p-0"
+                      onClick={() => setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm - 0.005)}
+                      disabled={remoteOfflineLayerHeightMm <= 0.001}
+                      title="Decrease offline layer height"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </IconButton>
+
+                    <input
+                      type="number"
+                      min={0.001}
+                      max={1}
+                      step={0.005}
+                      value={remoteOfflineLayerHeightDraft ?? String(remoteOfflineLayerHeightMm)}
+                      onFocus={beginRemoteOfflineLayerHeightEdit}
+                      onChange={(event) => setRemoteOfflineLayerHeightDraft(event.target.value)}
+                      onBlur={commitRemoteOfflineLayerHeightEdit}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          commitRemoteOfflineLayerHeightEdit();
+                          event.currentTarget.blur();
+                          return;
+                        }
+
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelRemoteOfflineLayerHeightEdit();
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      onWheel={(event) => {
+                        event.preventDefault();
+                        setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + (event.deltaY < 0 ? 0.005 : -0.005));
+                      }}
+                      className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
+                      aria-label="Offline layer height override in millimeters"
+                    />
+
+                    <IconButton
+                      className="!h-8 !w-8 shrink-0 !p-0"
+                      onClick={() => setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + 0.005)}
+                      disabled={remoteOfflineLayerHeightMm >= 1}
+                      title="Increase offline layer height"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
+                </div>
+
+                <div className="text-[11px] leading-snug text-center" style={{ color: 'var(--text-muted)' }}>
+                  Networking is currently unavailable, so this slice will use offline import. Set the layer height here, then choose the matching resin profile on the machine before printing.
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -1385,7 +1578,7 @@ export function SlicingPanel({
 
           <Button
             onClick={handleSliceZipExport}
-            disabled={isSlicingZip || !activePrinterProfile || !effectiveMaterialProfile || models.length === 0}
+            disabled={isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0}
             variant="primary"
             className={`w-full !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
           >

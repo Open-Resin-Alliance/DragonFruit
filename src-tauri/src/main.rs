@@ -323,6 +323,18 @@ struct NativeSlicerRuntimeMetrics {
     pool_threads: u32,
     max_concurrent: u32,
     queue_buffer: u32,
+    build_profile: String,
+    artifact_dir: String,
+    mesh_stage_dir: String,
+    metadata_parse_ns: u64,
+    mesh_decode_ns: u64,
+    artifact_metadata_ns: u64,
+    wrapper_total_ns: u64,
+    wrapper_overhead_ns: u64,
+}
+
+fn duration_ns_u64(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
 fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
@@ -417,7 +429,14 @@ struct NativeSliceTempPathResult {
     runtime: NativeSlicerRuntimeMetrics,
 }
 
-fn v3_runtime_metrics() -> NativeSlicerRuntimeMetrics {
+fn v3_runtime_metrics(
+    output_path: &std::path::Path,
+    metadata_parse_ns: u64,
+    mesh_decode_ns: u64,
+    artifact_metadata_ns: u64,
+    wrapper_total_ns: u64,
+    wrapper_overhead_ns: u64,
+) -> NativeSlicerRuntimeMetrics {
     let hw_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -429,10 +448,31 @@ fn v3_runtime_metrics() -> NativeSlicerRuntimeMetrics {
         .clamp(1, hw_threads);
     let queue_buffer = (max_concurrent * 2).clamp(2, 16);
 
+    let artifact_dir = output_path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| std::env::temp_dir().to_string_lossy().to_string());
+
+    let mesh_stage_dir = resolve_mesh_stage_directory().to_string_lossy().to_string();
+
+    let build_profile = if cfg!(debug_assertions) {
+        "debug".to_string()
+    } else {
+        "release".to_string()
+    };
+
     NativeSlicerRuntimeMetrics {
         pool_threads: hw_threads as u32,
         max_concurrent: max_concurrent as u32,
         queue_buffer: queue_buffer as u32,
+        build_profile,
+        artifact_dir,
+        mesh_stage_dir,
+        metadata_parse_ns,
+        mesh_decode_ns,
+        artifact_metadata_ns,
+        wrapper_total_ns,
+        wrapper_overhead_ns,
     }
 }
 
@@ -782,10 +822,16 @@ async fn slice_solid_native_to_temp_path(
 
     let win = window.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let wrapper_start = std::time::Instant::now();
+
+        let metadata_parse_start = std::time::Instant::now();
         let meta: SliceJobMetadata = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
+        let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
 
+        let mesh_decode_start = std::time::Instant::now();
         let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
+        let mesh_decode_ns = duration_ns_u64(mesh_decode_start.elapsed());
 
         let job = dragonfruit_slicer_v3::SliceJobV3 {
             output_format: meta.output_format,
@@ -850,11 +896,23 @@ async fn slice_solid_native_to_temp_path(
                 archive_encode_ns: perf_raw.archive_encode_ns,
                 layers: perf_raw.layers,
             };
-            let runtime = v3_runtime_metrics();
 
+            let artifact_metadata_start = std::time::Instant::now();
             let byte_len = std::fs::metadata(&path)
                 .map_err(|err| format!("Failed reading temp artifact metadata: {err}"))?
                 .len();
+            let artifact_metadata_ns = duration_ns_u64(artifact_metadata_start.elapsed());
+
+            let wrapper_total_ns = duration_ns_u64(wrapper_start.elapsed());
+            let wrapper_overhead_ns = wrapper_total_ns.saturating_sub(perf_raw.total_ns);
+            let runtime = v3_runtime_metrics(
+                &path,
+                metadata_parse_ns,
+                mesh_decode_ns,
+                artifact_metadata_ns,
+                wrapper_total_ns,
+                wrapper_overhead_ns,
+            );
 
             Ok((
                 path.to_string_lossy().to_string(),
@@ -1633,7 +1691,28 @@ fn main() {
         }
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .setup(|app| {
+            use tauri::WebviewWindowBuilder;
+
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .expect("Missing 'main' window config in tauri.conf.json");
+
+            let builder = WebviewWindowBuilder::from_config(app, window_config)?;
+
+            // Keep custom titlebar behavior on non-macOS.
+            #[cfg(not(target_os = "macos"))]
+            let builder = builder.decorations(false);
+
+            let _window = builder.build()?;
+
+            Ok(())
+        })
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
             emit_scene_file_handoff(app, &argv, "single-instance");
@@ -1644,7 +1723,12 @@ fn main() {
             if has_scene_files {
                 focus_main_window(app);
             }
-        }))
+        }));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_macos_fps::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
             stage_mesh_binary_start,

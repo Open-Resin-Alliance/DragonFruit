@@ -86,7 +86,8 @@ const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
 const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
-const DRAGONFRUIT_VERSION = '0.1.0';
+const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
+const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
 const ORA_LOGO_DARK_URL = 'https://raw.githubusercontent.com/Open-Resin-Alliance/Orion/athena_public_beta/assets/images/ora/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
@@ -529,6 +530,25 @@ export function SettingsModal({
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+  const isBetaBuildChannel = DRAGONFRUIT_BUILD_CHANNEL.includes('beta');
+  const buildStatusLabel = isBetaBuildChannel
+    ? 'BETA VERSION'
+    : DRAGONFRUIT_BUILD_CHANNEL === 'mainline'
+      ? 'Mainline Build'
+      : `${DRAGONFRUIT_BUILD_CHANNEL.toUpperCase()} Build`;
+  const buildStatusStyle: React.CSSProperties = isBetaBuildChannel
+    ? {
+      color: '#fdba74',
+      borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 16%)',
+      background: 'color-mix(in srgb, #f97316, transparent 96%)',
+      textShadow: '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
+      boxShadow: '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
+    }
+    : {
+      color: 'var(--text-strong)',
+      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+      background: 'color-mix(in srgb, var(--accent), transparent 84%)',
+    };
 
   return (
     <div
@@ -640,23 +660,28 @@ export function SettingsModal({
                   const Icon = meta.icon;
                   const active = activeTab === tab;
                   const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+                  const tabDisabled = tab === 'backups';
 
                   return (
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setActiveTab(tab)}
+                      aria-disabled={tabDisabled}
+                      onClick={tabDisabled ? undefined : () => setActiveTab(tab)}
                       className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
-                      style={active
-                        ? {
-                          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                        }
-                        : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                        }}
+                      style={{
+                        ...(active
+                          ? {
+                            borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
+                            background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
+                            boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
+                          }
+                          : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                          }),
+                        ...(tabDisabled ? { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' } : {}),
+                      }}
                     >
                       <div className="flex items-start gap-2.5">
                         <span
@@ -835,13 +860,9 @@ export function SettingsModal({
                       </span>
                       <span
                         className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                        style={{
-                          color: 'var(--text-strong)',
-                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
-                          background: 'color-mix(in srgb, var(--accent), transparent 84%)',
-                        }}
+                        style={buildStatusStyle}
                       >
-                        Mainline Build
+                        {buildStatusLabel}
                       </span>
                     </div>
                   </div>
@@ -985,10 +1006,10 @@ export function SettingsModal({
                         </div>
 
                         <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          Status: Public repository (currently empty)
+                          Status: Private GitHub Repo until public launch, then open-source.
                         </div>
                         <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          License: TBD (placeholder)
+                          License: TBD (GPLv3 or similar open-source license likely)
                         </div>
                       </div>
                     </div>
