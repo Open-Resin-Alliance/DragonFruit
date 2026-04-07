@@ -855,6 +855,8 @@ export default function Home() {
     remaining: string;
     transferred: string;
   } | null>(null);
+  const [completedSliceIntent, setCompletedSliceIntent] = React.useState<SliceIntent | null>(null);
+  const [completedSaveDestinationPath, setCompletedSaveDestinationPath] = React.useState<string | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
@@ -2453,59 +2455,75 @@ export default function Home() {
 
     // Dispatch slice intent action with the fresh artifact
     const intent = sliceIntentRef.current;
+    setCompletedSliceIntent(intent);
+    setCompletedSaveDestinationPath(null);
     if (intent === 'upload' || intent === 'print') {
       pendingPostSliceActionRef.current = intent;
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
     } else {
-      // 'file': write to pre-selected destination when available, then fallback to save dialog.
-      const downloadDirect = async (a: SliceExportArtifact) => {
-        const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
-        preSliceFileDestinationPathRef.current = null;
+      // 'file': write to pre-selected destination, then navigate to printing workspace.
+      const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
+      preSliceFileDestinationPathRef.current = null;
+      const saveAndNavigate = async (a: SliceExportArtifact) => {
+        let savedPath: string | null = null;
+
         if (destinationPath) {
           try {
             const nativePathForWrite = a.nativeTempPath?.trim() || '';
             const bytes = a.blob
               ? new Uint8Array(await a.blob.arrayBuffer())
               : (nativePathForWrite ? await readPrintArtifactBytesFromPath(nativePathForWrite) : null);
-            if (!bytes) {
-              throw new Error('No artifact bytes available for write.');
-            }
+            if (!bytes) throw new Error('No artifact bytes available for write.');
             await writeBytesToNativePath(destinationPath, bytes);
-            return;
+            savedPath = destinationPath;
           } catch (error) {
             console.warn('[Slicing] Failed writing pre-selected save path, falling back to save dialog.', error);
           }
         }
 
-        const nativePath = a.nativeTempPath?.trim() || '';
-        if (nativePath) {
-          try { await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName); return; } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err ?? '');
-            if (msg.toLowerCase().includes('cancel')) return;
+        if (!savedPath) {
+          const nativePath = a.nativeTempPath?.trim() || '';
+          if (nativePath) {
+            try {
+              await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
+              savedPath = a.outputName;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err ?? '');
+              if (msg.toLowerCase().includes('cancel')) return;
+            }
+          }
+          if (!savedPath) {
+            try {
+              const nativePath2 = a.nativeTempPath?.trim() || '';
+              const bytes = a.blob
+                ? new Uint8Array(await a.blob.arrayBuffer())
+                : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
+              if (!bytes) throw new Error('No artifact bytes');
+              await savePrintArtifactWithNativeDialog(bytes, a.outputName);
+              savedPath = a.outputName;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err ?? '');
+              if (msg.toLowerCase().includes('cancel')) return;
+            }
+          }
+          if (!savedPath && a.blob) {
+            const url = URL.createObjectURL(a.blob);
+            const anchor = document.createElement('a');
+            anchor.href = url; anchor.download = a.outputName; anchor.rel = 'noopener'; anchor.style.display = 'none';
+            document.body?.appendChild(anchor);
+            anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            anchor.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+            savedPath = a.outputName;
           }
         }
-        try {
-          const bytes = a.blob
-            ? new Uint8Array(await a.blob.arrayBuffer())
-            : (nativePath ? await readPrintArtifactBytesFromPath(nativePath) : null);
-          if (!bytes) throw new Error('No artifact bytes');
-          await savePrintArtifactWithNativeDialog(bytes, a.outputName);
-          return;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err ?? '');
-          if (msg.toLowerCase().includes('cancel')) return;
-        }
-        if (!a.blob) return;
-        const url = URL.createObjectURL(a.blob);
-        const anchor = document.createElement('a');
-        anchor.href = url; anchor.download = a.outputName; anchor.rel = 'noopener'; anchor.style.display = 'none';
-        document.body?.appendChild(anchor);
-        anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        anchor.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+        if (savedPath) setCompletedSaveDestinationPath(savedPath);
+        setShouldAutoSliceOnExportEntry(false);
+        scene.setMode('printing');
       };
-      void downloadDirect(artifact);
+      void saveAndNavigate(artifact);
     }
   }, [scene]);
 
@@ -11982,6 +12000,8 @@ export default function Home() {
               }}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
+              sliceIntent={completedSliceIntent}
+              savedFilePath={completedSaveDestinationPath}
             />
           </>
         ) : (
