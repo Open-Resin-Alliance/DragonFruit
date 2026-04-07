@@ -1,0 +1,24 @@
+[package]
+name = "dragonfruit-cli"
+version = "0.1.0"
+edition = "2021"
+default-run = "dragonfruit-cli"
+
+[[bin]]
+name = "dragonfruit-cli"
+path = "src/main.rs"
+
+[lib]
+name = "dragonfruit_cli"
+path = "src/lib.rs"
+
+[dependencies]
+dragonfruit-slicer-v3 = { path = "../dragonfruit-slicer-v3" }
+dragonfruit-islands = { path = "../dragonfruit-islands" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+proptest = "1.9.0"
