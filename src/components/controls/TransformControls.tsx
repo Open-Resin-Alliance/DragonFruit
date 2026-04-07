@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { SNAP_STORAGE_KEY } from '@/components/gizmo/rotate/snapRotation';
 
 interface SectionHeaderProps {
   title: string;
@@ -92,6 +93,16 @@ export function TransformControls({
   const [scaleExpanded, setScaleExpanded] = useState(true);
   const [uniformScaling, setUniformScaling] = useState(true);
   const [scaleUnit, setScaleUnit] = useState<'mm' | '%'>('%');
+  const [snapEnabled, setSnapEnabled] = useState(() => {
+    try { return localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch { return false; }
+  });
+
+  const handleSnapToggle = () => {
+    const next = !snapEnabled;
+    setSnapEnabled(next);
+    try { localStorage.setItem(SNAP_STORAGE_KEY, String(next)); } catch {}
+    window.dispatchEvent(new CustomEvent('dragonfruit:snap-toggle', { detail: { enabled: next } }));
+  };
 
   const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
   const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums no-spinners';
@@ -288,7 +299,7 @@ export function TransformControls({
 
                 <div className="rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Auto lift</span>
+                    <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Auto-Lift</span>
                     <button
                       type="button"
                       onClick={() => onAutoLiftChange(!autoLift)}
@@ -388,6 +399,28 @@ export function TransformControls({
                       className={valueInputClass}
                     />
                   </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Angle-Snap</span>
+                  <button
+                    type="button"
+                    onClick={handleSnapToggle}
+                    className="h-8 min-w-[72px] rounded-md border px-3 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                    style={snapEnabled
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                          color: 'var(--accent-contrast)',
+                        }
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-muted)',
+                        }}
+                  >
+                    {snapEnabled ? 'ON' : 'OFF'}
+                  </button>
                 </div>
 
                 <button
