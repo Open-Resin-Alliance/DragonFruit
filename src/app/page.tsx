@@ -13103,15 +13103,15 @@ export default function Home() {
               <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
-                  <span>No foreign objects are on or near the build area.</span>
+                  <span>Build plate and resin vat are properly seated and secured.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
-                  <span>The build plate is clear (no previous prints/debris left).</span>
+                  <span>Resin is mixed, sufficient for the print, and at operating temperature.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
-                  <span>Resin vat and machine are in a safe, ready state.</span>
+                  <span>Build plate is clean and clear, and the printer cover is fully closed.</span>
                 </div>
               </div>
 
