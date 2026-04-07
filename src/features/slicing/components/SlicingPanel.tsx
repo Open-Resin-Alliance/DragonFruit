@@ -881,6 +881,7 @@ export function SlicingPanel({
       alert('Select a printer profile first.');
       return;
     }
+    
     if (!materialProfileForSlicing) {
       alert('Select a material profile first.');
       return;
