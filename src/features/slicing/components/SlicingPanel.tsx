@@ -1724,10 +1724,11 @@ export function SlicingPanel({
           {(() => {
             const isDisabled = isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
-            const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean }[] = [
+            const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
               { key: 'file',    label: 'Slice to File',  Icon: Download as IconType, enabled: true },
               { key: 'upload',  label: 'Slice & Upload', Icon: Printer  as IconType, enabled: canUpload },
               { key: 'print',   label: 'Slice & Print',  Icon: Play     as IconType, enabled: canPrint },
+              { key: 'preview', label: 'Just Slice',     Icon: Cpu      as IconType, enabled: true, menuOnly: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
             const CurrentIcon = current.Icon;
@@ -1777,7 +1778,7 @@ export function SlicingPanel({
                       boxShadow: '0 14px 24px rgba(0,0,0,0.34)',
                     }}
                   >
-                    {intentOptions.map(({ key, label, Icon, enabled }) => (
+                    {intentOptions.filter((o) => !o.menuOnly).map(({ key, label, Icon, enabled }) => (
                       <button
                         key={key}
                         type="button"
