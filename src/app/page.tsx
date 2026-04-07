@@ -17,6 +17,7 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
+import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
 import { TransformControls } from '@/components/controls/TransformControls';
 import {
   ArrangePanel,
@@ -12450,6 +12451,7 @@ export default function Home() {
                 onModeChange={transformMgr.setTransformMode}
               />
               <SnapAngleReadout />
+              <RotationHintTooltip />
             </>
           )}
 

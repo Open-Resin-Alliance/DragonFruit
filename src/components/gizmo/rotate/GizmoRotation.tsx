@@ -223,17 +223,20 @@ export function GizmoRotation({
     rawAccumulatedAngleRef.current = 0;
     lastSnappedAngleRef.current = 0;
     prevSnapIncrementRef.current = null;
+    window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
     setIsDragging(true);
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     onPointerEnter();
+    window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: true, axis } }));
   };
 
   const handlePointerLeaveLocal = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     onPointerLeave();
+    window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
   };
 
   const getMouseAngle = useCallback((clientX: number, clientY: number): number => {
