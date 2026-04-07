@@ -1,4 +1,10 @@
 export const OPEN_PROFILE_SETTINGS_MODAL_EVENT = 'dragonfruit:open-profile-settings-modal';
+export const PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT = 'dragonfruit:profile-settings-modal-open-change';
+
+export function dispatchProfileSettingsModalOpenChange(isOpen: boolean): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<{ isOpen: boolean }>(PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT, { detail: { isOpen } }));
+}
 
 export type ProfileSettingsTab = 'printer' | 'material';
 

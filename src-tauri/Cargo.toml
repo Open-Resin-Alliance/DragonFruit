@@ -21,7 +21,7 @@ tungstenite = "0.24"
 base64 = "0.22"
 sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "fs"] }
-dragonfruit-slicer-v3 = { path = "../rust/dragonfruit-slicer-v3" }
+dragonfruit-slicing-engine = { path = "../rust/dragonfruit-slicing-engine" }
 dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 flate2 = "1.1.9"
@@ -38,7 +38,7 @@ custom-protocol = ["tauri/custom-protocol"]
 opt-level = 3
 
 # The wildcard above only covers registry deps; path deps need explicit entries.
-[profile.dev.package.dragonfruit-slicer-v3]
+[profile.dev.package.dragonfruit-slicing-engine]
 opt-level = 3
 
 # The desktop shell crate contains IPC/glue hot paths (mesh staging/decoding).

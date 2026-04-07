@@ -86,6 +86,7 @@ type NativeSolidSliceMetadataPayload = {
   source_height_px: number;
   width_px: number;
   height_px: number;
+  x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
@@ -204,6 +205,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
     height_px: job.heightPx,
+    x_packing_mode: job.xPackingMode,
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
@@ -234,6 +236,12 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
 export async function isNativeSlicerAvailable(): Promise<boolean> {
   const core = await loadTauriCore();
   return Boolean(core);
+}
+
+export async function getSlicerEngineVersion(): Promise<string | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  return core.invoke<string>('get_slicer_engine_version');
 }
 
 export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
@@ -644,6 +652,7 @@ export async function readPrintArtifactBytesFromPath(sourcePath: string): Promis
 export async function readPrintLayerPreviewPngFromPath(
   sourcePath: string,
   layerNumber: number,
+  formatHint: string,
 ): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
@@ -654,6 +663,7 @@ export async function readPrintLayerPreviewPngFromPath(
   const result = await core.invoke<ArrayBuffer>('read_print_layer_png', {
     sourcePath,
     layerNumber: safeLayerNumber,
+    formatHint,
   });
 
   return new Uint8Array(result);

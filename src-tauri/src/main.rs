@@ -9,7 +9,6 @@ mod plugin_registry;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Deserialize;
 use serde::Serialize;
-use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{InvokeBody, Response};
@@ -283,6 +282,8 @@ struct SliceJobMetadata {
     source_height_px: u32,
     width_px: u32,
     height_px: u32,
+    #[serde(default)]
+    x_packing_mode: Option<String>,
     png_compression_strategy: String,
     anti_aliasing_level: String,
     aa_on_supports: bool,
@@ -337,11 +338,11 @@ fn duration_ns_u64(duration: std::time::Duration) -> u64 {
     duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
-fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+fn phase_to_label(phase: dragonfruit_slicing_engine::types::SliceProgressPhaseV3) -> &'static str {
     match phase {
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
     }
 }
 
@@ -351,7 +352,7 @@ fn slicer_pool() -> &'static ThreadPool {
             .map(|n| n.get())
             .unwrap_or(1);
         ThreadPoolBuilder::new()
-            .thread_name(|i| format!("dragonfruit-slicer-v3-{i}"))
+            .thread_name(|i| format!("dragonfruit-slicing-engine-{i}"))
             .num_threads(threads)
             .build()
             .expect("failed to create slicer rayon thread pool")
@@ -410,6 +411,60 @@ fn decode_mesh_bytes(bytes: Vec<u8>, meta: &SliceJobMetadata) -> Result<Vec<f32>
 
 fn cancel_flag() -> &'static Arc<AtomicBool> {
     CANCEL_FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+/// Build a progress callback that throttles `window.emit` to at most ~60 fps.
+///
+/// The first event, any phase change, and the final event (done == total) are
+/// always emitted immediately.  Intermediate updates are skipped if fewer than
+/// 16 ms have elapsed since the last emit.
+fn make_throttled_progress_cb(
+    win: tauri::Window,
+) -> dragonfruit_slicing_engine::types::ProgressCallbackV3 {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    struct State {
+        last_emit: Instant,
+        last_phase: String,
+    }
+
+    let state = Arc::new(Mutex::new(State {
+        last_emit: Instant::now(),
+        last_phase: String::new(),
+    }));
+
+    Arc::new(
+        move |update: dragonfruit_slicing_engine::types::SliceProgressUpdateV3| {
+            let phase = phase_to_label(update.phase).to_string();
+            let is_final = update.done >= update.total;
+
+            let should_emit = {
+                let mut s = state.lock().unwrap();
+                let phase_changed = s.last_phase != phase;
+                let elapsed = s.last_emit.elapsed().as_millis() >= 8;
+
+                if is_final || phase_changed || elapsed {
+                    s.last_emit = Instant::now();
+                    s.last_phase = phase.clone();
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if should_emit {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase,
+                    },
+                );
+            }
+        },
+    )
 }
 
 #[derive(Clone, Serialize)]
@@ -483,24 +538,13 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
 
     let win = window.clone();
     let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let job: dragonfruit_slicer_v3::types::SliceJobV3 = serde_json::from_str(&job_json)
+        let job: dragonfruit_slicing_engine::types::SliceJobV3 = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 = std::sync::Arc::new(
-            move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
-                let _ = win.emit(
-                    "slicer://progress",
-                    SliceProgressPayload {
-                        done: update.done,
-                        total: update.total,
-                        phase: phase_to_label(update.phase).to_string(),
-                    },
-                );
-            },
-        );
+        let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
-            let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
+            let artifact = dragonfruit_slicing_engine::slice_with_progress_v3(
                 &job,
                 Some(progress_cb),
                 Some(flag.as_ref()),
@@ -833,13 +877,14 @@ async fn slice_solid_native_to_temp_path(
         let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
         let mesh_decode_ns = duration_ns_u64(mesh_decode_start.elapsed());
 
-        let job = dragonfruit_slicer_v3::SliceJobV3 {
+        let job = dragonfruit_slicing_engine::SliceJobV3 {
             output_format: meta.output_format,
             format_version: meta.format_version,
             source_width_px: meta.source_width_px,
             source_height_px: meta.source_height_px,
             width_px: meta.width_px,
             height_px: meta.height_px,
+            x_packing_mode: meta.x_packing_mode.unwrap_or_else(|| "none".to_string()),
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
             aa_on_supports: meta.aa_on_supports,
@@ -856,17 +901,7 @@ async fn slice_solid_native_to_temp_path(
             metadata_json: meta.metadata_json,
         };
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
-                let _ = win.emit(
-                    "slicer://progress",
-                    SliceProgressPayload {
-                        done: update.done,
-                        total: update.total,
-                        phase: phase_to_label(update.phase).to_string(),
-                    },
-                );
-            });
+        let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {
@@ -879,7 +914,7 @@ async fn slice_solid_native_to_temp_path(
             };
             let path = temp_artifact_path(ext);
 
-            let perf_raw = dragonfruit_slicer_v3::engine::slice_with_progress_v3_to_path(
+            let perf_raw = dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path(
                 &job,
                 &path,
                 Some(progress_cb),
@@ -1063,7 +1098,7 @@ async fn run_island_scan_native(
             .map_err(|e| format!("Invalid island scan params JSON: {e}"))?;
 
         let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
-        let triangles = dragonfruit_slicer_v3::geometry::parse_triangles(&triangles_xyz);
+        let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&triangles_xyz);
 
         // Debug dump: write positions + params to temp dir for offline reproduction
         let dump_dir = std::env::temp_dir().join("dragonfruit-island-debug");
@@ -1580,6 +1615,11 @@ fn focus_main_window(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn get_slicer_engine_version() -> &'static str {
+    dragonfruit_slicing_engine::ENGINE_VERSION
+}
+
+#[tauri::command]
 async fn notify_launch_scene_handoff(app: tauri::AppHandle) -> Result<(), String> {
     let args = std::env::args().collect::<Vec<_>>();
     emit_scene_file_handoff(&app, &args, "primary-launch");
@@ -1609,7 +1649,11 @@ async fn read_print_file_bytes(source_path: String) -> Result<Response, String> 
 }
 
 #[tauri::command]
-async fn read_print_layer_png(source_path: String, layer_number: u32) -> Result<Response, String> {
+async fn read_print_layer_png(
+    source_path: String,
+    layer_number: u32,
+    format_hint: String,
+) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         if layer_number == 0 {
             return Err("Layer number must be >= 1".to_string());
@@ -1620,22 +1664,15 @@ async fn read_print_layer_png(source_path: String, layer_number: u32) -> Result<
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        let file = std::fs::File::open(&source)
-            .map_err(|err| format!("Failed opening print archive: {err}"))?;
-        let mut zip = zip::ZipArchive::new(file)
-            .map_err(|err| format!("Failed reading print archive: {err}"))?;
-
-        let entry_name = format!("{}.png", layer_number);
-        let mut entry = zip
-            .by_name(&entry_name)
-            .map_err(|err| format!("Failed reading layer PNG {entry_name}: {err}"))?;
-
-        let mut png_bytes = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut png_bytes)
-            .map_err(|err| format!("Failed reading layer PNG bytes: {err}"))?;
-
-        Ok(png_bytes)
+        match format_hint.trim() {
+            f if f == ".ctb" || f.starts_with("ctb") => {
+                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::ctb_encoder::read_layer_preview_png(&source, layer_number)
+            }
+            _ => {
+                // Default: NanoDLP ZIP archive (.nanodlp, athena, and any unknown format)
+                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::athena_encoder::read_layer_preview_png(&source, layer_number)
+            }
+        }
     })
     .await
     .map_err(|err| format!("Read layer task failed to join: {err}"))??;
@@ -1745,6 +1782,7 @@ fn main() {
             pick_save_path,
             pick_open_files,
             get_launch_scene_files,
+            get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
             write_bytes_to_path,

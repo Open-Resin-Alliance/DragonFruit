@@ -16,6 +16,8 @@ import {
 } from '@/components/settings/themeCustomizations';
 import {
   OPEN_PROFILE_SETTINGS_MODAL_EVENT,
+  PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT,
+  dispatchProfileSettingsModalOpenChange,
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
 import {
@@ -442,6 +444,7 @@ export function TopBar({
       }
 
       setIsProfileModalOpen(true);
+      dispatchProfileSettingsModalOpenChange(true);
     };
 
     window.addEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
@@ -523,6 +526,7 @@ export function TopBar({
   const openProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
     setProfileModalTab(tab);
     setIsProfileModalOpen(true);
+    dispatchProfileSettingsModalOpenChange(true);
   }, []);
 
   const requestOpenProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
@@ -1254,7 +1258,7 @@ export function TopBar({
 
       <ProfileSettingsModal
         isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
+        onClose={() => { setIsProfileModalOpen(false); dispatchProfileSettingsModalOpenChange(false); }}
         initialTab={profileModalTab}
         openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
         openNetworkSettingsToken={profileModalOpenNetworkSettingsToken}
