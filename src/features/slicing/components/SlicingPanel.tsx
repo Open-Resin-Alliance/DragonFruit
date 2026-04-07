@@ -25,7 +25,7 @@ import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/fea
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 
-export type SliceIntent = 'file' | 'upload' | 'print';
+export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
@@ -184,7 +184,7 @@ function readSliceIntentByPrinterProfile(): Record<string, SliceIntent> {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const next: Record<string, SliceIntent> = {};
     for (const [key, value] of Object.entries(parsed)) {
-      if (value === 'file' || value === 'upload' || value === 'print') {
+      if (value === 'file' || value === 'upload' || value === 'print' || value === 'preview') {
         next[key] = value;
       }
     }
@@ -232,12 +232,14 @@ function resolveInitialMinimumAaAlphaPercent(): number {
 }
 
 function resolveInitialMinimumAaAlphaOverrideEnabled(): boolean {
-  if (typeof window === 'undefined') return true;
+  if (typeof window === 'undefined') return false;
 
   const stored = window.localStorage.getItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY)
     ?? window.sessionStorage.getItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY);
+  if (stored === 'true') return true;
   if (stored === 'false') return false;
-  return true;
+  // No stored preference — default to profile mode.
+  return false;
 }
 
 export function SlicingPanel({
@@ -269,7 +271,7 @@ export function SlicingPanel({
     const id = (getActivePrinterProfile(getProfileStoreSnapshot())?.id ?? '').trim();
     if (!id) return 'file';
     const remembered = readSliceIntentByPrinterProfile()[id];
-    if (remembered === 'file' || remembered === 'upload' || remembered === 'print') return remembered;
+    if (remembered === 'file' || remembered === 'upload' || remembered === 'print' || remembered === 'preview') return remembered;
     return 'file';
   });
   const [sliceIntentMenuOpen, setSliceIntentMenuOpen] = useState(false);
@@ -452,6 +454,7 @@ export function SlicingPanel({
     if (sliceIntent === 'print' && !canPrint) return 'file';
     return sliceIntent;
   }, [canPrint, canUpload, sliceIntent]);
+  // 'preview' is always available regardless of network state
   const sliceFilenameBase = useMemo(
     () => resolveSliceFilenameBase(models, activeModel),
     [activeModel, models],
@@ -464,7 +467,7 @@ export function SlicingPanel({
     }
 
     const remembered = readSliceIntentByPrinterProfile()[activePrinterProfileId];
-    if (remembered === 'file' || remembered === 'upload' || remembered === 'print') {
+    if (remembered === 'file' || remembered === 'upload' || remembered === 'print' || remembered === 'preview') {
       setSliceIntent(remembered);
       return;
     }
@@ -693,6 +696,16 @@ export function SlicingPanel({
       setEnableMinimumAaAlphaOverride(true);
     }
   }, [antiAliasingAvailable, antiAliasingLevel, enableMinimumAaAlphaOverride, hasProfileMinimumAaAlpha]);
+
+  // When the profile gains a min-AA-alpha field (e.g. printer profile switch), default back to profile mode.
+  const prevHasProfileMinimumAaAlphaRef = useRef(hasProfileMinimumAaAlpha);
+  useEffect(() => {
+    const prev = prevHasProfileMinimumAaAlphaRef.current;
+    prevHasProfileMinimumAaAlphaRef.current = hasProfileMinimumAaAlpha;
+    if (!prev && hasProfileMinimumAaAlpha) {
+      setEnableMinimumAaAlphaOverride(false);
+    }
+  }, [hasProfileMinimumAaAlpha]);
 
 
   useEffect(() => {
@@ -1695,9 +1708,10 @@ export function SlicingPanel({
             const isDisabled = isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean }[] = [
-              { key: 'file',   label: 'Slice to File',   Icon: Download as IconType, enabled: true },
-              { key: 'upload', label: 'Slice & Upload',  Icon: Printer  as IconType, enabled: canUpload },
-              { key: 'print',  label: 'Slice & Print',   Icon: Play     as IconType, enabled: canPrint },
+              { key: 'file',    label: 'Slice to File',  Icon: Download as IconType, enabled: true },
+              { key: 'upload',  label: 'Slice & Upload', Icon: Printer  as IconType, enabled: canUpload },
+              { key: 'print',   label: 'Slice & Print',  Icon: Play     as IconType, enabled: canPrint },
+              { key: 'preview', label: 'Just Slice',     Icon: Cpu      as IconType, enabled: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
             const CurrentIcon = current.Icon;

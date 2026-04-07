@@ -2461,6 +2461,10 @@ export default function Home() {
       pendingPostSliceActionRef.current = intent;
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
+    } else if (intent === 'preview') {
+      // 'preview': navigate to printing workspace without saving or uploading.
+      setShouldAutoSliceOnExportEntry(false);
+      scene.setMode('printing');
     } else {
       // 'file': write to pre-selected destination, then navigate to printing workspace.
       const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
@@ -3483,6 +3487,11 @@ export default function Home() {
 
     preSliceFileDestinationPathRef.current = null;
     preSliceUploadSelectionRef.current = null;
+
+    if (intent === 'preview') {
+      // Just slice — no preflight needed.
+      return true;
+    }
 
     if (intent === 'file') {
       try {

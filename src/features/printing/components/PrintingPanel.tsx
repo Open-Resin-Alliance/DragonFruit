@@ -19,7 +19,7 @@ type PrintingPanelProps = {
   onOpenSendTargetPicker?: () => void;
   onDownload: () => void;
   onSendToPrinter: () => void;
-  sliceIntent?: 'file' | 'upload' | 'print' | null;
+  sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | null;
   savedFilePath?: string | null;
 };
 
