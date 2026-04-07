@@ -1,6 +1,7 @@
 import React from 'react';
 import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
+import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 
 interface TransformToolbarProps {
   mode: TransformMode;
@@ -9,6 +10,7 @@ interface TransformToolbarProps {
 
 export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) {
   const [hoveredMode, setHoveredMode] = React.useState<TransformMode | null>(null);
+  const modKey = usePlatformModifier();
 
   const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string }> = [
     { mode: 'select', label: 'Select', icon: <Hand className="w-4 h-4" />, hint: 'Select and inspect model' },
@@ -28,7 +30,10 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
 
   return (
     <div
-      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 rounded-full pointer-events-auto"
+      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 flex items-center pointer-events-auto"
+    >
+    <div
+      className="rounded-full"
       style={{
         padding: '2px',
         background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%), var(--border-subtle), color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%))',
@@ -85,6 +90,8 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
           );
         })}
       </div>
+      </div>
+
     </div>
   );
 }

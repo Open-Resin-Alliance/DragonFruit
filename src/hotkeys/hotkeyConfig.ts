@@ -124,6 +124,18 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             modifier: 'ctrl',
             description: 'Apply Custom 3 Preset'
         }
+    },
+    ROTATION: {
+        SNAP_COARSE: {
+            key: 'drag',
+            modifier: 'meta',
+            description: 'Snap rotation to 45° increments (Cmd/Ctrl + drag)'
+        },
+        SNAP_FINE: {
+            key: 'drag',
+            modifier: 'meta+shift',
+            description: 'Snap rotation to 15° increments (Cmd/Ctrl + Shift + drag)'
+        }
     }
 } as const;
 

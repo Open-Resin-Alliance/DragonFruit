@@ -73,6 +73,8 @@ export function useMarqueeSelectionHandlers({
     if (mode !== 'prepare' && mode !== 'support') return;
     if (e.button !== 0) return;
     if (!e.shiftKey) return;
+    // Skip marquee when Cmd/Ctrl+Shift is held — that's rotation snap, not selection
+    if (e.metaKey || e.ctrlKey) return;
     if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
     if (mode === 'prepare' && (hoveredModelId || supportHoveredCategory !== 'none')) return;
 
