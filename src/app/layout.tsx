@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { HotkeyProvider } from "@/hotkeys/HotkeyContext";
 import { RendererCrashDiagnostics } from "@/components/debug/RendererCrashDiagnostics";
+import { AppLogger } from "@/components/AppLogger";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,6 +32,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <HotkeyProvider>
+          <AppLogger />
           <RendererCrashDiagnostics />
           {children}
         </HotkeyProvider>
