@@ -547,13 +547,26 @@ export function SupportProxyMeshLayer({
       const endKnot = supportKnots[brace.endKnotId];
       if (!startKnot || !endKnot) continue;
 
+      // Mirror SupportRenderer: derive visual diameter from host knot diameters (= trunk segment
+      // diameter + 0.1mm offset). Using profile.diameter alone produces the thin brace setting
+      // value and loses the dynamic sizing that matches the attached trunk thickness.
+      const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
+      const startHostDiameter = Math.max(
+        0.001,
+        (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      );
+      const endHostDiameter = Math.max(
+        0.001,
+        (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      );
+
       pushShaft({
         id: `braceSegment:${brace.id}`,
         supportId: brace.id,
         modelId: brace.modelId,
         start: startKnot.pos,
         end: endKnot.pos,
-        diameter: Math.max(0.1, brace.profile?.diameter ?? 1),
+        diameter: (startHostDiameter + endHostDiameter) * 0.5,
       });
     }
 
