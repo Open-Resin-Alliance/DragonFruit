@@ -12,6 +12,7 @@ interface ExportPanelProps {
   selectedModelIds?: string[];
   onActiveModelChange: (modelId: string | null) => void;
   supportsRef?: React.RefObject<THREE.Group | null>;
+  onExportSuccess?: (savedPath: string) => void;
 }
 
 type ExportScope = 'entire_plate' | 'active_model';
@@ -39,6 +40,7 @@ export function ExportPanel({
   selectedModelIds,
   onActiveModelChange,
   supportsRef,
+  onExportSuccess,
 }: ExportPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
@@ -151,7 +153,7 @@ export function ExportPanel({
         const scopedSelectedModelIds = (selectedModelIds ?? [])
           .filter((id) => scopedModelIds.includes(id));
 
-        await ExportManager.exportScene(
+        const savedPath = await ExportManager.exportScene(
           effectiveOptions.includeModel ? exportRoot : null,
           supportsRef?.current || null,
           {
@@ -166,6 +168,7 @@ export function ExportPanel({
               : (scopedActiveModelId ? [scopedActiveModelId] : []),
           },
         );
+        if (savedPath) onExportSuccess?.(savedPath);
       } catch (err) {
         console.error('Export failed:', err);
         alert('Export failed. Check console for details.');

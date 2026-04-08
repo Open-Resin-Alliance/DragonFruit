@@ -510,12 +510,11 @@ export class ExportManager {
     supportsGroup: THREE.Object3D | null,
     options: ExportOptions,
     sceneContext?: ExportSceneContext,
-  ): Promise<void> {
+  ): Promise<string | null> {
     console.log('[ExportManager] Starting export...', options);
 
     if (options.format === 'voxl') {
-      await this.exportVoxl(sceneContext, options);
-      return;
+      return this.exportVoxl(sceneContext, options);
     }
 
     // For STL/3MF: ask for the save destination FIRST so the user doesn't wait through
@@ -531,7 +530,7 @@ export class ExportManager {
     } catch (err) {
       const msg = this.getErrorMessage(err);
       if (msg.toLowerCase().includes('save cancelled by user') || msg.toLowerCase().includes('cancelled by user')) {
-        return; // User dismissed — nothing to do
+        return null; // User dismissed — nothing to do
       }
       // Native dialog unavailable (web mode) — fall back to browser <a download>
       useNativeWrite = false;
@@ -733,16 +732,15 @@ raftGroup.updateMatrixWorld(true);
     // 5. Serialize and write
     if (options.format === '3mf') {
       const bytes = await this.export3mf(exportObjects);
-      await this.downloadFile(bytes, options.filename, '3mf', 'model/3mf', prePickedNativePath, useNativeWrite);
-      return;
+      return this.downloadFile(bytes, options.filename, '3mf', 'model/3mf', prePickedNativePath, useNativeWrite);
     }
 
     // Binary STL — direct serializer, handles InstancedMesh without any cloning
     const stlBytes = this.buildBinaryStl(exportObjects);
-    await this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', prePickedNativePath, useNativeWrite);
+    return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', prePickedNativePath, useNativeWrite);
   }
 
-  private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<void> {
+  private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<string | null> {
     const supportSnapshot = getSnapshot();
     const kickstandSnapshot = getKickstandSnapshot();
     const supports = buildSupportExportFromStores(
@@ -815,7 +813,7 @@ raftGroup.updateMatrixWorld(true);
     });
 
     const json = serializeVoxlDocument(doc, true);
-    await this.downloadFile(json, options.filename, 'voxl', 'application/json');
+    return this.downloadFile(json, options.filename, 'voxl', 'application/json');
   }
 
   private static async downloadFile(
@@ -827,7 +825,7 @@ raftGroup.updateMatrixWorld(true);
     prePickedNativePath: string | null = null,
     /** False when native dialog was unavailable and we should use browser <a download>. */
     useNativeWrite = true,
-  ) {
+  ): Promise<string | null> {
     const normalizedBaseName = this.normalizeExportFilenameBase(filename);
     const resolvedFilename = `${normalizedBaseName}.${extension}`;
 
@@ -841,7 +839,7 @@ raftGroup.updateMatrixWorld(true);
     if (prePickedNativePath && useNativeWrite) {
       try {
         await writeChunkedToNativePath(prePickedNativePath, bytes);
-        return;
+        return prePickedNativePath;
       } catch (error) {
         console.warn('[ExportManager] Chunked write failed, falling back to browser download.', error);
       }
@@ -852,11 +850,11 @@ raftGroup.updateMatrixWorld(true);
       try {
         const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);
         await writeChunkedToNativePath(destinationPath, bytes);
-        return;
+        return destinationPath;
       } catch (error) {
         const message = this.getErrorMessage(error);
         if (message.toLowerCase().includes('save cancelled by user') || message.toLowerCase().includes('cancelled by user')) {
-          return;
+          return null;
         }
         console.warn('[ExportManager] Native save dialog unavailable/failed, falling back to browser download.', error);
       }
@@ -875,5 +873,7 @@ raftGroup.updateMatrixWorld(true);
     } finally {
       URL.revokeObjectURL(url);
     }
+    // Browser download — no path available
+    return resolvedFilename;
   }
 }

@@ -746,6 +746,8 @@ export default function Home() {
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
+  const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
+  const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
   const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
   const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
   const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
@@ -760,6 +762,7 @@ export default function Home() {
   const printingMonitorErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -7829,6 +7832,18 @@ export default function Home() {
     };
   }, [scene.sceneImportReport]);
 
+  const handleExportSuccess = React.useCallback((savedPath: string) => {
+    setExportSuccessToast({ id: Date.now(), path: savedPath });
+    setIsExportSuccessToastVisible(true);
+    if (exportSuccessToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(exportSuccessToastFadeTimeoutRef.current);
+    }
+    exportSuccessToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsExportSuccessToastVisible(false);
+      exportSuccessToastFadeTimeoutRef.current = null;
+    }, 3800);
+  }, []);
+
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
       window.cancelAnimationFrame(historyTransformResyncRafRef.current);
@@ -11986,6 +12001,7 @@ export default function Home() {
               selectedModelIds={scene.selectedModelIds}
               onActiveModelChange={scene.setActiveModelId}
               supportsRef={supportsRef}
+              onExportSuccess={handleExportSuccess}
             />
 
             <SlicingPanel
@@ -15305,6 +15321,24 @@ export default function Home() {
             }}
           >
             {scene.sceneImportReport.text}
+          </div>
+        </div>
+      )}
+
+      {exportSuccessToast && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
+          <div
+            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
+            style={{
+              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
+              background: 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
+              color: 'var(--text-strong)',
+              opacity: isExportSuccessToastVisible ? 1 : 0,
+              transform: `translateY(${isExportSuccessToastVisible ? '0px' : '8px'})`,
+              transition: 'opacity 220ms ease, transform 220ms ease',
+            }}
+          >
+            Saved to: {exportSuccessToast.path}
           </div>
         </div>
       )}
