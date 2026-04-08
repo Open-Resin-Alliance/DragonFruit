@@ -10256,6 +10256,17 @@ export default function Home() {
     scene.setSelectedModelIds(visibleIds);
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
 
+  // When entering arrange mode with exactly one visible model, auto-select it.
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') return;
+    if (transformMgr.transformMode !== 'arrange') return;
+    const visibleModels = scene.models.filter((m) => m.visible);
+    if (visibleModels.length !== 1) return;
+    const sole = visibleModels[0];
+    if (scene.activeModelId === sole.id && scene.selectedModelIds.includes(sole.id)) return;
+    scene.selectModel(sole.id, 'single');
+  }, [scene.mode, transformMgr.transformMode, scene.models, scene.activeModelId, scene.selectedModelIds, scene.selectModel]);
+
   React.useEffect(() => {
     if (!hasActivePrinterProfile) return;
     if (!allowPrepareWithoutPrinter) return;
