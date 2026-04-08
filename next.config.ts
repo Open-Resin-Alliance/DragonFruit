@@ -9,6 +9,10 @@ const { version: packageVersion, buildChannel: packageBuildChannel } = JSON.pars
 const buildChannel = (packageBuildChannel ?? 'mainline').trim().toLowerCase();
 
 const nextConfig: NextConfig = {
+  // Turbopack (Next.js 16 default) handles `new URL("*.wasm", import.meta.url)`
+  // natively — no extra config required. The empty object here acknowledges we
+  // are intentionally using Turbopack without a custom webpack config.
+  turbopack: {},
   env: {
     NEXT_PUBLIC_APP_VERSION: packageVersion,
     NEXT_PUBLIC_BUILD_CHANNEL: buildChannel,
