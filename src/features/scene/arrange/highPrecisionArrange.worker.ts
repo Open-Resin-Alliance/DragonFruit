@@ -86,6 +86,7 @@ self.onmessage = (event: MessageEvent<HighPrecisionArrangeWorkerRequest>) => {
       arrangeSpacingMm: msg.input.arrangeSpacingMm,
       arrangeAllowRotateOnZ: msg.input.arrangeAllowRotateOnZ,
       arrangeAnchorMode: msg.input.arrangeAnchorMode,
+      safetyMarginMm: msg.input.safetyMarginMm,
       getArrangeTransform: (model) => model.transform,
       hullCache: new Map(),
     };
