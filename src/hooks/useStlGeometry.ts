@@ -6,13 +6,55 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 
+export type MeshDefects = {
+  /** Whether any non-finite vertex position values were found */
+  hasDefects: boolean;
+  /** Number of individual float components (x/y/z) replaced with 0 */
+  repairedFloats: number;
+  /** Total vertex count in the position buffer */
+  totalVertices: number;
+};
+
 export type GeometryWithBounds = {
   geometry: THREE.BufferGeometry;
   bbox: THREE.Box3;
   center: THREE.Vector3;
   size: THREE.Vector3;
   flatteningPlanes: FlatteningPlane[];
+  /** Present when defective vertex data was detected and auto-repaired */
+  meshDefects?: MeshDefects;
 };
+
+/**
+ * Scans the geometry's position attribute for NaN/Inf values and replaces them
+ * with 0, preventing Three.js bbox/sphere computations from producing NaN.
+ * Returns a summary of what was repaired (or a clean result if nothing was wrong).
+ */
+function sanitizePositionAttribute(geometry: THREE.BufferGeometry): MeshDefects {
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
+  if (!posAttr) return { hasDefects: false, repairedFloats: 0, totalVertices: 0 };
+
+  const arr = posAttr.array as Float32Array;
+  let repairedFloats = 0;
+
+  for (let i = 0; i < arr.length; i++) {
+    if (!Number.isFinite(arr[i])) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (arr as any)[i] = 0;
+      repairedFloats++;
+    }
+  }
+
+  if (repairedFloats > 0) {
+    posAttr.needsUpdate = true;
+  }
+
+  return {
+    hasDefects: repairedFloats > 0,
+    repairedFloats,
+    totalVertices: arr.length / 3,
+  };
+}
 
 export interface ProcessGeometryOptions {
   center?: boolean;
@@ -25,6 +67,16 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       const startPrep = performance.now();
       const geometry = new THREE.BufferGeometry();
       geometry.copy(bufferGeometry);
+
+      // Sanitize any non-finite position values before any Three.js computation
+      // to prevent NaN bbox/sphere and subsequent renderer crashes.
+      const meshDefects = sanitizePositionAttribute(geometry);
+      if (meshDefects.hasDefects) {
+        console.warn(
+          `[processGeometry] Defective mesh detected: ${meshDefects.repairedFloats} non-finite position` +
+          ` values (out of ${meshDefects.totalVertices * 3} floats) replaced with 0.`,
+        );
+      }
 
       console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals`);
       geometry.computeVertexNormals();
@@ -57,7 +109,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       const flatteningPlanes = computeFlatteningPlanes(geometry);
       console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
 
-      resolve({ geometry, bbox, center, size, flatteningPlanes });
+      resolve({ geometry, bbox, center, size, flatteningPlanes, ...(meshDefects.hasDefects ? { meshDefects } : {}) });
     } catch (e) {
       reject(e);
     }

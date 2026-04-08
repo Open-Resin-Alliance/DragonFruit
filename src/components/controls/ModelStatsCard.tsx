@@ -479,6 +479,23 @@ export function ModelStatsCard({
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
             </div>
 
+            {model?.geometry.meshDefects?.hasDefects && (
+              <div
+                className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
+                style={{
+                  background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
+                  color: '#fde68a',
+                  border: '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
+                }}
+              >
+                <span>⚠</span>
+                <span>
+                  Defective geometry: {model.geometry.meshDefects.repairedFloats} non-finite values
+                  auto-repaired. Slicing results may be incorrect.
+                </span>
+              </div>
+            )}
+
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
               Click card to return to print settings
             </div>

@@ -1568,6 +1568,7 @@ export function useSceneCollectionManager() {
     }
 
     const newModels: LoadedModel[] = [];
+    const defectiveModelNames: string[] = [];
 
     setImportProgress({
       active: true,
@@ -1667,6 +1668,9 @@ export function useSceneCollectionManager() {
           };
 
           newModels.push(model);
+          if (geom.meshDefects?.hasDefects) {
+            defectiveModelNames.push(file.name);
+          }
         } catch (err) {
           console.error(`Failed to load ${file.name}`, err);
           URL.revokeObjectURL(url); // Cleanup if failed
@@ -1697,6 +1701,16 @@ export function useSceneCollectionManager() {
           setActiveModelId(newModels[0].id);
           setSelectedModelIds([newModels[0].id]);
         }
+
+        if (defectiveModelNames.length > 0) {
+          const names = defectiveModelNames.join(', ');
+          emitSceneImportReport(
+            defectiveModelNames.length === 1
+              ? `"${names}" has defective geometry (non-finite values). Auto-repaired — slicing results may be incorrect.`
+              : `${defectiveModelNames.length} files have defective geometry and were auto-repaired: ${names}`,
+            'warning',
+          );
+        }
       }
     } finally {
       setImportProgress({
@@ -1707,7 +1721,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
