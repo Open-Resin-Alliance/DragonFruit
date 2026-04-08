@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
-import JSZip from 'jszip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument } from '@/features/scene/voxl';
 import { pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
@@ -142,13 +141,15 @@ export class ExportManager {
   }
 
   /**
-   * Returns true if the material identifies this mesh as a non-exportable hitbox.
-   * Works for single materials and material arrays.
+   * Returns true if the mesh material marks it as a non-exportable hitbox.
+   * Hitboxes are always fully invisible (transparent=true AND opacity===0).
+   * NOTE: Do NOT check `instanceof MeshBasicMaterial` here — default THREE.Mesh
+   * objects (e.g. model meshes built with `new THREE.Mesh(geo)`) also get a
+   * MeshBasicMaterial, which would incorrectly exclude the model geometry.
    */
   private static isMaterialHitbox(material: THREE.Material | THREE.Material[]): boolean {
     const mat = Array.isArray(material) ? material[0] : material;
     if (!mat) return false;
-    if (mat instanceof THREE.MeshBasicMaterial) return true;
     return mat.transparent && mat.opacity === 0;
   }
 
@@ -265,17 +266,174 @@ export class ExportManager {
     return cleaned || 'export';
   }
 
-  /**
-   * Builds the 3MF model XML string from live scene objects.
-   * Handles both THREE.Mesh and THREE.InstancedMesh natively — no cloning, no expansion.
-   * Coordinates are rounded to 4 decimal places (0.1 µm — well below printer resolution)
-   * to shrink XML size and speed up DEFLATE.
-   */
-  private static buildMinimal3mfModelXml(objects: THREE.Object3D[]): string {
-    const vertexParts: string[] = [];
-    const triangleParts: string[] = [];
-    let triCount = 0;
+  // ---------------------------------------------------------------------------
+  // CRC-32 (used by the minimal ZIP builder)
+  // ---------------------------------------------------------------------------
 
+  private static readonly CRC32_TABLE: Uint32Array = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+
+  private static crc32(data: Uint8Array): number {
+    let crc = 0xffffffff;
+    const t = ExportManager.CRC32_TABLE;
+    for (let i = 0; i < data.length; i++) {
+      crc = (t[(crc ^ data[i]) & 0xff] ^ (crc >>> 8)) >>> 0;
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  /**
+   * Assembles a minimal STORE-only ZIP (no DEFLATE) from the supplied file list.
+   * Replaces JSZip to avoid pure-JS DEFLATE overhead on large payloads.
+   */
+  private static buildStoreZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
+    const enc = new TextEncoder();
+    const nameBytes = files.map((f) => enc.encode(f.name));
+
+    let totalSize = 0;
+    for (let i = 0; i < files.length; i++) {
+      totalSize += 30 + nameBytes[i].length + files[i].data.length; // local header + data
+      totalSize += 46 + nameBytes[i].length; // central directory entry
+    }
+    totalSize += 22; // end of central directory
+
+    const out = new Uint8Array(totalSize);
+    const view = new DataView(out.buffer);
+    let pos = 0;
+    const w16 = (v: number) => { view.setUint16(pos, v, true); pos += 2; };
+    const w32 = (v: number) => { view.setUint32(pos, v >>> 0, true); pos += 4; };
+    const wb  = (b: Uint8Array) => { out.set(b, pos); pos += b.length; };
+
+    const offsets: number[] = [];
+    const crcs: number[] = [];
+
+    // Local file headers + data
+    for (let i = 0; i < files.length; i++) {
+      offsets.push(pos);
+      const { data } = files[i];
+      const crc = this.crc32(data);
+      crcs.push(crc);
+      w32(0x04034b50); w16(20); w16(0); w16(0);   // sig, version, flags, method=STORE
+      w16(0); w16(0);                               // mod time, mod date
+      w32(crc); w32(data.length); w32(data.length); // crc, compressed, uncompressed
+      w16(nameBytes[i].length); w16(0);             // name len, extra len
+      wb(nameBytes[i]); wb(data);
+    }
+
+    const cdOffset = pos;
+    let cdSize = 0;
+
+    // Central directory
+    for (let i = 0; i < files.length; i++) {
+      const start = pos;
+      const { data } = files[i];
+      w32(0x02014b50); w16(20); w16(20); w16(0); w16(0); // sig, made by, needed, flags, method
+      w16(0); w16(0);                                      // mod time, mod date
+      w32(crcs[i]); w32(data.length); w32(data.length);   // crc, compressed, uncompressed
+      w16(nameBytes[i].length); w16(0); w16(0);           // name len, extra, comment
+      w16(0); w16(0); w32(0); w32(offsets[i]);            // disk, int attr, ext attr, offset
+      wb(nameBytes[i]);
+      cdSize += pos - start;
+    }
+
+    // End of central directory
+    w32(0x06054b50); w16(0); w16(0);
+    w16(files.length); w16(files.length);
+    w32(cdSize); w32(cdOffset); w16(0);
+
+    return out;
+  }
+
+  /**
+   * Builds the 3MF model XML directly into a pre-allocated Uint8Array.
+   *
+   * Why: XML text forces string representation for every coordinate.
+   * The old approach created 3–4 million small JS strings (via toFixed + template
+   * literals), pushed them into an array, then called join() — causing massive GC
+   * pressure and a multi-second stall for scenes with 500K+ triangles.
+   *
+   * This version:
+   *  - Pre-allocates one Uint8Array large enough to hold all output bytes.
+   *  - Writes float digits directly with integer math (writeF4) — no string allocation
+   *    for the common coordinate range (|v| < 10 000 mm).
+   *  - Writes integer indices directly (writeUint) — allocation-free up to 10^8.
+   *  - Exploits the sequential vertex layout: triangle i always references
+   *    vertices 3i / 3i+1 / 3i+2, so the \u003ctriangle\u003e section requires no
+   *    second geometry traversal.
+   */
+  private static async buildMinimal3mfXmlBytes(objects: THREE.Object3D[]): Promise<Uint8Array> {
+    const triCount = this.countExportTriangles(objects);
+    if (triCount === 0) throw new Error('Cannot export 3MF: no triangle geometry found.');
+
+    // Worst case per vertex: <vertex x="-12345.6789" y="-12345.6789" z="-12345.6789"/> = 59 bytes
+    // Worst case per triangle: <triangle v1="12345678" v2="12345679" v3="12345680"/> = 52 bytes
+    const buf = new Uint8Array(512 + triCount * (3 * 59 + 52));
+    let off = 0;
+
+    /** Write a short ASCII constant string (tag prefix / suffix). */
+    const ws = (s: string) => {
+      for (let i = 0; i < s.length; i++) buf[off++] = s.charCodeAt(i);
+    };
+
+    /**
+     * Write a float with exactly 4 decimal places as ASCII bytes.
+     * Uses integer math — zero heap allocation for |v| < 10 000 (all realistic coords).
+     */
+    const wf4 = (v: number) => {
+      if (!isFinite(v)) v = 0;
+      if (v < 0) { buf[off++] = 45; v = -v; } // '-'
+      let iv = Math.round(v * 10000);
+      if (iv < 0) iv = 0;
+      const frac = iv % 10000;
+      const whole = ((iv - frac) / 10000) | 0;
+      if      (whole === 0)  { buf[off++] = 48; }
+      else if (whole < 10)   { buf[off++] = 48 + whole; }
+      else if (whole < 100)  {
+        buf[off++] = 48 + ((whole / 10) | 0);
+        buf[off++] = 48 + (whole % 10);
+      } else if (whole < 1000) {
+        buf[off++] = 48 + ((whole / 100) | 0);
+        buf[off++] = 48 + (((whole / 10) | 0) % 10);
+        buf[off++] = 48 + (whole % 10);
+      } else if (whole < 10000) {
+        buf[off++] = 48 + ((whole / 1000) | 0);
+        buf[off++] = 48 + (((whole / 100) | 0) % 10);
+        buf[off++] = 48 + (((whole / 10) | 0) % 10);
+        buf[off++] = 48 + (whole % 10);
+      } else {
+        // Coordinates > 9999mm — rare; toString allocation is acceptable here
+        const s = whole.toString();
+        for (let i = 0; i < s.length; i++) buf[off++] = s.charCodeAt(i);
+      }
+      buf[off++] = 46; // '.'
+      buf[off++] = 48 + ((frac / 1000) | 0);
+      buf[off++] = 48 + (((frac / 100) | 0) % 10);
+      buf[off++] = 48 + (((frac / 10) | 0) % 10);
+      buf[off++] = 48 + (frac % 10);
+    };
+
+    /** Write unsigned integer without allocation up to 10^8. */
+    const wu = (v: number) => {
+      if (v < 10)       { buf[off++] = 48 + v; return; }
+      if (v < 100)      { buf[off++] = 48 + ((v / 10) | 0);       buf[off++] = 48 + (v % 10); return; }
+      if (v < 1000)     { buf[off++] = 48 + ((v / 100) | 0);      buf[off++] = 48 + (((v / 10) | 0) % 10);       buf[off++] = 48 + (v % 10); return; }
+      if (v < 10000)    { buf[off++] = 48 + ((v / 1000) | 0);     buf[off++] = 48 + (((v / 100) | 0) % 10);      buf[off++] = 48 + (((v / 10) | 0) % 10);      buf[off++] = 48 + (v % 10); return; }
+      if (v < 100000)   { buf[off++] = 48 + ((v / 10000) | 0);    buf[off++] = 48 + (((v / 1000) | 0) % 10);     buf[off++] = 48 + (((v / 100) | 0) % 10);     buf[off++] = 48 + (((v / 10) | 0) % 10);       buf[off++] = 48 + (v % 10); return; }
+      if (v < 1000000)  { buf[off++] = 48 + ((v / 100000) | 0);   buf[off++] = 48 + (((v / 10000) | 0) % 10);   buf[off++] = 48 + (((v / 1000) | 0) % 10);    buf[off++] = 48 + (((v / 100) | 0) % 10);      buf[off++] = 48 + (((v / 10) | 0) % 10);     buf[off++] = 48 + (v % 10); return; }
+      if (v < 10000000) { buf[off++] = 48 + ((v / 1000000) | 0);  buf[off++] = 48 + (((v / 100000) | 0) % 10);  buf[off++] = 48 + (((v / 10000) | 0) % 10);   buf[off++] = 48 + (((v / 1000) | 0) % 10);     buf[off++] = 48 + (((v / 100) | 0) % 10);    buf[off++] = 48 + (((v / 10) | 0) % 10);  buf[off++] = 48 + (v % 10); return; }
+      const s = v.toString(); for (let i = 0; i < s.length; i++) buf[off++] = s.charCodeAt(i);
+    };
+
+    ws('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"><mesh><vertices>');
+
+    let writtenTris = 0;
     const wv = new THREE.Vector3();
     const tmpMat = new THREE.Matrix4();
     const comMat = new THREE.Matrix4();
@@ -284,22 +442,17 @@ export class ExportManager {
       const pos = geo.getAttribute('position');
       if (!pos) return;
       const idx = geo.getIndex();
-      const appendTri = (a: number, b: number, c: number) => {
-        const base = triCount * 3;
-        wv.fromBufferAttribute(pos, a).applyMatrix4(mat);
-        vertexParts.push(`<vertex x="${wv.x.toFixed(4)}" y="${wv.y.toFixed(4)}" z="${wv.z.toFixed(4)}"/>`);
-        wv.fromBufferAttribute(pos, b).applyMatrix4(mat);
-        vertexParts.push(`<vertex x="${wv.x.toFixed(4)}" y="${wv.y.toFixed(4)}" z="${wv.z.toFixed(4)}"/>`);
-        wv.fromBufferAttribute(pos, c).applyMatrix4(mat);
-        vertexParts.push(`<vertex x="${wv.x.toFixed(4)}" y="${wv.y.toFixed(4)}" z="${wv.z.toFixed(4)}"/>`);
-        triangleParts.push(`<triangle v1="${base}" v2="${base + 1}" v3="${base + 2}"/>`);
-        triCount++;
+      const emit = (a: number, b: number, c: number) => {
+        ws('<vertex x="');  wv.fromBufferAttribute(pos, a).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
+        ws('<vertex x="');  wv.fromBufferAttribute(pos, b).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
+        ws('<vertex x="');  wv.fromBufferAttribute(pos, c).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
+        writtenTris++;
       };
       if (idx) {
         const arr = idx.array;
-        for (let i = 0; i + 2 < arr.length; i += 3) appendTri(arr[i], arr[i + 1], arr[i + 2]);
+        for (let i = 0; i + 2 < arr.length; i += 3) emit(arr[i], arr[i + 1], arr[i + 2]);
       } else {
-        for (let i = 0; i + 2 < pos.count; i += 3) appendTri(i, i + 1, i + 2);
+        for (let i = 0; i + 2 < pos.count; i += 3) emit(i, i + 1, i + 2);
       }
     };
 
@@ -320,41 +473,38 @@ export class ExportManager {
       });
     }
 
-    if (triCount === 0) {
-      throw new Error('Cannot export 3MF: no triangle geometry found.');
-    }
+    ws('</vertices>');
 
-    const vertexXml = vertexParts.join('');
-    const triangleXml = triangleParts.join('');
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"><mesh><vertices>${vertexXml}</vertices><triangles>${triangleXml}</triangles></mesh></object></resources><build><item objectid="1"/></build></model>`;
+    // Yield to unblock the render loop between the two heavyweight passes.
+    await new Promise<void>(r => setTimeout(r, 0));
+
+    ws('<triangles>');
+    // Triangles are always sequential: vertex indices for triangle i are 3i, 3i+1, 3i+2.
+    // No second geometry traversal needed.
+    for (let i = 0; i < writtenTris; i++) {
+      const b = i * 3;
+      ws('<triangle v1="'); wu(b); ws('" v2="'); wu(b + 1); ws('" v3="'); wu(b + 2); ws('"/>');
+    }
+    ws('</triangles></mesh></object></resources><build><item objectid="1"/></build></model>');
+
+    return buf.subarray(0, off);
   }
 
   private static async export3mf(objects: THREE.Object3D[]): Promise<Uint8Array> {
-    const modelXml = this.buildMinimal3mfModelXml(objects);
-
-    const contentTypesXml = `<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>`;
-
-    const relsXml = `<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
-
-    const zip = new JSZip();
-    zip.file('[Content_Types].xml', contentTypesXml);
-    zip.file('_rels/.rels', relsXml);
-    zip.file('3D/3dmodel.model', modelXml);
-
-    // Level 4 strikes a balance between file size and memory/CPU pressure.
-    // Level 9 can OOM or stall for minutes on scenes with 1M+ triangles.
-    return zip.generateAsync({
-      type: 'uint8array',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 4 },
-    });
+    const enc = new TextEncoder();
+    const modelXmlBytes = await this.buildMinimal3mfXmlBytes(objects);
+    return this.buildStoreZip([
+      {
+        name: '[Content_Types].xml',
+        data: enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>'),
+      },
+      {
+        name: '_rels/.rels',
+        data: enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
+      },
+      { name: '3D/3dmodel.model', data: modelXmlBytes },
+    ]);
   }
-
-  /**
-   * Generates and downloads an export artifact (STL / 3MF / VOXL) based on current scene state.
-   * For STL/3MF in the Tauri desktop app the native save dialog is shown BEFORE any heavy work
-   * so the user picks the destination up front and the export starts immediately after.
-   */
   public static async exportScene(
     modelObject: THREE.Object3D | null,
     supportsGroup: THREE.Object3D | null,
