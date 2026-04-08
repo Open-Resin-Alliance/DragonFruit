@@ -1909,6 +1909,27 @@ async fn delete_log_file(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn main() {
+    // Install a panic hook that writes the panic location and message to the
+    // DragonFruit log before the default handler runs.  This ensures that even
+    // hard crashes leave a human-readable trace in the log file rather than
+    // only a terse Windows Event 1005 entry.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message: String = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "(non-string panic payload)".to_string()
+        };
+        log::error!("[panic] {message} at {location}");
+        default_panic_hook(info);
+    }));
+
     // Sweep week-old stale temp artifacts on app startup.
     let _ = sweep_stale_temp_artifacts(7 * 24 * 60 * 60);
 

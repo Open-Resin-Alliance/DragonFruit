@@ -55,6 +55,10 @@ fn http_client() -> &'static Client {
         Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(4)
+            // Explicit TCP connect timeout prevents OS-level SYN retransmits from
+            // holding socket handles open beyond the per-request timeout, which is
+            // especially important on Windows during subnet scanning.
+            .connect_timeout(Duration::from_millis(800))
             .no_proxy()
             .build()
             .expect("failed to create HTTP client")
@@ -1422,13 +1426,28 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         4,
         64,
     ) as usize;
+    // Windows Defender Network Inspection and similar AV products treat high
+    // volumes of concurrent outbound TCP SYN packets to different hosts as a
+    // port scan and may terminate the process (Windows Event 1005).  Keep the
+    // concurrent socket count well below the heuristic threshold on Windows.
+    #[cfg(target_os = "windows")]
+    let (subnet_concurrency_default, subnet_concurrency_max): (u64, u64) =
+        if forced_host.is_some() { (8, 24) } else { (24, 48) };
+    #[cfg(not(target_os = "windows"))]
+    let (subnet_concurrency_default, subnet_concurrency_max): (u64, u64) =
+        if forced_host.is_some() { (12, 64) } else { (84, 160) };
     let subnet_concurrency = clamp_u64(
         payload.get("subnetConcurrency"),
-        if forced_host.is_some() { 12 } else { 84 },
-        8,
-        160,
+        subnet_concurrency_default,
+        4,
+        subnet_concurrency_max,
     ) as usize;
     let batch_start = clamp_u64(payload.get("batchStart"), 0, 0, u64::MAX) as usize;
+    // Smaller default batch on Windows: fewer tasks spawned per call means
+    // fewer pending socket handles in the OS at any one time.
+    #[cfg(target_os = "windows")]
+    let batch_size = clamp_u64(payload.get("batchSize"), 64, 8, 128) as usize;
+    #[cfg(not(target_os = "windows"))]
     let batch_size = clamp_u64(payload.get("batchSize"), 96, 8, 256) as usize;
 
     log_nanodlp_filter_debug(
@@ -2781,12 +2800,49 @@ pub async fn dispatch_plugin_network_request(request_json: String) -> Result<Plu
         });
     }
 
-    let (status, body) = match plugin_id.as_str() {
-        "athena" => handle_athena_network(&operation, &request).await,
-        _ => (
-            404,
-            json!({ "error": format!("Unknown network plugin: {plugin_id}") }),
-        ),
+    // Spawn the operation as an independent tokio task so that any panic
+    // inside a handler is caught as a JoinError rather than unwinding through
+    // the Tauri command dispatcher and crashing the process.
+    //
+    // A hard wall timeout is also applied: subnet discovery opens O(concurrency)
+    // TCP sockets simultaneously; if previous batches haven't finished when the
+    // next poll arrives the total open-socket count can grow until Windows AV
+    // heuristics decide the process is a port scanner and terminates it
+    // (Windows Event 1005).  Returning a 503 early breaks the accumulation.
+    #[cfg(target_os = "windows")]
+    let deadline = Duration::from_secs(60);
+    #[cfg(not(target_os = "windows"))]
+    let deadline = Duration::from_secs(120);
+
+    let task = tokio::spawn(async move {
+        match plugin_id.as_str() {
+            "athena" => handle_athena_network(&operation, &request).await,
+            _ => (
+                404,
+                json!({ "error": format!("Unknown network plugin: {plugin_id}") }),
+            ),
+        }
+    });
+
+    let (status, body) = match tokio::time::timeout(deadline, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join_err)) => {
+            log::error!("[plugin-network] Handler panicked: {join_err}");
+            (
+                500,
+                json!({ "error": "Network operation encountered an internal error" }),
+            )
+        }
+        Err(_elapsed) => {
+            log::warn!(
+                "[plugin-network] Operation timed out after {}s",
+                deadline.as_secs()
+            );
+            (
+                503,
+                json!({ "error": "Network operation timed out" }),
+            )
+        }
     };
 
     Ok(PluginNetworkResponse { status, body })
