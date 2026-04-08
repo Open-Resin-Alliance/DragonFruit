@@ -141,42 +141,119 @@ export class ExportManager {
     };
   }
 
-  private static expandInstancedMeshes(root: THREE.Object3D): void {
-    const instancedMeshes: THREE.InstancedMesh[] = [];
+  /**
+   * Returns true if the material identifies this mesh as a non-exportable hitbox.
+   * Works for single materials and material arrays.
+   */
+  private static isMaterialHitbox(material: THREE.Material | THREE.Material[]): boolean {
+    const mat = Array.isArray(material) ? material[0] : material;
+    if (!mat) return false;
+    if (mat instanceof THREE.MeshBasicMaterial) return true;
+    return mat.transparent && mat.opacity === 0;
+  }
 
-    root.traverse((child) => {
-      if (child instanceof THREE.InstancedMesh && child.count > 0) {
-        instancedMeshes.push(child);
-      }
-    });
-
-    const tempMatrix = new THREE.Matrix4();
-    const combinedMatrix = new THREE.Matrix4();
-
-    for (const instanced of instancedMeshes) {
-      const parent = instanced.parent;
-      if (!parent) continue;
-
-      for (let i = 0; i < instanced.count; i += 1) {
-        instanced.getMatrixAt(i, tempMatrix);
-        combinedMatrix.multiplyMatrices(instanced.matrix, tempMatrix);
-
-        const mesh = new THREE.Mesh(
-          instanced.geometry,
-          Array.isArray(instanced.material)
-            ? instanced.material.map((m) => m.clone())
-            : instanced.material.clone(),
-        );
-        mesh.matrixAutoUpdate = false;
-        mesh.matrix.copy(combinedMatrix);
-        mesh.castShadow = instanced.castShadow;
-        mesh.receiveShadow = instanced.receiveShadow;
-        mesh.name = `${instanced.name || 'InstancedMesh'}_${i}`;
-        parent.add(mesh);
-      }
-
-      parent.remove(instanced);
+  /** Counts export triangles across Mesh and InstancedMesh nodes, skipping hitboxes. */
+  private static countExportTriangles(objects: THREE.Object3D[]): number {
+    let count = 0;
+    const perGeo = (geo: THREE.BufferGeometry) => {
+      const idx = geo.getIndex();
+      if (idx) return Math.floor(idx.count / 3);
+      const pos = geo.getAttribute('position');
+      return pos ? Math.floor(pos.count / 3) : 0;
+    };
+    for (const obj of objects) {
+      obj.traverse((node) => {
+        if (node instanceof THREE.InstancedMesh) {
+          if (this.isMaterialHitbox(node.material)) return;
+          count += perGeo(node.geometry) * node.count;
+          return;
+        }
+        if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
+        if (this.isMaterialHitbox(node.material)) return;
+        count += perGeo(node.geometry);
+      });
     }
+    return count;
+  }
+
+  /**
+   * Builds a binary STL buffer directly from live scene objects.
+   * Handles both THREE.Mesh and THREE.InstancedMesh natively — no cloning, no expansion.
+   * Pre-allocates the exact buffer size in one triangle-count pass, then writes in one fill pass.
+   */
+  private static buildBinaryStl(objects: THREE.Object3D[]): Uint8Array {
+    const triCount = this.countExportTriangles(objects);
+    // 80-byte header + 4-byte triangle count + 50 bytes per triangle
+    const buf = new ArrayBuffer(84 + triCount * 50);
+    const view = new DataView(buf);
+    view.setUint32(80, triCount, true);
+    let off = 84;
+
+    const vA = new THREE.Vector3();
+    const vB = new THREE.Vector3();
+    const vC = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const edge1 = new THREE.Vector3();
+    const edge2 = new THREE.Vector3();
+    const tmpMat = new THREE.Matrix4();
+    const comMat = new THREE.Matrix4();
+
+    const writeTri = (
+      pos: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+      mat: THREE.Matrix4,
+      a: number, b: number, c: number,
+    ) => {
+      vA.fromBufferAttribute(pos, a).applyMatrix4(mat);
+      vB.fromBufferAttribute(pos, b).applyMatrix4(mat);
+      vC.fromBufferAttribute(pos, c).applyMatrix4(mat);
+      edge1.subVectors(vB, vA);
+      edge2.subVectors(vC, vA);
+      normal.crossVectors(edge1, edge2).normalize();
+      view.setFloat32(off, normal.x, true); off += 4;
+      view.setFloat32(off, normal.y, true); off += 4;
+      view.setFloat32(off, normal.z, true); off += 4;
+      view.setFloat32(off, vA.x, true); off += 4;
+      view.setFloat32(off, vA.y, true); off += 4;
+      view.setFloat32(off, vA.z, true); off += 4;
+      view.setFloat32(off, vB.x, true); off += 4;
+      view.setFloat32(off, vB.y, true); off += 4;
+      view.setFloat32(off, vB.z, true); off += 4;
+      view.setFloat32(off, vC.x, true); off += 4;
+      view.setFloat32(off, vC.y, true); off += 4;
+      view.setFloat32(off, vC.z, true); off += 4;
+      view.setUint16(off, 0, true); off += 2;
+    };
+
+    const processGeo = (geo: THREE.BufferGeometry, mat: THREE.Matrix4) => {
+      const pos = geo.getAttribute('position');
+      if (!pos) return;
+      const idx = geo.getIndex();
+      if (idx) {
+        const arr = idx.array;
+        for (let i = 0; i + 2 < arr.length; i += 3) writeTri(pos, mat, arr[i], arr[i + 1], arr[i + 2]);
+      } else {
+        for (let i = 0; i + 2 < pos.count; i += 3) writeTri(pos, mat, i, i + 1, i + 2);
+      }
+    };
+
+    for (const obj of objects) {
+      obj.traverse((node) => {
+        if (node instanceof THREE.InstancedMesh) {
+          if (node.count === 0 || this.isMaterialHitbox(node.material)) return;
+          for (let i = 0; i < node.count; i++) {
+            node.getMatrixAt(i, tmpMat);
+            comMat.multiplyMatrices(node.matrixWorld, tmpMat);
+            processGeo(node.geometry, comMat);
+          }
+          return;
+        }
+        if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
+        if (this.isMaterialHitbox(node.material)) return;
+        processGeo(node.geometry, node.matrixWorld);
+      });
+    }
+
+    return new Uint8Array(buf);
   }
 
   private static normalizeExportFilenameBase(filename: string): string {
@@ -188,53 +265,60 @@ export class ExportManager {
     return cleaned || 'export';
   }
 
-  private static buildMinimal3mfModelXml(scene: THREE.Scene): string {
-    // Build XML strings directly without intermediate {x,y,z}/{v1,v2,v3} object arrays.
-    // For large scenes (1M+ triangles) this avoids ~200MB of JS heap pressure.
+  /**
+   * Builds the 3MF model XML string from live scene objects.
+   * Handles both THREE.Mesh and THREE.InstancedMesh natively — no cloning, no expansion.
+   * Coordinates are rounded to 4 decimal places (0.1 µm — well below printer resolution)
+   * to shrink XML size and speed up DEFLATE.
+   */
+  private static buildMinimal3mfModelXml(objects: THREE.Object3D[]): string {
     const vertexParts: string[] = [];
     const triangleParts: string[] = [];
     let triCount = 0;
 
-    const worldVertex = new THREE.Vector3();
+    const wv = new THREE.Vector3();
+    const tmpMat = new THREE.Matrix4();
+    const comMat = new THREE.Matrix4();
 
-    scene.traverse((node) => {
-      if (!(node instanceof THREE.Mesh)) return;
-      if (!(node.geometry instanceof THREE.BufferGeometry)) return;
-
-      const geometry = node.geometry;
-      const position = geometry.getAttribute('position');
-      if (!position) return;
-
-      const index = geometry.getIndex();
-      const matrixWorld = node.matrixWorld;
-
+    const processGeo = (geo: THREE.BufferGeometry, mat: THREE.Matrix4) => {
+      const pos = geo.getAttribute('position');
+      if (!pos) return;
+      const idx = geo.getIndex();
       const appendTri = (a: number, b: number, c: number) => {
         const base = triCount * 3;
-
-        worldVertex.fromBufferAttribute(position, a).applyMatrix4(matrixWorld);
-        vertexParts.push(`<vertex x="${worldVertex.x}" y="${worldVertex.y}" z="${worldVertex.z}"/>`);
-
-        worldVertex.fromBufferAttribute(position, b).applyMatrix4(matrixWorld);
-        vertexParts.push(`<vertex x="${worldVertex.x}" y="${worldVertex.y}" z="${worldVertex.z}"/>`);
-
-        worldVertex.fromBufferAttribute(position, c).applyMatrix4(matrixWorld);
-        vertexParts.push(`<vertex x="${worldVertex.x}" y="${worldVertex.y}" z="${worldVertex.z}"/>`);
-
+        wv.fromBufferAttribute(pos, a).applyMatrix4(mat);
+        vertexParts.push(`<vertex x="${wv.x.toFixed(4)}" y="${wv.y.toFixed(4)}" z="${wv.z.toFixed(4)}"/>`);
+        wv.fromBufferAttribute(pos, b).applyMatrix4(mat);
+        vertexParts.push(`<vertex x="${wv.x.toFixed(4)}" y="${wv.y.toFixed(4)}" z="${wv.z.toFixed(4)}"/>`);
+        wv.fromBufferAttribute(pos, c).applyMatrix4(mat);
+        vertexParts.push(`<vertex x="${wv.x.toFixed(4)}" y="${wv.y.toFixed(4)}" z="${wv.z.toFixed(4)}"/>`);
         triangleParts.push(`<triangle v1="${base}" v2="${base + 1}" v3="${base + 2}"/>`);
         triCount++;
       };
-
-      if (index) {
-        const indexArray = index.array;
-        for (let i = 0; i + 2 < indexArray.length; i += 3) {
-          appendTri(indexArray[i], indexArray[i + 1], indexArray[i + 2]);
-        }
+      if (idx) {
+        const arr = idx.array;
+        for (let i = 0; i + 2 < arr.length; i += 3) appendTri(arr[i], arr[i + 1], arr[i + 2]);
       } else {
-        for (let i = 0; i + 2 < position.count; i += 3) {
-          appendTri(i, i + 1, i + 2);
-        }
+        for (let i = 0; i + 2 < pos.count; i += 3) appendTri(i, i + 1, i + 2);
       }
-    });
+    };
+
+    for (const obj of objects) {
+      obj.traverse((node) => {
+        if (node instanceof THREE.InstancedMesh) {
+          if (node.count === 0 || this.isMaterialHitbox(node.material)) return;
+          for (let i = 0; i < node.count; i++) {
+            node.getMatrixAt(i, tmpMat);
+            comMat.multiplyMatrices(node.matrixWorld, tmpMat);
+            processGeo(node.geometry, comMat);
+          }
+          return;
+        }
+        if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
+        if (this.isMaterialHitbox(node.material)) return;
+        processGeo(node.geometry, node.matrixWorld);
+      });
+    }
 
     if (triCount === 0) {
       throw new Error('Cannot export 3MF: no triangle geometry found.');
@@ -242,12 +326,11 @@ export class ExportManager {
 
     const vertexXml = vertexParts.join('');
     const triangleXml = triangleParts.join('');
-
     return `<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"><mesh><vertices>${vertexXml}</vertices><triangles>${triangleXml}</triangles></mesh></object></resources><build><item objectid="1"/></build></model>`;
   }
 
-  private static async export3mfFromScene(scene: THREE.Scene): Promise<Uint8Array> {
-    const modelXml = this.buildMinimal3mfModelXml(scene);
+  private static async export3mf(objects: THREE.Object3D[]): Promise<Uint8Array> {
+    const modelXml = this.buildMinimal3mfModelXml(objects);
 
     const contentTypesXml = `<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>`;
 
@@ -304,61 +387,21 @@ export class ExportManager {
       useNativeWrite = false;
     }
 
-    // 1. Create a temporary scene
-    const scene = new THREE.Scene();
+    // Collect live scene objects for serialization — no cloning, no InstancedMesh expansion.
+    // Each serializer (buildBinaryStl / buildMinimal3mfModelXml) handles InstancedMesh natively.
+    const exportObjects: THREE.Object3D[] = [];
 
-    // 2. Add Model (if requested)
+    // Model: already a fresh group from ExportPanel's buildModelGroup, updateMatrixWorld was called there.
     if (options.includeModel && modelObject) {
-      // Clone the object (Group or Mesh)
-      const clonedModel = modelObject.clone();
-      scene.add(clonedModel);
+      modelObject.updateMatrixWorld(true);
+      exportObjects.push(modelObject);
     }
 
-    // 3. Add Supports (if requested) - USE ACTUAL RENDERED SUPPORTS
+    // Supports: use the live R3F ref directly — its matrixWorld is already current.
+    // Hitbox meshes are filtered per-node inside the serializers via isMaterialHitbox().
     if (options.includeSupports && supportsGroup) {
-      // Clone the actual supports group from the scene
-      const clonedSupports = supportsGroup.clone();
-      clonedSupports.name = 'Supports';
-
-      // STLExporter doesn't serialize InstancedMesh directly.
-      // Expand batched/instanced supports into regular meshes for export.
-      this.expandInstancedMeshes(clonedSupports);
-      
-      // Remove invisible hitbox meshes and other non-exportable objects
-      // STL exporter ignores visibility, so we must actually remove them
-      const meshesToRemove: THREE.Mesh[] = [];
-      clonedSupports.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          // Skip hitbox meshes (transparent with opacity 0)
-          if (child.material instanceof THREE.Material) {
-            if (child.material.transparent && child.material.opacity === 0) {
-              meshesToRemove.push(child);
-              return;
-            }
-          }
-          // Skip meshes with basic materials used for hitboxes
-          if (child.material instanceof THREE.MeshBasicMaterial) {
-            meshesToRemove.push(child);
-            return;
-          }
-        }
-      });
-      
-      // Actually remove the hitbox meshes from their parents
-      meshesToRemove.forEach(mesh => {
-        if (mesh.parent) {
-          mesh.parent.remove(mesh);
-        }
-      });
-      
-      // Reset scale to ensure supports export with correct scale
-      // Supports should be in world units, not affected by any parent scaling
-      clonedSupports.scale.set(1, 1, 1);
-      
-      // CRITICAL: Update world matrix for supports to ensure proper scaling/positioning
-      clonedSupports.updateMatrixWorld(true);
-      
-      scene.add(clonedSupports);
+      supportsGroup.updateMatrixWorld(true);
+      exportObjects.push(supportsGroup);
     }
 
     // 4. Add Raft (if requested and enabled)
@@ -530,35 +573,23 @@ export class ExportManager {
              
                if (wallMesh) raftGroup.add(wallMesh);
              }
-             scene.add(raftGroup);
+raftGroup.updateMatrixWorld(true);
+             exportObjects.push(raftGroup);
            }
         }
       }
     }
 
-    // CRITICAL: Update all matrices in the detached scene before export.
-    // STLExporter relies on .matrixWorld to transform geometry into place.
-    // Without this, all grouped/positioned meshes will export at (0,0,0).
-    scene.updateMatrixWorld(true);
-
-    // 5. Export
+    // 5. Serialize and write
     if (options.format === '3mf') {
-      const bytes = await this.export3mfFromScene(scene);
+      const bytes = await this.export3mf(exportObjects);
       await this.downloadFile(bytes, options.filename, '3mf', 'model/3mf', prePickedNativePath, useNativeWrite);
-      scene.clear();
       return;
     }
 
-    const exporter = new STLExporter();
-    const result = options.binary
-      ? exporter.parse(scene, { binary: true })
-      : exporter.parse(scene, { binary: false });
-
-    // 6. Download
-    await this.downloadFile(result, options.filename, 'stl', 'application/octet-stream', prePickedNativePath, useNativeWrite);
-
-    // 7. Cleanup
-    scene.clear();
+    // Binary STL — direct serializer, handles InstancedMesh without any cloning
+    const stlBytes = this.buildBinaryStl(exportObjects);
+    await this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', prePickedNativePath, useNativeWrite);
   }
 
   private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<void> {
