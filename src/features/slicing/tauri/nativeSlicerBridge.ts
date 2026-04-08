@@ -619,21 +619,33 @@ export async function writeBytesToNativePath(
   });
 }
 
-export async function appendBytesToNativePath(
+/**
+ * Writes `bytes` to `destinationPath` using the raw-binary `append_mesh_stage_chunk` IPC command,
+ * sending the data in chunks to avoid JSON-encoding the entire buffer over IPC.
+ * Each call sequences through chunks of `chunkSize` bytes (default 4 MB).
+ * The first chunk truncates/creates the file; subsequent chunks append to it.
+ */
+export async function writeChunkedToNativePath(
   destinationPath: string,
   bytes: Uint8Array,
-): Promise<string> {
+  chunkSize = 4 * 1024 * 1024,
+): Promise<void> {
   const core = await loadTauriCore();
   if (!core) {
-    throw new Error('Native file writing is only available in DragonFruit Desktop (Tauri runtime).');
+    throw new Error('Chunked file writing is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
-  return core.invoke<string>('append_bytes_to_path', {
-    args: {
-      destinationPath,
-      bytes: Uint8Array.from(bytes),
-    },
-  });
+  let offset = 0;
+  while (offset < bytes.length) {
+    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+    await core.invoke<number>('append_mesh_stage_chunk', chunk, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-mesh-stage-path': destinationPath,
+      },
+    });
+    offset += chunk.length;
+  }
 }
 
 export async function readPrintArtifactBytesFromPath(sourcePath: string): Promise<Uint8Array> {

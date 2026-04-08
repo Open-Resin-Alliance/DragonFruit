@@ -3,7 +3,7 @@ import { STLExporter } from 'three-stdlib';
 import JSZip from 'jszip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument } from '@/features/scene/voxl';
-import { pickSavePathWithNativeDialog, writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
@@ -189,8 +189,11 @@ export class ExportManager {
   }
 
   private static buildMinimal3mfModelXml(scene: THREE.Scene): string {
-    const vertices: Array<{ x: number; y: number; z: number }> = [];
-    const triangles: Array<{ v1: number; v2: number; v3: number }> = [];
+    // Build XML strings directly without intermediate {x,y,z}/{v1,v2,v3} object arrays.
+    // For large scenes (1M+ triangles) this avoids ~200MB of JS heap pressure.
+    const vertexParts: string[] = [];
+    const triangleParts: string[] = [];
+    let triCount = 0;
 
     const worldVertex = new THREE.Vector3();
 
@@ -206,18 +209,19 @@ export class ExportManager {
       const matrixWorld = node.matrixWorld;
 
       const appendTri = (a: number, b: number, c: number) => {
-        const base = vertices.length;
+        const base = triCount * 3;
 
         worldVertex.fromBufferAttribute(position, a).applyMatrix4(matrixWorld);
-        vertices.push({ x: worldVertex.x, y: worldVertex.y, z: worldVertex.z });
+        vertexParts.push(`<vertex x="${worldVertex.x}" y="${worldVertex.y}" z="${worldVertex.z}"/>`);
 
         worldVertex.fromBufferAttribute(position, b).applyMatrix4(matrixWorld);
-        vertices.push({ x: worldVertex.x, y: worldVertex.y, z: worldVertex.z });
+        vertexParts.push(`<vertex x="${worldVertex.x}" y="${worldVertex.y}" z="${worldVertex.z}"/>`);
 
         worldVertex.fromBufferAttribute(position, c).applyMatrix4(matrixWorld);
-        vertices.push({ x: worldVertex.x, y: worldVertex.y, z: worldVertex.z });
+        vertexParts.push(`<vertex x="${worldVertex.x}" y="${worldVertex.y}" z="${worldVertex.z}"/>`);
 
-        triangles.push({ v1: base, v2: base + 1, v3: base + 2 });
+        triangleParts.push(`<triangle v1="${base}" v2="${base + 1}" v3="${base + 2}"/>`);
+        triCount++;
       };
 
       if (index) {
@@ -232,17 +236,12 @@ export class ExportManager {
       }
     });
 
-    if (triangles.length === 0) {
+    if (triCount === 0) {
       throw new Error('Cannot export 3MF: no triangle geometry found.');
     }
 
-    const vertexXml = vertices
-      .map((v) => `<vertex x="${v.x}" y="${v.y}" z="${v.z}"/>`)
-      .join('');
-
-    const triangleXml = triangles
-      .map((t) => `<triangle v1="${t.v1}" v2="${t.v2}" v3="${t.v3}"/>`)
-      .join('');
+    const vertexXml = vertexParts.join('');
+    const triangleXml = triangleParts.join('');
 
     return `<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"><mesh><vertices>${vertexXml}</vertices><triangles>${triangleXml}</triangles></mesh></object></resources><build><item objectid="1"/></build></model>`;
   }
@@ -259,15 +258,19 @@ export class ExportManager {
     zip.file('_rels/.rels', relsXml);
     zip.file('3D/3dmodel.model', modelXml);
 
+    // Level 4 strikes a balance between file size and memory/CPU pressure.
+    // Level 9 can OOM or stall for minutes on scenes with 1M+ triangles.
     return zip.generateAsync({
       type: 'uint8array',
       compression: 'DEFLATE',
-      compressionOptions: { level: 9 },
+      compressionOptions: { level: 4 },
     });
   }
 
   /**
    * Generates and downloads an export artifact (STL / 3MF / VOXL) based on current scene state.
+   * For STL/3MF in the Tauri desktop app the native save dialog is shown BEFORE any heavy work
+   * so the user picks the destination up front and the export starts immediately after.
    */
   public static async exportScene(
     modelObject: THREE.Object3D | null,
@@ -280,6 +283,25 @@ export class ExportManager {
     if (options.format === 'voxl') {
       await this.exportVoxl(sceneContext, options);
       return;
+    }
+
+    // For STL/3MF: ask for the save destination FIRST so the user doesn't wait through
+    // geometry serialization before seeing the dialog.
+    const base = this.normalizeExportFilenameBase(options.filename || 'export');
+    const ext = options.format === '3mf' ? '3mf' : 'stl';
+    const suggestedName = `${base}.${ext}`;
+    let prePickedNativePath: string | null = null;
+    let useNativeWrite = true;
+
+    try {
+      prePickedNativePath = await pickSavePathWithNativeDialog(suggestedName);
+    } catch (err) {
+      const msg = this.getErrorMessage(err);
+      if (msg.toLowerCase().includes('save cancelled by user') || msg.toLowerCase().includes('cancelled by user')) {
+        return; // User dismissed — nothing to do
+      }
+      // Native dialog unavailable (web mode) — fall back to browser <a download>
+      useNativeWrite = false;
     }
 
     // 1. Create a temporary scene
@@ -522,7 +544,7 @@ export class ExportManager {
     // 5. Export
     if (options.format === '3mf') {
       const bytes = await this.export3mfFromScene(scene);
-      await this.downloadFile(bytes, options.filename, '3mf', 'model/3mf');
+      await this.downloadFile(bytes, options.filename, '3mf', 'model/3mf', prePickedNativePath, useNativeWrite);
       scene.clear();
       return;
     }
@@ -533,8 +555,8 @@ export class ExportManager {
       : exporter.parse(scene, { binary: false });
 
     // 6. Download
-    await this.downloadFile(result, options.filename, 'stl', 'application/octet-stream');
-    
+    await this.downloadFile(result, options.filename, 'stl', 'application/octet-stream', prePickedNativePath, useNativeWrite);
+
     // 7. Cleanup
     scene.clear();
   }
@@ -615,7 +637,16 @@ export class ExportManager {
     await this.downloadFile(json, options.filename, 'voxl', 'application/json');
   }
 
-  private static async downloadFile(data: DataView | Uint8Array | string, filename: string, extension: 'stl' | '3mf' | 'voxl', mimeType: string) {
+  private static async downloadFile(
+    data: DataView | Uint8Array | string,
+    filename: string,
+    extension: 'stl' | '3mf' | 'voxl',
+    mimeType: string,
+    /** Pre-picked native path from an earlier dialog call; null means browser-fallback. */
+    prePickedNativePath: string | null = null,
+    /** False when native dialog was unavailable and we should use browser <a download>. */
+    useNativeWrite = true,
+  ) {
     const normalizedBaseName = this.normalizeExportFilenameBase(filename);
     const resolvedFilename = `${normalizedBaseName}.${extension}`;
 
@@ -625,19 +656,32 @@ export class ExportManager {
         ? data
         : new TextEncoder().encode(data);
 
-    try {
-      const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);
-      await writeBytesToNativePath(destinationPath, bytes);
-      return;
-    } catch (error) {
-      const message = this.getErrorMessage(error);
-      if (message.toLowerCase().includes('save cancelled by user')) {
+    // If a native path was already picked before heavy work started, write directly.
+    if (prePickedNativePath && useNativeWrite) {
+      try {
+        await writeChunkedToNativePath(prePickedNativePath, bytes);
         return;
+      } catch (error) {
+        console.warn('[ExportManager] Chunked write failed, falling back to browser download.', error);
       }
-      console.warn('[ExportManager] Native save dialog unavailable/failed, falling back to browser download.', error);
     }
 
-    // Create a clean copy with explicit ArrayBuffer for Blob compatibility
+    if (useNativeWrite && !prePickedNativePath) {
+      // Fallback: try native dialog + write (e.g. VOXL path that doesn't pre-pick)
+      try {
+        const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);
+        await writeChunkedToNativePath(destinationPath, bytes);
+        return;
+      } catch (error) {
+        const message = this.getErrorMessage(error);
+        if (message.toLowerCase().includes('save cancelled by user') || message.toLowerCase().includes('cancelled by user')) {
+          return;
+        }
+        console.warn('[ExportManager] Native save dialog unavailable/failed, falling back to browser download.', error);
+      }
+    }
+
+    // Browser <a download> fallback
     const blobData = typeof data === 'string' ? data : new Uint8Array(bytes);
     const blob = new Blob([blobData], { type: mimeType });
 
