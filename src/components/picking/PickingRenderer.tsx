@@ -34,6 +34,9 @@ function shouldExcludeFromPickClone(object: THREE.Object3D): boolean {
   return object.userData?.excludeFromPickingClone === true;
 }
 
+/** No-op override for Object3D.updateMatrixWorld — keeps our manually synced matrixWorld intact. */
+function noop() {}
+
 /**
  * PickingRenderer - Handles the offscreen render pass for GPU picking.
  * 
@@ -147,6 +150,22 @@ export function PickingRenderer({
     const pickObject = sourceObject.clone(true);
     pickObject.traverse((child) => {
       child.matrixAutoUpdate = false;
+      // Prevent Three.js from recomputing matrixWorld during gl.render(pickScene).
+      // Pick clones live directly under the pick scene root (identity transform), so
+      // Three.js would compute:  matrixWorld = identity × child.matrix = child.matrix
+      // But child.matrix is the SOURCE object's LOCAL matrix, not its world matrix.
+      // For meshes nested deep inside a gizmo hierarchy (positioned far from origin),
+      // this produces the wrong pick position. We manually copy source.matrixWorld in
+      // syncPickObjectTransforms and must prevent Three.js from overwriting it.
+      child.updateMatrixWorld = noop;
+      // Gizmo handles must always render after model geometry in the pick scene
+      // so their depthTest=false color wins regardless of depth values.
+      // This is set here (not relied on from the source) because React child
+      // effects fire before parent effects — the gizmo traverse that sets
+      // renderOrder=2500 on source objects hasn't run yet at registration time.
+      if (isGizmo) {
+        child.renderOrder = 9999;
+      }
       if (shouldExcludeFromPickClone(child)) {
         child.visible = false;
         return;
@@ -155,6 +174,8 @@ export function PickingRenderer({
         child.material = pickMaterial;
       }
     });
+    // Flag so syncPickSceneCache can skip the one-time renderOrder repair below.
+    if (isGizmo) pickObject.userData.renderOrderPatched = true;
 
     return pickObject;
   }, [getPickingMaterial]);
@@ -170,6 +191,9 @@ export function PickingRenderer({
 
       pick.visible = source.visible && !shouldExcludeFromPickClone(source);
       pick.matrixAutoUpdate = false;
+      // Also ensure the no-op guard is in place on every node we sync
+      // (covers clones created before this patch via hot-reload).
+      if (pick.updateMatrixWorld !== noop) pick.updateMatrixWorld = noop;
       pick.matrix.copy(source.matrix);
       pick.matrixWorld.copy(source.matrixWorld);
 
@@ -199,6 +223,12 @@ export function PickingRenderer({
 
       const cached = pickObjectCacheRef.current.get(pickId);
       if (cached && cached.sourceObject === registration.object) {
+        // One-time repair: clones created before the renderOrder=9999 fix
+        // (stale hot-reload survivors) need their renderOrder backfilled once.
+        if (registration.category === 'gizmo' && !cached.pickObject.userData.renderOrderPatched) {
+          cached.pickObject.traverse((child) => { child.renderOrder = 9999; });
+          cached.pickObject.userData.renderOrderPatched = true;
+        }
         continue;
       }
 

@@ -529,8 +529,12 @@ function StlMeshComponent({
             }
 
             // Let gizmo handles (especially center XY disc) receive clicks without
-            // model-level event swallowing.
-            if (isGizmoHoverCategory) {
+            // model-level event swallowing. Check both GPU pick (may lag 1 frame)
+            // and the raw intersection list for immediate accuracy.
+            const hasGizmoIntersection = e.intersections.some(
+              (h) => h.object.userData?.isGizmoHandle === true,
+            );
+            if (isGizmoHoverCategory || hasGizmoIntersection) {
               return;
             }
             e.stopPropagation();
@@ -663,7 +667,13 @@ function StlMeshComponent({
 
             // If the pointer is over a gizmo handle, do not consume the event at
             // the model layer; let gizmo drag interactions win.
-            if (isGizmoHoverCategory) {
+            // Check both the GPU pick result (isGizmoHoverCategory) AND the raw
+            // intersection list (isGizmoHandle userData) to guard against the
+            // 1-frame lag where GPU pick hasn't updated yet at click time.
+            const hasGizmoIntersection = e.intersections.some(
+              (h) => h.object.userData?.isGizmoHandle === true,
+            );
+            if (isGizmoHoverCategory || hasGizmoIntersection) {
               return;
             }
 

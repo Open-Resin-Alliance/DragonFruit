@@ -82,6 +82,9 @@ export function TransformGizmo({
     gizmoRootRef.current.traverse((obj) => {
       obj.frustumCulled = false;
       obj.renderOrder = 2500;
+      // Mark every gizmo node so StlMesh pointer handlers can detect gizmo
+      // involvement directly from e.intersections (frame-accurate, unlike GPU pick).
+      obj.userData.isGizmoHandle = true;
 
       const material = (obj as THREE.Mesh).material;
       if (!material) return;
