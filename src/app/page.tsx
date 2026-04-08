@@ -9472,10 +9472,15 @@ export default function Home() {
         };
       });
 
-      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const maxX = minX + scene.view3dSettings.widthMm;
-      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const maxY = minY + scene.view3dSettings.depthMm;
+      const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+      const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+      const arrangeSm = scene.view3dSettings.safetyMarginMm;
+      const minX = rawMinX + Math.max(0, arrangeSm?.left ?? 0);
+      const maxX = rawMaxX - Math.max(0, arrangeSm?.right ?? 0);
+      const minY = rawMinY + Math.max(0, arrangeSm?.front ?? 0);
+      const maxY = rawMaxY - Math.max(0, arrangeSm?.back ?? 0);
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
 
@@ -9963,6 +9968,7 @@ export default function Home() {
         arrangeAnchorMode,
         getArrangeTransform: (model) => model.transform,
         hullCache: arrangeHullFootprintCacheRef.current,
+        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
       });
 
       if (updates.length > 1) {
@@ -10029,10 +10035,15 @@ export default function Home() {
     const stepY = maxDepth + gapY;
     const stepZ = maxHeight + gapZ;
 
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const maxX = minX + scene.view3dSettings.widthMm;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const maxY = minY + scene.view3dSettings.depthMm;
+    const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+    const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+    const arraySm = scene.view3dSettings.safetyMarginMm;
+    const minX = rawMinX + Math.max(0, arraySm?.left ?? 0);
+    const maxX = rawMaxX - Math.max(0, arraySm?.right ?? 0);
+    const minY = rawMinY + Math.max(0, arraySm?.front ?? 0);
+    const maxY = rawMaxY - Math.max(0, arraySm?.back ?? 0);
 
     const slotsPerLayer = countX * countY;
     const requiredLayers = Math.max(1, Math.ceil(visibleModels.length / slotsPerLayer));
@@ -10041,8 +10052,8 @@ export default function Home() {
     const totalWidth = (countX - 1) * stepX;
     const totalDepth = (countY - 1) * stepY;
 
-    let startX = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0) - (totalWidth * 0.5);
-    let startY = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0) - (totalDepth * 0.5);
+    let startX = (minX + maxX) * 0.5 - totalWidth * 0.5;
+    let startY = (minY + maxY) * 0.5 - totalDepth * 0.5;
 
     if (arrangeAnchorMode === 'front_left') {
       startX = minX + (maxWidth * 0.5);
@@ -10093,6 +10104,7 @@ export default function Home() {
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
+    scene.view3dSettings.safetyMarginMm,
     scene.view3dSettings.widthMm,
     getArrangeTransform,
     getModelSupportAwareDimensionsMm,
@@ -10243,6 +10255,17 @@ export default function Home() {
     // Select all visible models for export workspace tinting
     scene.setSelectedModelIds(visibleIds);
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
+
+  // When entering arrange mode with exactly one visible model, auto-select it.
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') return;
+    if (transformMgr.transformMode !== 'arrange') return;
+    const visibleModels = scene.models.filter((m) => m.visible);
+    if (visibleModels.length !== 1) return;
+    const sole = visibleModels[0];
+    if (scene.activeModelId === sole.id && scene.selectedModelIds.includes(sole.id)) return;
+    scene.selectModel(sole.id, 'single');
+  }, [scene.mode, transformMgr.transformMode, scene.models, scene.activeModelId, scene.selectedModelIds, scene.selectModel]);
 
   React.useEffect(() => {
     if (!hasActivePrinterProfile) return;
@@ -11236,10 +11259,15 @@ export default function Home() {
       const totalCount = Math.max(1, duplicateTotalCopies);
       const spacing = Math.max(0, duplicateSpacingMm);
 
-      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const maxX = minX + scene.view3dSettings.widthMm;
-      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const maxY = minY + scene.view3dSettings.depthMm;
+      const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
+      const rawDupMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const rawDupMaxY = rawDupMinY + scene.view3dSettings.depthMm;
+      const dupSm = scene.view3dSettings.safetyMarginMm;
+      const minX = rawDupMinX + Math.max(0, dupSm?.left ?? 0);
+      const maxX = rawDupMaxX - Math.max(0, dupSm?.right ?? 0);
+      const minY = rawDupMinY + Math.max(0, dupSm?.front ?? 0);
+      const maxY = rawDupMaxY - Math.max(0, dupSm?.back ?? 0);
 
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
@@ -11397,6 +11425,7 @@ export default function Home() {
     scene.activeModel,
     scene.models,
     scene.mode,
+    scene.view3dSettings.safetyMarginMm,
     transformMgr.transformMode,
   ]);
 
@@ -11483,10 +11512,15 @@ export default function Home() {
     const depth = sourceDims.depth;
     const spacing = Math.max(0, duplicateSpacingMm);
 
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const maxX = minX + scene.view3dSettings.widthMm;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const maxY = minY + scene.view3dSettings.depthMm;
+    const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
+    const rawFillMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const rawFillMaxY = rawFillMinY + scene.view3dSettings.depthMm;
+    const fillSm = scene.view3dSettings.safetyMarginMm;
+    const minX = rawFillMinX + Math.max(0, fillSm?.left ?? 0);
+    const maxX = rawFillMaxX - Math.max(0, fillSm?.right ?? 0);
+    const minY = rawFillMinY + Math.max(0, fillSm?.front ?? 0);
+    const maxY = rawFillMaxY - Math.max(0, fillSm?.back ?? 0);
 
     const plateWidth = Math.max(1, maxX - minX);
     const plateDepth = Math.max(1, maxY - minY);

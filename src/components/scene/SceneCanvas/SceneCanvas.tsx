@@ -2346,6 +2346,11 @@ export function SceneCanvas({
     return Array.from(new Set(arrangeArrayPreviewItems.map((item) => item.model.id)));
   }, [arrangeArrayPreviewItems]);
 
+  const arrangeArraySourceModelIdSet = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) return new Set<string>();
+    return new Set(arrangeArrayPreviewItems.map((item) => item.model.id));
+  }, [arrangeArrayPreviewItems]);
+
   const supportBaseExcludeModelIds = React.useMemo(() => {
     const ids = [...multiGizmoSupportPreviewIds];
     if (arrangeSupportPreviewModelIds.length > 0) {
@@ -4265,6 +4270,7 @@ export function SceneCanvas({
                 // Use per-model visibility
                 if (!model.visible) return null;
                 if (shouldHideDuplicateSourceModel) return null;
+                if (arrangeArraySourceModelIdSet.has(model.id)) return null;
 
                 return (
                   <React.Fragment key={model.id}>

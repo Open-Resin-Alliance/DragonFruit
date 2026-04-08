@@ -69,6 +69,7 @@ export type HighPrecisionArrangeInput = {
   arrangeAnchorMode: ArrangeAnchorMode;
   getArrangeTransform: (model: ArrangeModel) => ArrangeTransform;
   hullCache: Map<string, HullCacheEntry>;
+  safetyMarginMm?: { front: number; back: number; left: number; right: number };
 };
 
 export type HighPrecisionArrangeUpdate = {
@@ -98,10 +99,14 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
   const minSpacing = spacing + SAT_EPS_MM;
   const PERF_COMPLEX_SCENE = visibleModels.length >= 30;
 
-  const minX = originMode === 'front_left' ? 0 : -widthMm * 0.5;
-  const maxX = minX + widthMm;
-  const minY = originMode === 'front_left' ? 0 : -depthMm * 0.5;
-  const maxY = minY + depthMm;
+  const rawMinX = originMode === 'front_left' ? 0 : -widthMm * 0.5;
+  const rawMaxX = rawMinX + widthMm;
+  const rawMinY = originMode === 'front_left' ? 0 : -depthMm * 0.5;
+  const rawMaxY = rawMinY + depthMm;
+  const minX = rawMinX + Math.max(0, input.safetyMarginMm?.left ?? 0);
+  const maxX = rawMaxX - Math.max(0, input.safetyMarginMm?.right ?? 0);
+  const minY = rawMinY + Math.max(0, input.safetyMarginMm?.front ?? 0);
+  const maxY = rawMaxY - Math.max(0, input.safetyMarginMm?.back ?? 0);
 
   const modelTransformById = new Map(
     sceneModels.map((model) => [model.id, getArrangeTransform(model)] as const),

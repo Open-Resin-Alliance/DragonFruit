@@ -36,6 +36,7 @@ export type HighPrecisionArrangeWorkerInput = {
   arrangeSpacingMm: number;
   arrangeAllowRotateOnZ: boolean;
   arrangeAnchorMode: 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
+  safetyMarginMm?: { front: number; back: number; left: number; right: number };
 };
 
 export type HighPrecisionArrangeWorkerRequest = {
