@@ -9472,10 +9472,15 @@ export default function Home() {
         };
       });
 
-      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const maxX = minX + scene.view3dSettings.widthMm;
-      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const maxY = minY + scene.view3dSettings.depthMm;
+      const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+      const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+      const arrangeSm = scene.view3dSettings.safetyMarginMm;
+      const minX = rawMinX + Math.max(0, arrangeSm?.left ?? 0);
+      const maxX = rawMaxX - Math.max(0, arrangeSm?.right ?? 0);
+      const minY = rawMinY + Math.max(0, arrangeSm?.front ?? 0);
+      const maxY = rawMaxY - Math.max(0, arrangeSm?.back ?? 0);
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
 
@@ -9963,6 +9968,7 @@ export default function Home() {
         arrangeAnchorMode,
         getArrangeTransform: (model) => model.transform,
         hullCache: arrangeHullFootprintCacheRef.current,
+        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
       });
 
       if (updates.length > 1) {
@@ -10029,10 +10035,15 @@ export default function Home() {
     const stepY = maxDepth + gapY;
     const stepZ = maxHeight + gapZ;
 
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const maxX = minX + scene.view3dSettings.widthMm;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const maxY = minY + scene.view3dSettings.depthMm;
+    const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+    const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+    const arraySm = scene.view3dSettings.safetyMarginMm;
+    const minX = rawMinX + Math.max(0, arraySm?.left ?? 0);
+    const maxX = rawMaxX - Math.max(0, arraySm?.right ?? 0);
+    const minY = rawMinY + Math.max(0, arraySm?.front ?? 0);
+    const maxY = rawMaxY - Math.max(0, arraySm?.back ?? 0);
 
     const slotsPerLayer = countX * countY;
     const requiredLayers = Math.max(1, Math.ceil(visibleModels.length / slotsPerLayer));
@@ -10041,8 +10052,8 @@ export default function Home() {
     const totalWidth = (countX - 1) * stepX;
     const totalDepth = (countY - 1) * stepY;
 
-    let startX = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0) - (totalWidth * 0.5);
-    let startY = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0) - (totalDepth * 0.5);
+    let startX = (minX + maxX) * 0.5 - totalWidth * 0.5;
+    let startY = (minY + maxY) * 0.5 - totalDepth * 0.5;
 
     if (arrangeAnchorMode === 'front_left') {
       startX = minX + (maxWidth * 0.5);
@@ -10093,6 +10104,7 @@ export default function Home() {
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
+    scene.view3dSettings.safetyMarginMm,
     scene.view3dSettings.widthMm,
     getArrangeTransform,
     getModelSupportAwareDimensionsMm,

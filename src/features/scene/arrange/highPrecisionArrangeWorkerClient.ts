@@ -111,6 +111,7 @@ const serializeInput = (input: HighPrecisionArrangeInput): HighPrecisionArrangeW
   arrangeSpacingMm: input.arrangeSpacingMm,
   arrangeAllowRotateOnZ: input.arrangeAllowRotateOnZ,
   arrangeAnchorMode: input.arrangeAnchorMode,
+  safetyMarginMm: input.safetyMarginMm,
 });
 
 export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecisionArrangeInput): Promise<HighPrecisionArrangeUpdate[]> {
