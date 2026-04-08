@@ -41,7 +41,6 @@ interface SupportProxyMeshLayerProps {
 const DEFAULT_SUPPORT_COLOR = '#9a9a9a';
 const ACTIVE_SUPPORT_COLOR = '#c8752a';
 const PROXY_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
-const PROXY_KNOT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM;
 
 type ProxyModelGeometry = {
   modelId?: string;
@@ -548,37 +547,32 @@ export function SupportProxyMeshLayer({
       const endKnot = supportKnots[brace.endKnotId];
       if (!startKnot || !endKnot) continue;
 
+      // Mirror SupportRenderer: derive visual diameter from host knot diameters (= trunk segment
+      // diameter + 0.1mm offset). Using profile.diameter alone produces the thin brace setting
+      // value and loses the dynamic sizing that matches the attached trunk thickness.
+      const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
+      const startHostDiameter = Math.max(
+        0.001,
+        (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      );
+      const endHostDiameter = Math.max(
+        0.001,
+        (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      );
+
       pushShaft({
         id: `braceSegment:${brace.id}`,
         supportId: brace.id,
         modelId: brace.modelId,
         start: startKnot.pos,
         end: endKnot.pos,
-        diameter: Math.max(0.1, brace.profile?.diameter ?? 1),
+        diameter: (startHostDiameter + endHostDiameter) * 0.5,
       });
     }
 
-    if (includeDetailedPrimitives) {
-      for (const knot of Object.values(supportKnots)) {
-        let modelId = segmentModelIdById.get(knot.parentShaftId);
-        let supportId = segmentSupportIdById.get(knot.parentShaftId);
-        const resolvedKnotDiameter = knot.diameter ?? 1.2;
-
-        if (!modelId && knot.parentShaftId.startsWith('leafCone:')) {
-          const leafId = knot.parentShaftId.slice('leafCone:'.length);
-          modelId = leafModelIdById.get(leafId);
-          supportId = leafSupportIdById.get(leafId);
-        }
-
-        pushJoint({
-          id: `knot:${knot.id}`,
-          pos: knot.pos,
-          diameter: Math.max(0.001, resolvedKnotDiameter),
-          supportId,
-          modelId,
-        }, `knot:${knot.id}`, PROXY_KNOT_DIAMETER_BLEND_MM);
-      }
-    }
+    // Knots are interaction affordances (branch/brace attachment point drag handles) rendered
+    // only for selected supports in the full SupportRenderer. Omitting them from the proxy
+    // avoids visible hemisphere bumps at every trunk segment split point.
 
     for (const kickstand of Object.values(kickstandKickstands)) {
       const root = kickstandRoots[kickstand.rootId];
@@ -637,21 +631,7 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    if (includeDetailedPrimitives) {
-      for (const knot of Object.values(kickstandKnots)) {
-        const modelId = segmentModelIdById.get(knot.parentShaftId);
-        const supportId = segmentSupportIdById.get(knot.parentShaftId);
-        const resolvedKnotDiameter = knot.diameter ?? 1.2;
-
-        pushJoint({
-          id: `kickstand-knot:${knot.id}`,
-          pos: knot.pos,
-          diameter: Math.max(0.001, resolvedKnotDiameter),
-          supportId,
-          modelId,
-        }, `kickstand-knot:${knot.id}`, PROXY_KNOT_DIAMETER_BLEND_MM);
-      }
-    }
+    // Kickstand host knots are also interaction affordances — omitted from proxy for the same reason.
 
     sharedProxyCache = {
       supportTrunksRef: supportTrunks,
