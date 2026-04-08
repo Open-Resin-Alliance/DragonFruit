@@ -11248,10 +11248,15 @@ export default function Home() {
       const totalCount = Math.max(1, duplicateTotalCopies);
       const spacing = Math.max(0, duplicateSpacingMm);
 
-      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const maxX = minX + scene.view3dSettings.widthMm;
-      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const maxY = minY + scene.view3dSettings.depthMm;
+      const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
+      const rawDupMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const rawDupMaxY = rawDupMinY + scene.view3dSettings.depthMm;
+      const dupSm = scene.view3dSettings.safetyMarginMm;
+      const minX = rawDupMinX + Math.max(0, dupSm?.left ?? 0);
+      const maxX = rawDupMaxX - Math.max(0, dupSm?.right ?? 0);
+      const minY = rawDupMinY + Math.max(0, dupSm?.front ?? 0);
+      const maxY = rawDupMaxY - Math.max(0, dupSm?.back ?? 0);
 
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
@@ -11409,6 +11414,7 @@ export default function Home() {
     scene.activeModel,
     scene.models,
     scene.mode,
+    scene.view3dSettings.safetyMarginMm,
     transformMgr.transformMode,
   ]);
 
@@ -11495,10 +11501,15 @@ export default function Home() {
     const depth = sourceDims.depth;
     const spacing = Math.max(0, duplicateSpacingMm);
 
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const maxX = minX + scene.view3dSettings.widthMm;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const maxY = minY + scene.view3dSettings.depthMm;
+    const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
+    const rawFillMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const rawFillMaxY = rawFillMinY + scene.view3dSettings.depthMm;
+    const fillSm = scene.view3dSettings.safetyMarginMm;
+    const minX = rawFillMinX + Math.max(0, fillSm?.left ?? 0);
+    const maxX = rawFillMaxX - Math.max(0, fillSm?.right ?? 0);
+    const minY = rawFillMinY + Math.max(0, fillSm?.front ?? 0);
+    const maxY = rawFillMaxY - Math.max(0, fillSm?.back ?? 0);
 
     const plateWidth = Math.max(1, maxX - minX);
     const plateDepth = Math.max(1, maxY - minY);
