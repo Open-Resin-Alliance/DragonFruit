@@ -483,15 +483,20 @@ export function ModelStatsCard({
               <div
                 className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
                 style={{
-                  background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
-                  color: '#fde68a',
-                  border: '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
+                  background: model.geometry.meshDefects.repairedByManifold
+                    ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
+                    : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
+                  color: model.geometry.meshDefects.repairedByManifold ? '#86efac' : '#fde68a',
+                  border: model.geometry.meshDefects.repairedByManifold
+                    ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
+                    : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
                 }}
               >
-                <span>⚠</span>
+                <span>{model.geometry.meshDefects.repairedByManifold ? '✓' : '⚠'}</span>
                 <span>
-                  Defective geometry: {model.geometry.meshDefects.repairedFloats} non-finite values
-                  auto-repaired. Slicing results may be incorrect.
+                  {model.geometry.meshDefects.repairedByManifold
+                    ? `Auto-Repaired — ${model.geometry.meshDefects.repairedFloats} errors`
+                    : `Defective — ${model.geometry.meshDefects.repairedFloats} errors`}
                 </span>
               </div>
             )}
