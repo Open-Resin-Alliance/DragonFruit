@@ -4026,7 +4026,6 @@ export function SceneCanvas({
     activeTransformOverrideModelId,
     transform,
     defaultCamera,
-    orbitControlsRef,
     rendererRef,
     sceneRef,
     cameraRef,

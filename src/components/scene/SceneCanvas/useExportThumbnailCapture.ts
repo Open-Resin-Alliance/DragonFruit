@@ -38,10 +38,6 @@ type UseExportThumbnailCaptureArgs = {
   activeTransformOverrideModelId: string | null;
   transform?: ModelTransform;
   defaultCamera: DefaultCameraSpec;
-  orbitControlsRef: React.RefObject<{
-    target: THREE.Vector3;
-    update?: () => void;
-  } | null>;
   rendererRef: React.RefObject<THREE.WebGLRenderer | null>;
   sceneRef: React.RefObject<THREE.Scene | null>;
   cameraRef: React.RefObject<THREE.Camera | null>;
@@ -58,7 +54,6 @@ export function useExportThumbnailCapture({
   activeTransformOverrideModelId,
   transform,
   defaultCamera,
-  orbitControlsRef,
   rendererRef,
   sceneRef,
   cameraRef,
