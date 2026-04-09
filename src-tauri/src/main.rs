@@ -935,6 +935,34 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
 }
 
 #[tauri::command]
+async fn finish_mesh_stage_write(path: String) -> Result<u64, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("finish_mesh_stage_write requires a non-empty path".into());
+    }
+
+    let mut appender_lock = staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    if let Some(appender) = appender_lock.as_mut() {
+        if appender.path == trimmed {
+            use std::io::Write;
+            appender
+                .writer
+                .flush()
+                .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            let len = appender.len;
+            *appender_lock = None; // release OS file handle immediately
+            return Ok(len);
+        }
+    }
+
+    // No open appender for this path (already closed or never opened).
+    Ok(0)
+}
+
+#[tauri::command]
 async fn stage_mesh_file_path(mesh_file_path: String) -> Result<u64, String> {
     let trimmed = mesh_file_path.trim();
     if trimmed.is_empty() {
@@ -2292,6 +2320,7 @@ fn main() {
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
+            finish_mesh_stage_write,
             stage_mesh_file_path,
             stage_mesh_binary_set,
             stage_mesh_binary_chunk,

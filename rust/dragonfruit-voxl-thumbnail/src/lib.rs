@@ -84,6 +84,16 @@ pub fn extract_thumbnail_from_bytes_resized(
     resize_png(&png, max_size)
 }
 
+/// Extract from memory, resize to fit within `size × size`, and center on a
+/// transparent `size × size` square canvas.
+pub fn extract_thumbnail_from_bytes_square(
+    data: &[u8],
+    size: u32,
+) -> Result<Vec<u8>, VoxlThumbnailError> {
+    let png = extract_thumbnail_from_bytes(data)?;
+    resize_png_square(&png, size)
+}
+
 /// Resize existing PNG bytes to fit within `max_size × max_size`,
 /// preserving aspect ratio. Returns the original bytes unchanged if the
 /// image already fits.
@@ -99,6 +109,80 @@ pub fn resize_png(png_bytes: &[u8], max_size: u32) -> Result<Vec<u8>, VoxlThumbn
 
     let mut buf = Cursor::new(Vec::new());
     resized
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| VoxlThumbnailError::Image(e.to_string()))?;
+
+    Ok(buf.into_inner())
+}
+
+/// Crop transparent borders from an image, returning the tight bounding box
+/// around any pixel with alpha > 0.  Returns the original if fully opaque or
+/// fully transparent.
+fn autocrop_transparent(img: image::DynamicImage) -> image::DynamicImage {
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+
+    let mut min_x = w;
+    let mut min_y = h;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+
+    for y in 0..h {
+        for x in 0..w {
+            if rgba.get_pixel(x, y)[3] > 0 {
+                if x < min_x {
+                    min_x = x;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+            }
+        }
+    }
+
+    if min_x > max_x || min_y > max_y {
+        return img; // fully transparent — leave unchanged
+    }
+
+    img.crop_imm(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+}
+
+/// Resize existing PNG bytes to fit within `size × size` (aspect-ratio
+/// preserved), then center the result on a fully-transparent `size × size`
+/// square canvas.  Transparent borders in the source image are cropped first
+/// so the model content fills the canvas rather than inheriting ORA padding.
+pub fn resize_png_square(png_bytes: &[u8], size: u32) -> Result<Vec<u8>, VoxlThumbnailError> {
+    use image::{DynamicImage, GenericImage, RgbaImage};
+
+    let img = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)
+        .map_err(|e| VoxlThumbnailError::Image(e.to_string()))?;
+
+    // Remove ORA canvas padding so the model content fills the square.
+    let img = autocrop_transparent(img);
+
+    let resized = if img.width() > size || img.height() > size {
+        img.thumbnail(size, size)
+    } else {
+        img
+    };
+
+    let (rw, rh) = (resized.width(), resized.height());
+    let x_off = (size - rw) / 2;
+    let y_off = (size - rh) / 2;
+
+    let mut canvas = DynamicImage::ImageRgba8(RgbaImage::new(size, size));
+    canvas
+        .copy_from(&resized, x_off, y_off)
+        .map_err(|e| VoxlThumbnailError::Image(e.to_string()))?;
+
+    let mut buf = Cursor::new(Vec::new());
+    canvas
         .write_to(&mut buf, image::ImageFormat::Png)
         .map_err(|e| VoxlThumbnailError::Image(e.to_string()))?;
 

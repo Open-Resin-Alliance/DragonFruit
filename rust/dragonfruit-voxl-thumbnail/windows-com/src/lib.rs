@@ -106,9 +106,8 @@ impl IThumbnailProvider_Impl for VoxlThumbnailProvider_Impl {
 
         // Extract thumbnail PNG from VOXL
         let max = if cx > 0 && cx < 4096 { cx } else { 256 };
-        let png_bytes =
-            dragonfruit_voxl_thumbnail::extract_thumbnail_from_bytes_resized(&data, max)
-                .map_err(|_| windows::core::Error::from(E_FAIL))?;
+        let png_bytes = dragonfruit_voxl_thumbnail::extract_thumbnail_from_bytes_square(&data, max)
+            .map_err(|_| windows::core::Error::from(E_FAIL))?;
 
         // Decode PNG → RGBA pixels
         let img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
@@ -268,11 +267,20 @@ unsafe fn register() -> windows::core::Result<()> {
     set_registry_value_in(hkcu_classes, &inproc, None, &dll_path)?;
     set_registry_value_in(hkcu_classes, &inproc, Some("ThreadingModel"), "Apartment")?;
 
-    // Register the thumbnail handler directly on the .voxl extension.
-    // We hook ShellEx on `.voxl` itself rather than a ProgID so we don't
-    // fight with Tauri's fileAssociations registration.
-    let shellex = format!(".voxl\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
-    set_registry_value_in(hkcu_classes, &shellex, None, CLSID_STR)?;
+    // Register the thumbnail handler in multiple standard lookup locations.
+    // Explorer may resolve via extension, ProgID, or SystemFileAssociations
+    // depending on current UserChoice / association state.
+    let shellex_ext = format!(".voxl\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
+    set_registry_value_in(hkcu_classes, &shellex_ext, None, CLSID_STR)?;
+
+    let shellex_progid = format!("VoxlFile\\shellex\\{}", CATID_THUMBNAIL_HANDLER);
+    set_registry_value_in(hkcu_classes, &shellex_progid, None, CLSID_STR)?;
+
+    let shellex_system = format!(
+        "SystemFileAssociations\\.voxl\\ShellEx\\{}",
+        CATID_THUMBNAIL_HANDLER
+    );
+    set_registry_value_in(hkcu_classes, &shellex_system, None, CLSID_STR)?;
 
     // Windows 11 (and hardened Win10) requires the CLSID to appear in the
     // "Approved" extensions list, otherwise Explorer silently ignores it.
@@ -291,8 +299,18 @@ unsafe fn unregister() -> windows::core::Result<()> {
     if let Ok(hkcu_classes) = open_or_create_hkcu_classes() {
         let clsid_path = format!("CLSID\\{}", CLSID_STR);
         let _ = delete_registry_tree(hkcu_classes, &clsid_path);
-        let shellex = format!(".voxl\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
-        let _ = delete_registry_tree(hkcu_classes, &shellex);
+
+        let shellex_ext = format!(".voxl\\ShellEx\\{}", CATID_THUMBNAIL_HANDLER);
+        let _ = delete_registry_tree(hkcu_classes, &shellex_ext);
+
+        let shellex_progid = format!("VoxlFile\\shellex\\{}", CATID_THUMBNAIL_HANDLER);
+        let _ = delete_registry_tree(hkcu_classes, &shellex_progid);
+
+        let shellex_system = format!(
+            "SystemFileAssociations\\.voxl\\ShellEx\\{}",
+            CATID_THUMBNAIL_HANDLER
+        );
+        let _ = delete_registry_tree(hkcu_classes, &shellex_system);
         let _ = RegCloseKey(hkcu_classes);
     }
 

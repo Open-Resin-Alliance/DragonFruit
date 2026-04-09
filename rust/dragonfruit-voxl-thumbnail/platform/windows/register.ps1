@@ -1,8 +1,11 @@
 # Register the VOXL thumbnail provider on Windows.
-# Run elevated (Admin) for HKCR, or without elevation for per-user (HKCU).
 #
 # Usage:
 #   .\register.ps1 [-DllPath <path>] [-PerUser]
+#
+# Notes:
+#   - Registration is per-user (HKCU) inside DllRegisterServer.
+#   - -PerUser is kept only for backwards compatibility.
 
 param(
     [string]$DllPath,
@@ -14,53 +17,75 @@ $ErrorActionPreference = 'Stop'
 $CLSID = '{8B4F2E3A-7C1D-4A5E-B9F0-6D2E8C3A1B5F}'
 $ThumbnailHandlerCATID = '{E357FCCD-A995-4576-B01F-234630154E96}'
 
+function Resolve-DllPath {
+    param([string]$ScriptDir)
+
+    $crateRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+    $candidates = @(
+        (Join-Path $crateRoot 'windows-com\target\release\dragonfruit_voxl_thumbnail_com.dll'),
+        (Join-Path $crateRoot ('windows-com\target\{0}\release\dragonfruit_voxl_thumbnail_com.dll' -f $env:TAURI_ENV_TARGET_TRIPLE)),
+        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll'),
+        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll')
+    ) | Where-Object { $_ }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    Write-Error (
+        "DLL not found in expected locations:`n" +
+        ($candidates | ForEach-Object { "  - $_" } | Out-String) +
+        "`nBuild first from windows-com:`n" +
+        "  cd rust\dragonfruit-voxl-thumbnail\windows-com`n" +
+        "  cargo build --release"
+    )
+}
+
+if ($PerUser) {
+    Write-Host "-PerUser is no longer needed; registration is already per-user (HKCU)."
+}
+
 if (-not $DllPath) {
     $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $DllPath = Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptDir)) `
-        "target\release\dragonfruit_voxl_thumbnail_com.dll"
+    $DllPath = Resolve-DllPath -ScriptDir $ScriptDir
 }
 
 if (-not (Test-Path $DllPath)) {
-    Write-Error "DLL not found: $DllPath`nBuild first: cargo build --release -p dragonfruit-voxl-thumbnail-com"
+    Write-Error "DLL not found: $DllPath"
     exit 1
 }
 
 $DllPath = (Resolve-Path $DllPath).Path
+$RegSvr32 = Join-Path $env:WINDIR 'System32\regsvr32.exe'
 
-$Root = if ($PerUser) { 'HKCU:\Software\Classes' } else { 'HKCR:' }
+Write-Host "Registering VOXL thumbnail handler via regsvr32..."
+Write-Host "  DLL:  $DllPath"
 
-# Ensure HKCR drive exists
-if (-not $PerUser -and -not (Test-Path 'HKCR:\')) {
-    New-PSDrive -Name HKCR -PSProvider Registry -Root HKEY_CLASSES_ROOT -Scope Script | Out-Null
+& $RegSvr32 /s $DllPath
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "regsvr32 failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
 }
 
-Write-Host "Registering VOXL thumbnail handler..."
-Write-Host "  DLL:  $DllPath"
-Write-Host "  Root: $Root"
+# Quick sanity checks
+$inprocKey = "HKCU:\Software\Classes\CLSID\$CLSID\InProcServer32"
+$shellExKey = "HKCU:\Software\Classes\.voxl\ShellEx\$ThumbnailHandlerCATID"
+$approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved'
 
-# CLSID registration
-$ClsidKey = "$Root\CLSID\$CLSID"
-New-Item -Path $ClsidKey -Force | Out-Null
-Set-ItemProperty -Path $ClsidKey -Name '(Default)' -Value 'DragonFruit VOXL Thumbnail Provider'
-
-$InProcKey = "$ClsidKey\InProcServer32"
-New-Item -Path $InProcKey -Force | Out-Null
-Set-ItemProperty -Path $InProcKey -Name '(Default)' -Value $DllPath
-Set-ItemProperty -Path $InProcKey -Name 'ThreadingModel' -Value 'Apartment'
-
-# .voxl file type
-New-Item -Path "$Root\.voxl" -Force | Out-Null
-Set-ItemProperty -Path "$Root\.voxl" -Name '(Default)' -Value 'VoxlFile'
-
-New-Item -Path "$Root\VoxlFile" -Force | Out-Null
-Set-ItemProperty -Path "$Root\VoxlFile" -Name '(Default)' -Value 'DragonFruit VOXL Scene'
-
-# Thumbnail handler association
-$ShellExKey = "$Root\VoxlFile\shellex\$ThumbnailHandlerCATID"
-New-Item -Path $ShellExKey -Force | Out-Null
-Set-ItemProperty -Path $ShellExKey -Name '(Default)' -Value $CLSID
+if (-not (Test-Path $inprocKey)) {
+    Write-Warning "Missing registry key: $inprocKey"
+}
+if (-not (Test-Path $shellExKey)) {
+    Write-Warning "Missing registry key: $shellExKey"
+}
+if (-not (Get-ItemProperty -Path $approvedKey -Name $CLSID -ErrorAction SilentlyContinue)) {
+    Write-Warning "Missing approved shell extension entry at: $approvedKey"
+}
 
 Write-Host "`nRegistration complete."
-Write-Host "You may need to restart Explorer or clear the thumbnail cache:"
+Write-Host "If thumbnails still don't appear, refresh shell caches:"
 Write-Host "  ie4uinit.exe -show"
-Write-Host "  del /f /q `"$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db`""
+Write-Host "  Remove-Item `"$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db`" -Force -ErrorAction SilentlyContinue"
+Write-Host "Then restart Explorer (or sign out/in)."
