@@ -204,38 +204,12 @@ export function useExportThumbnailCapture({
     const fitCorners = getBoxCorners(boundsUnion);
 
     const prevRenderTarget = renderer.getRenderTarget();
-    const prevPixelRatio = renderer.getPixelRatio();
-    const prevSize = renderer.getSize(new THREE.Vector2());
     const prevViewport = renderer.getViewport(new THREE.Vector4());
     const prevScissor = renderer.getScissor(new THREE.Vector4());
     const prevScissorTest = renderer.getScissorTest();
     const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
-    const orbitControls = orbitControlsRef.current;
-    const prevOrbitTarget = orbitControls?.target.clone() ?? null;
-    const prevCameraPosition = camera.position.clone();
-    const prevCameraQuaternion = camera.quaternion.clone();
-    const prevCameraUp = camera.up.clone();
-    const prevPerspectiveState = camera instanceof THREE.PerspectiveCamera
-      ? {
-          fov: camera.fov,
-          near: camera.near,
-          far: camera.far,
-          aspect: camera.aspect,
-          zoom: camera.zoom,
-        }
-      : null;
-    const prevOrthoState = camera instanceof THREE.OrthographicCamera
-      ? {
-          left: camera.left,
-          right: camera.right,
-          top: camera.top,
-          bottom: camera.bottom,
-          near: camera.near,
-          far: camera.far,
-          zoom: camera.zoom,
-        }
-      : null;
     const visibilityRestores: Array<{ node: THREE.Object3D; visible: boolean }> = [];
+    const lightRestores: Array<{ light: THREE.Light; position: THREE.Vector3 }> = [];
     const helperOriginalVisibility = new WeakMap<THREE.Object3D, boolean>();
     const buildPlateHelperNodes: THREE.Object3D[] = [];
     const gridHelperNodes: THREE.Object3D[] = [];
@@ -248,46 +222,26 @@ export function useExportThumbnailCapture({
       node.visible = false;
     };
 
-    const restoreCamera = () => {
+    const restoreRendererState = () => {
       renderer.setRenderTarget(prevRenderTarget);
-      renderer.setPixelRatio(prevPixelRatio);
-      renderer.setSize(prevSize.x, prevSize.y, false);
       renderer.setViewport(prevViewport.x, prevViewport.y, prevViewport.z, prevViewport.w);
       renderer.setScissor(prevScissor.x, prevScissor.y, prevScissor.z, prevScissor.w);
       renderer.setScissorTest(prevScissorTest);
-      camera.position.copy(prevCameraPosition);
-      camera.quaternion.copy(prevCameraQuaternion);
-      camera.up.copy(prevCameraUp);
-      if (camera instanceof THREE.PerspectiveCamera && prevPerspectiveState) {
-        camera.fov = prevPerspectiveState.fov;
-        camera.near = prevPerspectiveState.near;
-        camera.far = prevPerspectiveState.far;
-        camera.aspect = prevPerspectiveState.aspect;
-        camera.zoom = prevPerspectiveState.zoom;
-        camera.updateProjectionMatrix();
-      } else if (camera instanceof THREE.OrthographicCamera && prevOrthoState) {
-        camera.left = prevOrthoState.left;
-        camera.right = prevOrthoState.right;
-        camera.top = prevOrthoState.top;
-        camera.bottom = prevOrthoState.bottom;
-        camera.near = prevOrthoState.near;
-        camera.far = prevOrthoState.far;
-        camera.zoom = prevOrthoState.zoom;
-        camera.updateProjectionMatrix();
-      }
-      camera.updateMatrixWorld(true);
-      if (orbitControls && prevOrbitTarget) {
-        orbitControls.target.copy(prevOrbitTarget);
-        orbitControls.update?.();
-      }
       if (buildVolumeBoundsOverlayRef.current && prevBuildVolumeOverlayVisible != null) {
         buildVolumeBoundsOverlayRef.current.visible = prevBuildVolumeOverlayVisible;
+      }
+      for (let i = lightRestores.length - 1; i >= 0; i -= 1) {
+        const entry = lightRestores[i];
+        entry.light.position.copy(entry.position);
+        entry.light.updateMatrixWorld(true);
       }
       for (let i = visibilityRestores.length - 1; i >= 0; i -= 1) {
         const entry = visibilityRestores[i];
         entry.node.visible = entry.visible;
       }
     };
+
+    let captureRenderer: THREE.WebGLRenderer | null = null;
 
     try {
 
@@ -509,35 +463,6 @@ export function useExportThumbnailCapture({
         }
       }
 
-      if (camera instanceof THREE.PerspectiveCamera && captureCamera instanceof THREE.PerspectiveCamera) {
-        camera.position.copy(captureCamera.position);
-        camera.quaternion.copy(captureCamera.quaternion);
-        camera.up.copy(captureCamera.up);
-        camera.fov = captureCamera.fov;
-        camera.near = captureCamera.near;
-        camera.far = captureCamera.far;
-        camera.aspect = EXPORT_THUMBNAIL_WIDTH / EXPORT_THUMBNAIL_HEIGHT;
-        camera.zoom = captureCamera.zoom;
-        camera.updateProjectionMatrix();
-      } else if (camera instanceof THREE.OrthographicCamera && captureCamera instanceof THREE.OrthographicCamera) {
-        camera.position.copy(captureCamera.position);
-        camera.quaternion.copy(captureCamera.quaternion);
-        camera.up.copy(captureCamera.up);
-        camera.left = captureCamera.left;
-        camera.right = captureCamera.right;
-        camera.top = captureCamera.top;
-        camera.bottom = captureCamera.bottom;
-        camera.near = captureCamera.near;
-        camera.far = captureCamera.far;
-        camera.zoom = captureCamera.zoom;
-        camera.updateProjectionMatrix();
-      } else {
-        camera.position.copy(captureCamera.position);
-        camera.quaternion.copy(captureCamera.quaternion);
-        camera.up.copy(captureCamera.up);
-      }
-      camera.updateMatrixWorld(true);
-
       const includeBuildPlate = exportThumbnailRenderOptions?.includeBuildPlate ?? false;
       const includeGrid = exportThumbnailRenderOptions?.includeGrid ?? false;
 
@@ -568,13 +493,48 @@ export function useExportThumbnailCapture({
 
       const syncCaptureCameraLights = () => {
         sceneGraph.traverse((node) => {
-          if ((node as any).isLight !== true) return;
-          const light = node as THREE.Light;
+          if (!(node instanceof THREE.Light)) return;
+          const light = node;
           const followCaptureCamera = Boolean((light.userData as Record<string, unknown> | undefined)?.followCaptureCamera);
           if (!followCaptureCamera) return;
-          light.position.copy(camera.position);
+          if (lightRestores.every((entry) => entry.light !== light)) {
+            lightRestores.push({ light, position: light.position.clone() });
+          }
+          light.position.copy(captureCamera.position);
           light.updateMatrixWorld(true);
         });
+      };
+
+      const captureCanvas = document.createElement('canvas');
+      captureCanvas.width = EXPORT_THUMBNAIL_WIDTH;
+      captureCanvas.height = EXPORT_THUMBNAIL_HEIGHT;
+
+      const liveClearColor = renderer.getClearColor(new THREE.Color());
+      const liveClearAlpha = renderer.getClearAlpha();
+
+      captureRenderer = new THREE.WebGLRenderer({
+        canvas: captureCanvas,
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true,
+      });
+      captureRenderer.outputColorSpace = renderer.outputColorSpace;
+      captureRenderer.toneMapping = renderer.toneMapping;
+      captureRenderer.toneMappingExposure = renderer.toneMappingExposure;
+      captureRenderer.autoClear = renderer.autoClear;
+      captureRenderer.shadowMap.enabled = renderer.shadowMap.enabled;
+      captureRenderer.shadowMap.type = renderer.shadowMap.type;
+      captureRenderer.setClearColor(liveClearColor, liveClearAlpha);
+      captureRenderer.setPixelRatio(1);
+      captureRenderer.setSize(EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT, false);
+      captureRenderer.setViewport(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+      captureRenderer.setScissor(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+      captureRenderer.setScissorTest(false);
+
+      const renderCaptureScene = () => {
+        syncCaptureCameraLights();
+        captureRenderer?.clear(true, true, true);
+        captureRenderer?.render(sceneGraph, captureCamera);
       };
 
       const analysisCanvas = document.createElement('canvas');
@@ -588,7 +548,7 @@ export function useExportThumbnailCapture({
         const width = EXPORT_THUMBNAIL_WIDTH;
         const height = EXPORT_THUMBNAIL_HEIGHT;
         analysisContext.clearRect(0, 0, width, height);
-        analysisContext.drawImage(renderer.domElement, 0, 0, width, height);
+        analysisContext.drawImage(captureCanvas, 0, 0, width, height);
         const pixels = analysisContext.getImageData(0, 0, width, height).data;
 
         const topLeft = 0;
@@ -638,46 +598,9 @@ export function useExportThumbnailCapture({
         return bounds;
       };
 
-      renderer.setRenderTarget(null);
-      renderer.setPixelRatio(1);
-      renderer.setSize(EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT, false);
-      renderer.setViewport(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
-      renderer.setScissorTest(false);
-
       const DESIRED_SCREEN_FILL = 0.93;
       for (let pass = 0; pass < 2; pass += 1) {
-        if (camera instanceof THREE.PerspectiveCamera && captureCamera instanceof THREE.PerspectiveCamera) {
-          camera.position.copy(captureCamera.position);
-          camera.quaternion.copy(captureCamera.quaternion);
-          camera.up.copy(captureCamera.up);
-          camera.fov = captureCamera.fov;
-          camera.near = captureCamera.near;
-          camera.far = captureCamera.far;
-          camera.aspect = EXPORT_THUMBNAIL_WIDTH / EXPORT_THUMBNAIL_HEIGHT;
-          camera.zoom = captureCamera.zoom;
-          camera.updateProjectionMatrix();
-        } else if (camera instanceof THREE.OrthographicCamera && captureCamera instanceof THREE.OrthographicCamera) {
-          camera.position.copy(captureCamera.position);
-          camera.quaternion.copy(captureCamera.quaternion);
-          camera.up.copy(captureCamera.up);
-          camera.left = captureCamera.left;
-          camera.right = captureCamera.right;
-          camera.top = captureCamera.top;
-          camera.bottom = captureCamera.bottom;
-          camera.near = captureCamera.near;
-          camera.far = captureCamera.far;
-          camera.zoom = captureCamera.zoom;
-          camera.updateProjectionMatrix();
-        } else {
-          camera.position.copy(captureCamera.position);
-          camera.quaternion.copy(captureCamera.quaternion);
-          camera.up.copy(captureCamera.up);
-        }
-        camera.updateMatrixWorld(true);
-
-        syncCaptureCameraLights();
-        renderer.clear(true, true, true);
-        renderer.render(sceneGraph, camera);
+        renderCaptureScene();
 
         const ndcBounds = measureRenderedSubjectNdcBounds();
         if (!ndcBounds) break;
@@ -750,38 +673,7 @@ export function useExportThumbnailCapture({
         node.visible = originalVisible && includeGrid;
       }
 
-      if (camera instanceof THREE.PerspectiveCamera && captureCamera instanceof THREE.PerspectiveCamera) {
-        camera.position.copy(captureCamera.position);
-        camera.quaternion.copy(captureCamera.quaternion);
-        camera.up.copy(captureCamera.up);
-        camera.fov = captureCamera.fov;
-        camera.near = captureCamera.near;
-        camera.far = captureCamera.far;
-        camera.aspect = EXPORT_THUMBNAIL_WIDTH / EXPORT_THUMBNAIL_HEIGHT;
-        camera.zoom = captureCamera.zoom;
-        camera.updateProjectionMatrix();
-      } else if (camera instanceof THREE.OrthographicCamera && captureCamera instanceof THREE.OrthographicCamera) {
-        camera.position.copy(captureCamera.position);
-        camera.quaternion.copy(captureCamera.quaternion);
-        camera.up.copy(captureCamera.up);
-        camera.left = captureCamera.left;
-        camera.right = captureCamera.right;
-        camera.top = captureCamera.top;
-        camera.bottom = captureCamera.bottom;
-        camera.near = captureCamera.near;
-        camera.far = captureCamera.far;
-        camera.zoom = captureCamera.zoom;
-        camera.updateProjectionMatrix();
-      } else {
-        camera.position.copy(captureCamera.position);
-        camera.quaternion.copy(captureCamera.quaternion);
-        camera.up.copy(captureCamera.up);
-      }
-      camera.updateMatrixWorld(true);
-
-      syncCaptureCameraLights();
-      renderer.clear(true, true, true);
-      renderer.render(sceneGraph, camera);
+      renderCaptureScene();
 
       const canvas = document.createElement('canvas');
       canvas.width = EXPORT_THUMBNAIL_WIDTH;
@@ -791,7 +683,7 @@ export function useExportThumbnailCapture({
         return null;
       }
 
-      context.drawImage(renderer.domElement, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+      context.drawImage(captureCanvas, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
 
       const includeGradient = exportThumbnailRenderOptions?.includeGradient ?? false;
       if (includeGradient) {
@@ -841,7 +733,11 @@ export function useExportThumbnailCapture({
 
       return bytes;
     } finally {
-      restoreCamera();
+      if (captureRenderer) {
+        captureRenderer.dispose();
+        captureRenderer.forceContextLoss();
+      }
+      restoreRendererState();
     }
   }, [
     activeTransformOverrideModelId,
@@ -851,7 +747,6 @@ export function useExportThumbnailCapture({
     exportThumbnailRenderOptions,
     modelWorldBounds,
     models,
-    orbitControlsRef,
     rendererRef,
     sceneRef,
     cameraRef,
