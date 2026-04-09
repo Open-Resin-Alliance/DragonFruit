@@ -15,6 +15,18 @@ use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
 use tauri::Manager;
 
+// dragonfruit-83-6 CEF spike: in the feat/cef branch, DragonFruitAppHandle is no
+// longer defaulted to `AppHandle<Wry>` unless the `wry` feature is explicitly
+// enabled (the default_runtime proc-macro hard-codes Wry). When building with
+// --features tauri-cef, we need to reference a concrete runtime type. This
+// alias selects Cef on the spike path and Wry otherwise, so the rest of the
+// file can keep saying `DragonFruitAppHandle` without caring which runtime
+// is active.
+#[cfg(feature = "tauri-cef")]
+type DragonFruitAppHandle = tauri::AppHandle<tauri::Cef>;
+#[cfg(not(feature = "tauri-cef"))]
+type DragonFruitAppHandle = tauri::AppHandle<tauri::Wry>;
+
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     let stamp = std::time::SystemTime::now()
@@ -1831,7 +1843,7 @@ async fn get_launch_scene_files() -> Result<Vec<PickedOpenFile>, String> {
     .map_err(|err| format!("Launch scene-files task failed to join: {err}"))?
 }
 
-fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str) {
+fn emit_scene_file_handoff(app: &DragonFruitAppHandle, args: &[String], source: &str) {
     let paths = collect_scene_file_paths_from_args(args);
     if paths.is_empty() {
         return;
@@ -1845,7 +1857,7 @@ fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str
     let _ = app.emit("dragonfruit://scene-file-handoff", payload);
 }
 
-fn focus_main_window(app: &tauri::AppHandle) {
+fn focus_main_window(app: &DragonFruitAppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
@@ -1870,14 +1882,14 @@ fn get_slicer_engine_version() -> &'static str {
 }
 
 #[tauri::command]
-async fn notify_launch_scene_handoff(app: tauri::AppHandle) -> Result<(), String> {
+async fn notify_launch_scene_handoff(app: DragonFruitAppHandle) -> Result<(), String> {
     let args = std::env::args().collect::<Vec<_>>();
     emit_scene_file_handoff(&app, &args, "primary-launch");
     Ok(())
 }
 
 #[tauri::command]
-async fn focus_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
     focus_main_window(&app);
     Ok(())
 }
@@ -2080,7 +2092,7 @@ async fn set_log_level_pref(level: String) -> Result<(), String> {
 /// Return the last `lines` lines of the log file for the live viewer in Settings.
 /// Returns an empty string if the file does not yet exist.
 #[tauri::command]
-async fn read_log_tail(app: tauri::AppHandle, lines: usize) -> Result<String, String> {
+async fn read_log_tail(app: DragonFruitAppHandle, lines: usize) -> Result<String, String> {
     use tauri::Manager;
     let log_dir = app
         .path()
@@ -2106,7 +2118,7 @@ async fn read_log_tail(app: tauri::AppHandle, lines: usize) -> Result<String, St
 
 /// Open the log file in the OS default text editor / viewer.
 #[tauri::command]
-async fn open_log_file(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_log_file(app: DragonFruitAppHandle) -> Result<(), String> {
     use tauri::Manager;
     let log_dir = app
         .path()
@@ -2144,7 +2156,7 @@ async fn open_log_file(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Delete the log file so it starts fresh on the next write.
 #[tauri::command]
-async fn delete_log_file(app: tauri::AppHandle) -> Result<(), String> {
+async fn delete_log_file(app: DragonFruitAppHandle) -> Result<(), String> {
     use tauri::Manager;
     let log_dir = app
         .path()
