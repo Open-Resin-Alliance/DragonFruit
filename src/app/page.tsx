@@ -766,7 +766,12 @@ export default function Home() {
   const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
   const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
   const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
+  const [loadedSceneSaveSource, setLoadedSceneSaveSource] = React.useState<{ name: string; path: string | null } | null>(null);
+  const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
+  const [sceneSaveChoiceFileName, setSceneSaveChoiceFileName] = React.useState<string | null>(null);
+  const [sceneSaveChoicePath, setSceneSaveChoicePath] = React.useState<string | null>(null);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
+  const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
@@ -781,6 +786,8 @@ export default function Home() {
   const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
   const sceneSaveInFlightRef = React.useRef(false);
   const sceneSaveQueuedRef = React.useRef(false);
+  const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
+  const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -1207,6 +1214,56 @@ export default function Home() {
     resolveLysImportWarning(true);
   }, [lysImportWarningSkipFuture, resolveLysImportWarning]);
 
+  const resolveSceneSaveChoice = React.useCallback((choice: 'overwrite' | 'save_as' | 'cancel') => {
+    const resolve = sceneSaveChoiceResolveRef.current;
+    sceneSaveChoiceResolveRef.current = null;
+    setShowSceneSaveChoiceModal(false);
+    setSceneSaveChoiceFileName(null);
+    setSceneSaveChoicePath(null);
+    resolve?.(choice);
+  }, []);
+
+  const promptSceneSaveChoice = React.useCallback(async (
+    options: { fileName: string; scenePath: string | null },
+  ): Promise<'overwrite' | 'save_as' | 'cancel'> => {
+    if (sceneSaveChoiceResolveRef.current) {
+      sceneSaveChoiceResolveRef.current('cancel');
+      sceneSaveChoiceResolveRef.current = null;
+    }
+
+    setSceneSaveChoiceFileName(options.fileName);
+    setSceneSaveChoicePath(options.scenePath);
+    setShowSceneSaveChoiceModal(true);
+
+    return await new Promise<'overwrite' | 'save_as' | 'cancel'>((resolve) => {
+      sceneSaveChoiceResolveRef.current = resolve;
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (!showSceneSaveChoiceModal) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        resolveSceneSaveChoice('cancel');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [resolveSceneSaveChoice, showSceneSaveChoiceModal]);
+
+  React.useEffect(() => {
+    return () => {
+      if (sceneSaveChoiceResolveRef.current) {
+        sceneSaveChoiceResolveRef.current('cancel');
+        sceneSaveChoiceResolveRef.current = null;
+      }
+    };
+  }, []);
+
   const importSceneFilesWithLysWarning = React.useCallback(async (
     filesInput: FileList | File[],
     options?: { resultingScenePath?: string | null },
@@ -1222,7 +1279,18 @@ export default function Home() {
       : await importSceneFiles(sceneFiles);
 
     if (imported) {
-      setActiveSceneFilePath(normalizeActiveVoxlScenePath(options?.resultingScenePath));
+      const importedSingleFile = sceneFiles.length === 1 ? sceneFiles[0] : null;
+      const importedSingleIsVoxl = Boolean(importedSingleFile && getFileExtension(importedSingleFile.name) === '.voxl');
+      const normalizedScenePath = normalizeActiveVoxlScenePath(options?.resultingScenePath);
+      setActiveSceneFilePath(normalizedScenePath);
+      if (importedSingleFile && importedSingleIsVoxl) {
+        setLoadedSceneSaveSource({
+          name: importedSingleFile.name,
+          path: normalizedScenePath,
+        });
+      } else {
+        setLoadedSceneSaveSource(null);
+      }
     }
 
     return imported;
@@ -1249,6 +1317,14 @@ export default function Home() {
     const reopened = await reopenRecentOpenedFile(entryId);
     if (reopened && entry.kind === 'scene') {
       setActiveSceneFilePath(null);
+      if (entry.name.trim().toLowerCase().endsWith('.voxl')) {
+        setLoadedSceneSaveSource({
+          name: entry.name,
+          path: null,
+        });
+      } else {
+        setLoadedSceneSaveSource(null);
+      }
     }
     return reopened;
   }, [maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
@@ -6112,11 +6188,14 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }, [printingArtifact]);
 
-  const performTopBarSaveScene = React.useCallback(async () => {
+  const performTopBarSaveScene = React.useCallback(async (options?: { nativePathOverride?: string | null }) => {
     const visibleModels = scene.models.filter((model) => model.visible);
     const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
-    const resolvedSceneFilename = activeSceneFilePath
-      ? (getFileNameFromPath(activeSceneFilePath).replace(/\.voxl$/i, '').trim() || 'Scene')
+    const resolvedNativePath = options?.nativePathOverride !== undefined
+      ? options.nativePathOverride
+      : activeSceneFilePath;
+    const resolvedSceneFilename = resolvedNativePath
+      ? (getFileNameFromPath(resolvedNativePath).replace(/\.voxl$/i, '').trim() || 'Scene')
       : resolveEntirePlateExportBaseName(scene.models);
 
     // Capture a thumbnail from the live scene canvas — same path as the export panel.
@@ -6147,12 +6226,19 @@ export default function Home() {
         exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {
-        nativePath: activeSceneFilePath,
+        nativePath: resolvedNativePath,
       },
     );
     const nextActiveScenePath = normalizeActiveVoxlScenePath(savedPath);
     if (nextActiveScenePath) {
       setActiveSceneFilePath(nextActiveScenePath);
+      setLoadedSceneSaveSource({
+        name: getFileNameFromPath(nextActiveScenePath),
+        path: nextActiveScenePath,
+      });
+      // Once a scene has been successfully saved to a concrete VOXL path,
+      // future Ctrl+S should keep saving in-place without prompting again.
+      preferredOverwriteScenePathRef.current = nextActiveScenePath;
     }
     if (savedPath) {
       setExportSuccessToast({ id: Date.now(), path: savedPath });
@@ -6167,7 +6253,9 @@ export default function Home() {
     }
   }, [activeSceneFilePath, scene.activeModelId, scene.models, scene.selectedModelIds]);
 
-  const handleTopBarSaveScene = React.useCallback(() => {
+  const queueTopBarSaveScene = React.useCallback((nativePathOverride?: string | null) => {
+    queuedSceneSavePathOverrideRef.current = nativePathOverride;
+
     if (typeof window === 'undefined') {
       if (sceneSaveInFlightRef.current) {
         sceneSaveQueuedRef.current = true;
@@ -6176,7 +6264,9 @@ export default function Home() {
       }
       sceneSaveInFlightRef.current = true;
       setIsSceneSaveInProgress(true);
-      void performTopBarSaveScene().finally(() => {
+      const queuedNativePathOverride = queuedSceneSavePathOverrideRef.current;
+      queuedSceneSavePathOverrideRef.current = undefined;
+      void performTopBarSaveScene({ nativePathOverride: queuedNativePathOverride }).finally(() => {
         sceneSaveInFlightRef.current = false;
         setIsSceneSaveInProgress(sceneSaveQueuedRef.current);
       });
@@ -6197,7 +6287,9 @@ export default function Home() {
 
       sceneSaveInFlightRef.current = true;
       setIsSceneSaveInProgress(true);
-      void performTopBarSaveScene()
+      const queuedNativePathOverride = queuedSceneSavePathOverrideRef.current;
+      queuedSceneSavePathOverrideRef.current = undefined;
+      void performTopBarSaveScene({ nativePathOverride: queuedNativePathOverride })
         .catch((error) => {
           console.error('[SceneSave] Save operation failed.', error);
         })
@@ -6230,6 +6322,71 @@ export default function Home() {
     queueKickoff();
   }, [performTopBarSaveScene]);
 
+  const handleTopBarSaveScene = React.useCallback(() => {
+    void (async () => {
+      const loadedScenePath = normalizeActiveVoxlScenePath(
+        activeSceneFilePath ?? loadedSceneSaveSource?.path ?? null,
+      );
+      const loadedSceneFileName = (() => {
+        if (loadedSceneSaveSource && getFileExtension(loadedSceneSaveSource.name) === '.voxl') {
+          return loadedSceneSaveSource.name;
+        }
+        if (loadedScenePath) {
+          return getFileNameFromPath(loadedScenePath);
+        }
+        return null;
+      })();
+
+      if (!loadedSceneFileName) {
+        queueTopBarSaveScene();
+        return;
+      }
+
+      // We know this came from a VOXL scene, but we cannot overwrite if the
+      // originating native path is unavailable (e.g. recent-reopen blob cache).
+      // In that case, skip the modal and go straight to Save As.
+      if (!loadedScenePath) {
+        preferredOverwriteScenePathRef.current = null;
+        queueTopBarSaveScene(null);
+        return;
+      }
+
+      if (preferredOverwriteScenePathRef.current === loadedScenePath) {
+        queueTopBarSaveScene(loadedScenePath);
+        return;
+      }
+
+      const choice = await promptSceneSaveChoice({
+        fileName: loadedSceneFileName,
+        scenePath: loadedScenePath,
+      });
+      if (choice === 'cancel') return;
+      if (choice === 'save_as') {
+        preferredOverwriteScenePathRef.current = null;
+        queueTopBarSaveScene(null);
+        return;
+      }
+
+      preferredOverwriteScenePathRef.current = loadedScenePath;
+      queueTopBarSaveScene(loadedScenePath);
+    })();
+  }, [activeSceneFilePath, loadedSceneSaveSource, promptSceneSaveChoice, queueTopBarSaveScene]);
+
+  React.useEffect(() => {
+    if (scene.models.length !== 0) return;
+
+    preferredOverwriteScenePathRef.current = null;
+    setActiveSceneFilePath(null);
+    setLoadedSceneSaveSource(null);
+    if (sceneSaveChoiceResolveRef.current) {
+      sceneSaveChoiceResolveRef.current('cancel');
+      sceneSaveChoiceResolveRef.current = null;
+    }
+    setShowSceneSaveChoiceModal(false);
+    setSceneSaveChoiceFileName(null);
+    setSceneSaveChoicePath(null);
+  }, [scene.models.length]);
+
   React.useEffect(() => {
     return () => {
       if (sceneSaveKickoffTimerRef.current !== null) {
@@ -6237,6 +6394,8 @@ export default function Home() {
         sceneSaveKickoffTimerRef.current = null;
       }
       sceneSaveQueuedRef.current = false;
+      queuedSceneSavePathOverrideRef.current = undefined;
+      preferredOverwriteScenePathRef.current = null;
       setIsSceneSaveInProgress(false);
     };
   }, []);
@@ -13320,6 +13479,105 @@ export default function Home() {
                     Continue
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSceneSaveChoiceModal && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              resolveSceneSaveChoice('cancel');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Save scene options"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
+                    color: '#86efac',
+                  }}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Save Loaded Scene
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    Choose where Ctrl+S should save this imported `.voxl` scene.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close save scene options"
+                onClick={() => resolveSceneSaveChoice('cancel')}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 p-5">
+              <div
+                className="rounded-lg border px-3 py-2.5"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+                }}
+              >
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Loaded file
+                </div>
+                <div className="mt-1 text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }} title={sceneSaveChoiceFileName ?? ''}>
+                  {sceneSaveChoiceFileName ?? 'Loaded scene'}
+                </div>
+                <div className="mt-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }} title={sceneSaveChoicePath ?? ''}>
+                  {sceneSaveChoicePath ?? 'Original file path unavailable (overwrite disabled)'}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                  onClick={() => resolveSceneSaveChoice('save_as')}
+                >
+                  Save as New Scene
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
+                  disabled={!sceneSaveChoicePath}
+                  onClick={() => resolveSceneSaveChoice('overwrite')}
+                >
+                  Overwrite Loaded Scene
+                </button>
               </div>
             </div>
           </div>
