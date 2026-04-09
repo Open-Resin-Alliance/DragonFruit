@@ -1,4 +1,4 @@
-import type { Branch, Knot, SupportState, Vec3 } from '../../types';
+import type { Anchor, Branch, Knot, SupportState, Vec3 } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { SupportSettings } from '../../Settings/types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
@@ -35,6 +35,11 @@ export type GridPlacementDecision =
         hostTrunkId: string;
         knot: Knot;
         branch: Branch;
+        supportData: SupportData;
+    }
+    | {
+        kind: 'place_anchor';
+        anchor: Anchor;
         supportData: SupportData;
     }
     | {

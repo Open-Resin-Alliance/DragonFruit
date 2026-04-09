@@ -25,6 +25,7 @@ import {
   removeLeaf,
   removeTwig,
   removeStick,
+  removeAnchor,
   removeTrunk,
   removeKickstandCascade,
   removeJointById,
@@ -36,7 +37,7 @@ import {
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND } from '@/supports/history/actionTypes';
+import { SUPPORT_REMOVE_ANCHOR, SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND } from '@/supports/history/actionTypes';
 import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
@@ -68,6 +69,7 @@ function resolveSupportCategoryFromSnapshot(id: string) {
   if (snapshot.twigs[id]) return 'twig' as const;
   if (snapshot.sticks[id]) return 'stick' as const;
   if (snapshot.braces[id]) return 'brace' as const;
+  if (snapshot.anchors[id]) return 'anchor' as const;
   if (getKickstandSnapshot().kickstands[id]) return 'brace' as const;
   return null;
 }
@@ -83,6 +85,7 @@ function collectAllSupportIds() {
     ...Object.keys(snapshot.twigs),
     ...Object.keys(snapshot.sticks),
     ...Object.keys(snapshot.braces),
+    ...Object.keys(snapshot.anchors),
     ...Object.keys(kickstandSnapshot.kickstands),
   ];
 }
@@ -551,6 +554,19 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           pushHistory({
             type: SUPPORT_REMOVE_STICK,
             payload: snapshots,
+          });
+        }
+        setSelectedId(null);
+        return true;
+      }
+
+      if (category === 'anchor') {
+        const snapshots = removeAnchor(id);
+        if (!snapshots) return false;
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_ANCHOR,
+            payload: { anchor: snapshots.anchor },
           });
         }
         setSelectedId(null);

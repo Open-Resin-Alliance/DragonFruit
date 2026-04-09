@@ -39,6 +39,7 @@ function makeEmptySnapshot(): SupportState {
         twigs: {},
         sticks: {},
         braces: {},
+        anchors: {},
         knots: {},
         selectedId: null,
         hoveredId: null,

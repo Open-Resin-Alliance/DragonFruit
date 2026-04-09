@@ -242,6 +242,7 @@ export function buildSupportExportFromStores(
     twigs: Object.values(supportState.twigs),
     sticks: Object.values(supportState.sticks),
     braces: Object.values(supportState.braces),
+    anchors: Object.values(supportState.anchors),
     knots: Object.values(supportState.knots),
     kickstands,
   };

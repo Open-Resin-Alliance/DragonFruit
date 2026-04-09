@@ -1,8 +1,8 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addBranch, addKnot, addRoot, addTrunk, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
+import { addAnchor, addBranch, addKnot, addRoot, addTrunk, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TRUNK } from '../../history/actionTypes';
+import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_TRUNK } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
@@ -165,6 +165,13 @@ export function useTrunkPlacementV2() {
             return;
         }
 
+        if (decision.kind === 'place_anchor') {
+            setPreviewData(decision.supportData);
+            setPreviewError(null);
+            setPreviewWarning(null);
+            return;
+        }
+
         // reject
         if (decision.trunkBuild) {
             setPreviewData(decision.trunkBuild.supportData);
@@ -220,6 +227,16 @@ export function useTrunkPlacementV2() {
             modelId,
             mesh,
         });
+
+        if (decision.kind === 'place_anchor') {
+            addAnchor(decision.anchor);
+            pushHistory({
+                type: SUPPORT_ADD_ANCHOR,
+                payload: { anchor: decision.anchor },
+            });
+            clearSupportSelection();
+            return;
+        }
 
         if (decision.kind === 'place_branch') {
             addKnot(decision.knot);
