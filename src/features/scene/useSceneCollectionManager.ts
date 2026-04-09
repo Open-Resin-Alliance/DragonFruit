@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadMeshGeometry, processGeometry, type GeometryWithBounds, type MeshDefects } from '@/hooks/useStlGeometry';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
+import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromLychee, mergeFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
@@ -2965,8 +2965,26 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
-      const text = await file.text();
-      const document = parseVoxlDocument(text);
+      // Peek at the first 6 bytes to detect format.
+      // V2 binary starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2.
+      // V1 JSON starts with '{' (0x7B).
+      // For V1, we use file.text() rather than TextDecoder.decode(arrayBuffer) because
+      // some WebView environments (e.g. Tauri/WebView2) truncate TextDecoder output at ~4 MB
+      // for large single-buffer decodes, while the native file.text() path is unaffected.
+      const headerBytes = new Uint8Array(await file.slice(0, 6).arrayBuffer());
+      const isV2 = isVoxlBinaryV2(headerBytes);
+
+      let document: VoxlDocumentV1;
+      let resolvedMeshBytes: Map<string, Uint8Array>;
+
+      if (isV2) {
+        const r = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
+        document = r.document;
+        resolvedMeshBytes = r.meshBytes;
+      } else {
+        document = parseVoxlDocument(await file.text());
+        resolvedMeshBytes = new Map();
+      }
 
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
       const idMap = new Map<string, string>();
@@ -2991,21 +3009,27 @@ export function useSceneCollectionManager() {
           progress: null,
         });
 
-        if (meshRef.mode !== 'embedded-file') {
+        if (meshRef.mode !== 'embedded-file' && meshRef.mode !== 'embedded-chunk') {
           console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
           skippedModels += 1;
           continue;
         }
 
-        if (!meshRef.dataBase64) {
-          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
-          skippedModels += 1;
-          continue;
+        // V2: mesh bytes pre-decoded; V1: fall back to base64 decode from meshRef.dataBase64
+        let meshDataBytes: Uint8Array | undefined = resolvedMeshBytes.get(model.id);
+
+        if (!meshDataBytes) {
+          if (!meshRef.dataBase64) {
+            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
+            skippedModels += 1;
+            continue;
+          }
+          meshDataBytes = decodeVoxlEmbeddedMeshBytes(meshRef);
         }
 
         let url = '';
         try {
-          const bytes = decodeVoxlEmbeddedMeshBytes(meshRef);
+          const bytes = meshDataBytes;
 
           if (typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0) {
             const expected = meshRef.sha256.trim().toLowerCase();

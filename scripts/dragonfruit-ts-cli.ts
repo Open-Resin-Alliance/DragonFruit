@@ -19,6 +19,7 @@ import { basename, resolve, dirname } from 'path';
 import { execSync } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  parseVoxlAuto,
   parseVoxlDocument,
   serializeVoxlDocument,
   buildVoxlDocumentV1,
@@ -45,8 +46,9 @@ import type {
 // ---------------------------------------------------------------------------
 
 function loadVoxl(path: string): VoxlDocumentV1 {
-  const raw = readFileSync(path, 'utf-8');
-  return parseVoxlDocument(raw);
+  const raw = readFileSync(path);
+  const result = parseVoxlAuto(raw);
+  return result.document;
 }
 
 function saveVoxl(path: string, doc: VoxlDocumentV1): void {

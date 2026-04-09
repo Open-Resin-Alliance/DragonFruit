@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
@@ -1031,9 +1031,14 @@ export class ExportManager {
       supports.kickstands = [];
     }
 
+    const meshBytesMap = new Map<number, Uint8Array>();
+    const sha256Map = new Map<number, string>();
+
     const models = options.includeModel
-      ? await Promise.all((sceneContext?.models ?? []).map(async (model) => {
-          const embedded = await this.buildEmbeddedMeshPayload(model);
+      ? await Promise.all((sceneContext?.models ?? []).map(async (model, index) => {
+          const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
+          meshBytesMap.set(index, rawBytes);
+          sha256Map.set(index, await this.sha256Hex(rawBytes));
 
           return {
             id: model.id,
@@ -1063,27 +1068,26 @@ export class ExportManager {
               mode: 'embedded-file' as const,
               fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
               mimeType: 'model/stl',
-              dataBase64: embedded.dataBase64,
-              dataEncoding: embedded.dataEncoding,
-              uncompressedSizeBytes: embedded.uncompressedSizeBytes,
-              sha256: embedded.sha256,
             },
           };
         }))
       : [];
 
-    const doc = buildVoxlDocumentV1({
-      models,
-      activeModelId: sceneContext?.activeModelId ?? null,
-      selectedModelIds: sceneContext?.selectedModelIds ?? [],
-      supports,
-      meta: {
-        generator: 'DragonFruit',
+    const binary = serializeVoxlDocumentV2(
+      {
+        models,
+        activeModelId: sceneContext?.activeModelId ?? null,
+        selectedModelIds: sceneContext?.selectedModelIds ?? [],
+        supports,
+        meta: {
+          generator: 'DragonFruit',
+        },
       },
-    });
+      meshBytesMap,
+      sha256Map,
+    );
 
-    const json = serializeVoxlDocument(doc, true);
-    return this.downloadFile(json, options.filename, 'voxl', 'application/json');
+    return this.downloadFile(binary, options.filename, 'voxl', 'application/vnd.dragonfruit.voxl');
   }
 
   private static async downloadFile(

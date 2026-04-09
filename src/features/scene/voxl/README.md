@@ -1,8 +1,19 @@
-# VOXL (V1)
+# VOXL (V1 + V2)
 
 VOXL is DragonFruit's scene container format (`.voxl`) for full project round-tripping.
 
-## V1 highlights
+## V2 highlights (current default)
+
+- **Binary chunk-based container** — eliminates base64 overhead entirely
+- Binary magic header: `VOXL` (0x56 0x4F 0x58 0x4C), `version: 2`
+- Independent chunk directory for random access
+- Chunk types: `META`, `SCNE`, `MODL`, `MESH`, `SUPP`, `EXTD`
+- Mesh data stored as raw binary with per-chunk zlib compression
+- `mesh.mode = "embedded-chunk"` — mesh bytes in separate MESH chunk
+- **~60–65% smaller** than V1 for typical scenes
+- Faster write (no base64 encoding) and faster read (no base64 decoding)
+
+## V1 highlights (still supported for reading)
 
 - Top-level contract: `magic: "VOXL"`, `version: 1`
 - Stores complete scene state:
@@ -23,12 +34,12 @@ VOXL is DragonFruit's scene container format (`.voxl`) for full project round-tr
 
 ## Current implementation behavior
 
-- Export writes embedded STL mesh payloads for single-file scene portability.
-- Export computes SHA-256 for each embedded mesh and includes it in the file.
-- Export uses RLE encoding only when it reduces payload size.
-- Export can serialize the entire document as a compressed envelope (auto mode picks smallest of raw/RLE/zlib).
-- Import verifies `sha256` when present and rejects mismatched embedded meshes.
-- Import supports both direct scene JSON and compressed-envelope JSON profiles.
+- **Export writes V2 binary** by default for optimal size and speed.
+- Import auto-detects V1 (JSON, first byte `{`) vs V2 (binary, first bytes `VOXL`).
+- V2 export stores raw mesh bytes in MESH chunks with zlib compression (no base64).
+- V2 reader provides pre-decoded mesh bytes via `ParsedVoxlResult.meshBytes` map.
+- V1 import path is fully preserved (base64 decode, RLE, sha256 validation).
+- SHA-256 integrity validation works for both V1 and V2 embedded meshes.
 
 For the normative format contract, see:
 

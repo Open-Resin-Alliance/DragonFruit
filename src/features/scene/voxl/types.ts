@@ -6,7 +6,7 @@ export const VOXL_VERSION = 1 as const;
 export type VoxlUnits = 'mm';
 export type VoxlCoordinateSystem = 'right-handed-z-up';
 
-export type VoxlMeshMode = 'none' | 'external-file' | 'embedded-file';
+export type VoxlMeshMode = 'none' | 'external-file' | 'embedded-file' | 'embedded-chunk';
 export type VoxlMeshEncoding = 'base64-raw' | 'base64-rle-u8';
 export type VoxlDocumentCompressionEncoding = 'base64-raw' | 'base64-rle-u8' | 'base64-zlib';
 
@@ -106,4 +106,19 @@ export type BuildVoxlDocumentInput = {
   supports: DragonfruitImportFormat;
   meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion'>>;
   extensions?: Record<string, unknown>;
+};
+
+/**
+ * Unified result from parsing any VOXL file (V1 JSON or V2 binary).
+ *
+ * V2 binary files provide pre-decoded mesh bytes in `meshBytes`,
+ * keyed by model ID, so the consumer can skip base64 round-trips.
+ */
+export type ParsedVoxlResult = {
+  /** The parsed document normalised to V1 schema shape. */
+  document: VoxlDocumentV1;
+  /** Pre-decoded mesh bytes keyed by model ID (populated for V2 files). */
+  meshBytes: Map<string, Uint8Array>;
+  /** The container format version that was actually read (1 or 2). */
+  sourceVersion: number;
 };

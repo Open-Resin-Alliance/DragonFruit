@@ -642,6 +642,7 @@ export async function writeChunkedToNativePath(
       headers: {
         'Content-Type': 'application/octet-stream',
         'x-mesh-stage-path': destinationPath,
+        'x-mesh-stage-offset': String(offset),
       },
     });
     offset += chunk.length;

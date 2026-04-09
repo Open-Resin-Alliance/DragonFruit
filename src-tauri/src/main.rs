@@ -869,12 +869,30 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
             .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
     }
 
+    let offset_header = request.headers().get("x-mesh-stage-offset");
+    let is_first_chunk = match offset_header {
+        Some(value) => {
+            let raw = value
+                .to_str()
+                .map_err(|e| format!("Invalid x-mesh-stage-offset header value: {e}"))?
+                .trim();
+            if raw.is_empty() {
+                false
+            } else {
+                raw.parse::<u64>()
+                    .map_err(|e| format!("Invalid x-mesh-stage-offset header value: {e}"))?
+                    == 0
+            }
+        }
+        None => false,
+    };
+
     let mut appender_lock = staged_mesh_file_appender()
         .lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
 
     let needs_new_appender = match appender_lock.as_ref() {
-        Some(existing) => existing.path != path_text,
+        Some(existing) => is_first_chunk || existing.path != path_text,
         None => true,
     };
 
@@ -907,6 +925,10 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         .writer
         .write_all(bytes)
         .map_err(|err| format!("Failed appending mesh stage bytes: {err}"))?;
+    appender
+        .writer
+        .flush()
+        .map_err(|err| format!("Failed flushing mesh stage bytes: {err}"))?;
     appender.len = appender.len.saturating_add(bytes.len() as u64);
 
     Ok(appender.len)
