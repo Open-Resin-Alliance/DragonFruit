@@ -4,32 +4,28 @@ version = "0.1.2"
 edition = "2021"
 
 [build-dependencies]
-# macOS / Windows: use the stable crates.io tauri-build.
-# Linux: overridden below by the target-specific block so CEF-spike Linux
-# builds use the feat/cef branch.
-tauri-build = { version = "2", features = [] }
-
-[target.'cfg(target_os = "linux")'.build-dependencies]
-# dragonfruit-83-6 CEF spike: on Linux only, use tauri-build from the feat/cef
-# branch so the build script matches the runtime dependency version.
+# dragonfruit-83-6 CEF spike: tauri-build must match the tauri runtime version.
+# Cargo does not allow target-gated dependencies with different sources, so
+# the whole tree uses the feat/cef branch. macOS/Windows get wry via the
+# `tauri-wry` feature (default); Linux-CEF builds pass
+# --no-default-features --features custom-protocol,tauri-cef
 tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", features = [] }
 
 [dependencies]
-# Default tauri from crates.io for macOS/Windows. Linux replaces this below.
-tauri = { version = "2", features = [] }
+# dragonfruit-83-6 CEF spike: single tauri dep from the feat/cef branch.
+# default-features = false so runtime backend is chosen explicitly via
+# the `tauri-wry` / `tauri-cef` features below.
+# Non-runtime tauri features we always need are listed here:
+#   - compression     (asset compression; default in crates.io stable)
+#   - dynamic-acl     (runtime capability resolution; default in stable)
+#
+# To revert: swap the git dep for `tauri = { version = "2", features = [] }`
+# and delete the [features] block for tauri-wry / tauri-cef, and delete the
+# [patch.crates-io] block below.
+tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["compression", "dynamic-acl"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-macos-fps = "0.1.0"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# dragonfruit-83-6 CEF spike: on Linux only, replace the default WebKitGTK
-# runtime (wry) with the CEF runtime from the feat/cef branch.
-# default-features = false disables the "wry" default feature; "cef" enables
-# tauri-runtime-cef which pulls in the cef = 146.4.1 crate and the CEF binary
-# distribution (~250MB download at build time).
-#
-# To revert on Linux: delete this target block or swap `cef` for `wry`.
-tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["cef", "compression", "dynamic-acl"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -48,8 +44,16 @@ dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 flate2 = "1.1.9"
 
 [features]
-default = ["custom-protocol"]
+# Default runtime: wry (native webview — WebKitGTK on Linux, WebView2 on
+# Windows, WebKit on macOS). This matches stable tauri behavior.
+default = ["custom-protocol", "tauri-wry"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# dragonfruit-83-6 CEF spike: runtime backend features. Mutually exclusive.
+# macOS/Windows/Linux-stable: --features tauri-wry (default)
+# Linux-CEF spike build:      --no-default-features --features custom-protocol,tauri-cef
+tauri-wry = ["tauri/wry"]
+tauri-cef = ["tauri/cef"]
 
 # dragonfruit-83-6 CEF spike: [patch.crates-io] is a GLOBAL cargo section —
 # cargo does not support target-gated [patch] blocks. This means macOS/Windows
