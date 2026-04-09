@@ -43,6 +43,7 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  exportThumbnailPng?: Uint8Array | null;
 }
 
 export class ExportManager {
@@ -1080,6 +1081,18 @@ export class ExportManager {
         }))
       : [];
 
+    const thumbnailBytes = sceneContext?.exportThumbnailPng;
+    const voxlExtensions = thumbnailBytes && thumbnailBytes.length > 0
+      ? {
+          'ora.preview': {
+            kind: 'scene-thumbnail',
+            mimeType: 'image/png',
+            encoding: 'base64',
+            dataBase64: this.toBase64(thumbnailBytes),
+          },
+        }
+      : undefined;
+
     const binary = serializeVoxlDocumentV2(
       {
         models,
@@ -1089,6 +1102,7 @@ export class ExportManager {
         meta: {
           generator: 'DragonFruit',
         },
+        extensions: voxlExtensions,
       },
       meshBytesMap,
       sha256Map,

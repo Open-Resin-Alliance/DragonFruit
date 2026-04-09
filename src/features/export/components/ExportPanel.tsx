@@ -12,6 +12,7 @@ interface ExportPanelProps {
   selectedModelIds?: string[];
   onActiveModelChange: (modelId: string | null) => void;
   supportsRef?: React.RefObject<THREE.Group | null>;
+  captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onExportSuccess?: (savedPath: string) => void;
 }
 
@@ -40,6 +41,7 @@ export function ExportPanel({
   selectedModelIds,
   onActiveModelChange,
   supportsRef,
+  captureSceneThumbnailPng,
   onExportSuccess,
 }: ExportPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -137,6 +139,15 @@ export function ExportPanel({
 
     setTimeout(async () => {
       try {
+        let exportThumbnailPng: Uint8Array | null = null;
+        if (effectiveOptions.format === 'voxl' && captureSceneThumbnailPng) {
+          try {
+            exportThumbnailPng = await captureSceneThumbnailPng();
+          } catch (thumbnailError) {
+            console.warn('[ExportPanel] Scene thumbnail capture failed for VOXL export; continuing without thumbnail.', thumbnailError);
+          }
+        }
+
         const exportRoot = new THREE.Group();
         if (effectiveOptions.includeModel) {
           scopeModels.forEach((model) => {
@@ -166,6 +177,7 @@ export function ExportPanel({
             selectedModelIds: scopedSelectedModelIds.length > 0
               ? scopedSelectedModelIds
               : (scopedActiveModelId ? [scopedActiveModelId] : []),
+            exportThumbnailPng,
           },
         );
         if (savedPath) onExportSuccess?.(savedPath);
