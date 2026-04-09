@@ -27,8 +27,10 @@
 
 import { unzlibSync, zlib as zlibAsync } from 'fflate';
 
+type ZlibCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
 // Promisified async zlib — runs in fflate's worker pool, never blocks the main thread.
-const compressAsync = (data: Uint8Array, level: number): Promise<Uint8Array> =>
+const compressAsync = (data: Uint8Array, level: ZlibCompressionLevel): Promise<Uint8Array> =>
   new Promise((resolve, reject) => {
     zlibAsync(data, { level }, (err, result) => {
       if (err) reject(err);
