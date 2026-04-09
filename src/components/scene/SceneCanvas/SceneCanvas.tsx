@@ -2799,12 +2799,18 @@ export function SceneCanvas({
     raftWallEnabled: raftSettingsForBounds.wallEnabled,
     raftWallHeight: raftSettingsForBounds.wallHeight,
     raftChamferAngle: raftSettingsForBounds.chamferAngle,
+    // Model-level signals: ensure the cross-section rebuilds when models are
+    // added, removed, copied, or transformed (supports may be attached to a
+    // model whose transform drives their rendered world positions).
+    models,
+    transform,
   }), [
     effectiveHoldSupportDragDelta,
     isGizmoDragging,
     kickstandStateForBounds.kickstands,
     kickstandStateForBounds.knots,
     kickstandStateForBounds.roots,
+    models,
     raftSettingsForBounds.bottomMode,
     raftSettingsForBounds.chamferAngle,
     raftSettingsForBounds.lineHeightMm,
@@ -2821,6 +2827,7 @@ export function SceneCanvas({
     supportStateForBounds.twigs,
     supportDragTransactionId,
     supportRenderRefreshNonce,
+    transform,
   ]);
 
   const crossSectionPlaneWidthMm = Math.max(

@@ -410,6 +410,17 @@ function CrossSectionStencilCapInner({
     return material;
   }, [color, glowColor, glowOpacity, glowThicknessMm]);
 
+  // R3F adds/removes meshes from the support group during the commit phase,
+  // AFTER React's render phase (where useMemo runs). To avoid traversing a
+  // stale group, we gate the traversal on a post-commit counter that is
+  // incremented by a useLayoutEffect after each version change. This ensures
+  // staticSourceEntries is recomputed on the render that follows the commit
+  // in which the scene graph was actually updated.
+  const [postCommitTraversalKey, setPostCommitTraversalKey] = React.useState(0);
+  React.useLayoutEffect(() => {
+    setPostCommitTraversalKey((k) => k + 1);
+  }, [sourceObjectVersion]);
+
   const staticSourceEntries = React.useMemo<StaticStencilEntry[]>(() => {
     if (!sourceObject) return [];
 
@@ -573,7 +584,7 @@ function CrossSectionStencilCapInner({
     });
 
     return results;
-  }, [skipSourceZBounds, sourceObject, sourceObjectVersion]);
+  }, [skipSourceZBounds, sourceObject, postCommitTraversalKey]);
 
   const modelStencilEntryCacheRef = React.useRef<Map<string, {
     signature: string;

@@ -3585,7 +3585,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 applyMaterialGhostOpacity(mesh.material);
             }
         });
-    }, [clippingPlanes, ghostOpacityClamped, ghostTransparent, ghostRenderOrder]);
+    }, [clippingPlanes, ghostOpacityClamped, ghostTransparent, ghostRenderOrder, selectedId]);
 
     return (
         <group ref={groupRef}>
