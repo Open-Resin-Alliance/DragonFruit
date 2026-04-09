@@ -46,6 +46,10 @@ export interface ExportSceneContext {
   exportThumbnailPng?: Uint8Array | null;
 }
 
+export interface ExportSceneSaveTarget {
+  nativePath?: string | null;
+}
+
 export class ExportManager {
   private static getErrorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
@@ -763,6 +767,7 @@ export class ExportManager {
     supportsGroup: THREE.Object3D | null,
     options: ExportOptions,
     sceneContext?: ExportSceneContext,
+    saveTarget?: ExportSceneSaveTarget,
   ): Promise<string | null> {
     console.log('[ExportManager] Starting export...', options);
 
@@ -771,18 +776,20 @@ export class ExportManager {
     const base = this.normalizeExportFilenameBase(options.filename || 'export');
     const ext = options.format === '3mf' ? '3mf' : options.format === 'voxl' ? 'voxl' : 'stl';
     const suggestedName = `${base}.${ext}`;
-    let prePickedNativePath: string | null = null;
+    let prePickedNativePath = saveTarget?.nativePath?.trim() || null;
     let useNativeWrite = true;
 
-    try {
-      prePickedNativePath = await pickSavePathWithNativeDialog(suggestedName);
-    } catch (err) {
-      const msg = this.getErrorMessage(err);
-      if (msg.toLowerCase().includes('save cancelled by user') || msg.toLowerCase().includes('cancelled by user')) {
-        return null; // User dismissed — nothing to do
+    if (!prePickedNativePath) {
+      try {
+        prePickedNativePath = await pickSavePathWithNativeDialog(suggestedName);
+      } catch (err) {
+        const msg = this.getErrorMessage(err);
+        if (msg.toLowerCase().includes('save cancelled by user') || msg.toLowerCase().includes('cancelled by user')) {
+          return null; // User dismissed — nothing to do
+        }
+        // Native dialog unavailable (web mode) — fall back to browser <a download>
+        useNativeWrite = false;
       }
-      // Native dialog unavailable (web mode) — fall back to browser <a download>
-      useNativeWrite = false;
     }
 
     // VOXL path: serialization can be expensive, so destination is pre-picked above.
@@ -1138,16 +1145,19 @@ export class ExportManager {
         : new TextEncoder().encode(data);
 
     // If a native path was already picked before heavy work started, write directly.
-    if (prePickedNativePath && useNativeWrite) {
+    let nativeDestinationPath = prePickedNativePath;
+
+    if (nativeDestinationPath && useNativeWrite) {
       try {
-        await writeChunkedToNativePath(prePickedNativePath, bytes);
-        return prePickedNativePath;
+        await writeChunkedToNativePath(nativeDestinationPath, bytes);
+        return nativeDestinationPath;
       } catch (error) {
-        console.warn('[ExportManager] Chunked write failed, falling back to browser download.', error);
+        console.warn('[ExportManager] Chunked write failed, retrying with a fresh save destination.', error);
+        nativeDestinationPath = null;
       }
     }
 
-    if (useNativeWrite && !prePickedNativePath) {
+    if (useNativeWrite && !nativeDestinationPath) {
       // Fallback: try native dialog + write (e.g. VOXL path that doesn't pre-pick)
       try {
         const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);

@@ -32,6 +32,7 @@ import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuP
 import { SupportSidebar } from '@/supports/Settings';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
+import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
@@ -66,7 +67,7 @@ import {
 import { computeHighPrecisionArrangeUpdatesWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
-import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
+import { useSceneCollectionManager, type LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
@@ -447,6 +448,13 @@ function isSceneFileName(name: string): boolean {
   return ext === '.voxl' || ext === '.lys';
 }
 
+function normalizeActiveVoxlScenePath(path: string | null | undefined): string | null {
+  if (typeof path !== 'string') return null;
+  const trimmed = path.trim();
+  if (!trimmed) return null;
+  return getFileExtension(trimmed) === '.voxl' ? trimmed : null;
+}
+
 type LaunchSceneFileEntry = {
   path: string;
   name: string;
@@ -623,6 +631,10 @@ function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+  const importSceneFile = scene.importSceneFile;
+  const importSceneFiles = scene.importSceneFiles;
+  const recentOpenedFiles = scene.recentOpenedFiles;
+  const reopenRecentOpenedFile = scene.reopenRecentOpenedFile;
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const workspaceCameraSettings = React.useSyncExternalStore(
     subscribeToWorkspaceCameraSettings,
@@ -752,6 +764,7 @@ export default function Home() {
   const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
   const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
   const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
+  const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
@@ -1190,15 +1203,26 @@ export default function Home() {
     resolveLysImportWarning(true);
   }, [lysImportWarningSkipFuture, resolveLysImportWarning]);
 
-  const importSceneFilesWithLysWarning = React.useCallback(async (filesInput: FileList | File[]) => {
+  const importSceneFilesWithLysWarning = React.useCallback(async (
+    filesInput: FileList | File[],
+    options?: { resultingScenePath?: string | null },
+  ): Promise<boolean> => {
     const sceneFiles = Array.from(filesInput);
-    if (sceneFiles.length === 0) return;
+    if (sceneFiles.length === 0) return false;
 
     const proceed = await maybeConfirmLysImportWarning(sceneFiles);
-    if (!proceed) return;
+    if (!proceed) return false;
 
-    await scene.importSceneFiles(sceneFiles);
-  }, [maybeConfirmLysImportWarning, scene]);
+    const imported = sceneFiles.length === 1
+      ? await importSceneFile(sceneFiles[0])
+      : await importSceneFiles(sceneFiles);
+
+    if (imported) {
+      setActiveSceneFilePath(normalizeActiveVoxlScenePath(options?.resultingScenePath));
+    }
+
+    return imported;
+  }, [importSceneFile, importSceneFiles, maybeConfirmLysImportWarning]);
 
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1208,7 +1232,7 @@ export default function Home() {
   }, [importSceneFilesWithLysWarning]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
-    const entry = scene.recentOpenedFiles.find((item) => item.id === entryId);
+    const entry = recentOpenedFiles.find((item) => item.id === entryId);
     if (!entry) return false;
 
     if (entry.kind === 'scene' && entry.name.trim().toLowerCase().endsWith('.lys')) {
@@ -1218,8 +1242,12 @@ export default function Home() {
       if (!proceed) return false;
     }
 
-    return await scene.reopenRecentOpenedFile(entryId);
-  }, [maybeConfirmLysImportWarning, scene.recentOpenedFiles, scene.reopenRecentOpenedFile]);
+    const reopened = await reopenRecentOpenedFile(entryId);
+    if (reopened && entry.kind === 'scene') {
+      setActiveSceneFilePath(null);
+    }
+    return reopened;
+  }, [maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -6083,8 +6111,11 @@ export default function Home() {
   const handleTopBarSaveScene = React.useCallback(async () => {
     const visibleModels = scene.models.filter((model) => model.visible);
     const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
+    const resolvedSceneFilename = activeSceneFilePath
+      ? (getFileNameFromPath(activeSceneFilePath).replace(/\.voxl$/i, '').trim() || 'Scene')
+      : resolveEntirePlateExportBaseName(scene.models);
 
-    const buildModelGroup = (model: typeof scene.models[number]): THREE.Group => {
+    const buildModelGroup = (model: LoadedModel): THREE.Group => {
       const group = new THREE.Group();
       const t = model.transform;
       group.position.copy(t.position);
@@ -6104,11 +6135,11 @@ export default function Home() {
     scopeModels.forEach((model) => exportRoot.add(buildModelGroup(model)));
     exportRoot.updateMatrixWorld(true);
 
-    await ExportManager.exportScene(
+    const savedPath = await ExportManager.exportScene(
       scopeModels.length > 0 ? exportRoot : null,
       supportsRef.current || null,
       {
-        filename: 'Scene',
+        filename: resolvedSceneFilename,
         format: 'voxl',
         binary: true,
         separateFiles: false,
@@ -6121,8 +6152,26 @@ export default function Home() {
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
       },
+      {
+        nativePath: activeSceneFilePath,
+      },
     );
-  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+    const nextActiveScenePath = normalizeActiveVoxlScenePath(savedPath);
+    if (nextActiveScenePath) {
+      setActiveSceneFilePath(nextActiveScenePath);
+    }
+    if (savedPath) {
+      setExportSuccessToast({ id: Date.now(), path: savedPath });
+      setIsExportSuccessToastVisible(true);
+      if (exportSuccessToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(exportSuccessToastFadeTimeoutRef.current);
+      }
+      exportSuccessToastFadeTimeoutRef.current = window.setTimeout(() => {
+        setIsExportSuccessToastVisible(false);
+        exportSuccessToastFadeTimeoutRef.current = null;
+      }, 3800);
+    }
+  }, [activeSceneFilePath, scene.activeModelId, scene.models, scene.selectedModelIds]);
 
   const isDesktopRuntime = React.useCallback(() => {
     if (typeof window === 'undefined') return false;
@@ -6234,6 +6283,46 @@ export default function Home() {
     });
   }, []);
 
+  const pickSceneFilesWithNativeDialog = React.useCallback(async (): Promise<Array<{ file: File; sourcePath: string }> | null> => {
+    if (!isDesktopRuntime()) return null;
+
+    try {
+      const picked = await pickOpenFilesWithNativeDialog('scene', true);
+      if (!picked || picked.length === 0) return [];
+
+      const core = await import('@tauri-apps/api/core');
+      const files: Array<{ file: File; sourcePath: string }> = [];
+
+      for (const entry of picked) {
+        try {
+          const sourcePath = entry.path.trim();
+          if (!sourcePath) continue;
+
+          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+          const name = entry.name || getFileNameFromPath(sourcePath);
+
+          files.push({
+            file: new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }),
+            sourcePath,
+          });
+        } catch (error) {
+          console.warn(`[Picker] Failed reading picked scene file path: ${entry.path}`, error);
+        }
+      }
+
+      return files;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      const cancelled = message.toLowerCase().includes('cancel');
+      if (cancelled) return [];
+      console.warn('[Picker] Native scene picker failed, falling back to web input.', error);
+      return null;
+    }
+  }, [isDesktopRuntime]);
+
   const handleOpenMeshDialog = React.useCallback(async () => {
     const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
     if (nativeFiles) {
@@ -6248,17 +6337,22 @@ export default function Home() {
   }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
-    const nativeFiles = await pickFilesWithNativeDialog('scene', true);
+    const nativeFiles = await pickSceneFilesWithNativeDialog();
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      await importSceneFilesWithLysWarning(nativeFiles);
+      await importSceneFilesWithLysWarning(
+        nativeFiles.map((entry) => entry.file),
+        {
+          resultingScenePath: nativeFiles.length === 1 ? nativeFiles[0]?.sourcePath ?? null : null,
+        },
+      );
       return;
     }
 
     const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
     if (webFiles.length === 0) return;
-    await importSceneFilesWithLysWarning(webFiles);
-  }, [importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput]);
+    await importSceneFilesWithLysWarning(webFiles, { resultingScenePath: null });
+  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -6286,8 +6380,9 @@ export default function Home() {
     }
 
     if (files.length === 0) return false;
-    await importSceneFilesWithLysWarning(files);
-    return true;
+    return await importSceneFilesWithLysWarning(files, {
+      resultingScenePath: files.length === 1 ? sceneEntries[0]?.path ?? null : null,
+    });
   }, [importSceneFilesWithLysWarning]);
 
   // Keep the ref in sync with the latest callback.

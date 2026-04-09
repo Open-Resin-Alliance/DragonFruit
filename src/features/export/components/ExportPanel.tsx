@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Download, FileType2, Layers3, Settings2 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
+import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
 import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/ui/primitives';
 
 interface ExportPanelProps {
@@ -17,22 +18,6 @@ interface ExportPanelProps {
 }
 
 type ExportScope = 'entire_plate' | 'active_model';
-
-function normalizeExportBaseName(rawName: string | null | undefined): string {
-  const trimmed = (rawName ?? '').trim();
-  if (!trimmed) return 'MyPrint';
-
-  // Strip common source suffixes if present (including chained suffixes).
-  const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json|voxl))+$/i, '');
-  const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
-  return cleaned || 'MyPrint';
-}
-
-function resolveEntirePlateExportBaseName(models: LoadedModel[]): string {
-  const firstVisible = models.find((model) => model.visible) ?? models[0] ?? null;
-  const firstBase = normalizeExportBaseName(firstVisible?.name);
-  return `${firstBase}_DF_Scene`;
-}
 
 export function ExportPanel({
   models,

@@ -3291,13 +3291,12 @@ export function useSceneCollectionManager() {
     return false;
   }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
 
-  const importSceneFiles = useCallback(async (filesInput: FileList | File[]) => {
+  const importSceneFiles = useCallback(async (filesInput: FileList | File[]): Promise<boolean> => {
     const files = Array.from(filesInput).filter((file) => getSceneExtension(file.name) !== null);
-    if (files.length === 0) return;
+    if (files.length === 0) return false;
 
     if (files.length === 1) {
-      await importSceneFile(files[0]);
-      return;
+      return await importSceneFile(files[0]);
     }
 
     trackRecentOpenedFiles(files, 'scene');
@@ -3349,6 +3348,7 @@ export function useSceneCollectionManager() {
     } else {
       emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
     }
+    return successCount > 0;
   }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3752,6 +3752,7 @@ export function useSceneCollectionManager() {
 
     // LYS Import (1-step)
     importLysFile: handleImportLysFile,
+    importSceneFile,
     importSceneFiles,
     onImportLysChange,
     isLysLoading: lysImport.isLoading,
