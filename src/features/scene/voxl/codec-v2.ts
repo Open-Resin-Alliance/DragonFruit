@@ -25,7 +25,16 @@
  * Chunk data follows the directory, tightly packed.
  */
 
-import { unzlibSync, zlibSync } from 'fflate';
+import { unzlibSync, zlib as zlibAsync } from 'fflate';
+
+// Promisified async zlib — runs in fflate's worker pool, never blocks the main thread.
+const compressAsync = (data: Uint8Array, level: number): Promise<Uint8Array> =>
+  new Promise((resolve, reject) => {
+    zlibAsync(data, { level }, (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
 import {
   VOXL_MAGIC,
   type BuildVoxlDocumentInput,
@@ -85,11 +94,11 @@ const textDecoder = new TextDecoder();
  * @param sha256Map   - Optional map of model index → hex SHA-256 digest
  * @returns           - Complete VOXL V2 binary as Uint8Array
  */
-export function serializeVoxlDocumentV2(
+export async function serializeVoxlDocumentV2(
   input: BuildVoxlDocumentInput,
   meshBytes: Map<number, Uint8Array>,
   sha256Map?: Map<number, string>,
-): Uint8Array {
+): Promise<Uint8Array> {
   const nowIso = new Date().toISOString();
 
   // ── Build chunk payloads ──────────────────────────────────────────────
@@ -160,11 +169,11 @@ export function serializeVoxlDocumentV2(
     pending.push({ type: CHUNK_EXTD, index: 0, raw: textEncoder.encode(JSON.stringify(input.extensions)), compress: false });
   }
 
-  // ── Compress ──────────────────────────────────────────────────────────
+  // ── Compress (async – does not block the main thread) ─────────────────
 
-  const resolved = pending.map((chunk) => {
+  const resolved = await Promise.all(pending.map(async (chunk) => {
     if (chunk.compress && chunk.raw.length > 64) {
-      const compressed = zlibSync(chunk.raw, { level: 6 });
+      const compressed = await compressAsync(chunk.raw, 6);
       if (compressed.length < chunk.raw.length) {
         return {
           type: chunk.type,
@@ -182,7 +191,7 @@ export function serializeVoxlDocumentV2(
       data: chunk.raw,
       uncompressedSize: chunk.raw.length,
     };
-  });
+  }));
 
   // ── Calculate layout ──────────────────────────────────────────────────
 

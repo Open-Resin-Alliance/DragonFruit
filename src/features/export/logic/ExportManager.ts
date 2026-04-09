@@ -51,6 +51,12 @@ export interface ExportSceneSaveTarget {
 }
 
 export class ExportManager {
+  private static readonly embeddedBinaryStlCache = new Map<string, {
+    geometrySignature: string;
+    rawBytes: Uint8Array;
+    sha256: string;
+  }>();
+
   private static getErrorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
     return String(error ?? 'Unknown error');
@@ -96,6 +102,42 @@ export class ExportManager {
 
     const bytes = new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
     return new Uint8Array(bytes);
+  }
+
+  private static computeModelGeometrySignature(model: LoadedModel): string {
+    const geometry = model.geometry.geometry;
+    const position = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    const vertexCount = position?.count ?? 0;
+    const positionVersion = !position
+      ? 0
+      : ('version' in position ? position.version : position.data.version);
+    const indexVersion = index?.version ?? 0;
+    return `${geometry.uuid}:${positionVersion}:${indexVersion}:${vertexCount}`;
+  }
+
+  private static async getEmbeddedBinaryStlWithSha(model: LoadedModel): Promise<{
+    rawBytes: Uint8Array;
+    sha256: string;
+  }> {
+    const geometrySignature = this.computeModelGeometrySignature(model);
+    const cached = this.embeddedBinaryStlCache.get(model.id);
+    if (cached && cached.geometrySignature === geometrySignature) {
+      return {
+        rawBytes: cached.rawBytes,
+        sha256: cached.sha256,
+      };
+    }
+
+    const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
+    const sha256 = await this.sha256Hex(rawBytes);
+    this.embeddedBinaryStlCache.set(model.id, {
+      geometrySignature,
+      rawBytes,
+      sha256,
+    });
+
+    return { rawBytes, sha256 };
   }
 
   private static encodeRleU8(input: Uint8Array): Uint8Array {
@@ -1036,6 +1078,10 @@ export class ExportManager {
     prePickedNativePath: string | null,
     useNativeWrite: boolean,
   ): Promise<string | null> {
+    // Yield before the (synchronous) support snapshot so the render loop stays
+    // alive on scenes with many support nodes.
+    await this.yieldToBrowserFrame();
+
     const supportSnapshot = getSnapshot();
     const kickstandSnapshot = getKickstandSnapshot();
     const supports = buildSupportExportFromStores(
@@ -1081,11 +1127,15 @@ export class ExportManager {
             };
           }> = [];
 
+          if (sourceModels.length > 0) {
+            await this.yieldToBrowserFrame();
+          }
+
           for (let index = 0; index < sourceModels.length; index += 1) {
             const model = sourceModels[index];
-            const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
+            const { rawBytes, sha256 } = await this.getEmbeddedBinaryStlWithSha(model);
             meshBytesMap.set(index, rawBytes);
-            sha256Map.set(index, await this.sha256Hex(rawBytes));
+            sha256Map.set(index, sha256);
 
             exportedModels.push({
               id: model.id,
@@ -1139,7 +1189,8 @@ export class ExportManager {
         }
       : undefined;
 
-    const binary = serializeVoxlDocumentV2(
+    // serializeVoxlDocumentV2 is async — compression runs off the main thread.
+    const binary = await serializeVoxlDocumentV2(
       {
         models,
         activeModelId: sceneContext?.activeModelId ?? null,
