@@ -23,8 +23,18 @@ tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef"
 # and delete the [features] block for tauri-wry / tauri-cef, and delete the
 # [patch.crates-io] block below.
 tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["compression", "dynamic-acl"] }
-tauri-plugin-log = "2"
-tauri-plugin-single-instance = "2"
+# dragonfruit-83-6 CEF spike: temporarily disabled.
+# These plugins from crates.io have an unconditional dep on tauri with default
+# features (including "wry"). Cargo unions that with our "tauri-cef" feature
+# request, which compiles BOTH tauri_runtime_wry AND tauri_runtime_cef. The
+# feat/cef branch's tauri/src/lib.rs re-exports `webview_version` from both
+# without feature gating, causing E0252 collision.
+#
+# For the spike we drop these plugins to unblock the build. On merge-back,
+# re-enable them and work with upstream to either (a) feature-gate the lib.rs
+# re-export or (b) patch the plugins to use default-features = false.
+# tauri-plugin-log = "2"
+# tauri-plugin-single-instance = "2"
 tauri-plugin-macos-fps = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -73,9 +83,13 @@ tauri-cef = ["tauri/cef"]
 tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 tauri-codegen = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+# tauri-plugin (crates.io 2.5.3) depends on the old tauri-utils schemars types
+# (RootSchema vs Schema). Patch to feat/cef so it uses the new types.
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 
 # Compile ALL dependencies with full optimizations in dev builds.
 # The slicer and its deps (flate2, crc32fast, png, zip, rayon) are

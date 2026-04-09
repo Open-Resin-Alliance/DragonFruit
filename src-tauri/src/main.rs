@@ -2198,7 +2198,12 @@ fn main() {
         cfg!(debug_assertions)
     );
 
-    let log_level = read_log_level_pref();
+    let _log_level = read_log_level_pref();
+    // dragonfruit-83-6 CEF spike: tauri-plugin-log pulls tauri with default
+    // features including wry, which collides with the cef runtime at link
+    // time (webview_version re-exports). Gate the plugin init behind the
+    // non-cef feature path.
+    #[cfg(not(feature = "tauri-cef"))]
     let log_plugin = {
         use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
         LogBuilder::new()
@@ -2209,7 +2214,7 @@ fn main() {
                 }),
                 Target::new(TargetKind::Webview),
             ])
-            .level(log_level)
+            .level(_log_level)
             // Suppress chatty low-level transport crates — these flood the log
             // at DEBUG/TRACE and contain no actionable application information.
             .level_for("tungstenite", log::LevelFilter::Warn)
@@ -2224,8 +2229,10 @@ fn main() {
             .build()
     };
 
-    let builder = tauri::Builder::default()
-        .plugin(log_plugin)
+    let builder = tauri::Builder::default();
+    #[cfg(not(feature = "tauri-cef"))]
+    let builder = builder.plugin(log_plugin);
+    let builder = builder
         .setup(|app| {
             use tauri::WebviewWindowBuilder;
 
@@ -2247,19 +2254,23 @@ fn main() {
 
             log::info!("Main window created successfully");
             Ok(())
-        })
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            log::info!("Single-instance activated: second launch detected (args={argv:?})");
-            let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
-            emit_scene_file_handoff(app, &argv, "single-instance");
+        });
 
-            // Only force foreground when this second launch is handing off a scene file.
-            // Avoiding unconditional focus here reduces Windows "error" chimes when users
-            // launch the app again while it's already running.
-            if has_scene_files {
-                focus_main_window(app);
-            }
-        }));
+    // dragonfruit-83-6 CEF spike: single-instance plugin also pulls the wry
+    // default feature transitively. Gate behind the non-cef path.
+    #[cfg(not(feature = "tauri-cef"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        log::info!("Single-instance activated: second launch detected (args={argv:?})");
+        let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
+        emit_scene_file_handoff(app, &argv, "single-instance");
+
+        // Only force foreground when this second launch is handing off a scene file.
+        // Avoiding unconditional focus here reduces Windows "error" chimes when users
+        // launch the app again while it's already running.
+        if has_scene_files {
+            focus_main_window(app);
+        }
+    }));
 
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_plugin_macos_fps::init());
