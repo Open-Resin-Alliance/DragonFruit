@@ -1,0 +1,20 @@
+[package]
+name = "dragonfruit-voxl-thumbnail"
+version = "0.1.0"
+edition = "2021"
+description = "Extract embedded thumbnails from DragonFruit VOXL V2 scene files"
+
+[lib]
+name = "dragonfruit_voxl_thumbnail"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dragonfruit-voxl-thumbnailer"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1"
+thiserror = "1"
