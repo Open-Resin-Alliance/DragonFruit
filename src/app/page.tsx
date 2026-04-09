@@ -376,6 +376,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
 const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
+const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
@@ -1321,6 +1322,15 @@ export default function Home() {
   const pendingDestructiveTransformContinueRef = React.useRef<(() => void) | null>(null);
   const dragDepthRef = React.useRef(0);
   const launchSceneFilesHandledRef = React.useRef(false);
+  const startupSceneHandoffReadyRef = React.useRef(false);
+  const queuedLaunchSceneEntriesRef = React.useRef<LaunchSceneFileEntry[]>([]);
+  const coldStartSceneHandoffTimerRef = React.useRef<number | null>(null);
+  const launchSceneImportInFlightRef = React.useRef(false);
+  // Stable ref so the launch effect can always call the latest version of
+  // this callback without listing it as a dep (which causes effect re-runs
+  // and cancelled-flag races during scene initialization).
+  const importSceneFromLaunchEntriesRef = React.useRef<((entries: LaunchSceneFileEntry[]) => Promise<boolean>) | null>(null);
+  const [pendingStartupSceneHandoff, setPendingStartupSceneHandoff] = React.useState(false);
   const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
     signature: '',
     atMs: 0,
@@ -6226,52 +6236,117 @@ export default function Home() {
     return true;
   }, [importSceneFilesWithLysWarning]);
 
-  const importSceneFromPaths = React.useCallback(async (paths: string[]): Promise<boolean> => {
-    if (!paths || paths.length === 0) return false;
-
-    const entries: LaunchSceneFileEntry[] = paths
-      .map((path) => {
-        const trimmed = path.trim();
-        if (!trimmed) return null;
-        return {
-          path: trimmed,
-          name: getFileNameFromPath(trimmed),
-        } satisfies LaunchSceneFileEntry;
-      })
-      .filter((entry): entry is LaunchSceneFileEntry => Boolean(entry));
-
-    return importSceneFromLaunchEntries(entries);
+  // Keep the ref in sync with the latest callback.
+  React.useEffect(() => {
+    importSceneFromLaunchEntriesRef.current = importSceneFromLaunchEntries;
   }, [importSceneFromLaunchEntries]);
 
+  const flushQueuedLaunchSceneImports = React.useCallback(async (): Promise<void> => {
+    if (!startupSceneHandoffReadyRef.current) return;
+    if (launchSceneImportInFlightRef.current) return;
+
+    const queuedEntries = queuedLaunchSceneEntriesRef.current;
+    if (!queuedEntries || queuedEntries.length === 0) {
+      setPendingStartupSceneHandoff(false);
+      return;
+    }
+
+    queuedLaunchSceneEntriesRef.current = [];
+    launchSceneImportInFlightRef.current = true;
+
+    try {
+      const handler = importSceneFromLaunchEntriesRef.current;
+      if (!handler) return;
+
+      const imported = await handler(queuedEntries);
+      if (!imported) {
+        console.warn('[LaunchOpen] App launched with file arguments, but no supported scene file (.voxl/.lys) was found.');
+      }
+    } catch (error) {
+      console.warn('[LaunchOpen] Failed handling queued launch scene file arguments.', error);
+    } finally {
+      launchSceneImportInFlightRef.current = false;
+      const stillQueued = queuedLaunchSceneEntriesRef.current.length > 0;
+      setPendingStartupSceneHandoff(stillQueued && !startupSceneHandoffReadyRef.current);
+      if (stillQueued) {
+        void flushQueuedLaunchSceneImports();
+      }
+    }
+  }, []);
+
+  const queueLaunchSceneEntries = React.useCallback((entries: LaunchSceneFileEntry[]) => {
+    if (!entries || entries.length === 0) return;
+
+    const merged = new Map<string, LaunchSceneFileEntry>();
+    for (const entry of queuedLaunchSceneEntriesRef.current) {
+      const key = entry.path.trim().toLowerCase();
+      if (!key) continue;
+      merged.set(key, entry);
+    }
+    for (const entry of entries) {
+      const key = entry.path.trim().toLowerCase();
+      if (!key) continue;
+      merged.set(key, entry);
+    }
+
+    queuedLaunchSceneEntriesRef.current = Array.from(merged.values());
+
+    if (!startupSceneHandoffReadyRef.current) {
+      setPendingStartupSceneHandoff(true);
+      return;
+    }
+
+    void flushQueuedLaunchSceneImports();
+  }, [flushQueuedLaunchSceneImports]);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) {
+      startupSceneHandoffReadyRef.current = true;
+      return;
+    }
+
+    if (coldStartSceneHandoffTimerRef.current !== null) {
+      window.clearTimeout(coldStartSceneHandoffTimerRef.current);
+    }
+
+    coldStartSceneHandoffTimerRef.current = window.setTimeout(() => {
+      coldStartSceneHandoffTimerRef.current = null;
+      startupSceneHandoffReadyRef.current = true;
+      void flushQueuedLaunchSceneImports();
+    }, COLD_START_SCENE_HANDOFF_DELAY_MS);
+
+    return () => {
+      if (coldStartSceneHandoffTimerRef.current !== null) {
+        window.clearTimeout(coldStartSceneHandoffTimerRef.current);
+        coldStartSceneHandoffTimerRef.current = null;
+      }
+      startupSceneHandoffReadyRef.current = true;
+    };
+  }, [flushQueuedLaunchSceneImports, isDesktopRuntime]);
+
+  // Primary-launch file loading. Uses importSceneFromLaunchEntriesRef (a
+  // stable ref) so this effect only runs once on mount and is never
+  // cancelled mid-flight by scene re-renders during initialization.
   React.useEffect(() => {
     if (launchSceneFilesHandledRef.current) return;
     launchSceneFilesHandledRef.current = true;
 
     if (!isDesktopRuntime()) return;
 
-    let cancelled = false;
-
     void (async () => {
       try {
         const core = await import('@tauri-apps/api/core');
         const launchEntries = await core.invoke<LaunchSceneFileEntry[]>('get_launch_scene_files');
-        if (cancelled || !launchEntries || launchEntries.length === 0) return;
+        if (!launchEntries || launchEntries.length === 0) return;
 
-        const imported = await importSceneFromLaunchEntries(launchEntries);
-        if (!imported) {
-          console.warn('[LaunchOpen] App launched with file arguments, but no supported scene file (.voxl/.lys) was found.');
-        }
+        queueLaunchSceneEntries(launchEntries);
       } catch (error) {
-        if (!cancelled) {
-          console.warn('[LaunchOpen] Failed handling launch scene file arguments.', error);
-        }
+        console.warn('[LaunchOpen] Failed handling launch scene file arguments.', error);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [importSceneFromLaunchEntries, isDesktopRuntime]);
+    // isDesktopRuntime is a stable useCallback([]) — this effect runs once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktopRuntime, queueLaunchSceneEntries]);
 
   React.useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -6288,9 +6363,18 @@ export default function Home() {
           const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : [];
           if (paths.length === 0) return;
 
-          void importSceneFromPaths(paths).catch((error) => {
-            console.warn('[LaunchOpen] Failed importing handed-off scene file(s).', error);
-          });
+          const entries: LaunchSceneFileEntry[] = paths
+            .map((path) => {
+              const trimmed = path.trim();
+              if (!trimmed) return null;
+              return {
+                path: trimmed,
+                name: getFileNameFromPath(trimmed),
+              } satisfies LaunchSceneFileEntry;
+            })
+            .filter((entry): entry is LaunchSceneFileEntry => Boolean(entry));
+
+          queueLaunchSceneEntries(entries);
         });
       } catch (error) {
         if (!disposed) {
@@ -6309,7 +6393,7 @@ export default function Home() {
         }
       }
     };
-  }, [importSceneFromPaths, isDesktopRuntime]);
+  }, [isDesktopRuntime, queueLaunchSceneEntries]);
 
   const handleTopBarOpenScene = React.useCallback(() => {
     void handleOpenSceneDialog();
@@ -10500,7 +10584,7 @@ export default function Home() {
     };
   }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
 
-  const showInlineEmptyLoading = scene.models.length === 0 && importOverlayState.active;
+  const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
 
   React.useEffect(() => {
@@ -10523,6 +10607,12 @@ export default function Home() {
   const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
   const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active && !holdEmptyStateSceneImportUi;
   const showEmptySceneDialog = scene.models.length === 0;
+  const emptyStateLoadingLabel = pendingStartupSceneHandoff
+    ? 'Opening scene…'
+    : importOverlayState.label;
+  const emptyStateLoadingDetail = pendingStartupSceneHandoff
+    ? 'Letting DragonFruit finish its startup animation before loading your scene.'
+    : importOverlayState.detail;
 
   const renderId = useRef(0);
   const postRotateLiftScheduledRef = useRef(false);
@@ -12343,8 +12433,8 @@ export default function Home() {
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={handleReopenRecentFile}
               isLoading={showEmptyStateLoading}
-              loadingLabel={importOverlayState.label}
-              loadingDetail={importOverlayState.detail}
+              loadingLabel={emptyStateLoadingLabel}
+              loadingDetail={emptyStateLoadingDetail}
               showFirstTimeOnboarding={!hasActivePrinterProfile && !allowPrepareWithoutPrinter}
               onAddPrinter={handleAddPrinterFromOnboarding}
               onUseWithoutPrinter={handleUseWithoutPrinter}
