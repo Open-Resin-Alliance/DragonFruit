@@ -35,6 +35,10 @@ tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", defa
 # re-export or (b) patch the plugins to use default-features = false.
 # tauri-plugin-log = "2"
 # tauri-plugin-single-instance = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS-only plugin. Was previously in unconditional [dependencies] which
+# forced tauri/wry to be active on Linux too, breaking the CEF spike.
 tauri-plugin-macos-fps = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
