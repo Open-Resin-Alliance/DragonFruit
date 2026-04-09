@@ -4,13 +4,32 @@ version = "0.1.2"
 edition = "2021"
 
 [build-dependencies]
+# macOS / Windows: use the stable crates.io tauri-build.
+# Linux: overridden below by the target-specific block so CEF-spike Linux
+# builds use the feat/cef branch.
 tauri-build = { version = "2", features = [] }
 
+[target.'cfg(target_os = "linux")'.build-dependencies]
+# dragonfruit-83-6 CEF spike: on Linux only, use tauri-build from the feat/cef
+# branch so the build script matches the runtime dependency version.
+tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", features = [] }
+
 [dependencies]
+# Default tauri from crates.io for macOS/Windows. Linux replaces this below.
 tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-macos-fps = "0.1.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# dragonfruit-83-6 CEF spike: on Linux only, replace the default WebKitGTK
+# runtime (wry) with the CEF runtime from the feat/cef branch.
+# default-features = false disables the "wry" default feature; "cef" enables
+# tauri-runtime-cef which pulls in the cef = 146.4.1 crate and the CEF binary
+# distribution (~250MB download at build time).
+#
+# To revert on Linux: delete this target block or swap `cef` for `wry`.
+tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["cef", "compression", "dynamic-acl"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -31,6 +50,28 @@ flate2 = "1.1.9"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# dragonfruit-83-6 CEF spike: [patch.crates-io] is a GLOBAL cargo section —
+# cargo does not support target-gated [patch] blocks. This means macOS/Windows
+# builds will also resolve tauri-plugin-log's `tauri = "2"` through these git
+# crates. That is SAFE because the feat/cef branch still has `wry` as a
+# default feature, so macOS/Windows pick it up transparently — they just pull
+# a slightly more recent tauri than stable 2.x from crates.io.
+#
+# The reason we need this patch at all: on Linux, our direct dep pulls tauri
+# from git, while tauri-plugin-log pulls tauri from crates.io. Without the
+# patch, cargo would emit TWO tauri crates and fail to link. The patch
+# rewrites the plugins' crates.io dep to the same git source.
+#
+# To revert: delete this block, delete the Linux target block above, and
+# change tauri-build back to the crates.io version.
+[patch.crates-io]
+tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 
 # Compile ALL dependencies with full optimizations in dev builds.
 # The slicer and its deps (flate2, crc32fast, png, zip, rayon) are
