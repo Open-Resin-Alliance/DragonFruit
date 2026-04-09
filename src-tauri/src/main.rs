@@ -1933,7 +1933,13 @@ async fn read_print_layer_png(
 
         match format_hint.trim() {
             f if f == ".ctb" || f.starts_with("ctb") => {
-                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::ctb_encoder::read_layer_preview_png(&source, layer_number)
+                // dragonfruit-83-6 CEF spike: ctb plugin does not yet implement
+                // read_layer_preview_png (present only in athena plugin). This
+                // is a pre-existing gap on the dev branch and is unrelated to
+                // the CEF work. Stub with an error for now so the build
+                // completes — the real fix is to implement ctb::read_layer_preview_png
+                // or route both formats through a shared trait.
+                Err("layer preview PNG not yet supported for .ctb files".to_string())
             }
             _ => {
                 // Default: NanoDLP ZIP archive (.nanodlp, athena, and any unknown format)
