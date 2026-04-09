@@ -6119,6 +6119,15 @@ export default function Home() {
       ? (getFileNameFromPath(activeSceneFilePath).replace(/\.voxl$/i, '').trim() || 'Scene')
       : resolveEntirePlateExportBaseName(scene.models);
 
+    // Capture a thumbnail from the live scene canvas — same path as the export panel.
+    let exportThumbnailPng: Uint8Array | null = null;
+    try {
+      const runCapture = exportThumbnailCaptureRunnerRef.current;
+      if (runCapture) exportThumbnailPng = await runCapture();
+    } catch {
+      // Non-fatal: save proceeds without thumbnail.
+    }
+
     const savedPath = await ExportManager.exportScene(
       null,
       supportsRef.current || null,
@@ -6135,6 +6144,7 @@ export default function Home() {
         models: scopeModels,
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
+        exportThumbnailPng: exportThumbnailPng ?? undefined,
       },
       {
         nativePath: activeSceneFilePath,
