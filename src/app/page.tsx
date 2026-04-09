@@ -1266,7 +1266,7 @@ export default function Home() {
 
   const importSceneFilesWithLysWarning = React.useCallback(async (
     filesInput: FileList | File[],
-    options?: { resultingScenePath?: string | null },
+    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
   ): Promise<boolean> => {
     const sceneFiles = Array.from(filesInput);
     if (sceneFiles.length === 0) return false;
@@ -1275,8 +1275,12 @@ export default function Home() {
     if (!proceed) return false;
 
     const imported = sceneFiles.length === 1
-      ? await importSceneFile(sceneFiles[0])
-      : await importSceneFiles(sceneFiles);
+      ? await importSceneFile(sceneFiles[0], {
+          sourcePath: options?.sourcePaths?.[0] ?? options?.resultingScenePath ?? null,
+        })
+      : await importSceneFiles(sceneFiles, {
+          sourcePaths: options?.sourcePaths,
+        });
 
     if (imported) {
       const importedSingleFile = sceneFiles.length === 1 ? sceneFiles[0] : null;
@@ -1314,20 +1318,49 @@ export default function Home() {
       if (!proceed) return false;
     }
 
+    const sourcePath = typeof entry.sourcePath === 'string' && entry.sourcePath.trim().length > 0
+      ? entry.sourcePath.trim()
+      : null;
+
+    // Preferred path for desktop: reload from the original source file so the
+    // editing session can resume with an overwrite-capable scene path.
+    if (entry.kind === 'scene' && sourcePath) {
+      try {
+        const sourceBytes = await readPrintArtifactBytesFromPath(sourcePath);
+        if (sourceBytes && sourceBytes.length > 0) {
+          const restoredFile = new File([Uint8Array.from(sourceBytes)], entry.name, {
+            type: getDroppedFileMimeType(entry.name),
+            lastModified: Date.now(),
+          });
+
+          const importedFromSource = await importSceneFilesWithLysWarning([restoredFile], {
+            resultingScenePath: sourcePath,
+            sourcePaths: [sourcePath],
+          });
+
+          if (importedFromSource) {
+            return true;
+          }
+        }
+      } catch (error) {
+        console.warn('[RecentFiles] Failed reopening scene from original source path; falling back to cached copy.', error);
+      }
+    }
+
     const reopened = await reopenRecentOpenedFile(entryId);
     if (reopened && entry.kind === 'scene') {
-      setActiveSceneFilePath(null);
+      setActiveSceneFilePath(normalizeActiveVoxlScenePath(sourcePath));
       if (entry.name.trim().toLowerCase().endsWith('.voxl')) {
         setLoadedSceneSaveSource({
           name: entry.name,
-          path: null,
+          path: normalizeActiveVoxlScenePath(sourcePath),
         });
       } else {
         setLoadedSceneSaveSource(null);
       }
     }
     return reopened;
-  }, [maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
+  }, [importSceneFilesWithLysWarning, maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -6571,6 +6604,7 @@ export default function Home() {
         nativeFiles.map((entry) => entry.file),
         {
           resultingScenePath: nativeFiles.length === 1 ? nativeFiles[0]?.sourcePath ?? null : null,
+          sourcePaths: nativeFiles.map((entry) => entry.sourcePath),
         },
       );
       return;
@@ -6609,6 +6643,7 @@ export default function Home() {
     if (files.length === 0) return false;
     return await importSceneFilesWithLysWarning(files, {
       resultingScenePath: files.length === 1 ? sceneEntries[0]?.path ?? null : null,
+      sourcePaths: sceneEntries.map((entry) => entry.path),
     });
   }, [importSceneFilesWithLysWarning]);
 

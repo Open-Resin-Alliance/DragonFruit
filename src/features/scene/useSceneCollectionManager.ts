@@ -206,6 +206,7 @@ export type RecentOpenedFileEntry = {
   id: string;
   name: string;
   kind: RecentOpenedFileKind;
+  sourcePath?: string;
   sizeBytes?: number;
   openedAt: number;
 };
@@ -214,6 +215,7 @@ type RecentOpenedFileBlobRecord = {
   id: string;
   name: string;
   kind: RecentOpenedFileKind;
+  sourcePath?: string;
   sizeBytes?: number;
   openedAt: number;
   type: string;
@@ -342,6 +344,7 @@ async function putRecentOpenedFileBlob(entry: RecentOpenedFileEntry, file: File)
       id: entry.id,
       name: entry.name,
       kind: entry.kind,
+      sourcePath: entry.sourcePath,
       sizeBytes: entry.sizeBytes,
       openedAt: entry.openedAt,
       type: file.type,
@@ -434,6 +437,9 @@ function readRecentOpenedFilesFromLocalStorage(): RecentOpenedFileEntry[] {
         const id = typeof item.id === 'string' ? item.id.trim() : '';
         const name = typeof item.name === 'string' ? item.name : '';
         const kind = item.kind === 'mesh' || item.kind === 'scene' ? item.kind : null;
+        const sourcePath = typeof item.sourcePath === 'string' && item.sourcePath.trim().length > 0
+          ? item.sourcePath.trim()
+          : undefined;
         const openedAt = Number(item.openedAt);
         const sizeBytes = typeof item.sizeBytes === 'number' && Number.isFinite(item.sizeBytes) && item.sizeBytes >= 0
           ? item.sizeBytes
@@ -445,6 +451,7 @@ function readRecentOpenedFilesFromLocalStorage(): RecentOpenedFileEntry[] {
           id,
           name,
           kind,
+          sourcePath,
           sizeBytes,
           openedAt,
         };
@@ -1507,7 +1514,11 @@ export function useSceneCollectionManager() {
     processDeferredDisposalQueue();
   }, [processDeferredDisposalQueue]);
 
-  const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
+  const trackRecentOpenedFiles = useCallback((
+    files: File[],
+    kind: RecentOpenedFileKind,
+    options?: { sourcePaths?: Array<string | null | undefined> },
+  ) => {
     if (files.length === 0) return;
 
     setRecentOpenedFiles((prev) => {
@@ -1519,10 +1530,19 @@ export function useSceneCollectionManager() {
         const name = file.name?.trim();
         if (!name) return;
 
+        const sourcePath = kind === 'scene'
+          ? (typeof options?.sourcePaths?.[index] === 'string' && options.sourcePaths[index]!.trim().length > 0
+              ? options.sourcePaths[index]!.trim()
+              : undefined)
+          : undefined;
+
         const sizeBytes = Number.isFinite(file.size) ? file.size : undefined;
 
         const matches = next.filter(
-          (entry) => entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes,
+          (entry) => entry.kind === kind
+            && entry.name === name
+            && entry.sizeBytes === sizeBytes
+            && (kind !== 'scene' || (entry.sourcePath ?? null) === (sourcePath ?? null)),
         );
 
         const existingId = matches.length > 0 ? matches[matches.length - 1].id : generateRecentEntryId();
@@ -1531,7 +1551,12 @@ export function useSceneCollectionManager() {
         if (matches.length > 0) {
           for (let i = next.length - 1; i >= 0; i -= 1) {
             const entry = next[i];
-            if (entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes) {
+            if (
+              entry.kind === kind
+              && entry.name === name
+              && entry.sizeBytes === sizeBytes
+              && (kind !== 'scene' || (entry.sourcePath ?? null) === (sourcePath ?? null))
+            ) {
               next.splice(i, 1);
             }
           }
@@ -1545,6 +1570,7 @@ export function useSceneCollectionManager() {
           id: existingId,
           name,
           kind,
+          sourcePath,
           sizeBytes,
           openedAt: now + index,
         };
@@ -2867,11 +2893,13 @@ export function useSceneCollectionManager() {
     suppressReport?: boolean;
     suppressRecentTracking?: boolean;
     suppressPlacementPrompt?: boolean;
+    sourcePath?: string | null;
+    sourcePaths?: Array<string | null | undefined>;
   };
 
   const handleImportLysFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
-      trackRecentOpenedFiles([file], 'scene');
+      trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
     if (!options?.suppressProgress) {
@@ -3036,7 +3064,7 @@ export function useSceneCollectionManager() {
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
-      trackRecentOpenedFiles([file], 'scene');
+      trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
     if (!options?.suppressProgress) {
@@ -3291,15 +3319,21 @@ export function useSceneCollectionManager() {
     return false;
   }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
 
-  const importSceneFiles = useCallback(async (filesInput: FileList | File[]): Promise<boolean> => {
+  const importSceneFiles = useCallback(async (
+    filesInput: FileList | File[],
+    options?: SceneImportRunOptions,
+  ): Promise<boolean> => {
     const files = Array.from(filesInput).filter((file) => getSceneExtension(file.name) !== null);
     if (files.length === 0) return false;
 
     if (files.length === 1) {
-      return await importSceneFile(files[0]);
+      return await importSceneFile(files[0], {
+        ...options,
+        sourcePath: options?.sourcePaths?.[0] ?? options?.sourcePath,
+      });
     }
 
-    trackRecentOpenedFiles(files, 'scene');
+    trackRecentOpenedFiles(files, 'scene', { sourcePaths: options?.sourcePaths });
 
     setImportProgress({
       active: true,
@@ -3327,6 +3361,7 @@ export function useSceneCollectionManager() {
         suppressProgress: true,
         suppressReport: true,
         suppressRecentTracking: true,
+        sourcePath: options?.sourcePaths?.[i] ?? null,
       });
 
       if (ok) successCount += 1;
