@@ -619,20 +619,71 @@ export async function writeBytesToNativePath(
   });
 }
 
-export async function appendBytesToNativePath(
+/**
+ * Writes `bytes` to `destinationPath` using the raw-binary `append_mesh_stage_chunk` IPC command,
+ * sending the data in chunks to avoid JSON-encoding the entire buffer over IPC.
+ * Each call sequences through chunks of `chunkSize` bytes (default 4 MB).
+ * The first chunk truncates/creates the file; subsequent chunks append to it.
+ */
+export async function writeChunkedToNativePath(
   destinationPath: string,
   bytes: Uint8Array,
+  chunkSize = 4 * 1024 * 1024,
+): Promise<void> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Chunked file writing is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  let offset = 0;
+  while (offset < bytes.length) {
+    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+    await core.invoke<number>('append_mesh_stage_chunk', chunk, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-mesh-stage-path': destinationPath,
+      },
+    });
+    offset += chunk.length;
+  }
+}
+
+/**
+ * Asks the Rust backend to allocate a unique temporary staging file path.
+ * The returned path lives in the system temp directory.
+ */
+export async function allocateMeshStagePath(): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('allocateMeshStagePath is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+  return core.invoke<string>('allocate_mesh_stage_path');
+}
+
+/**
+ * Exports staged raw geometry to a properly formatted mesh file (STL / 3MF).
+ *
+ * The staging file must contain raw triangle vertex data: 9 × f32 (LE) per
+ * triangle (v0xyz, v1xyz, v2xyz), written via `writeChunkedToNativePath`.
+ *
+ * For 3MF, Rust uses the `zip` crate with DEFLATE compression — XML text
+ * compresses ~10–20× so the output is compact (often smaller than STL).
+ *
+ * @returns The destination path on success.
+ */
+export async function exportMeshFile(
+  stagingPath: string,
+  destPath: string,
+  format: 'stl' | '3mf',
 ): Promise<string> {
   const core = await loadTauriCore();
   if (!core) {
-    throw new Error('Native file writing is only available in DragonFruit Desktop (Tauri runtime).');
+    throw new Error('exportMeshFile is only available in DragonFruit Desktop (Tauri runtime).');
   }
-
-  return core.invoke<string>('append_bytes_to_path', {
-    args: {
-      destinationPath,
-      bytes: Uint8Array.from(bytes),
-    },
+  return core.invoke<string>('export_mesh_file', {
+    stagingPath,
+    destPath,
+    format,
   });
 }
 

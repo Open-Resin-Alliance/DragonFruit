@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, processGeometry, type GeometryWithBounds, type MeshDefects } from '@/hooks/useStlGeometry';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
@@ -1568,6 +1568,7 @@ export function useSceneCollectionManager() {
     }
 
     const newModels: LoadedModel[] = [];
+    const defectiveModels: { name: string; defects: MeshDefects }[] = [];
 
     setImportProgress({
       active: true,
@@ -1667,6 +1668,9 @@ export function useSceneCollectionManager() {
           };
 
           newModels.push(model);
+          if (geom.meshDefects?.hasDefects) {
+            defectiveModels.push({ name: file.name, defects: geom.meshDefects });
+          }
         } catch (err) {
           console.error(`Failed to load ${file.name}`, err);
           URL.revokeObjectURL(url); // Cleanup if failed
@@ -1697,6 +1701,27 @@ export function useSceneCollectionManager() {
           setActiveModelId(newModels[0].id);
           setSelectedModelIds([newModels[0].id]);
         }
+
+        if (defectiveModels.length > 0) {
+          if (defectiveModels.length === 1) {
+            const { name, defects } = defectiveModels[0];
+            const status = defects.repairedByManifold ? 'Auto-Repaired' : 'Defective';
+            emitSceneImportReport(
+              `"${name}" — ${status} — ${defects.repairedFloats.toLocaleString()} errors`,
+              'warning',
+            );
+          } else {
+            const repairedCount = defectiveModels.filter(m => m.defects.repairedByManifold).length;
+            const defectiveCount = defectiveModels.length - repairedCount;
+            const parts: string[] = [];
+            if (repairedCount > 0) parts.push(`${repairedCount} auto-repaired`);
+            if (defectiveCount > 0) parts.push(`${defectiveCount} defective`);
+            emitSceneImportReport(
+              `${defectiveModels.length} files with defective geometry — ${parts.join(', ')}`,
+              'warning',
+            );
+          }
+        }
       }
     } finally {
       setImportProgress({
@@ -1707,7 +1732,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {

@@ -479,6 +479,28 @@ export function ModelStatsCard({
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
             </div>
 
+            {model?.geometry.meshDefects?.hasDefects && (
+              <div
+                className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
+                style={{
+                  background: model.geometry.meshDefects.repairedByManifold
+                    ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
+                    : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
+                  color: model.geometry.meshDefects.repairedByManifold ? '#86efac' : '#fde68a',
+                  border: model.geometry.meshDefects.repairedByManifold
+                    ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
+                    : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
+                }}
+              >
+                <span>{model.geometry.meshDefects.repairedByManifold ? '✓' : '⚠'}</span>
+                <span>
+                  {model.geometry.meshDefects.repairedByManifold
+                    ? `Auto-Repaired — ${model.geometry.meshDefects.repairedFloats} errors`
+                    : `Defective — ${model.geometry.meshDefects.repairedFloats} errors`}
+                </span>
+              </div>
+            )}
+
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
               Click card to return to print settings
             </div>
