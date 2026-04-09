@@ -38,6 +38,8 @@
       {
         "label": "main",
         "create": false,
+        "visible": false,
+        "backgroundColor": "#0B0F14",
         "title": "DragonFruit",
         "width": 1280,
         "height": 800,

@@ -1932,6 +1932,21 @@ async fn focus_main_window_command(app: tauri::AppHandle) -> Result<(), String> 
     Ok(())
 }
 
+/// Reveals the main window without calling set_focus().
+/// Used at startup to avoid triggering the Windows focus-stealing prevention
+/// mechanism, which plays an error sound when SetForegroundWindow is called
+/// from a process that does not currently own the foreground.
+#[tauri::command]
+async fn reveal_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let is_visible = window.is_visible().unwrap_or(true);
+        if !is_visible {
+            let _ = window.show();
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn read_print_file_bytes(source_path: String) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
@@ -2336,6 +2351,7 @@ fn main() {
             get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
+            reveal_main_window_command,
             write_bytes_to_path,
             read_print_file_bytes,
             read_print_layer_png,

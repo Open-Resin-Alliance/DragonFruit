@@ -1326,6 +1326,7 @@ export default function Home() {
   const queuedLaunchSceneEntriesRef = React.useRef<LaunchSceneFileEntry[]>([]);
   const coldStartSceneHandoffTimerRef = React.useRef<number | null>(null);
   const launchSceneImportInFlightRef = React.useRef(false);
+  const desktopWindowRevealRequestedRef = React.useRef(false);
   // Stable ref so the launch effect can always call the latest version of
   // this callback without listing it as a dep (which causes effect re-runs
   // and cancelled-flag races during scene initialization).
@@ -6115,6 +6116,44 @@ export default function Home() {
       || window.location.hostname === 'tauri.localhost'
       || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
   }, []);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    if (desktopWindowRevealRequestedRef.current) return;
+    desktopWindowRevealRequestedRef.current = true;
+
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+
+    const revealWindow = async () => {
+      try {
+        const core = await import('@tauri-apps/api/core');
+        // Use reveal_main_window_command (show only, no set_focus) to avoid
+        // triggering Windows' focus-stealing prevention error sound.
+        await core.invoke('reveal_main_window_command');
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[StartupWindow] Failed to reveal main window after startup.', error);
+        }
+      }
+    };
+
+    // Wait for the React tree to finish its initial paint before revealing.
+    // Two RAF frames (~33ms) is not enough for this app's heavy component tree;
+    // a short setTimeout gives the browser time to commit the first full frame.
+    timerId = setTimeout(() => {
+      if (!cancelled) {
+        void revealWindow();
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        clearTimeout(timerId);
+      }
+    };
+  }, [isDesktopRuntime]);
 
   const buildSyntheticFileChangeEvent = React.useCallback((nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
     const dt = new DataTransfer();
