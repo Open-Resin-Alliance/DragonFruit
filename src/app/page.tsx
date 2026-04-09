@@ -1127,6 +1127,21 @@ export default function Home() {
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!scene.sceneImportPlacementPrompt) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        scene.resolveSceneImportPlacementPrompt('load_as_is');
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
+
   const hasLysSceneFile = React.useCallback((filesInput: FileList | File[]) => {
     const files = Array.from(filesInput);
     return files.some((file) => file.name.trim().toLowerCase().endsWith('.lys'));
@@ -12922,6 +12937,103 @@ export default function Home() {
         onCancel={handleCancelDestructiveTransform}
         onConfirm={handleConfirmDestructiveTransform}
       />
+
+      {scene.sceneImportPlacementPrompt && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              scene.resolveSceneImportPlacementPrompt('load_as_is');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Scene import placement decision"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                    color: 'var(--accent)',
+                  }}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Scene may be off-plate
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    Choose how to place imported models.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close scene import placement prompt"
+                onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Imported scene</div>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={scene.sceneImportPlacementPrompt.fileName}>
+                  {scene.sceneImportPlacementPrompt.fileName}
+                </div>
+                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {scene.sceneImportPlacementPrompt.offPlateModelCount.toLocaleString()} of {scene.sceneImportPlacementPrompt.modelCount.toLocaleString()} model{scene.sceneImportPlacementPrompt.modelCount === 1 ? '' : 's'} appear outside the build plate.
+                </div>
+              </div>
+
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                <strong style={{ color: 'var(--text-strong)' }}>Auto-Arrange</strong> will reposition imported models onto free space on the plate.
+                <span className="mt-1 block">
+                  <strong style={{ color: 'var(--text-strong)' }}>Load As-Is</strong> keeps scene coordinates exactly as stored in the file.
+                </span>
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
+                >
+                  Load As-Is
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
+                >
+                  Auto-Arrange
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showLysImportWarningModal && (
         <div

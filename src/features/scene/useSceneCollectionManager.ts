@@ -676,6 +676,15 @@ type SceneImportReport = {
   tone: SceneImportReportTone;
 };
 
+type SceneImportPlacementChoice = 'auto_arrange' | 'load_as_is';
+
+export type SceneImportPlacementPrompt = {
+  source: 'LYS' | 'VOXL';
+  fileName: string;
+  modelCount: number;
+  offPlateModelCount: number;
+};
+
 type ModelClipboardEntry = {
   sourceId: string;
   name: string;
@@ -728,7 +737,9 @@ export function useSceneCollectionManager() {
     progress: null,
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
+  const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
+  const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
@@ -770,6 +781,43 @@ export function useSceneCollectionManager() {
       window.clearTimeout(sceneImportReportTimeoutRef.current);
       sceneImportReportTimeoutRef.current = null;
     }
+  }, []);
+
+  const resolveSceneImportPlacementPrompt = useCallback((choice: SceneImportPlacementChoice) => {
+    const resolve = sceneImportPlacementResolveRef.current;
+    sceneImportPlacementResolveRef.current = null;
+    setSceneImportPlacementPrompt(null);
+    resolve?.(choice);
+  }, []);
+
+  const requestSceneImportPlacementChoice = useCallback(async (
+    prompt: SceneImportPlacementPrompt,
+  ): Promise<SceneImportPlacementChoice> => {
+    if (typeof window === 'undefined') {
+      return 'auto_arrange';
+    }
+
+    if (sceneImportPlacementResolveRef.current) {
+      // Fail-safe: resolve previous unresolved prompt so imports never deadlock.
+      sceneImportPlacementResolveRef.current('load_as_is');
+      sceneImportPlacementResolveRef.current = null;
+    }
+
+    setSceneImportPlacementPrompt(prompt);
+
+    return await new Promise<SceneImportPlacementChoice>((resolve) => {
+      sceneImportPlacementResolveRef.current = resolve;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (sceneImportPlacementResolveRef.current) {
+        const resolve = sceneImportPlacementResolveRef.current;
+        sceneImportPlacementResolveRef.current = null;
+        resolve('load_as_is');
+      }
+    };
   }, []);
 
   const getDebugPresetDims = useCallback((preset: DebugPrimitiveSizePreset) => {
@@ -1091,6 +1139,25 @@ export function useSceneCollectionManager() {
       depth: Math.max(2, meshRect.maxY - meshRect.minY),
     };
   }, [footprintForTransform]);
+
+  const isModelFootprintInsidePlate = useCallback((
+    model: Pick<LoadedModel, 'geometry' | 'transform'>,
+  ) => {
+    const placement = buildMeshPlacementOffsets(
+      { x: model.transform.position.x, y: model.transform.position.y },
+      model.geometry.size,
+      model.transform,
+    );
+
+    const modelRect: Rect2D = {
+      minX: model.transform.position.x + placement.minXOffset,
+      maxX: model.transform.position.x + placement.maxXOffset,
+      minY: model.transform.position.y + placement.minYOffset,
+      maxY: model.transform.position.y + placement.maxYOffset,
+    };
+
+    return isRectInsidePlate(modelRect);
+  }, [buildMeshPlacementOffsets, isRectInsidePlate]);
 
   const findFreeSpotCentersForModels = useCallback((
     incomingModels: Array<Pick<LoadedModel, 'geometry' | 'transform'>>,
@@ -2799,6 +2866,7 @@ export function useSceneCollectionManager() {
     suppressProgress?: boolean;
     suppressReport?: boolean;
     suppressRecentTracking?: boolean;
+    suppressPlacementPrompt?: boolean;
   };
 
   const handleImportLysFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
@@ -2840,28 +2908,47 @@ export function useSceneCollectionManager() {
           importedTransform.position.z
         );
 
-        const assignedCenter = findFreeSpotCentersForModels([
-          {
-            geometry: processed,
-            transform: {
-              position: originalPosition.clone(),
-              rotation: importedTransform.rotation,
-              scale: importedTransform.scale,
-            },
-          },
-        ], 5)[0];
-
-        const finalPosition = new THREE.Vector3(
-          assignedCenter?.x ?? originalPosition.x,
-          assignedCenter?.y ?? originalPosition.y,
-          originalPosition.z,
-        );
-
         const sourceTransform: ModelTransform = {
           position: originalPosition.clone(),
           rotation: importedTransform.rotation.clone(),
           scale: importedTransform.scale.clone(),
         };
+
+        const sourceCandidate: Pick<LoadedModel, 'geometry' | 'transform'> = {
+          geometry: processed,
+          transform: sourceTransform,
+        };
+
+        let shouldAutoArrangeOnImport = true;
+        const isLikelyOffPlate = !isModelFootprintInsidePlate(sourceCandidate);
+        if (isLikelyOffPlate && !options?.suppressPlacementPrompt) {
+          const choice = await requestSceneImportPlacementChoice({
+            source: 'LYS',
+            fileName: file.name,
+            modelCount: 1,
+            offPlateModelCount: 1,
+          });
+          shouldAutoArrangeOnImport = choice === 'auto_arrange';
+        }
+
+        const assignedCenter = shouldAutoArrangeOnImport
+          ? findFreeSpotCentersForModels([
+              {
+                geometry: processed,
+                transform: {
+                  position: originalPosition.clone(),
+                  rotation: importedTransform.rotation,
+                  scale: importedTransform.scale,
+                },
+              },
+            ], 5)[0]
+          : null;
+
+        const finalPosition = new THREE.Vector3(
+          shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
+          shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
+          originalPosition.z,
+        );
 
         const model: LoadedModel = {
           id: importedModelId || generateId(),
@@ -2945,7 +3032,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, lysImport, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, lysImport, processGeometry, requestSceneImportPlacementChoice, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -3090,13 +3177,29 @@ export function useSceneCollectionManager() {
         sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
       }
 
-      if (importedModels.length > 0) {
-        const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
-        importedModels.forEach((model, index) => {
-          const center = assignedCenters[index];
-          if (!center) return;
-          model.transform.position.set(center.x, center.y, model.transform.position.z);
+      const offPlateImportedModels = importedModels.filter((model) => !isModelFootprintInsidePlate(model));
+      const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
+
+      let shouldAutoArrangeOnImport = true;
+      if (shouldPromptForPlacement) {
+        const choice = await requestSceneImportPlacementChoice({
+          source: 'VOXL',
+          fileName: file.name,
+          modelCount: importedModels.length,
+          offPlateModelCount: offPlateImportedModels.length,
         });
+        shouldAutoArrangeOnImport = choice === 'auto_arrange';
+      }
+
+      if (importedModels.length > 0) {
+        if (shouldAutoArrangeOnImport) {
+          const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
+          importedModels.forEach((model, index) => {
+            const center = assignedCenters[index];
+            if (!center) return;
+            model.transform.position.set(center.x, center.y, model.transform.position.z);
+          });
+        }
 
         setModels((prev) => [...prev, ...importedModels]);
 
@@ -3173,7 +3276,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -3558,6 +3661,8 @@ export function useSceneCollectionManager() {
     importProgress,
     sceneImportReport,
     clearSceneImportReport,
+    sceneImportPlacementPrompt,
+    resolveSceneImportPlacementPrompt,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     view3dSettings,
