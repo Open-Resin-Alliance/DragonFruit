@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
@@ -765,14 +765,10 @@ export class ExportManager {
   ): Promise<string | null> {
     console.log('[ExportManager] Starting export...', options);
 
-    if (options.format === 'voxl') {
-      return this.exportVoxl(sceneContext, options);
-    }
-
-    // For STL/3MF: ask for the save destination FIRST so the user doesn't wait through
+    // Ask for the save destination FIRST so the user doesn't wait through
     // geometry serialization before seeing the dialog.
     const base = this.normalizeExportFilenameBase(options.filename || 'export');
-    const ext = options.format === '3mf' ? '3mf' : 'stl';
+    const ext = options.format === '3mf' ? '3mf' : options.format === 'voxl' ? 'voxl' : 'stl';
     const suggestedName = `${base}.${ext}`;
     let prePickedNativePath: string | null = null;
     let useNativeWrite = true;
@@ -786,6 +782,11 @@ export class ExportManager {
       }
       // Native dialog unavailable (web mode) — fall back to browser <a download>
       useNativeWrite = false;
+    }
+
+    // VOXL path: serialization can be expensive, so destination is pre-picked above.
+    if (options.format === 'voxl') {
+      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite);
     }
 
     // Collect live scene objects for serialization — no cloning, no InstancedMesh expansion.
@@ -993,7 +994,8 @@ export class ExportManager {
       try {
         const stagingPath = await allocateMeshStagePath();
         await this.stageRawGeometry(exportObjects, stagingPath);
-        await exportMeshFile(stagingPath, prePickedNativePath, ext as 'stl' | '3mf');
+        const format = options.format === '3mf' ? '3mf' : 'stl';
+        await exportMeshFile(stagingPath, prePickedNativePath, format);
         return prePickedNativePath;
       } catch (err) {
         console.warn('[ExportManager] Rust export failed, falling back to JS serializer.', err);
@@ -1010,7 +1012,12 @@ export class ExportManager {
     return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', null, false);
   }
 
-  private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<string | null> {
+  private static async exportVoxl(
+    sceneContext: ExportSceneContext | undefined,
+    options: ExportOptions,
+    prePickedNativePath: string | null,
+    useNativeWrite: boolean,
+  ): Promise<string | null> {
     const supportSnapshot = getSnapshot();
     const kickstandSnapshot = getKickstandSnapshot();
     const supports = buildSupportExportFromStores(
@@ -1087,7 +1094,14 @@ export class ExportManager {
       sha256Map,
     );
 
-    return this.downloadFile(binary, options.filename, 'voxl', 'application/vnd.dragonfruit.voxl');
+    return this.downloadFile(
+      binary,
+      options.filename,
+      'voxl',
+      'application/vnd.dragonfruit.voxl',
+      prePickedNativePath,
+      useNativeWrite,
+    );
   }
 
   private static async downloadFile(
