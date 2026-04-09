@@ -27,6 +27,11 @@ type DragonFruitAppHandle = tauri::AppHandle<tauri::Cef>;
 #[cfg(not(feature = "tauri-cef"))]
 type DragonFruitAppHandle = tauri::AppHandle<tauri::Wry>;
 
+#[cfg(feature = "tauri-cef")]
+type DragonFruitWindow = tauri::Window<tauri::Cef>;
+#[cfg(not(feature = "tauri-cef"))]
+type DragonFruitWindow = tauri::Window<tauri::Wry>;
+
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     let stamp = std::time::SystemTime::now()
@@ -431,7 +436,7 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
 /// always emitted immediately.  Intermediate updates are skipped if fewer than
 /// 16 ms have elapsed since the last emit.
 fn make_throttled_progress_cb(
-    win: tauri::Window,
+    win: DragonFruitWindow,
 ) -> dragonfruit_slicing_engine::types::ProgressCallbackV3 {
     use std::sync::Mutex;
     use std::time::Instant;
@@ -794,7 +799,7 @@ async fn export_mesh_file(
 }
 
 #[tauri::command]
-async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<Response, String> {
+async fn slice_solid_native(window: DragonFruitWindow, job_json: String) -> Result<Response, String> {
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
 
@@ -1074,7 +1079,7 @@ async fn stage_mesh_binary_chunk(
 
 #[tauri::command]
 async fn slice_solid_native_to_temp_path(
-    window: tauri::Window,
+    window: DragonFruitWindow,
     job_json: String,
 ) -> Result<NativeSliceTempPathResult, String> {
     // Take the pre-staged mesh bytes (set by stage_mesh_binary)
@@ -1344,7 +1349,7 @@ struct NativeRleLabels {
 
 #[tauri::command]
 async fn run_island_scan_native(
-    window: tauri::Window,
+    window: DragonFruitWindow,
     params_json: String,
 ) -> Result<NativeIslandScanResult, String> {
     // Take staged mesh bytes
