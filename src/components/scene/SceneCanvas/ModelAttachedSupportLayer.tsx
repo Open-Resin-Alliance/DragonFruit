@@ -152,61 +152,62 @@ export function ModelAttachedSupportLayer({
         </>
       )}
 
-      {useUltraLazySupports ? (
-        <SupportProxyMeshLayer
-          mode={mode}
-          clipLower={clipLower}
-          clipUpper={clipUpper}
-          supportColorsByModelId={supportColorsByModelId}
-          activeModelId={activeModelId}
-          selectedModelIds={selectedModelIds}
-          hoverModelId={hoverModelId}
-          hoverTintColor={hoverTintColor}
-          hoverTintStrength={hoverTintStrength}
-          modelFilterId={modelFilterId}
-          excludeModelId={excludeModelId}
-          excludeModelIds={excludeModelIds}
-          modelDropOffsetsById={modelDropOffsetsById}
-          ghostOpacity={ghostOpacity}
-          showOutOfBoundsOverlay={showOutOfBoundsOverlay}
-          outOfBoundsMin={outOfBoundsMin}
-          outOfBoundsMax={outOfBoundsMax}
-          outOfBoundsStripeColor={outOfBoundsStripeColor}
-          onModelPointerSelect={onModelPointerSelect}
-          enablePointerSelection={proxyPointerSelectionEnabled}
-          includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
-        />
-      ) : (
-        <SupportRenderer
-          key={`support-renderer-${supportRenderRefreshNonce}`}
-          ref={supportRendererRef}
-          mode={mode}
-          navigationLodActive={navigationLodActive}
-          hidePlateContactPrimitives={hidePlateContactPrimitives}
-          clipLower={clipLower}
-          clipUpper={clipUpper}
-          supportColorsByModelId={supportColorsByModelId}
-          hoverTintColor={hoverTintColor}
-          hoverTintStrength={hoverTintStrength}
-          selectedTintStrength={selectedTintStrength}
-          activeModelId={activeModelId}
-          selectedModelIds={selectedModelIds}
-          hoverModelId={hoverModelId}
-          modelDropOffsetsById={modelDropOffsetsById}
-          modelFilterId={modelFilterId}
-          excludeModelId={excludeModelId}
-          excludeModelIds={excludeModelIds}
-          disableSelectionAndHover={disableSelectionAndHover}
-          ghostOpacity={ghostOpacity}
-          ghostRenderOrder={ghostRenderOrder}
-          passive={passive}
-          trunkPlacementPreview={trunkPlacementPreview}
-          branchPlacementPreview={branchPlacementPreview}
-          leafPlacementPreview={leafPlacementPreview}
-          bracePlacementPreview={bracePlacementPreview}
-          kickstandPlacementPreview={kickstandPlacementPreview}
-        />
-      )}
+      <group ref={supportRendererRef ?? undefined}>
+        {useUltraLazySupports ? (
+          <SupportProxyMeshLayer
+            mode={mode}
+            clipLower={clipLower}
+            clipUpper={clipUpper}
+            supportColorsByModelId={supportColorsByModelId}
+            activeModelId={activeModelId}
+            selectedModelIds={selectedModelIds}
+            hoverModelId={hoverModelId}
+            hoverTintColor={hoverTintColor}
+            hoverTintStrength={hoverTintStrength}
+            modelFilterId={modelFilterId}
+            excludeModelId={excludeModelId}
+            excludeModelIds={excludeModelIds}
+            modelDropOffsetsById={modelDropOffsetsById}
+            ghostOpacity={ghostOpacity}
+            showOutOfBoundsOverlay={showOutOfBoundsOverlay}
+            outOfBoundsMin={outOfBoundsMin}
+            outOfBoundsMax={outOfBoundsMax}
+            outOfBoundsStripeColor={outOfBoundsStripeColor}
+            onModelPointerSelect={onModelPointerSelect}
+            enablePointerSelection={proxyPointerSelectionEnabled}
+            includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
+          />
+        ) : (
+          <SupportRenderer
+            key={`support-renderer-${supportRenderRefreshNonce}`}
+            mode={mode}
+            navigationLodActive={navigationLodActive}
+            hidePlateContactPrimitives={hidePlateContactPrimitives}
+            clipLower={clipLower}
+            clipUpper={clipUpper}
+            supportColorsByModelId={supportColorsByModelId}
+            hoverTintColor={hoverTintColor}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
+            activeModelId={activeModelId}
+            selectedModelIds={selectedModelIds}
+            hoverModelId={hoverModelId}
+            modelDropOffsetsById={modelDropOffsetsById}
+            modelFilterId={modelFilterId}
+            excludeModelId={excludeModelId}
+            excludeModelIds={excludeModelIds}
+            disableSelectionAndHover={disableSelectionAndHover}
+            ghostOpacity={ghostOpacity}
+            ghostRenderOrder={ghostRenderOrder}
+            passive={passive}
+            trunkPlacementPreview={trunkPlacementPreview}
+            branchPlacementPreview={branchPlacementPreview}
+            leafPlacementPreview={leafPlacementPreview}
+            bracePlacementPreview={bracePlacementPreview}
+            kickstandPlacementPreview={kickstandPlacementPreview}
+          />
+        )}
+      </group>
     </>
   );
 }

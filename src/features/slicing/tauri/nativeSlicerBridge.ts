@@ -648,6 +648,45 @@ export async function writeChunkedToNativePath(
   }
 }
 
+/**
+ * Asks the Rust backend to allocate a unique temporary staging file path.
+ * The returned path lives in the system temp directory.
+ */
+export async function allocateMeshStagePath(): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('allocateMeshStagePath is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+  return core.invoke<string>('allocate_mesh_stage_path');
+}
+
+/**
+ * Exports staged raw geometry to a properly formatted mesh file (STL / 3MF).
+ *
+ * The staging file must contain raw triangle vertex data: 9 × f32 (LE) per
+ * triangle (v0xyz, v1xyz, v2xyz), written via `writeChunkedToNativePath`.
+ *
+ * For 3MF, Rust uses the `zip` crate with DEFLATE compression — XML text
+ * compresses ~10–20× so the output is compact (often smaller than STL).
+ *
+ * @returns The destination path on success.
+ */
+export async function exportMeshFile(
+  stagingPath: string,
+  destPath: string,
+  format: 'stl' | '3mf',
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('exportMeshFile is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+  return core.invoke<string>('export_mesh_file', {
+    stagingPath,
+    destPath,
+    format,
+  });
+}
+
 export async function readPrintArtifactBytesFromPath(sourcePath: string): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {

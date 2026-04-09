@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument } from '@/features/scene/voxl';
-import { pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
@@ -178,6 +178,77 @@ export class ExportManager {
   }
 
   /**
+   * Extracts raw triangle vertex data from the scene and streams it to a Tauri
+   * staging file via IPC.
+   *
+   * Staging format: 9 × Float32 (LE) per triangle — v0xyz v1xyz v2xyz.
+   * This is the most compact representation (36 bytes/tri) and is trivially
+   * readable on the Rust side.
+   *
+   * The staging buffer is pre-allocated at `triCount × 36` bytes.  For ~2M
+   * triangles that's ~72 MB — well within JS heap limits (the old 3MF XML
+   * pre-allocation was 4–6× larger and was the OOM source).
+   */
+  private static async stageRawGeometry(
+    objects: THREE.Object3D[],
+    stagingPath: string,
+  ): Promise<number> {
+    const triCount = this.countExportTriangles(objects);
+    if (triCount === 0) throw new Error('Cannot export: no triangle geometry found.');
+
+    // 9 floats per triangle, 4 bytes each = 36 bytes/tri
+    const buf = new Float32Array(triCount * 9);
+    let off = 0;
+
+    const v = new THREE.Vector3();
+    const tmpMat = new THREE.Matrix4();
+    const comMat = new THREE.Matrix4();
+
+    const processGeo = (geo: THREE.BufferGeometry, mat: THREE.Matrix4) => {
+      const pos = geo.getAttribute('position');
+      if (!pos) return;
+      const idx = geo.getIndex();
+      const emit = (a: number, b: number, c: number) => {
+        v.fromBufferAttribute(pos, a).applyMatrix4(mat);
+        buf[off++] = v.x; buf[off++] = v.y; buf[off++] = v.z;
+        v.fromBufferAttribute(pos, b).applyMatrix4(mat);
+        buf[off++] = v.x; buf[off++] = v.y; buf[off++] = v.z;
+        v.fromBufferAttribute(pos, c).applyMatrix4(mat);
+        buf[off++] = v.x; buf[off++] = v.y; buf[off++] = v.z;
+      };
+      if (idx) {
+        const arr = idx.array;
+        for (let i = 0; i + 2 < arr.length; i += 3) emit(arr[i], arr[i + 1], arr[i + 2]);
+      } else {
+        for (let i = 0; i + 2 < pos.count; i += 3) emit(i, i + 1, i + 2);
+      }
+    };
+
+    for (const obj of objects) {
+      obj.traverse((node) => {
+        if (node instanceof THREE.InstancedMesh) {
+          if (node.count === 0 || this.isMaterialHitbox(node.material)) return;
+          for (let i = 0; i < node.count; i++) {
+            node.getMatrixAt(i, tmpMat);
+            comMat.multiplyMatrices(node.matrixWorld, tmpMat);
+            processGeo(node.geometry, comMat);
+          }
+          return;
+        }
+        if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
+        if (this.isMaterialHitbox(node.material)) return;
+        processGeo(node.geometry, node.matrixWorld);
+      });
+    }
+
+    // Stream the raw f32 data to the staging file (writeChunkedToNativePath handles 4 MB chunking)
+    const bytes = new Uint8Array(buf.buffer, 0, off * 4);
+    await writeChunkedToNativePath(stagingPath, bytes);
+
+    return off / 9; // actual triangle count
+  }
+
+  /**
    * Builds a binary STL buffer directly from live scene objects.
    * Handles both THREE.Mesh and THREE.InstancedMesh natively — no cloning, no expansion.
    * Pre-allocates the exact buffer size in one triangle-count pass, then writes in one fill pass.
@@ -290,96 +361,224 @@ export class ExportManager {
   }
 
   /**
-   * Assembles a minimal STORE-only ZIP (no DEFLATE) from the supplied file list.
-   * Replaces JSZip to avoid pure-JS DEFLATE overhead on large payloads.
+   * Incremental CRC32 update.  Pass the running state (start with 0xffffffff) and
+   * finalize the final call with `(result ^ 0xffffffff) >>> 0`.
    */
-  private static buildStoreZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
-    const enc = new TextEncoder();
-    const nameBytes = files.map((f) => enc.encode(f.name));
-
-    let totalSize = 0;
-    for (let i = 0; i < files.length; i++) {
-      totalSize += 30 + nameBytes[i].length + files[i].data.length; // local header + data
-      totalSize += 46 + nameBytes[i].length; // central directory entry
+  private static updateCrc32(crc: number, data: Uint8Array): number {
+    const t = ExportManager.CRC32_TABLE;
+    for (let i = 0; i < data.length; i++) {
+      crc = (t[(crc ^ data[i]) & 0xff] ^ (crc >>> 8)) >>> 0;
     }
-    totalSize += 22; // end of central directory
+    return crc;
+  }
 
-    const out = new Uint8Array(totalSize);
-    const view = new DataView(out.buffer);
-    let pos = 0;
-    const w16 = (v: number) => { view.setUint16(pos, v, true); pos += 2; };
-    const w32 = (v: number) => { view.setUint32(pos, v >>> 0, true); pos += 4; };
-    const wb  = (b: Uint8Array) => { out.set(b, pos); pos += b.length; };
+  // ---------------------------------------------------------------------------
+  // ZIP structural helpers (STORE, with optional data-descriptor for streaming)
+  // ---------------------------------------------------------------------------
 
-    const offsets: number[] = [];
-    const crcs: number[] = [];
+  private static buildLocalFileHeader(name: Uint8Array, crc: number, size: number, dataDescriptor: boolean): Uint8Array {
+    const out = new Uint8Array(30 + name.length);
+    const v = new DataView(out.buffer);
+    let p = 0;
+    const w32 = (n: number) => { v.setUint32(p, n >>> 0, true); p += 4; };
+    const w16 = (n: number) => { v.setUint16(p, n,        true); p += 2; };
+    w32(0x04034b50); w16(20); w16(dataDescriptor ? 0x0008 : 0); w16(0); // sig, version, flags, method=STORE
+    w16(0); w16(0);                                                       // mod time, mod date
+    w32(dataDescriptor ? 0 : crc); w32(dataDescriptor ? 0 : size); w32(dataDescriptor ? 0 : size);
+    w16(name.length); w16(0);
+    out.set(name, p);
+    return out;
+  }
 
-    // Local file headers + data
-    for (let i = 0; i < files.length; i++) {
-      offsets.push(pos);
-      const { data } = files[i];
-      const crc = this.crc32(data);
-      crcs.push(crc);
-      w32(0x04034b50); w16(20); w16(0); w16(0);   // sig, version, flags, method=STORE
-      w16(0); w16(0);                               // mod time, mod date
-      w32(crc); w32(data.length); w32(data.length); // crc, compressed, uncompressed
-      w16(nameBytes[i].length); w16(0);             // name len, extra len
-      wb(nameBytes[i]); wb(data);
-    }
+  /** 16-byte data descriptor written after streamed file data (ZIP flag bit 3). */
+  private static buildDataDescriptor(crc: number, size: number): Uint8Array {
+    const out = new Uint8Array(16);
+    const v = new DataView(out.buffer);
+    v.setUint32(0,  0x08074b50, true); // signature
+    v.setUint32(4,  crc  >>> 0, true);
+    v.setUint32(8,  size >>> 0, true); // compressed size (STORE: same as uncompressed)
+    v.setUint32(12, size >>> 0, true); // uncompressed size
+    return out;
+  }
 
-    const cdOffset = pos;
-    let cdSize = 0;
+  private static buildCentralDirEntry(name: Uint8Array, crc: number, size: number, localOffset: number, dataDescriptor: boolean): Uint8Array {
+    const out = new Uint8Array(46 + name.length);
+    const v = new DataView(out.buffer);
+    let p = 0;
+    const w32 = (n: number) => { v.setUint32(p, n >>> 0, true); p += 4; };
+    const w16 = (n: number) => { v.setUint16(p, n,        true); p += 2; };
+    w32(0x02014b50); w16(20); w16(20); w16(dataDescriptor ? 0x0008 : 0); w16(0); // sig, made-by, needed, flags, method=STORE
+    w16(0); w16(0);                                                                // mod time, mod date
+    w32(crc); w32(size); w32(size);                                                // crc, compressed, uncompressed
+    w16(name.length); w16(0); w16(0); w16(0); w16(0); w32(0); w32(localOffset);   // name, extra, comment, disk, int-attr, ext-attr, offset
+    out.set(name, p);
+    return out;
+  }
 
-    // Central directory
-    for (let i = 0; i < files.length; i++) {
-      const start = pos;
-      const { data } = files[i];
-      w32(0x02014b50); w16(20); w16(20); w16(0); w16(0); // sig, made by, needed, flags, method
-      w16(0); w16(0);                                      // mod time, mod date
-      w32(crcs[i]); w32(data.length); w32(data.length);   // crc, compressed, uncompressed
-      w16(nameBytes[i].length); w16(0); w16(0);           // name len, extra, comment
-      w16(0); w16(0); w32(0); w32(offsets[i]);            // disk, int attr, ext attr, offset
-      wb(nameBytes[i]);
-      cdSize += pos - start;
-    }
-
-    // End of central directory
-    w32(0x06054b50); w16(0); w16(0);
-    w16(files.length); w16(files.length);
-    w32(cdSize); w32(cdOffset); w16(0);
-
+  private static buildEocd(numFiles: number, cdSize: number, cdOffset: number): Uint8Array {
+    const out = new Uint8Array(22);
+    const v = new DataView(out.buffer);
+    v.setUint32(0,  0x06054b50, true);
+    v.setUint16(4,  0,        true); v.setUint16(6, 0,        true); // disk numbers
+    v.setUint16(8,  numFiles, true); v.setUint16(10, numFiles, true);
+    v.setUint32(12, cdSize   >>> 0, true);
+    v.setUint32(16, cdOffset >>> 0, true);
+    v.setUint16(20, 0, true); // comment length
     return out;
   }
 
   /**
-   * Builds the 3MF model XML directly into a pre-allocated Uint8Array.
+   * Builds a ZIP as a Blob from pre-computed XML chunks (browser path).
+   * The Blob constructor accepts an array of BlobPart — it never needs a single
+   * contiguous ArrayBuffer, so it can handle arbitrarily large model XML.
    *
-   * Why: XML text forces string representation for every coordinate.
-   * The old approach created 3–4 million small JS strings (via toFixed + template
-   * literals), pushed them into an array, then called join() — causing massive GC
-   * pressure and a multi-second stall for scenes with 500K+ triangles.
-   *
-   * This version:
-   *  - Pre-allocates one Uint8Array large enough to hold all output bytes.
-   *  - Writes float digits directly with integer math (writeF4) — no string allocation
-   *    for the common coordinate range (|v| < 10 000 mm).
-   *  - Writes integer indices directly (writeUint) — allocation-free up to 10^8.
-   *  - Exploits the sequential vertex layout: triangle i always references
-   *    vertices 3i / 3i+1 / 3i+2, so the \u003ctriangle\u003e section requires no
-   *    second geometry traversal.
+   * Small metadata files (Content_Types, rels) are stored with CRC in the local
+   * header.  The large 3dmodel.model file uses ZIP flag bit 3 (data descriptor
+   * follows) so its local header can be written without knowing the CRC / size
+   * up front; the data descriptor and central directory carry the correct values.
    */
-  private static async buildMinimal3mfXmlBytes(objects: THREE.Object3D[]): Promise<Uint8Array> {
-    const triCount = this.countExportTriangles(objects);
-    if (triCount === 0) throw new Error('Cannot export 3MF: no triangle geometry found.');
+  private static buildBlobZip(
+    ctName: Uint8Array, ctData: Uint8Array,
+    relsName: Uint8Array, relsData: Uint8Array,
+    modelName: Uint8Array,
+    xmlChunks: Uint8Array[], xmlCrc32: number, xmlTotalBytes: number,
+  ): Blob {
+    const ctCrc   = this.crc32(ctData);
+    const relsCrc = this.crc32(relsData);
+    const ctHeader    = this.buildLocalFileHeader(ctName,    ctCrc,   ctData.length,   false);
+    const relsHeader  = this.buildLocalFileHeader(relsName,  relsCrc, relsData.length, false);
+    const modelHeader = this.buildLocalFileHeader(modelName, 0, 0, true); // data descriptor flag
 
-    // Worst case per vertex: <vertex x="-12345.6789" y="-12345.6789" z="-12345.6789"/> = 59 bytes
-    // Worst case per triangle: <triangle v1="12345678" v2="12345679" v3="12345680"/> = 52 bytes
-    const buf = new Uint8Array(512 + triCount * (3 * 59 + 52));
+    const ctOffset    = 0;
+    const relsOffset  = ctHeader.length + ctData.length;
+    const modelOffset = relsOffset + relsHeader.length + relsData.length;
+    const cdOffset    = modelOffset + modelHeader.length + xmlTotalBytes + 16; // 16 = data descriptor
+
+    const dataDesc = this.buildDataDescriptor(xmlCrc32, xmlTotalBytes);
+    const cdCt     = this.buildCentralDirEntry(ctName,    ctCrc,    ctData.length,   ctOffset,    false);
+    const cdRels   = this.buildCentralDirEntry(relsName,  relsCrc,  relsData.length, relsOffset,  false);
+    const cdModel  = this.buildCentralDirEntry(modelName, xmlCrc32, xmlTotalBytes,   modelOffset, true);
+    const cdSize   = cdCt.length + cdRels.length + cdModel.length;
+    const eocd     = this.buildEocd(3, cdSize, cdOffset);
+
+    return new Blob(
+      // Cast required: strict DOM lib expects Uint8Array<ArrayBuffer> for BlobPart,
+      // but all Uint8Array constructors here return Uint8Array<ArrayBufferLike>.
+      // At runtime every Uint8Array is accepted by the Blob constructor.
+      [ctHeader, ctData, relsHeader, relsData, modelHeader, ...xmlChunks, dataDesc, cdCt, cdRels, cdModel, eocd] as unknown as BlobPart[],
+      { type: 'model/3mf' },
+    );
+  }
+
+  /**
+   * Streams a 3MF ZIP directly to the native file system using append_mesh_stage_chunk.
+   *
+   * Three sequential writes to the same path:
+   *   1. Preamble  — local headers for the two small metadata files + their data +
+   *                  the model local header (flag bit 3, CRC/sizes = 0).
+   *   2. XML chunks — streamed one 4 MB chunk at a time, never all in memory at once.
+   *   3. Postamble — data descriptor + central directory + end-of-central-directory.
+   *
+   * append_mesh_stage_chunk truncates the file on the first call to a given path and
+   * appends on all subsequent calls, so the three sequential writeChunkedToNativePath
+   * calls are always correct.
+   */
+  private static async streamZipToNativePath(
+    nativePath: string,
+    ctName: Uint8Array, ctData: Uint8Array,
+    relsName: Uint8Array, relsData: Uint8Array,
+    modelName: Uint8Array,
+    xmlChunks: Uint8Array[], xmlCrc32: number, xmlTotalBytes: number,
+  ): Promise<void> {
+    const ctCrc   = this.crc32(ctData);
+    const relsCrc = this.crc32(relsData);
+    const ctHeader    = this.buildLocalFileHeader(ctName,    ctCrc,   ctData.length,   false);
+    const relsHeader  = this.buildLocalFileHeader(relsName,  relsCrc, relsData.length, false);
+    const modelHeader = this.buildLocalFileHeader(modelName, 0, 0, true);
+
+    const ctOffset    = 0;
+    const relsOffset  = ctHeader.length + ctData.length;
+    const modelOffset = relsOffset + relsHeader.length + relsData.length;
+
+    // ── 1. Preamble (truncates the output file) ──
+    const preambleSize = ctHeader.length + ctData.length + relsHeader.length + relsData.length + modelHeader.length;
+    const preamble = new Uint8Array(preambleSize);
+    let p = 0;
+    preamble.set(ctHeader,    p); p += ctHeader.length;
+    preamble.set(ctData,      p); p += ctData.length;
+    preamble.set(relsHeader,  p); p += relsHeader.length;
+    preamble.set(relsData,    p); p += relsData.length;
+    preamble.set(modelHeader, p);
+    await writeChunkedToNativePath(nativePath, preamble);
+
+    // ── 2. XML chunks (appended sequentially) ──
+    for (const chunk of xmlChunks) {
+      await writeChunkedToNativePath(nativePath, chunk);
+    }
+
+    // ── 3. Postamble: data descriptor + central dir + EOCD ──
+    const cdOffset = modelOffset + modelHeader.length + xmlTotalBytes + 16;
+    const dataDesc = this.buildDataDescriptor(xmlCrc32, xmlTotalBytes);
+    const cdCt     = this.buildCentralDirEntry(ctName,    ctCrc,    ctData.length,   ctOffset,    false);
+    const cdRels   = this.buildCentralDirEntry(relsName,  relsCrc,  relsData.length, relsOffset,  false);
+    const cdModel  = this.buildCentralDirEntry(modelName, xmlCrc32, xmlTotalBytes,   modelOffset, true);
+    const cdSize   = cdCt.length + cdRels.length + cdModel.length;
+    const eocd     = this.buildEocd(3, cdSize, cdOffset);
+
+    const postambleSize = dataDesc.length + cdCt.length + cdRels.length + cdModel.length + eocd.length;
+    const postamble = new Uint8Array(postambleSize);
+    p = 0;
+    postamble.set(dataDesc, p); p += dataDesc.length;
+    postamble.set(cdCt,     p); p += cdCt.length;
+    postamble.set(cdRels,   p); p += cdRels.length;
+    postamble.set(cdModel,  p); p += cdModel.length;
+    postamble.set(eocd,     p);
+    await writeChunkedToNativePath(nativePath, postamble);
+  }
+
+  /**
+   * Builds the 3MF model XML in fixed-size chunks (4 MB each) to avoid a single
+   * large pre-allocation.
+   *
+   * Why chunked:  for a full print-plate (~2 M+ triangles) the old approach
+   * pre-allocated `triCount × (3×59 + 52)` bytes in one shot — up to 450 MB — which
+   * reliably throws `RangeError: Array buffer allocation failed` on constrained
+   * heap environments.
+   *
+   * Callers either stream the returned chunks directly to a native file
+   * (Tauri / streamZipToNativePath) or fold them into a Blob (browser /
+   * buildBlobZip).  Neither path ever requires a single contiguous buffer for
+   * the full model XML.
+   */
+  private static async buildMinimal3mfXmlChunks(
+    objects: THREE.Object3D[],
+  ): Promise<{ chunks: Uint8Array[]; totalBytes: number }> {
+    const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB per working buffer
+    const chunks: Uint8Array[] = [];
+    let cur = new Uint8Array(CHUNK_SIZE);
     let off = 0;
+    let totalBytes = 0;
 
-    /** Write a short ASCII constant string (tag prefix / suffix). */
+    /** Push the current buffer to the output list and start a new one. */
+    const flush = () => {
+      if (off === 0) return;
+      // .slice() returns Uint8Array<ArrayBuffer> (vs a view over ArrayBufferLike),
+      // which is required for the Blob constructor and allows the 4 MB source buffer
+      // to be freed once cur is reassigned.
+      chunks.push(cur.slice(0, off));
+      totalBytes += off;
+      cur = new Uint8Array(CHUNK_SIZE);
+      off = 0;
+    };
+
+    /**
+     * Ensure at least `n` bytes remain in the current buffer.
+     * Because CHUNK_SIZE (4 MB) >> max unit (~180 bytes), one flush is always sufficient.
+     */
+    const ensure = (n: number) => { if (off + n > cur.length) flush(); };
+
     const ws = (s: string) => {
-      for (let i = 0; i < s.length; i++) buf[off++] = s.charCodeAt(i);
+      for (let i = 0; i < s.length; i++) cur[off++] = s.charCodeAt(i);
     };
 
     /**
@@ -388,49 +587,49 @@ export class ExportManager {
      */
     const wf4 = (v: number) => {
       if (!isFinite(v)) v = 0;
-      if (v < 0) { buf[off++] = 45; v = -v; } // '-'
+      if (v < 0) { cur[off++] = 45; v = -v; } // '-'
       let iv = Math.round(v * 10000);
       if (iv < 0) iv = 0;
       const frac = iv % 10000;
       const whole = ((iv - frac) / 10000) | 0;
-      if      (whole === 0)  { buf[off++] = 48; }
-      else if (whole < 10)   { buf[off++] = 48 + whole; }
+      if      (whole === 0)  { cur[off++] = 48; }
+      else if (whole < 10)   { cur[off++] = 48 + whole; }
       else if (whole < 100)  {
-        buf[off++] = 48 + ((whole / 10) | 0);
-        buf[off++] = 48 + (whole % 10);
+        cur[off++] = 48 + ((whole / 10) | 0);
+        cur[off++] = 48 + (whole % 10);
       } else if (whole < 1000) {
-        buf[off++] = 48 + ((whole / 100) | 0);
-        buf[off++] = 48 + (((whole / 10) | 0) % 10);
-        buf[off++] = 48 + (whole % 10);
+        cur[off++] = 48 + ((whole / 100) | 0);
+        cur[off++] = 48 + (((whole / 10) | 0) % 10);
+        cur[off++] = 48 + (whole % 10);
       } else if (whole < 10000) {
-        buf[off++] = 48 + ((whole / 1000) | 0);
-        buf[off++] = 48 + (((whole / 100) | 0) % 10);
-        buf[off++] = 48 + (((whole / 10) | 0) % 10);
-        buf[off++] = 48 + (whole % 10);
+        cur[off++] = 48 + ((whole / 1000) | 0);
+        cur[off++] = 48 + (((whole / 100) | 0) % 10);
+        cur[off++] = 48 + (((whole / 10) | 0) % 10);
+        cur[off++] = 48 + (whole % 10);
       } else {
-        // Coordinates > 9999mm — rare; toString allocation is acceptable here
-        const s = whole.toString();
-        for (let i = 0; i < s.length; i++) buf[off++] = s.charCodeAt(i);
+        const s2 = whole.toString();
+        for (let i = 0; i < s2.length; i++) cur[off++] = s2.charCodeAt(i);
       }
-      buf[off++] = 46; // '.'
-      buf[off++] = 48 + ((frac / 1000) | 0);
-      buf[off++] = 48 + (((frac / 100) | 0) % 10);
-      buf[off++] = 48 + (((frac / 10) | 0) % 10);
-      buf[off++] = 48 + (frac % 10);
+      cur[off++] = 46; // '.'
+      cur[off++] = 48 + ((frac / 1000) | 0);
+      cur[off++] = 48 + (((frac / 100) | 0) % 10);
+      cur[off++] = 48 + (((frac / 10) | 0) % 10);
+      cur[off++] = 48 + (frac % 10);
     };
 
     /** Write unsigned integer without allocation up to 10^8. */
     const wu = (v: number) => {
-      if (v < 10)       { buf[off++] = 48 + v; return; }
-      if (v < 100)      { buf[off++] = 48 + ((v / 10) | 0);       buf[off++] = 48 + (v % 10); return; }
-      if (v < 1000)     { buf[off++] = 48 + ((v / 100) | 0);      buf[off++] = 48 + (((v / 10) | 0) % 10);       buf[off++] = 48 + (v % 10); return; }
-      if (v < 10000)    { buf[off++] = 48 + ((v / 1000) | 0);     buf[off++] = 48 + (((v / 100) | 0) % 10);      buf[off++] = 48 + (((v / 10) | 0) % 10);      buf[off++] = 48 + (v % 10); return; }
-      if (v < 100000)   { buf[off++] = 48 + ((v / 10000) | 0);    buf[off++] = 48 + (((v / 1000) | 0) % 10);     buf[off++] = 48 + (((v / 100) | 0) % 10);     buf[off++] = 48 + (((v / 10) | 0) % 10);       buf[off++] = 48 + (v % 10); return; }
-      if (v < 1000000)  { buf[off++] = 48 + ((v / 100000) | 0);   buf[off++] = 48 + (((v / 10000) | 0) % 10);   buf[off++] = 48 + (((v / 1000) | 0) % 10);    buf[off++] = 48 + (((v / 100) | 0) % 10);      buf[off++] = 48 + (((v / 10) | 0) % 10);     buf[off++] = 48 + (v % 10); return; }
-      if (v < 10000000) { buf[off++] = 48 + ((v / 1000000) | 0);  buf[off++] = 48 + (((v / 100000) | 0) % 10);  buf[off++] = 48 + (((v / 10000) | 0) % 10);   buf[off++] = 48 + (((v / 1000) | 0) % 10);     buf[off++] = 48 + (((v / 100) | 0) % 10);    buf[off++] = 48 + (((v / 10) | 0) % 10);  buf[off++] = 48 + (v % 10); return; }
-      const s = v.toString(); for (let i = 0; i < s.length; i++) buf[off++] = s.charCodeAt(i);
+      if (v < 10)       { cur[off++] = 48 + v; return; }
+      if (v < 100)      { cur[off++] = 48 + ((v / 10) | 0);       cur[off++] = 48 + (v % 10); return; }
+      if (v < 1000)     { cur[off++] = 48 + ((v / 100) | 0);      cur[off++] = 48 + (((v / 10) | 0) % 10);      cur[off++] = 48 + (v % 10); return; }
+      if (v < 10000)    { cur[off++] = 48 + ((v / 1000) | 0);     cur[off++] = 48 + (((v / 100) | 0) % 10);     cur[off++] = 48 + (((v / 10) | 0) % 10);      cur[off++] = 48 + (v % 10); return; }
+      if (v < 100000)   { cur[off++] = 48 + ((v / 10000) | 0);    cur[off++] = 48 + (((v / 1000) | 0) % 10);    cur[off++] = 48 + (((v / 100) | 0) % 10);     cur[off++] = 48 + (((v / 10) | 0) % 10);      cur[off++] = 48 + (v % 10); return; }
+      if (v < 1000000)  { cur[off++] = 48 + ((v / 100000) | 0);   cur[off++] = 48 + (((v / 10000) | 0) % 10);   cur[off++] = 48 + (((v / 1000) | 0) % 10);    cur[off++] = 48 + (((v / 100) | 0) % 10);     cur[off++] = 48 + (((v / 10) | 0) % 10);    cur[off++] = 48 + (v % 10); return; }
+      if (v < 10000000) { cur[off++] = 48 + ((v / 1000000) | 0);  cur[off++] = 48 + (((v / 100000) | 0) % 10);  cur[off++] = 48 + (((v / 10000) | 0) % 10);   cur[off++] = 48 + (((v / 1000) | 0) % 10);    cur[off++] = 48 + (((v / 100) | 0) % 10);   cur[off++] = 48 + (((v / 10) | 0) % 10); cur[off++] = 48 + (v % 10); return; }
+      const s2 = v.toString(); for (let i = 0; i < s2.length; i++) cur[off++] = s2.charCodeAt(i);
     };
 
+    ensure(256);
     ws('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"><mesh><vertices>');
 
     let writtenTris = 0;
@@ -443,6 +642,7 @@ export class ExportManager {
       if (!pos) return;
       const idx = geo.getIndex();
       const emit = (a: number, b: number, c: number) => {
+        ensure(180); // 3 vertex tags, ~60 bytes each
         ws('<vertex x="');  wv.fromBufferAttribute(pos, a).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
         ws('<vertex x="');  wv.fromBufferAttribute(pos, b).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
         ws('<vertex x="');  wv.fromBufferAttribute(pos, c).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
@@ -473,37 +673,89 @@ export class ExportManager {
       });
     }
 
+    if (writtenTris === 0) throw new Error('Cannot export 3MF: no triangle geometry found.');
+
+    ensure(16);
     ws('</vertices>');
 
     // Yield to unblock the render loop between the two heavyweight passes.
     await new Promise<void>(r => setTimeout(r, 0));
 
+    ensure(16);
     ws('<triangles>');
     // Triangles are always sequential: vertex indices for triangle i are 3i, 3i+1, 3i+2.
-    // No second geometry traversal needed.
     for (let i = 0; i < writtenTris; i++) {
       const b = i * 3;
+      ensure(55); // one triangle tag ~53 bytes worst case
       ws('<triangle v1="'); wu(b); ws('" v2="'); wu(b + 1); ws('" v3="'); wu(b + 2); ws('"/>');
     }
+
+    ensure(128);
     ws('</triangles></mesh></object></resources><build><item objectid="1"/></build></model>');
 
-    return buf.subarray(0, off);
+    flush();
+    return { chunks, totalBytes };
   }
 
-  private static async export3mf(objects: THREE.Object3D[]): Promise<Uint8Array> {
+  /**
+   * Exports the scene as a 3MF file.
+   *
+   * For the Tauri native path: the ZIP is streamed directly to disk chunk by chunk —
+   * the full model XML is never resident in memory all at once.
+   * For the browser path: the ZIP is assembled as a Blob (array of BlobPart),
+   * which also avoids a single contiguous ArrayBuffer allocation.
+   *
+   * Returns the saved path (native) or the resolved filename (browser), or null on
+   * unexpected failure.
+   */
+  private static async export3mf(
+    objects: THREE.Object3D[],
+    filename: string,
+    prePickedNativePath: string | null,
+    useNativeWrite: boolean,
+  ): Promise<string | null> {
     const enc = new TextEncoder();
-    const modelXmlBytes = await this.buildMinimal3mfXmlBytes(objects);
-    return this.buildStoreZip([
-      {
-        name: '[Content_Types].xml',
-        data: enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>'),
-      },
-      {
-        name: '_rels/.rels',
-        data: enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
-      },
-      { name: '3D/3dmodel.model', data: modelXmlBytes },
-    ]);
+    const ctName    = enc.encode('[Content_Types].xml');
+    const relsName  = enc.encode('_rels/.rels');
+    const modelName = enc.encode('3D/3dmodel.model');
+    const ctData    = enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>');
+    const relsData  = enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>');
+
+    const { chunks: xmlChunks, totalBytes: xmlTotalBytes } = await this.buildMinimal3mfXmlChunks(objects);
+
+    // Compute CRC32 of the model XML incrementally — no extra buffer needed.
+    let xmlCrcState = 0xffffffff;
+    for (const chunk of xmlChunks) xmlCrcState = this.updateCrc32(xmlCrcState, chunk);
+    const xmlCrc32 = (xmlCrcState ^ 0xffffffff) >>> 0;
+
+    if (prePickedNativePath && useNativeWrite) {
+      await this.streamZipToNativePath(
+        prePickedNativePath,
+        ctName, ctData, relsName, relsData, modelName,
+        xmlChunks, xmlCrc32, xmlTotalBytes,
+      );
+      return prePickedNativePath;
+    }
+
+    // Browser fallback: Blob-based ZIP.
+    const zipBlob = this.buildBlobZip(
+      ctName, ctData, relsName, relsData, modelName,
+      xmlChunks, xmlCrc32, xmlTotalBytes,
+    );
+    const normalizedBase = this.normalizeExportFilenameBase(filename);
+    const resolvedFilename = `${normalizedBase}.3mf`;
+    const url = URL.createObjectURL(zipBlob);
+    try {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = resolvedFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    return resolvedFilename;
   }
   public static async exportScene(
     modelObject: THREE.Object3D | null,
@@ -553,191 +805,209 @@ export class ExportManager {
       exportObjects.push(supportsGroup);
     }
 
-    // 4. Add Raft (if requested and enabled)
+    // 4. Add Raft (if requested and enabled) — per-model so each model gets its own raft
     if (options.includeRaft) {
       const raftSettings = getRaftSettings();
       if (raftSettings.bottomMode !== 'off') {
-        // We need to get the support state for raft generation
         const supportState = getSnapshot();
-        const roots = Object.values(supportState.roots);
-        if (roots.length > 0) {
-           const circles: SupportBaseCircle[] = roots.map(r => ({
-             x: r.transform.pos.x,
-             y: r.transform.pos.y,
-             r: r.diameter / 2
-           }));
+        const allRoots = Object.values(supportState.roots);
 
-           const chamferInset = Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
-           const profile = computeFootprint(circles, { marginMm: 0.2 + (raftSettings.bottomMode === 'line' ? chamferInset : 0), samplesPerCircle: 24 });
-           
-           if (profile && profile.length >= 3) {
-             const raftGroup = new THREE.Group();
-             raftGroup.name = 'Raft';
+        // Group roots by modelId so each model gets a separate raft
+        const rootsByModel = new Map<string, typeof allRoots>();
+        for (const root of allRoots) {
+          const mid = root.modelId ?? '__orphan__';
+          let arr = rootsByModel.get(mid);
+          if (!arr) { arr = []; rootsByModel.set(mid, arr); }
+          arr.push(root);
+        }
 
-             if (raftSettings.bottomMode === 'solid') {
-               // Base
-               const baseMesh = generateChamferedBase(profile, {
-                 thickness: raftSettings.thickness,
-                 chamferAngle: raftSettings.chamferAngle
-               });
-               raftGroup.add(baseMesh);
-             }
+        const chamferInset = Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
 
-             if (raftSettings.bottomMode === 'line') {
-               const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
-               const hasBorderRing = !!profile && profile.length >= 3;
+        for (const [, roots] of rootsByModel) {
+          if (roots.length === 0) continue;
 
-               // Compute hull for filtering (border ring replaces hull-edge beams)
-               const hull = convexHull2d(nodes2d);
-               const hullIndices: number[] = hull.map((hp) => {
-                 let best = 0;
-                 let bestD2 = Infinity;
-                 for (let i = 0; i < nodes2d.length; i++) {
-                   const p = nodes2d[i];
-                   const dx = p.x - hp.x;
-                   const dy = p.y - hp.y;
-                   const d2 = dx * dx + dy * dy;
-                   if (d2 < bestD2) {
-                     bestD2 = d2;
-                     best = i;
-                   }
-                 }
-                 return best;
-               });
+          const circles: SupportBaseCircle[] = roots.map(r => ({
+            x: r.transform.pos.x,
+            y: r.transform.pos.y,
+            r: r.diameter / 2
+          }));
 
-               const hullEdges: Array<[number, number]> = [];
-               if (hullIndices.length >= 2) {
-                 for (let i = 0; i < hullIndices.length; i++) {
-                   const a = hullIndices[i];
-                   const b = hullIndices[(i + 1) % hullIndices.length];
-                   if (a !== b) hullEdges.push([a, b]);
-                 }
-               }
+          const profile = computeFootprint(circles, { marginMm: 0.2 + (raftSettings.bottomMode === 'line' ? chamferInset : 0), samplesPerCircle: 24 });
 
-               const hullEdgeSet = new Set<EdgeKey>();
-               for (const [a, b] of hullEdges) hullEdgeSet.add(edgeKey(a, b));
+          if (!profile || profile.length < 3) continue;
 
-               const tris = delaunayTriangulate2d(nodes2d);
+          const raftGroup = new THREE.Group();
+          raftGroup.name = 'Raft';
 
-               const nn = new Array(nodes2d.length).fill(Infinity);
-               for (let i = 0; i < nodes2d.length; i++) {
-                 for (let j = 0; j < nodes2d.length; j++) {
-                   if (i === j) continue;
-                   nn[i] = Math.min(nn[i], edgeLen(nodes2d[i], nodes2d[j]));
-                 }
-                 if (!Number.isFinite(nn[i])) nn[i] = 0;
-               }
+          if (raftSettings.bottomMode === 'solid') {
+            const baseMesh = generateChamferedBase(profile, {
+              thickness: raftSettings.thickness,
+              chamferAngle: raftSettings.chamferAngle
+            });
+            raftGroup.add(baseMesh);
+          }
 
-               const keepFactor = 3.2;
-               const absMaxLen = 120;
-               const edges = new Set<EdgeKey>();
-               const edgePairs: Array<[number, number]> = [];
+          if (raftSettings.bottomMode === 'line') {
+            const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
+            const hasBorderRing = !!profile && profile.length >= 3;
 
-               // Fallback only: if no border ring, add hull edges.
-               if (!hasBorderRing) {
-                 for (const [a, b] of hullEdges) {
-                   const key = edgeKey(a, b);
-                   if (!edges.has(key)) {
-                     edges.add(key);
-                     edgePairs.push([a, b]);
-                   }
-                 }
-               }
+            const hull = convexHull2d(nodes2d);
+            const hullIndices: number[] = hull.map((hp) => {
+              let best = 0;
+              let bestD2 = Infinity;
+              for (let i = 0; i < nodes2d.length; i++) {
+                const p = nodes2d[i];
+                const dx = p.x - hp.x;
+                const dy = p.y - hp.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) {
+                  bestD2 = d2;
+                  best = i;
+                }
+              }
+              return best;
+            });
 
-               // Add pruned Delaunay edges
-               for (const [i, j, k] of tris) {
-                 const triEdges: Array<[number, number]> = [
-                   [i, j],
-                   [j, k],
-                   [k, i],
-                 ];
-                 for (const [a, b] of triEdges) {
-                   const key = edgeKey(a, b);
-                   if (edges.has(key)) continue;
-                   if (hasBorderRing && hullEdgeSet.has(key)) continue;
-                   const len = edgeLen(nodes2d[a], nodes2d[b]);
-                   const localMax = keepFactor * Math.min(nn[a], nn[b]);
-                   if (len > absMaxLen) continue;
-                   if (nn[a] > 0 && nn[b] > 0 && len > localMax) continue;
-                   edges.add(key);
-                   edgePairs.push([a, b]);
-                 }
-               }
+            const hullEdges: Array<[number, number]> = [];
+            if (hullIndices.length >= 2) {
+              for (let i = 0; i < hullIndices.length; i++) {
+                const a = hullIndices[i];
+                const b = hullIndices[(i + 1) % hullIndices.length];
+                if (a !== b) hullEdges.push([a, b]);
+              }
+            }
 
-               const beamHeight = Math.max(0.01, raftSettings.lineHeightMm);
+            const hullEdgeSet = new Set<EdgeKey>();
+            for (const [a, b] of hullEdges) hullEdgeSet.add(edgeKey(a, b));
 
-               // Interior network: unioned flat mesh (no chamfer) for clean topology.
-               const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]);
-               const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
-                 widthMm: raftSettings.lineWidthMm,
-                 heightMm: beamHeight,
-                 borderProfile: null,
-               });
+            const tris = delaunayTriangulate2d(nodes2d);
 
-               const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
-               const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
-               if (unionHasGeometry) {
-                 raftGroup.add(unionMesh);
-               } else {
-                 for (const [a, b] of edgePairs) {
-                   const start = new THREE.Vector3(nodes2d[a].x, nodes2d[a].y, 0);
-                   const end = new THREE.Vector3(nodes2d[b].x, nodes2d[b].y, 0);
-                   const beam = generateChamferedBeam(start, end, {
-                     widthMm: raftSettings.lineWidthMm,
-                     heightMm: beamHeight,
-                     chamferAngleDeg: 90,
-                   });
-                   raftGroup.add(beam);
-                 }
-               }
+            const nn = new Array(nodes2d.length).fill(Infinity);
+            for (let i = 0; i < nodes2d.length; i++) {
+              for (let j = 0; j < nodes2d.length; j++) {
+                if (i === j) continue;
+                nn[i] = Math.min(nn[i], edgeLen(nodes2d[i], nodes2d[j]));
+              }
+              if (!Number.isFinite(nn[i])) nn[i] = 0;
+            }
 
-               // Perimeter border: chamfered ring mesh aligned with wall.
-               const borderMesh = generatePerimeterBorderBeam(profile, {
-                 widthMm: raftSettings.lineWidthMm,
-                 heightMm: beamHeight,
-                 chamferAngleDeg: raftSettings.chamferAngle,
-               });
-               raftGroup.add(borderMesh);
-             }
+            const keepFactor = 3.2;
+            const absMaxLen = 120;
+            const edges = new Set<EdgeKey>();
+            const edgePairs: Array<[number, number]> = [];
 
-             // Wall
-             const shouldRenderWall = raftSettings.wallEnabled;
-             if (shouldRenderWall) {
-               const useCrenels = raftSettings.crenulationSpacing > 0 && raftSettings.crenulationGapWidth > 0;
-               const thickness = raftSettings.bottomMode === 'line' ? Math.max(0.01, raftSettings.lineHeightMm) : raftSettings.thickness;
-               const wallMesh = useCrenels
-                ? generateCrenelatedWallManual(profile, {
-                    wallHeight: raftSettings.wallHeight,
-                    wallThickness: raftSettings.wallThickness,
-                    crenulationGapWidth: raftSettings.crenulationGapWidth,
-                    crenulationSpacing: raftSettings.crenulationSpacing,
-                    thickness,
-                    chamferAngle: raftSettings.chamferAngle,
-                  })
-                : generatePerimeterWall(profile, {
-                    wallHeight: raftSettings.wallHeight,
-                    wallThickness: raftSettings.wallThickness,
-                    thickness
-                  });
-             
-               if (wallMesh) raftGroup.add(wallMesh);
-             }
-raftGroup.updateMatrixWorld(true);
-             exportObjects.push(raftGroup);
-           }
+            if (!hasBorderRing) {
+              for (const [a, b] of hullEdges) {
+                const key = edgeKey(a, b);
+                if (!edges.has(key)) {
+                  edges.add(key);
+                  edgePairs.push([a, b]);
+                }
+              }
+            }
+
+            for (const [i, j, k] of tris) {
+              const triEdges: Array<[number, number]> = [
+                [i, j],
+                [j, k],
+                [k, i],
+              ];
+              for (const [a, b] of triEdges) {
+                const key = edgeKey(a, b);
+                if (edges.has(key)) continue;
+                if (hasBorderRing && hullEdgeSet.has(key)) continue;
+                const len = edgeLen(nodes2d[a], nodes2d[b]);
+                const localMax = keepFactor * Math.min(nn[a], nn[b]);
+                if (len > absMaxLen) continue;
+                if (nn[a] > 0 && nn[b] > 0 && len > localMax) continue;
+                edges.add(key);
+                edgePairs.push([a, b]);
+              }
+            }
+
+            const beamHeight = Math.max(0.01, raftSettings.lineHeightMm);
+
+            const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]);
+            const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
+              widthMm: raftSettings.lineWidthMm,
+              heightMm: beamHeight,
+              borderProfile: null,
+            });
+
+            const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
+            const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
+            if (unionHasGeometry) {
+              raftGroup.add(unionMesh);
+            } else {
+              for (const [a, b] of edgePairs) {
+                const start = new THREE.Vector3(nodes2d[a].x, nodes2d[a].y, 0);
+                const end = new THREE.Vector3(nodes2d[b].x, nodes2d[b].y, 0);
+                const beam = generateChamferedBeam(start, end, {
+                  widthMm: raftSettings.lineWidthMm,
+                  heightMm: beamHeight,
+                  chamferAngleDeg: 90,
+                });
+                raftGroup.add(beam);
+              }
+            }
+
+            const borderMesh = generatePerimeterBorderBeam(profile, {
+              widthMm: raftSettings.lineWidthMm,
+              heightMm: beamHeight,
+              chamferAngleDeg: raftSettings.chamferAngle,
+            });
+            raftGroup.add(borderMesh);
+          }
+
+          const shouldRenderWall = raftSettings.wallEnabled;
+          if (shouldRenderWall) {
+            const useCrenels = raftSettings.crenulationSpacing > 0 && raftSettings.crenulationGapWidth > 0;
+            const thickness = raftSettings.bottomMode === 'line' ? Math.max(0.01, raftSettings.lineHeightMm) : raftSettings.thickness;
+            const wallMesh = useCrenels
+              ? generateCrenelatedWallManual(profile, {
+                  wallHeight: raftSettings.wallHeight,
+                  wallThickness: raftSettings.wallThickness,
+                  crenulationGapWidth: raftSettings.crenulationGapWidth,
+                  crenulationSpacing: raftSettings.crenulationSpacing,
+                  thickness,
+                  chamferAngle: raftSettings.chamferAngle,
+                })
+              : generatePerimeterWall(profile, {
+                  wallHeight: raftSettings.wallHeight,
+                  wallThickness: raftSettings.wallThickness,
+                  thickness
+                });
+
+            if (wallMesh) raftGroup.add(wallMesh);
+          }
+
+          raftGroup.updateMatrixWorld(true);
+          exportObjects.push(raftGroup);
         }
       }
     }
 
     // 5. Serialize and write
-    if (options.format === '3mf') {
-      const bytes = await this.export3mf(exportObjects);
-      return this.downloadFile(bytes, options.filename, '3mf', 'model/3mf', prePickedNativePath, useNativeWrite);
+    // ── Tauri path: stage raw geometry → Rust writes STL / compressed 3MF ──
+    if (prePickedNativePath && useNativeWrite) {
+      try {
+        const stagingPath = await allocateMeshStagePath();
+        await this.stageRawGeometry(exportObjects, stagingPath);
+        await exportMeshFile(stagingPath, prePickedNativePath, ext as 'stl' | '3mf');
+        return prePickedNativePath;
+      } catch (err) {
+        console.warn('[ExportManager] Rust export failed, falling back to JS serializer.', err);
+        // Fall through to JS-based export below
+      }
     }
 
-    // Binary STL — direct serializer, handles InstancedMesh without any cloning
+    // ── Browser / fallback: JS-based serializers ──
+    if (options.format === '3mf') {
+      return this.export3mf(exportObjects, options.filename, null, false);
+    }
+
     const stlBytes = this.buildBinaryStl(exportObjects);
-    return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', prePickedNativePath, useNativeWrite);
+    return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', null, false);
   }
 
   private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<string | null> {
