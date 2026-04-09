@@ -67,7 +67,7 @@ import {
 import { computeHighPrecisionArrangeUpdatesWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
-import { useSceneCollectionManager, type LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
@@ -761,6 +761,7 @@ export default function Home() {
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
+  const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
   const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
   const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
   const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
@@ -777,6 +778,9 @@ export default function Home() {
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
   const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
+  const sceneSaveInFlightRef = React.useRef(false);
+  const sceneSaveQueuedRef = React.useRef(false);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -6108,35 +6112,15 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }, [printingArtifact]);
 
-  const handleTopBarSaveScene = React.useCallback(async () => {
+  const performTopBarSaveScene = React.useCallback(async () => {
     const visibleModels = scene.models.filter((model) => model.visible);
     const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
     const resolvedSceneFilename = activeSceneFilePath
       ? (getFileNameFromPath(activeSceneFilePath).replace(/\.voxl$/i, '').trim() || 'Scene')
       : resolveEntirePlateExportBaseName(scene.models);
 
-    const buildModelGroup = (model: LoadedModel): THREE.Group => {
-      const group = new THREE.Group();
-      const t = model.transform;
-      group.position.copy(t.position);
-      group.rotation.copy(t.rotation);
-      group.scale.copy(t.scale);
-
-      const centerOffset = model.geometry.center;
-      const mesh = new THREE.Mesh(model.geometry.geometry);
-      mesh.position.set(-centerOffset.x, -centerOffset.y, -centerOffset.z);
-
-      group.add(mesh);
-      group.updateMatrixWorld(true);
-      return group;
-    };
-
-    const exportRoot = new THREE.Group();
-    scopeModels.forEach((model) => exportRoot.add(buildModelGroup(model)));
-    exportRoot.updateMatrixWorld(true);
-
     const savedPath = await ExportManager.exportScene(
-      scopeModels.length > 0 ? exportRoot : null,
+      null,
       supportsRef.current || null,
       {
         filename: resolvedSceneFilename,
@@ -6172,6 +6156,80 @@ export default function Home() {
       }, 3800);
     }
   }, [activeSceneFilePath, scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const handleTopBarSaveScene = React.useCallback(() => {
+    if (typeof window === 'undefined') {
+      if (sceneSaveInFlightRef.current) {
+        sceneSaveQueuedRef.current = true;
+        setIsSceneSaveInProgress(true);
+        return;
+      }
+      sceneSaveInFlightRef.current = true;
+      setIsSceneSaveInProgress(true);
+      void performTopBarSaveScene().finally(() => {
+        sceneSaveInFlightRef.current = false;
+        setIsSceneSaveInProgress(sceneSaveQueuedRef.current);
+      });
+      return;
+    }
+
+    if (sceneSaveInFlightRef.current) {
+      sceneSaveQueuedRef.current = true;
+      setIsSceneSaveInProgress(true);
+      return;
+    }
+
+    const runSaveTask = () => {
+      if (sceneSaveInFlightRef.current) {
+        sceneSaveQueuedRef.current = true;
+        return;
+      }
+
+      sceneSaveInFlightRef.current = true;
+      setIsSceneSaveInProgress(true);
+      void performTopBarSaveScene()
+        .catch((error) => {
+          console.error('[SceneSave] Save operation failed.', error);
+        })
+        .finally(() => {
+          sceneSaveInFlightRef.current = false;
+          if (sceneSaveQueuedRef.current) {
+            sceneSaveQueuedRef.current = false;
+            queueKickoff();
+            setIsSceneSaveInProgress(true);
+            return;
+          }
+          setIsSceneSaveInProgress(false);
+        });
+    };
+
+    const queueKickoff = () => {
+      if (sceneSaveKickoffTimerRef.current !== null) return;
+      setIsSceneSaveInProgress(true);
+      sceneSaveKickoffTimerRef.current = window.setTimeout(() => {
+        sceneSaveKickoffTimerRef.current = null;
+        runSaveTask();
+      }, 0);
+    };
+
+    if (sceneSaveKickoffTimerRef.current !== null) {
+      sceneSaveQueuedRef.current = true;
+      return;
+    }
+
+    queueKickoff();
+  }, [performTopBarSaveScene]);
+
+  React.useEffect(() => {
+    return () => {
+      if (sceneSaveKickoffTimerRef.current !== null) {
+        window.clearTimeout(sceneSaveKickoffTimerRef.current);
+        sceneSaveKickoffTimerRef.current = null;
+      }
+      sceneSaveQueuedRef.current = false;
+      setIsSceneSaveInProgress(false);
+    };
+  }, []);
 
   const isDesktopRuntime = React.useCallback(() => {
     if (typeof window === 'undefined') return false;
@@ -11466,6 +11524,32 @@ export default function Home() {
   }, [arrangeSpacingMm, scene]);
 
   React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.repeat || event.isComposing) return;
+      if (event.altKey || event.shiftKey) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() !== 's') return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.models.length === 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void handleTopBarSaveScene();
+    };
+
+    window.addEventListener('keydown', handleSceneSaveHotkey, true);
+    return () => {
+      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
+    };
+  }, [handleTopBarSaveScene, scene.models.length]);
+
+  React.useEffect(() => {
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
@@ -15583,6 +15667,22 @@ export default function Home() {
                 style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {isSceneSaveInProgress && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[126] flex justify-center px-3">
+          <div
+            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
+            style={{
+              borderColor: 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
+              background: 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
+              color: 'var(--text-strong)',
+            }}
+          >
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            Saving…
           </div>
         </div>
       )}

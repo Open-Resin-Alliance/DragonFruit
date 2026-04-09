@@ -56,6 +56,16 @@ export class ExportManager {
     return String(error ?? 'Unknown error');
   }
 
+  private static async yieldToBrowserFrame(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => resolve());
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
+  }
+
   private static toBase64(bytes: Uint8Array): string {
     if (typeof btoa !== 'function') {
       throw new Error('Base64 encoding is unavailable in this environment.');
@@ -1050,42 +1060,71 @@ export class ExportManager {
     const sha256Map = new Map<number, string>();
 
     const models = options.includeModel
-      ? await Promise.all((sceneContext?.models ?? []).map(async (model, index) => {
-          const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
-          meshBytesMap.set(index, rawBytes);
-          sha256Map.set(index, await this.sha256Hex(rawBytes));
-
-          return {
-            id: model.id,
-            name: model.name,
-            visible: model.visible,
-            color: model.color,
-            polygonCount: model.polygonCount,
-            fileSizeBytes: model.fileSizeBytes,
+      ? await (async () => {
+          const sourceModels = sceneContext?.models ?? [];
+          const exportedModels: Array<{
+            id: string;
+            name: string;
+            visible: boolean;
+            color: string;
+            polygonCount: number;
+            fileSizeBytes: number;
             transform: {
-              position: {
-                x: model.transform.position.x,
-                y: model.transform.position.y,
-                z: model.transform.position.z,
-              },
-              rotation: {
-                x: model.transform.rotation.x,
-                y: model.transform.rotation.y,
-                z: model.transform.rotation.z,
-              },
-              scale: {
-                x: model.transform.scale.x,
-                y: model.transform.scale.y,
-                z: model.transform.scale.z,
-              },
-            },
+              position: { x: number; y: number; z: number };
+              rotation: { x: number; y: number; z: number };
+              scale: { x: number; y: number; z: number };
+            };
             mesh: {
-              mode: 'embedded-file' as const,
-              fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
-              mimeType: 'model/stl',
-            },
-          };
-        }))
+              mode: 'embedded-file';
+              fileName: string;
+              mimeType: 'model/stl';
+            };
+          }> = [];
+
+          for (let index = 0; index < sourceModels.length; index += 1) {
+            const model = sourceModels[index];
+            const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
+            meshBytesMap.set(index, rawBytes);
+            sha256Map.set(index, await this.sha256Hex(rawBytes));
+
+            exportedModels.push({
+              id: model.id,
+              name: model.name,
+              visible: model.visible,
+              color: model.color,
+              polygonCount: model.polygonCount,
+              fileSizeBytes: model.fileSizeBytes ?? 0,
+              transform: {
+                position: {
+                  x: model.transform.position.x,
+                  y: model.transform.position.y,
+                  z: model.transform.position.z,
+                },
+                rotation: {
+                  x: model.transform.rotation.x,
+                  y: model.transform.rotation.y,
+                  z: model.transform.rotation.z,
+                },
+                scale: {
+                  x: model.transform.scale.x,
+                  y: model.transform.scale.y,
+                  z: model.transform.scale.z,
+                },
+              },
+              mesh: {
+                mode: 'embedded-file',
+                fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
+                mimeType: 'model/stl',
+              },
+            });
+
+            if (index < sourceModels.length - 1) {
+              await this.yieldToBrowserFrame();
+            }
+          }
+
+          return exportedModels;
+        })()
       : [];
 
     const thumbnailBytes = sceneContext?.exportThumbnailPng;
