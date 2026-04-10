@@ -702,7 +702,7 @@ export function LocalBackupsSettingsTab() {
               </div>
             </div>
             <p className="mt-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              Same autosave + snapshot viewer workflow as GitHub backups, but fully local on disk.
+              Automatically saves snapshots of your settings and profiles to a folder on your computer.
             </p>
           </div>
         </div>
