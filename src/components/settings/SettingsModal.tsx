@@ -6,13 +6,14 @@ import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
-import { BackupsSettingsTab } from '@/components/settings/BackupsSettingsTab';
+import { LocalBackupsSettingsTab } from '@/components/settings/LocalBackupsSettingsTab';
+import { SceneAutosaveSettingsTab } from '@/components/settings/SceneAutosaveSettingsTab';
 import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab } from '@/components/settings/PerformanceSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -136,7 +137,7 @@ type SettingsModalProps = {
   activeOutputFormat?: string | null;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -214,6 +215,7 @@ export function SettingsModal({
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
+  const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
 
   const resetDraftFromProps = React.useCallback(() => {
@@ -290,11 +292,12 @@ export function SettingsModal({
   }, []);
 
   const handleCancel = React.useCallback(() => {
+    setShowRestoreDefaultsConfirm(false);
     resetDraftFromProps();
     onClose();
   }, [onClose, resetDraftFromProps]);
 
-  const handleRestoreDefaults = React.useCallback(() => {
+  const applyRestoreDefaultsToDraft = React.useCallback(() => {
     setDraftMeshColor(DEFAULT_MESH_COLOR);
     setDraftShaderType(DEFAULT_SHADER_TYPE);
     setDraftMatcapVariant(DEFAULT_MATCAP_VARIANT);
@@ -323,6 +326,19 @@ export function SettingsModal({
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
     setDraftSlicingPerformanceSettings(DEFAULT_SLICING_PERFORMANCE_SETTINGS);
+  }, []);
+
+  const handleRestoreDefaults = React.useCallback(() => {
+    setShowRestoreDefaultsConfirm(true);
+  }, []);
+
+  const handleConfirmRestoreDefaults = React.useCallback(() => {
+    applyRestoreDefaultsToDraft();
+    setShowRestoreDefaultsConfirm(false);
+  }, [applyRestoreDefaultsToDraft]);
+
+  const handleCancelRestoreDefaults = React.useCallback(() => {
+    setShowRestoreDefaultsConfirm(false);
   }, []);
 
   const handleApply = React.useCallback(() => {
@@ -441,12 +457,17 @@ export function SettingsModal({
     if (!isOpen) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleCancel();
+      if (e.key !== 'Escape') return;
+      if (showRestoreDefaultsConfirm) {
+        handleCancelRestoreDefaults();
+        return;
+      }
+      handleCancel();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, handleCancel]);
+  }, [isOpen, handleCancel, handleCancelRestoreDefaults, showRestoreDefaultsConfirm]);
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
     setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
@@ -482,7 +503,7 @@ export function SettingsModal({
     },
     performance: {
       label: 'Slicing',
-      description: 'PNG compression, spatial acceleration, and backend tuning',
+      description: 'PNG compression, spatial acceleration, and engine metadata',
       icon: MonitorCog,
       tone: 'primary',
     },
@@ -516,9 +537,15 @@ export function SettingsModal({
       icon: Plug,
       tone: 'secondary',
     },
+    sceneAutosave: {
+      label: 'Scene Autosave',
+      description: 'Autosave and crash recovery behavior',
+      icon: HardDrive,
+      tone: 'secondary',
+    },
     backups: {
       label: 'Backups',
-      description: 'Private GitHub settings sync',
+      description: 'Local on-disk backup snapshots',
       icon: ArchiveRestore,
       tone: 'secondary',
     },
@@ -537,7 +564,7 @@ export function SettingsModal({
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'logging', 'about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'sceneAutosave', 'backups', 'logging', 'about'];
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
@@ -671,14 +698,13 @@ export function SettingsModal({
                   const Icon = meta.icon;
                   const active = activeTab === tab;
                   const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
-                  const tabDisabled = tab === 'backups';
 
                   return (
                     <button
                       key={tab}
                       type="button"
-                      aria-disabled={tabDisabled}
-                      onClick={tabDisabled ? undefined : () => setActiveTab(tab)}
+                      aria-disabled={false}
+                      onClick={() => setActiveTab(tab)}
                       className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
                       style={{
                         ...(active
@@ -691,7 +717,6 @@ export function SettingsModal({
                             borderColor: 'var(--border-subtle)',
                             background: 'var(--surface-1)',
                           }),
-                        ...(tabDisabled ? { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' } : {}),
                       }}
                     >
                       <div className="flex items-start gap-2.5">
@@ -825,7 +850,8 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'plugins' && <PluginsSettingsTab />}
-              {activeTab === 'backups' && <BackupsSettingsTab />}
+              {activeTab === 'sceneAutosave' && <SceneAutosaveSettingsTab />}
+              {activeTab === 'backups' && <LocalBackupsSettingsTab />}
               {activeTab === 'logging' && (
                 <LoggingSettingsTab
                   logLevel={draftLogLevel}
@@ -1078,6 +1104,90 @@ export function SettingsModal({
           </div>
         </div>
       </div>
+
+      {showRestoreDefaultsConfirm && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              handleCancelRestoreDefaults();
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm restore defaults"
+          >
+            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Restore Defaults?
+                  </h3>
+                  <p className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    This resets settings in this dialog to their default values.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCancelRestoreDefaults}
+                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
+                aria-label="Close restore defaults confirmation"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
+              </p>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelRestoreDefaults}
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                >
+                  Keep Current
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmRestoreDefaults}
+                  className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                    color: '#fde68a',
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Restore Defaults
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

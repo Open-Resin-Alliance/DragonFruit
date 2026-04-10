@@ -16,11 +16,11 @@ export const WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY = 'workspace-camera-settings'
 const WORKSPACE_CAMERA_SETTINGS_EVENT = 'workspace-camera-settings-changed';
 
 export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
-  scope: 'workspace',
+  scope: 'global',
   defaults: {
     prepare: 'orthographic',
     analysis: 'orthographic',
-    support: 'perspective',
+    support: 'orthographic',
     export: 'orthographic',
     printing: 'orthographic',
   },
