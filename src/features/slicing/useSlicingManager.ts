@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, type SetStateAction } from 'react';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 
 interface SlicingStateProps {
@@ -9,7 +9,7 @@ interface SlicingStateProps {
 export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   const [layerHeightMicron, setLayerHeightMicron] = useState<number>(50);
   const [crossSectionMode, setCrossSectionMode] = useState<'smooth' | 'rasterized'>('smooth');
-  const [layerIndex, setLayerIndex] = useState<number>(0);
+  const [layerIndex, setLayerIndexState] = useState<number>(0);
 
   const layerHeightMm = useMemo(() => layerHeightMicron / 1000, [layerHeightMicron]);
 
@@ -28,6 +28,29 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   const numLayers = useMemo(() => (
     heightMm > 0 && layerHeightMm > 0 ? Math.ceil(heightMm / layerHeightMm) : 0
   ), [heightMm, layerHeightMm]);
+
+  const clampLayerIndex = useCallback((value: number) => {
+    const safeValue = Number.isFinite(value) ? Math.round(value) : 0;
+    const maxLayer = Math.max(0, numLayers);
+    return Math.max(0, Math.min(maxLayer, safeValue));
+  }, [numLayers]);
+
+  const setLayerIndex = useCallback((next: SetStateAction<number>) => {
+    setLayerIndexState((previous) => {
+      const resolved = typeof next === 'function'
+        ? (next as (prevState: number) => number)(previous)
+        : next;
+      const clamped = clampLayerIndex(resolved);
+      return previous === clamped ? previous : clamped;
+    });
+  }, [clampLayerIndex]);
+
+  useEffect(() => {
+    setLayerIndexState((previous) => {
+      const clamped = clampLayerIndex(previous);
+      return previous === clamped ? previous : clamped;
+    });
+  }, [clampLayerIndex]);
 
   const currentHeightMm = useMemo(() => {
     if (!hasGeometry) return 0;
