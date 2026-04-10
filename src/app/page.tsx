@@ -783,8 +783,22 @@ export default function Home() {
   const [sceneSaveChoiceFileName, setSceneSaveChoiceFileName] = React.useState<string | null>(null);
   const [sceneSaveChoicePath, setSceneSaveChoicePath] = React.useState<string | null>(null);
   const [autosaveRecovery, setAutosaveRecovery] = React.useState<{ savedAt: string } | null>(null);
+  const [showCloseUnsavedChangesModal, setShowCloseUnsavedChangesModal] = React.useState(false);
+  const [closeUnsavedChangesBusy, setCloseUnsavedChangesBusy] = React.useState<'none' | 'save_and_close' | 'discard_and_close'>('none');
+  const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
+  const hasUnsavedSceneChangesRef = React.useRef(false);
+  const allowProgrammaticWindowCloseRef = React.useRef(false);
+  const sceneSaveBaselineRef = React.useRef<{
+    undo: number;
+    redo: number;
+    modelCount: number;
+  }>({
+    undo: getUndoCount(),
+    redo: getRedoCount(),
+    modelCount: scene.models.length,
+  });
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
@@ -1287,6 +1301,43 @@ export default function Home() {
     };
   }, []);
 
+  const markSceneSaveBaseline = React.useCallback(() => {
+    sceneSaveBaselineRef.current = {
+      undo: getUndoCount(),
+      redo: getRedoCount(),
+      modelCount: scene.models.length,
+    };
+    setHasUnsavedSceneChanges(false);
+    hasUnsavedSceneChangesRef.current = false;
+  }, [scene.models.length]);
+
+  const recomputeUnsavedSceneChanges = React.useCallback(() => {
+    const baseline = sceneSaveBaselineRef.current;
+    const undoCount = getUndoCount();
+    const redoCount = getRedoCount();
+    const modelCount = scene.models.length;
+
+    const dirty = modelCount > 0 && (
+      undoCount !== baseline.undo
+      || redoCount !== baseline.redo
+      || modelCount !== baseline.modelCount
+    );
+
+    setHasUnsavedSceneChanges(dirty);
+    hasUnsavedSceneChangesRef.current = dirty;
+  }, [scene.models.length]);
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeHistory(recomputeUnsavedSceneChanges);
+    return () => {
+      unsubscribe();
+    };
+  }, [recomputeUnsavedSceneChanges]);
+
+  React.useEffect(() => {
+    recomputeUnsavedSceneChanges();
+  }, [recomputeUnsavedSceneChanges, scene.models.length]);
+
   const importSceneFilesWithLysWarning = React.useCallback(async (
     filesInput: FileList | File[],
     options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
@@ -1315,13 +1366,14 @@ export default function Home() {
           name: importedSingleFile.name,
           path: normalizedScenePath,
         });
+        markSceneSaveBaseline();
       } else {
         setLoadedSceneSaveSource(null);
       }
     }
 
     return imported;
-  }, [importSceneFile, importSceneFiles, maybeConfirmLysImportWarning]);
+  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
 
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1378,12 +1430,13 @@ export default function Home() {
           name: entry.name,
           path: normalizeActiveVoxlScenePath(sourcePath),
         });
+        markSceneSaveBaseline();
       } else {
         setLoadedSceneSaveSource(null);
       }
     }
     return reopened;
-  }, [importSceneFilesWithLysWarning, maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
+  }, [importSceneFilesWithLysWarning, markSceneSaveBaseline, maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -6307,9 +6360,12 @@ export default function Home() {
         exportSuccessToastFadeTimeoutRef.current = null;
       }, 3800);
 
+      markSceneSaveBaseline();
       void clearAutosave();
     }
-  }, [activeSceneFilePath, clearAutosave, scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+    return savedPath;
+  }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
     try {
@@ -6399,55 +6455,73 @@ export default function Home() {
     queueKickoff();
   }, [performTopBarSaveScene]);
 
+  const resolveSceneSaveNativePath = React.useCallback(async (): Promise<{
+    cancelled: boolean;
+    nativePathOverride?: string | null;
+  }> => {
+    const loadedScenePath = normalizeActiveVoxlScenePath(
+      activeSceneFilePath ?? loadedSceneSaveSource?.path ?? null,
+    );
+    const loadedSceneFileName = (() => {
+      if (loadedSceneSaveSource && getFileExtension(loadedSceneSaveSource.name) === '.voxl') {
+        return loadedSceneSaveSource.name;
+      }
+      if (loadedScenePath) {
+        return getFileNameFromPath(loadedScenePath);
+      }
+      return null;
+    })();
+
+    if (!loadedSceneFileName) {
+      return { cancelled: false, nativePathOverride: undefined };
+    }
+
+    // We know this came from a VOXL scene, but we cannot overwrite if the
+    // originating native path is unavailable (e.g. recent-reopen blob cache).
+    // In that case, skip the modal and go straight to Save As.
+    if (!loadedScenePath) {
+      preferredOverwriteScenePathRef.current = null;
+      return { cancelled: false, nativePathOverride: null };
+    }
+
+    if (preferredOverwriteScenePathRef.current === loadedScenePath) {
+      return { cancelled: false, nativePathOverride: loadedScenePath };
+    }
+
+    const choice = await promptSceneSaveChoice({
+      fileName: loadedSceneFileName,
+      scenePath: loadedScenePath,
+    });
+    if (choice === 'cancel') {
+      return { cancelled: true };
+    }
+
+    if (choice === 'save_as') {
+      preferredOverwriteScenePathRef.current = null;
+      return { cancelled: false, nativePathOverride: null };
+    }
+
+    preferredOverwriteScenePathRef.current = loadedScenePath;
+    return { cancelled: false, nativePathOverride: loadedScenePath };
+  }, [activeSceneFilePath, loadedSceneSaveSource, promptSceneSaveChoice]);
+
+  const saveCurrentSceneNow = React.useCallback(async (): Promise<boolean> => {
+    const resolution = await resolveSceneSaveNativePath();
+    if (resolution.cancelled) return false;
+
+    const savedPath = await performTopBarSaveScene({
+      nativePathOverride: resolution.nativePathOverride,
+    });
+    return Boolean(savedPath);
+  }, [performTopBarSaveScene, resolveSceneSaveNativePath]);
+
   const handleTopBarSaveScene = React.useCallback(() => {
     void (async () => {
-      const loadedScenePath = normalizeActiveVoxlScenePath(
-        activeSceneFilePath ?? loadedSceneSaveSource?.path ?? null,
-      );
-      const loadedSceneFileName = (() => {
-        if (loadedSceneSaveSource && getFileExtension(loadedSceneSaveSource.name) === '.voxl') {
-          return loadedSceneSaveSource.name;
-        }
-        if (loadedScenePath) {
-          return getFileNameFromPath(loadedScenePath);
-        }
-        return null;
-      })();
-
-      if (!loadedSceneFileName) {
-        queueTopBarSaveScene();
-        return;
-      }
-
-      // We know this came from a VOXL scene, but we cannot overwrite if the
-      // originating native path is unavailable (e.g. recent-reopen blob cache).
-      // In that case, skip the modal and go straight to Save As.
-      if (!loadedScenePath) {
-        preferredOverwriteScenePathRef.current = null;
-        queueTopBarSaveScene(null);
-        return;
-      }
-
-      if (preferredOverwriteScenePathRef.current === loadedScenePath) {
-        queueTopBarSaveScene(loadedScenePath);
-        return;
-      }
-
-      const choice = await promptSceneSaveChoice({
-        fileName: loadedSceneFileName,
-        scenePath: loadedScenePath,
-      });
-      if (choice === 'cancel') return;
-      if (choice === 'save_as') {
-        preferredOverwriteScenePathRef.current = null;
-        queueTopBarSaveScene(null);
-        return;
-      }
-
-      preferredOverwriteScenePathRef.current = loadedScenePath;
-      queueTopBarSaveScene(loadedScenePath);
+      const resolution = await resolveSceneSaveNativePath();
+      if (resolution.cancelled) return;
+      queueTopBarSaveScene(resolution.nativePathOverride);
     })();
-  }, [activeSceneFilePath, loadedSceneSaveSource, promptSceneSaveChoice, queueTopBarSaveScene]);
+  }, [queueTopBarSaveScene, resolveSceneSaveNativePath]);
 
   React.useEffect(() => {
     if (scene.models.length !== 0) return;
@@ -6455,6 +6529,8 @@ export default function Home() {
     preferredOverwriteScenePathRef.current = null;
     setActiveSceneFilePath(null);
     setLoadedSceneSaveSource(null);
+    setShowCloseUnsavedChangesModal(false);
+    setCloseUnsavedChangesBusy('none');
     if (sceneSaveChoiceResolveRef.current) {
       sceneSaveChoiceResolveRef.current('cancel');
       sceneSaveChoiceResolveRef.current = null;
@@ -6462,7 +6538,8 @@ export default function Home() {
     setShowSceneSaveChoiceModal(false);
     setSceneSaveChoiceFileName(null);
     setSceneSaveChoicePath(null);
-  }, [scene.models.length]);
+    markSceneSaveBaseline();
+  }, [markSceneSaveBaseline, scene.models.length]);
 
   React.useEffect(() => {
     return () => {
@@ -6509,6 +6586,110 @@ export default function Home() {
       || window.location.hostname === 'tauri.localhost'
       || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
   }, []);
+
+  const closeDesktopWindowNow = React.useCallback(async () => {
+    if (!isDesktopRuntime()) return;
+
+    allowProgrammaticWindowCloseRef.current = true;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().close();
+    } catch {
+      allowProgrammaticWindowCloseRef.current = false;
+    }
+  }, [isDesktopRuntime]);
+
+  const handleRequestProgramClose = React.useCallback(() => {
+    if (hasUnsavedSceneChangesRef.current) {
+      setShowCloseUnsavedChangesModal(true);
+      return;
+    }
+    void closeDesktopWindowNow();
+  }, [closeDesktopWindowNow]);
+
+  const handleDiscardAndCloseProgram = React.useCallback(() => {
+    void (async () => {
+      setCloseUnsavedChangesBusy('discard_and_close');
+      try {
+        setShowCloseUnsavedChangesModal(false);
+        await closeDesktopWindowNow();
+      } finally {
+        setCloseUnsavedChangesBusy('none');
+      }
+    })();
+  }, [closeDesktopWindowNow]);
+
+  const handleSaveAndCloseProgram = React.useCallback(() => {
+    void (async () => {
+      setCloseUnsavedChangesBusy('save_and_close');
+      try {
+        const saved = await saveCurrentSceneNow();
+        if (!saved) return;
+        setShowCloseUnsavedChangesModal(false);
+        await closeDesktopWindowNow();
+      } catch (error) {
+        console.error('[SceneSave] Save-and-close failed.', error);
+      } finally {
+        setCloseUnsavedChangesBusy('none');
+      }
+    })();
+  }, [closeDesktopWindowNow, saveCurrentSceneNow]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedSceneChangesRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) return;
+
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const currentWindow = getCurrentWindow();
+        unlisten = await currentWindow.onCloseRequested((event) => {
+          if (allowProgrammaticWindowCloseRef.current) {
+            allowProgrammaticWindowCloseRef.current = false;
+            return;
+          }
+
+          if (!hasUnsavedSceneChangesRef.current) {
+            return;
+          }
+
+          event.preventDefault();
+          setShowCloseUnsavedChangesModal(true);
+        });
+
+        if (disposed && unlisten) {
+          unlisten();
+          unlisten = null;
+        }
+      } catch {
+        // Non-fatal in web runtime or restricted capability mode.
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isDesktopRuntime]);
 
   React.useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -12278,6 +12459,7 @@ export default function Home() {
         isSlicingBusy={isSlicingBusy}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
         onOpenScene={handleTopBarOpenScene}
+        onCloseProgram={handleRequestProgramClose}
         showMonitorButton={showTopbarMonitorButton}
         monitorButtonActive={selectedPrinterHasActivePrint}
         monitorButtonPaused={selectedPrinterHasPausedAlert}
@@ -13591,6 +13773,99 @@ export default function Home() {
                     Continue
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCloseUnsavedChangesModal && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && closeUnsavedChangesBusy === 'none') {
+              setShowCloseUnsavedChangesModal(false);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Unsaved changes"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Unsaved Scene Changes
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    {hasUnsavedSceneChanges
+                      ? 'There are unsaved changes to this scene.'
+                      : 'This scene is already saved.'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close unsaved changes modal"
+                disabled={closeUnsavedChangesBusy !== 'none'}
+                onClick={() => setShowCloseUnsavedChangesModal(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 p-5">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Are you sure you want to close?
+                <br />
+                Choose <strong>Save &amp; Close</strong> to keep your latest edits.
+                <br />
+                Choose <strong>Close Without Saving</strong> to discard them.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                  disabled={closeUnsavedChangesBusy !== 'none'}
+                  onClick={handleDiscardAndCloseProgram}
+                >
+                  Close Without Saving
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
+                  disabled={closeUnsavedChangesBusy !== 'none'}
+                  onClick={handleSaveAndCloseProgram}
+                >
+                  Save &amp; Close
+                </button>
               </div>
             </div>
           </div>

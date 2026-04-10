@@ -19,20 +19,21 @@ const AUTOSAVE_CAP_MS = 2 * 60_000;  // write at most every 2 min even under chu
 type AutosavePaths = { voxlPath: string; manifestPath: string };
 
 let cachedPaths: AutosavePaths | null = null;
+let cachedPreferredSavePath: string | null | undefined;
 
 async function getAutosavePaths(preferredSavePath?: string | null): Promise<AutosavePaths> {
   // Invalidate cache if preferredSavePath changes
-  if (cachedPaths && preferredSavePath !== cachedPaths._preferredSavePath) {
+  if (cachedPaths && preferredSavePath !== cachedPreferredSavePath) {
     cachedPaths = null;
   }
   if (cachedPaths) return cachedPaths;
   const { invoke } = await import('@tauri-apps/api/core');
-  const result = await invoke<AutosavePaths & { _preferredSavePath?: string | null }>(
+  const result = await invoke<AutosavePaths>(
     'scene_autosave_get_paths',
     preferredSavePath ? { preferredSavePath } : {},
   );
-  cachedPaths = result as AutosavePaths;
-  (cachedPaths as any)._preferredSavePath = preferredSavePath;
+  cachedPaths = result;
+  cachedPreferredSavePath = preferredSavePath;
   return cachedPaths;
 }
 
