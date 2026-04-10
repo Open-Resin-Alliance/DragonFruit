@@ -2108,6 +2108,14 @@ export function SceneCanvas({
       pushIfProjectedInside(brace.id, points);
     }
 
+    for (const anchor of Object.values(supportStateForBounds.anchors)) {
+      const points: Array<{ x: number; y: number; z: number }> = [anchor.rootPos];
+      if (anchor.contactCone) {
+        points.push(anchor.contactCone.pos);
+      }
+      pushIfProjectedInside(anchor.id, points);
+    }
+
     for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
       const points = segmentPoints(kickstand.segments);
       pushIfProjectedInside(kickstand.id, points);

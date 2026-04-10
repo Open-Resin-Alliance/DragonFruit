@@ -45,6 +45,7 @@ type VisibleRaftEntry = {
 
 type RaftProxyCacheEntry = {
   supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
+  supportAnchorsRef: ReturnType<typeof getSnapshot>['anchors'];
   raftSignature: string;
   geometriesByModel: Map<string, CachedRaftGeometry>;
 };
@@ -161,7 +162,10 @@ function disposeGeneratedMeshes(meshes: Array<THREE.Mesh | null | undefined>) {
   }
 }
 
-function collectRootCirclesByModel(roots: ReturnType<typeof getSnapshot>['roots']): Map<string, SupportBaseCircle[]> {
+function collectRootCirclesByModel(
+  roots: ReturnType<typeof getSnapshot>['roots'],
+  anchors: ReturnType<typeof getSnapshot>['anchors'],
+): Map<string, SupportBaseCircle[]> {
   const byModel = new Map<string, SupportBaseCircle[]>();
 
   for (const root of Object.values(roots)) {
@@ -171,6 +175,17 @@ function collectRootCirclesByModel(roots: ReturnType<typeof getSnapshot>['roots'
       x: root.transform.pos.x,
       y: root.transform.pos.y,
       r: root.diameter / 2,
+    });
+    if (!byModel.has(modelKey)) byModel.set(modelKey, circles);
+  }
+
+  for (const anchor of Object.values(anchors)) {
+    const modelKey = toModelKey(anchor.modelId);
+    const circles = byModel.get(modelKey) ?? [];
+    circles.push({
+      x: anchor.rootPos.x,
+      y: anchor.rootPos.y,
+      r: anchor.rootBaseDiameter / 2,
     });
     if (!byModel.has(modelKey)) byModel.set(modelKey, circles);
   }
@@ -198,6 +213,7 @@ export function RaftProxyMeshLayer({
 }: RaftProxyMeshLayerProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const supportRoots = supportState.roots;
+  const supportAnchors = supportState.anchors;
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
@@ -222,12 +238,13 @@ export function RaftProxyMeshLayer({
     if (
       raftProxyCache
       && raftProxyCache.supportRootsRef === supportRoots
+      && raftProxyCache.supportAnchorsRef === supportAnchors
       && raftProxyCache.raftSignature === raftSignature
     ) {
       return raftProxyCache.geometriesByModel;
     }
 
-    const rootCirclesByModel = collectRootCirclesByModel(supportRoots);
+    const rootCirclesByModel = collectRootCirclesByModel(supportRoots, supportAnchors);
     const next = new Map<string, CachedRaftGeometry>();
 
     if (raft.bottomMode === 'solid') {
@@ -286,12 +303,13 @@ export function RaftProxyMeshLayer({
 
     raftProxyCache = {
       supportRootsRef: supportRoots,
+      supportAnchorsRef: supportAnchors,
       raftSignature,
       geometriesByModel: next,
     };
 
     return next;
-  }, [raft, raftSignature, supportRoots]);
+  }, [raft, raftSignature, supportRoots, supportAnchors]);
 
   const visibleEntries = React.useMemo<VisibleRaftEntry[]>(() => {
     const entries: VisibleRaftEntry[] = [];

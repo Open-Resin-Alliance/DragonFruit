@@ -73,6 +73,7 @@ type SharedProxyCacheEntry = {
   supportTwigsRef: ReturnType<typeof getSnapshot>['twigs'];
   supportSticksRef: ReturnType<typeof getSnapshot>['sticks'];
   supportBracesRef: ReturnType<typeof getSnapshot>['braces'];
+  supportAnchorsRef: ReturnType<typeof getSnapshot>['anchors'];
   kickstandKickstandsRef: ReturnType<typeof useKickstandStoreState>['kickstands'];
   kickstandRootsRef: ReturnType<typeof useKickstandStoreState>['roots'];
   kickstandKnotsRef: ReturnType<typeof useKickstandStoreState>['knots'];
@@ -233,6 +234,7 @@ export function SupportProxyMeshLayer({
       && sharedProxyCache.supportTwigsRef === supportTwigs
       && sharedProxyCache.supportSticksRef === supportSticks
       && sharedProxyCache.supportBracesRef === supportBraces
+      && sharedProxyCache.supportAnchorsRef === supportState.anchors
       && sharedProxyCache.kickstandKickstandsRef === kickstandKickstands
       && sharedProxyCache.kickstandRootsRef === kickstandRoots
       && sharedProxyCache.kickstandKnotsRef === kickstandKnots
@@ -574,6 +576,29 @@ export function SupportProxyMeshLayer({
     // only for selected supports in the full SupportRenderer. Omitting them from the proxy
     // avoids visible hemisphere bumps at every trunk segment split point.
 
+    // Anchors: root + contact cone, no shafts
+    const supportAnchors = supportState.anchors;
+    for (const anchor of Object.values(supportAnchors)) {
+      pushRoot({
+        id: `${anchor.id}:root`,
+        supportId: anchor.id,
+        modelId: anchor.modelId,
+        basePos: anchor.rootPos,
+        bottomRadius: Math.max(0.001, anchor.rootBaseDiameter / 2),
+        topRadius: Math.max(0.001, anchor.rootTopDiameter / 2),
+        effectiveDiskHeight: 0.1,
+        coneHeight: Math.max(0, anchor.rootHeight),
+      });
+
+      if (includeDetailedPrimitives && anchor.contactCone) {
+        pushCone({
+          ...anchor.contactCone,
+          supportId: anchor.id,
+          modelId: anchor.modelId,
+        });
+      }
+    }
+
     for (const kickstand of Object.values(kickstandKickstands)) {
       const root = kickstandRoots[kickstand.rootId];
       const hostKnot = kickstandKnots[kickstand.hostKnotId];
@@ -642,6 +667,7 @@ export function SupportProxyMeshLayer({
       supportTwigsRef: supportTwigs,
       supportSticksRef: supportSticks,
       supportBracesRef: supportBraces,
+      supportAnchorsRef: supportState.anchors,
       kickstandKickstandsRef: kickstandKickstands,
       kickstandRootsRef: kickstandRoots,
       kickstandKnotsRef: kickstandKnots,

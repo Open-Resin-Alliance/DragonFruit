@@ -249,6 +249,23 @@ export default function LineRaftRenderer({
       rootsByModel.get(key)!.push(root);
     }
 
+    // Include anchor roots for raft footprint
+    for (const anchor of Object.values(supportState.anchors)) {
+      if (excludeModelId && anchor.modelId === excludeModelId) continue;
+      if (anchor.modelId && excludedModelIdSet.has(anchor.modelId)) continue;
+      if (modelFilterId && anchor.modelId !== modelFilterId) continue;
+      const key = anchor.modelId || 'unknown';
+      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
+      rootsByModel.get(key)!.push({
+        id: anchor.id,
+        modelId: anchor.modelId,
+        transform: { pos: anchor.rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
+        diameter: anchor.rootBaseDiameter,
+        diskHeight: anchor.rootHeight,
+        coneHeight: 0,
+      });
+    }
+
     const blendColor = (baseHex: string, tintHex: string, strength: number) =>
       new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
 

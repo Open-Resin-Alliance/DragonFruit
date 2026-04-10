@@ -4,7 +4,7 @@ const listeners = new Set<() => void>();
 const selectedSupportIds = new Set<string>();
 const EMPTY_SELECTION: readonly string[] = Object.freeze([]);
 
-const SUPPORT_SELECTION_CATEGORIES = new Set(['trunk', 'branch', 'leaf', 'twig', 'stick', 'brace', 'root']);
+const SUPPORT_SELECTION_CATEGORIES = new Set(['trunk', 'branch', 'leaf', 'twig', 'stick', 'brace', 'anchor', 'root']);
 
 let syncedPrimarySelection = false;
 let lastPrimarySelectedId: string | null = null;
