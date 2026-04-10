@@ -2298,11 +2298,8 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     widthPx: settings.widthPx,
     heightPx: settings.heightPx,
     xPackingMode: settings.xPackingMode,
-    computeBackend: perfSettings.computeBackend === 'gpu'
-      ? 'gpu'
-      : perfSettings.computeBackend === 'cpu'
-        ? 'cpu'
-        : 'auto',
+    // Backend selection is managed internally by the slicing engine.
+    computeBackend: 'auto',
     pngCompressionStrategy: perfSettings.pngCompressionStrategy,
     bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
     mirrorX: settings.mirrorX,
