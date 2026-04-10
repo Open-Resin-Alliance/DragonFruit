@@ -53,26 +53,17 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVal = e.target.value;
 
-    if (newVal.includes('-')) {
+    // Allow optional leading minus, optional decimals, and up to 2 decimal places.
+    // Also allows transitional editing states like '-', '.', and '-.'.
+    const numericPattern = /^-?(?:\d+)?(?:\.\d{0,2})?$/;
+    if (!numericPattern.test(newVal)) {
       return;
-    }
-
-    // Allow empty or valid float
-    if (newVal === '') {
-      setDisplayValue(newVal);
-      return;
-    }
-
-    // Check decimal places
-    const parts = newVal.split('.');
-    if (parts[1] && parts[1].length > 2) {
-      return; // Reject modification if more than 2 decimals
     }
 
     setDisplayValue(newVal);
 
-    const parsed = parseFloat(newVal);
-    if (!isNaN(parsed)) {
+    const parsed = Number.parseFloat(newVal);
+    if (Number.isFinite(parsed)) {
       onChange(parsed);
     }
   };
@@ -80,19 +71,10 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     isEditing.current = false;
 
-    // Check if current display value is empty or invalid
-    const parsed = parseFloat(displayValue);
-
-    if (displayValue === '' || isNaN(parsed)) {
-      // Restore previous valid value
-      setDisplayValue(formatValue(safeValue));
-    } else {
-      // Ensure standard formatting (e.g. remove trailing decimal points)
-      // But also respect the parent's update which triggers the Effect.
-      // However, if parent value didn't change (e.g. parsed same as value), Effect won't run.
-      // So force a sync.
-      setDisplayValue(formatValue(parsed));
-    }
+    // Always snap back to the latest committed prop value on blur.
+    // This avoids stale UI when an attempted edit is rejected upstream
+    // (e.g. destructive-transform modal canceled).
+    setDisplayValue(formatValue(safeValue));
 
     if (onBlur) onBlur(e);
   };
