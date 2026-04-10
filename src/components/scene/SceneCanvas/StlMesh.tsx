@@ -68,6 +68,10 @@ function StlMeshComponent({
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
+  supportPlacementGuidePlaneZ,
+  supportPlacementGuideColor,
+  supportPlacementGuideLineWidthMm,
+  supportPlacementGuideOpacity,
   suppressModelInteraction,
   isExternallyHovered,
   deferExternalTransformUpdates,
@@ -125,6 +129,10 @@ function StlMeshComponent({
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
+  supportPlacementGuidePlaneZ?: number | null;
+  supportPlacementGuideColor?: string;
+  supportPlacementGuideLineWidthMm?: number;
+  supportPlacementGuideOpacity?: number;
   suppressModelInteraction?: boolean;
   isExternallyHovered?: boolean;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
@@ -482,11 +490,102 @@ function StlMeshComponent({
     return material;
   }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
 
+  const supportPlacementGuideEnabled = supportPlacementGuidePlaneZ != null && Number.isFinite(supportPlacementGuidePlaneZ);
+
+  const supportPlacementGuideMaterial = React.useMemo(() => {
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+      clippingPlanes: planes,
+      clipIntersection: true,
+      side: THREE.FrontSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      toneMapped: false,
+      uniforms: {
+        uPlaneZ: { value: 0 },
+        uLineWidthMm: { value: Math.max(0.02, supportPlacementGuideLineWidthMm ?? 0.24) },
+        uLineColor: { value: new THREE.Color(supportPlacementGuideColor ?? '#baf72e') },
+        uOpacity: { value: THREE.MathUtils.clamp(supportPlacementGuideOpacity ?? 0.62, 0, 1) },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNormal;
+
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          vWorldNormal = normalize(mat3(modelMatrix) * normal);
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNormal;
+        uniform float uPlaneZ;
+        uniform float uLineWidthMm;
+        uniform vec3 uLineColor;
+        uniform float uOpacity;
+
+        void main() {
+          float distanceToPlane = abs(vWorldPos.z - uPlaneZ);
+          float baseHalfWidth = max(0.0005, uLineWidthMm * 0.5);
+          vec3 worldNormal = normalize(vWorldNormal);
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          float ndotv = abs(dot(worldNormal, viewDir));
+          float grazing = 1.0 - ndotv;
+          float grazingComp = mix(1.0, 0.58, smoothstep(0.45, 0.96, grazing));
+
+          float compensatedHalfWidth = baseHalfWidth * grazingComp;
+          float aa = max(fwidth(vWorldPos.z) * 1.15, 0.0012);
+          float feather = min(
+            max(aa * 1.15, compensatedHalfWidth * 0.16),
+            max(aa * 1.1, compensatedHalfWidth * 0.55)
+          );
+
+          float lineMask = 1.0 - smoothstep(compensatedHalfWidth - feather, compensatedHalfWidth + feather, distanceToPlane);
+          if (lineMask <= 0.001) discard;
+
+          float alpha = uOpacity * lineMask;
+          gl_FragColor = vec4(uLineColor, alpha);
+        }
+      `,
+    });
+
+    return material;
+  }, [planes]);
+
+  React.useEffect(() => {
+    if (!supportPlacementGuideMaterial) return;
+
+    supportPlacementGuideMaterial.uniforms.uPlaneZ.value = supportPlacementGuideEnabled
+      ? Number(supportPlacementGuidePlaneZ)
+      : 0;
+    supportPlacementGuideMaterial.uniforms.uLineWidthMm.value = Math.max(0.02, supportPlacementGuideLineWidthMm ?? 0.24);
+    supportPlacementGuideMaterial.uniforms.uOpacity.value = THREE.MathUtils.clamp(supportPlacementGuideOpacity ?? 0.62, 0, 1);
+    (supportPlacementGuideMaterial.uniforms.uLineColor.value as THREE.Color).set(supportPlacementGuideColor ?? '#baf72e');
+  }, [
+    supportPlacementGuideColor,
+    supportPlacementGuideEnabled,
+    supportPlacementGuideLineWidthMm,
+    supportPlacementGuideMaterial,
+    supportPlacementGuideOpacity,
+    supportPlacementGuidePlaneZ,
+  ]);
+
   React.useEffect(() => {
     return () => {
       outOfBoundsMaterial?.dispose();
     };
   }, [outOfBoundsMaterial]);
+
+  React.useEffect(() => {
+    return () => {
+      supportPlacementGuideMaterial?.dispose();
+    };
+  }, [supportPlacementGuideMaterial]);
 
   return (
     <group
@@ -779,6 +878,12 @@ function StlMeshComponent({
       {outOfBoundsMaterial && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={3} raycast={() => null}>
           <primitive object={outOfBoundsMaterial} attach="material" />
+        </mesh>
+      )}
+
+      {supportPlacementGuideEnabled && supportPlacementGuideMaterial && (
+        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={4} raycast={() => null}>
+          <primitive object={supportPlacementGuideMaterial} attach="material" />
         </mesh>
       )}
 
