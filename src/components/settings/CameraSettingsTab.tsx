@@ -119,95 +119,29 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div
-          className="mt-2 rounded-md border p-2.5 transition-opacity"
-          aria-disabled={!usingGlobalScope}
-          style={{
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-0)',
-            opacity: usingGlobalScope ? 1 : 0.35,
-            pointerEvents: usingGlobalScope ? 'auto' : 'none',
-          }}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Projection mode
+        {usingGlobalScope && (
+          <div
+            className="mt-2 rounded-md border p-2.5"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-0)',
+            }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Projection mode
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Use one projection mode everywhere when global scope is active.
+                </div>
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Use one projection mode everywhere when global scope is active.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => onCameraProjectionModeChange('orthographic')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={cameraProjectionMode === 'orthographic'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Ortho
-              </button>
-              <button
-                type="button"
-                onClick={() => onCameraProjectionModeChange('perspective')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={cameraProjectionMode === 'perspective'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Perspective
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div
-          className="mt-2 rounded-md border p-2.5 transition-opacity"
-          aria-disabled={!usingWorkspaceScope}
-          style={{
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-0)',
-            opacity: usingWorkspaceScope ? 1 : 0.35,
-            pointerEvents: usingWorkspaceScope ? 'auto' : 'none',
-          }}
-        >
-          <div>
-            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Workspace camera defaults
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Pick the default projection mode used when you enter each workspace.
-            </div>
-          </div>
-
-          <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4">
-            {workspaceMeta.map((workspace) => {
-              const active = activeWorkspace === workspace.key;
-              return (
+              <div className="flex items-center gap-1.5">
                 <button
-                  key={workspace.key}
                   type="button"
-                  onClick={() => setActiveWorkspace(workspace.key)}
-                  className="h-10 rounded-md border px-2 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={active
+                  onClick={() => onCameraProjectionModeChange('orthographic')}
+                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={cameraProjectionMode === 'orthographic'
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
@@ -219,60 +153,124 @@ export function CameraSettingsTab({
                         color: 'var(--text-muted)',
                       }}
                 >
-                  {workspace.label}
+                  Ortho
                 </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera
-            </div>
-            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
-            </div>
-
-            <div className="mt-2 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'orthographic')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={workspaceCameraDefaults[activeWorkspace] === 'orthographic'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Ortho
-              </button>
-              <button
-                type="button"
-                onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'perspective')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={workspaceCameraDefaults[activeWorkspace] === 'perspective'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Perspective
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onCameraProjectionModeChange('perspective')}
+                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={cameraProjectionMode === 'perspective'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Perspective
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {usingWorkspaceScope && (
+          <div
+            className="mt-2 rounded-md border p-2.5"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-0)',
+            }}
+          >
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Workspace camera defaults
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Pick the default projection mode used when you enter each workspace.
+              </div>
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4">
+              {workspaceMeta.map((workspace) => {
+                const active = activeWorkspace === workspace.key;
+                return (
+                  <button
+                    key={workspace.key}
+                    type="button"
+                    onClick={() => setActiveWorkspace(workspace.key)}
+                    className="h-10 rounded-md border px-2 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                    style={active
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                          color: 'var(--accent-contrast)',
+                        }
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-muted)',
+                        }}
+                  >
+                    {workspace.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera
+              </div>
+              <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
+              </div>
+
+              <div className="mt-2 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'orthographic')}
+                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={workspaceCameraDefaults[activeWorkspace] === 'orthographic'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Ortho
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'perspective')}
+                  className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={workspaceCameraDefaults[activeWorkspace] === 'perspective'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Perspective
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="flex items-center justify-between gap-3">
