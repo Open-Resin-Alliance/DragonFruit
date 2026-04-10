@@ -382,25 +382,29 @@ export function BranchPlacementController() {
                 previewNormalKey(tipNormal),
             ].join('|');
 
-            const parentKnot: Knot = {
-                id: 'preview-knot',
-                parentShaftId: segmentId,
-                t,
-                pos: knotPos,
-                diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
-            };
+            if (lastPreviewSignatureRef.current !== previewSignature) {
+                lastPreviewSignatureRef.current = previewSignature;
 
-            const buildResult = buildBranchData({
-                tipPos: tipPosition,
-                tipNormal: tipNormal,
-                modelId: modelId,
-                parentKnot,
-            });
+                const parentKnot: Knot = {
+                    id: 'preview-knot',
+                    parentShaftId: segmentId,
+                    t,
+                    pos: knotPos,
+                    diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
+                };
 
-            publishPreview(previewSignature, {
-                ...buildResult.supportData,
-                startPos: parentKnot.pos,
-            });
+                const buildResult = buildBranchData({
+                    tipPos: tipPosition,
+                    tipNormal: tipNormal,
+                    modelId: modelId,
+                    parentKnot,
+                });
+
+                branchPlacementStore.setPreviewData({
+                    ...buildResult.supportData,
+                    startPos: parentKnot.pos,
+                });
+            }
             return;
         } else {
             let hoveredSnapResolved = false;
@@ -466,25 +470,29 @@ export function BranchPlacementController() {
                         previewNormalKey(tipNormal),
                     ].join('|');
 
-                    const parentKnot: Knot = {
-                        id: 'preview-knot',
-                        parentShaftId: segmentId,
-                        t,
-                        pos: knotPos,
-                        diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
-                    };
+                    if (lastPreviewSignatureRef.current !== previewSignature) {
+                        lastPreviewSignatureRef.current = previewSignature;
 
-                    const buildResult = buildBranchData({
-                        tipPos: tipPosition,
-                        tipNormal: tipNormal,
-                        modelId: modelId,
-                        parentKnot,
-                    });
+                        const parentKnot: Knot = {
+                            id: 'preview-knot',
+                            parentShaftId: segmentId,
+                            t,
+                            pos: knotPos,
+                            diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
+                        };
 
-                    publishPreview(previewSignature, {
-                        ...buildResult.supportData,
-                        startPos: parentKnot.pos,
-                    });
+                        const buildResult = buildBranchData({
+                            tipPos: tipPosition,
+                            tipNormal: tipNormal,
+                            modelId: modelId,
+                            parentKnot,
+                        });
+
+                        branchPlacementStore.setPreviewData({
+                            ...buildResult.supportData,
+                            startPos: parentKnot.pos,
+                        });
+                    }
 
                     return;
                 }
@@ -513,53 +521,46 @@ export function BranchPlacementController() {
                     if (bModelId === modelId) {
                         meshHoverRef.current = { pos: bPos, normal: bNormal, modelId: bModelId };
 
-                        const a = new THREE.Vector3(tipPosition.x, tipPosition.y, tipPosition.z);
-                        const b = new THREE.Vector3(bPos.x, bPos.y, bPos.z);
-                        const dist = a.distanceTo(b);
+                        const dx = tipPosition.x - bPos.x;
+                        const dy = tipPosition.y - bPos.y;
+                        const dz = tipPosition.z - bPos.z;
+                        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
                         const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
                         const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
                         meshKindRef.current = kind;
 
-                        if (kind === 'twig') {
-                            const { twig } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
-                            const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                            const previewSignature = [
-                                'branch:twig',
-                                modelId,
-                                bModelId,
-                                previewVecKey(tipPosition),
-                                previewNormalKey(tipNormal),
-                                previewVecKey(bPos),
-                                previewNormalKey(bNormal),
-                                previewVecKey(startPos),
-                            ].join('|');
-                            const supportData: SupportData = {
-                                id: 'preview-meshlink',
-                                startPos,
-                                segments: twig.segments,
-                                contactDisks: [twig.contactDiskA, twig.contactDiskB],
-                            };
-                            publishPreview(previewSignature, supportData);
-                        } else {
-                            const { stick } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
-                            const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                            const previewSignature = [
-                                'branch:stick',
-                                modelId,
-                                bModelId,
-                                previewVecKey(tipPosition),
-                                previewNormalKey(tipNormal),
-                                previewVecKey(bPos),
-                                previewNormalKey(bNormal),
-                                previewVecKey(startPos),
-                            ].join('|');
-                            const supportData: SupportData = {
-                                id: 'preview-meshlink',
-                                startPos,
-                                segments: stick.segments,
-                                contactCones: [stick.contactConeA, stick.contactConeB],
-                            };
-                            publishPreview(previewSignature, supportData);
+                        const meshLinkSignature = [
+                            kind === 'twig' ? 'branch:twig' : 'branch:stick',
+                            modelId,
+                            bModelId,
+                            previewVecKey(tipPosition),
+                            previewNormalKey(tipNormal),
+                            previewVecKey(bPos),
+                            previewNormalKey(bNormal),
+                        ].join('|');
+
+                        if (lastPreviewSignatureRef.current !== meshLinkSignature) {
+                            lastPreviewSignatureRef.current = meshLinkSignature;
+
+                            if (kind === 'twig') {
+                                const { twig } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
+                                const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                                branchPlacementStore.setPreviewData({
+                                    id: 'preview-meshlink',
+                                    startPos,
+                                    segments: twig.segments,
+                                    contactDisks: [twig.contactDiskA, twig.contactDiskB],
+                                });
+                            } else {
+                                const { stick } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
+                                const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                                branchPlacementStore.setPreviewData({
+                                    id: 'preview-meshlink',
+                                    startPos,
+                                    segments: stick.segments,
+                                    contactCones: [stick.contactConeA, stick.contactConeB],
+                                });
+                            }
                         }
                         return;
                     }
@@ -579,21 +580,6 @@ export function BranchPlacementController() {
 
         const resolvedHostDiameter = hostDiameterMm ?? fallbackHostDiameterMm;
 
-        const parentKnot: Knot = {
-            id: 'preview-knot',
-            parentShaftId: segmentId,
-            t,
-            pos: knotPos,
-            diameter: resolvedHostDiameter + 0.1,
-        };
-
-        const buildResult = buildBranchData({
-            tipPos: tipPosition,
-            tipNormal: tipNormal,
-            modelId: modelId,
-            parentKnot,
-        });
-
         const previewSignature = [
             'branch:free',
             modelId,
@@ -604,10 +590,29 @@ export function BranchPlacementController() {
             previewNormalKey(tipNormal),
         ].join('|');
 
-        publishPreview(previewSignature, {
-            ...buildResult.supportData,
-            startPos: parentKnot.pos,
-        });
+        if (lastPreviewSignatureRef.current !== previewSignature) {
+            lastPreviewSignatureRef.current = previewSignature;
+
+            const parentKnot: Knot = {
+                id: 'preview-knot',
+                parentShaftId: segmentId,
+                t,
+                pos: knotPos,
+                diameter: resolvedHostDiameter + 0.1,
+            };
+
+            const buildResult = buildBranchData({
+                tipPos: tipPosition,
+                tipNormal: tipNormal,
+                modelId: modelId,
+                parentKnot,
+            });
+
+            branchPlacementStore.setPreviewData({
+                ...buildResult.supportData,
+                startPos: parentKnot.pos,
+            });
+        }
     });
 
     // Handle clicks for branch creation
