@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
@@ -43,12 +43,33 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  exportThumbnailPng?: Uint8Array | null;
+}
+
+export interface ExportSceneSaveTarget {
+  nativePath?: string | null;
 }
 
 export class ExportManager {
+  private static readonly embeddedBinaryStlCache = new Map<string, {
+    geometrySignature: string;
+    rawBytes: Uint8Array;
+    sha256: string;
+  }>();
+
   private static getErrorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
     return String(error ?? 'Unknown error');
+  }
+
+  private static async yieldToBrowserFrame(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => resolve());
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
   }
 
   private static toBase64(bytes: Uint8Array): string {
@@ -81,6 +102,42 @@ export class ExportManager {
 
     const bytes = new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
     return new Uint8Array(bytes);
+  }
+
+  private static computeModelGeometrySignature(model: LoadedModel): string {
+    const geometry = model.geometry.geometry;
+    const position = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    const vertexCount = position?.count ?? 0;
+    const positionVersion = !position
+      ? 0
+      : ('version' in position ? position.version : position.data.version);
+    const indexVersion = index?.version ?? 0;
+    return `${geometry.uuid}:${positionVersion}:${indexVersion}:${vertexCount}`;
+  }
+
+  private static async getEmbeddedBinaryStlWithSha(model: LoadedModel): Promise<{
+    rawBytes: Uint8Array;
+    sha256: string;
+  }> {
+    const geometrySignature = this.computeModelGeometrySignature(model);
+    const cached = this.embeddedBinaryStlCache.get(model.id);
+    if (cached && cached.geometrySignature === geometrySignature) {
+      return {
+        rawBytes: cached.rawBytes,
+        sha256: cached.sha256,
+      };
+    }
+
+    const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
+    const sha256 = await this.sha256Hex(rawBytes);
+    this.embeddedBinaryStlCache.set(model.id, {
+      geometrySignature,
+      rawBytes,
+      sha256,
+    });
+
+    return { rawBytes, sha256 };
   }
 
   private static encodeRleU8(input: Uint8Array): Uint8Array {
@@ -762,30 +819,34 @@ export class ExportManager {
     supportsGroup: THREE.Object3D | null,
     options: ExportOptions,
     sceneContext?: ExportSceneContext,
+    saveTarget?: ExportSceneSaveTarget,
   ): Promise<string | null> {
     console.log('[ExportManager] Starting export...', options);
 
-    if (options.format === 'voxl') {
-      return this.exportVoxl(sceneContext, options);
-    }
-
-    // For STL/3MF: ask for the save destination FIRST so the user doesn't wait through
+    // Ask for the save destination FIRST so the user doesn't wait through
     // geometry serialization before seeing the dialog.
     const base = this.normalizeExportFilenameBase(options.filename || 'export');
-    const ext = options.format === '3mf' ? '3mf' : 'stl';
+    const ext = options.format === '3mf' ? '3mf' : options.format === 'voxl' ? 'voxl' : 'stl';
     const suggestedName = `${base}.${ext}`;
-    let prePickedNativePath: string | null = null;
+    let prePickedNativePath = saveTarget?.nativePath?.trim() || null;
     let useNativeWrite = true;
 
-    try {
-      prePickedNativePath = await pickSavePathWithNativeDialog(suggestedName);
-    } catch (err) {
-      const msg = this.getErrorMessage(err);
-      if (msg.toLowerCase().includes('save cancelled by user') || msg.toLowerCase().includes('cancelled by user')) {
-        return null; // User dismissed — nothing to do
+    if (!prePickedNativePath) {
+      try {
+        prePickedNativePath = await pickSavePathWithNativeDialog(suggestedName);
+      } catch (err) {
+        const msg = this.getErrorMessage(err);
+        if (msg.toLowerCase().includes('save cancelled by user') || msg.toLowerCase().includes('cancelled by user')) {
+          return null; // User dismissed — nothing to do
+        }
+        // Native dialog unavailable (web mode) — fall back to browser <a download>
+        useNativeWrite = false;
       }
-      // Native dialog unavailable (web mode) — fall back to browser <a download>
-      useNativeWrite = false;
+    }
+
+    // VOXL path: serialization can be expensive, so destination is pre-picked above.
+    if (options.format === 'voxl') {
+      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite);
     }
 
     // Collect live scene objects for serialization — no cloning, no InstancedMesh expansion.
@@ -993,7 +1054,8 @@ export class ExportManager {
       try {
         const stagingPath = await allocateMeshStagePath();
         await this.stageRawGeometry(exportObjects, stagingPath);
-        await exportMeshFile(stagingPath, prePickedNativePath, ext as 'stl' | '3mf');
+        const format = options.format === '3mf' ? '3mf' : 'stl';
+        await exportMeshFile(stagingPath, prePickedNativePath, format);
         return prePickedNativePath;
       } catch (err) {
         console.warn('[ExportManager] Rust export failed, falling back to JS serializer.', err);
@@ -1010,7 +1072,16 @@ export class ExportManager {
     return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', null, false);
   }
 
-  private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<string | null> {
+  private static async exportVoxl(
+    sceneContext: ExportSceneContext | undefined,
+    options: ExportOptions,
+    prePickedNativePath: string | null,
+    useNativeWrite: boolean,
+  ): Promise<string | null> {
+    // Yield before the (synchronous) support snapshot so the render loop stays
+    // alive on scenes with many support nodes.
+    await this.yieldToBrowserFrame();
+
     const supportSnapshot = getSnapshot();
     const kickstandSnapshot = getKickstandSnapshot();
     const supports = buildSupportExportFromStores(
@@ -1031,59 +1102,117 @@ export class ExportManager {
       supports.kickstands = [];
     }
 
-    const models = options.includeModel
-      ? await Promise.all((sceneContext?.models ?? []).map(async (model) => {
-          const embedded = await this.buildEmbeddedMeshPayload(model);
+    const meshBytesMap = new Map<number, Uint8Array>();
+    const sha256Map = new Map<number, string>();
 
-          return {
-            id: model.id,
-            name: model.name,
-            visible: model.visible,
-            color: model.color,
-            polygonCount: model.polygonCount,
-            fileSizeBytes: model.fileSizeBytes,
+    const models = options.includeModel
+      ? await (async () => {
+          const sourceModels = sceneContext?.models ?? [];
+          const exportedModels: Array<{
+            id: string;
+            name: string;
+            visible: boolean;
+            color: string;
+            polygonCount: number;
+            fileSizeBytes: number;
             transform: {
-              position: {
-                x: model.transform.position.x,
-                y: model.transform.position.y,
-                z: model.transform.position.z,
-              },
-              rotation: {
-                x: model.transform.rotation.x,
-                y: model.transform.rotation.y,
-                z: model.transform.rotation.z,
-              },
-              scale: {
-                x: model.transform.scale.x,
-                y: model.transform.scale.y,
-                z: model.transform.scale.z,
-              },
-            },
+              position: { x: number; y: number; z: number };
+              rotation: { x: number; y: number; z: number };
+              scale: { x: number; y: number; z: number };
+            };
             mesh: {
-              mode: 'embedded-file' as const,
-              fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
-              mimeType: 'model/stl',
-              dataBase64: embedded.dataBase64,
-              dataEncoding: embedded.dataEncoding,
-              uncompressedSizeBytes: embedded.uncompressedSizeBytes,
-              sha256: embedded.sha256,
-            },
-          };
-        }))
+              mode: 'embedded-file';
+              fileName: string;
+              mimeType: 'model/stl';
+            };
+          }> = [];
+
+          if (sourceModels.length > 0) {
+            await this.yieldToBrowserFrame();
+          }
+
+          for (let index = 0; index < sourceModels.length; index += 1) {
+            const model = sourceModels[index];
+            const { rawBytes, sha256 } = await this.getEmbeddedBinaryStlWithSha(model);
+            meshBytesMap.set(index, rawBytes);
+            sha256Map.set(index, sha256);
+
+            exportedModels.push({
+              id: model.id,
+              name: model.name,
+              visible: model.visible,
+              color: model.color,
+              polygonCount: model.polygonCount,
+              fileSizeBytes: model.fileSizeBytes ?? 0,
+              transform: {
+                position: {
+                  x: model.transform.position.x,
+                  y: model.transform.position.y,
+                  z: model.transform.position.z,
+                },
+                rotation: {
+                  x: model.transform.rotation.x,
+                  y: model.transform.rotation.y,
+                  z: model.transform.rotation.z,
+                },
+                scale: {
+                  x: model.transform.scale.x,
+                  y: model.transform.scale.y,
+                  z: model.transform.scale.z,
+                },
+              },
+              mesh: {
+                mode: 'embedded-file',
+                fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
+                mimeType: 'model/stl',
+              },
+            });
+
+            if (index < sourceModels.length - 1) {
+              await this.yieldToBrowserFrame();
+            }
+          }
+
+          return exportedModels;
+        })()
       : [];
 
-    const doc = buildVoxlDocumentV1({
-      models,
-      activeModelId: sceneContext?.activeModelId ?? null,
-      selectedModelIds: sceneContext?.selectedModelIds ?? [],
-      supports,
-      meta: {
-        generator: 'DragonFruit',
-      },
-    });
+    const thumbnailBytes = sceneContext?.exportThumbnailPng;
+    const voxlExtensions = thumbnailBytes && thumbnailBytes.length > 0
+      ? {
+          'ora.preview': {
+            kind: 'scene-thumbnail',
+            mimeType: 'image/png',
+            encoding: 'base64',
+            dataBase64: this.toBase64(thumbnailBytes),
+          },
+        }
+      : undefined;
 
-    const json = serializeVoxlDocument(doc, true);
-    return this.downloadFile(json, options.filename, 'voxl', 'application/json');
+    // serializeVoxlDocumentV2 is async — compression runs off the main thread.
+    const binary = await serializeVoxlDocumentV2(
+      {
+        models,
+        activeModelId: sceneContext?.activeModelId ?? null,
+        selectedModelIds: sceneContext?.selectedModelIds ?? [],
+        supports,
+        meta: {
+          generator: 'DragonFruit',
+        },
+        extensions: voxlExtensions,
+      },
+      meshBytesMap,
+      sha256Map,
+    );
+
+    return this.downloadFile(
+      binary,
+      options.filename,
+      'voxl',
+      'application/vnd.dragonfruit.voxl',
+      prePickedNativePath,
+      useNativeWrite,
+    );
   }
 
   private static async downloadFile(
@@ -1106,16 +1235,19 @@ export class ExportManager {
         : new TextEncoder().encode(data);
 
     // If a native path was already picked before heavy work started, write directly.
-    if (prePickedNativePath && useNativeWrite) {
+    let nativeDestinationPath = prePickedNativePath;
+
+    if (nativeDestinationPath && useNativeWrite) {
       try {
-        await writeChunkedToNativePath(prePickedNativePath, bytes);
-        return prePickedNativePath;
+        await writeChunkedToNativePath(nativeDestinationPath, bytes);
+        return nativeDestinationPath;
       } catch (error) {
-        console.warn('[ExportManager] Chunked write failed, falling back to browser download.', error);
+        console.warn('[ExportManager] Chunked write failed, retrying with a fresh save destination.', error);
+        nativeDestinationPath = null;
       }
     }
 
-    if (useNativeWrite && !prePickedNativePath) {
+    if (useNativeWrite && !nativeDestinationPath) {
       // Fallback: try native dialog + write (e.g. VOXL path that doesn't pre-pick)
       try {
         const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);

@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "resources": {
+      "windows-resources/dragonfruit_voxl_thumbnail_com.dll": "dragonfruit_voxl_thumbnail_com.dll"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/thumbnail-hooks.nsh"
+      }
+    }
+  }
+}

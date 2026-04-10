@@ -5,7 +5,7 @@
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build:tauri",
+    "beforeBuildCommand": "npm run build:tauri && node scripts/build-thumbnail-providers.mjs",
     "devUrl": "http://localhost:3005",
     "frontendDist": "frontend-dist"
   },
@@ -38,6 +38,8 @@
       {
         "label": "main",
         "create": false,
+        "visible": false,
+        "backgroundColor": "#0B0F14",
         "title": "DragonFruit",
         "width": 1280,
         "height": 800,

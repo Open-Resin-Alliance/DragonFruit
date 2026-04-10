@@ -869,12 +869,30 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
             .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
     }
 
+    let offset_header = request.headers().get("x-mesh-stage-offset");
+    let is_first_chunk = match offset_header {
+        Some(value) => {
+            let raw = value
+                .to_str()
+                .map_err(|e| format!("Invalid x-mesh-stage-offset header value: {e}"))?
+                .trim();
+            if raw.is_empty() {
+                false
+            } else {
+                raw.parse::<u64>()
+                    .map_err(|e| format!("Invalid x-mesh-stage-offset header value: {e}"))?
+                    == 0
+            }
+        }
+        None => false,
+    };
+
     let mut appender_lock = staged_mesh_file_appender()
         .lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
 
     let needs_new_appender = match appender_lock.as_ref() {
-        Some(existing) => existing.path != path_text,
+        Some(existing) => is_first_chunk || existing.path != path_text,
         None => true,
     };
 
@@ -907,9 +925,41 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         .writer
         .write_all(bytes)
         .map_err(|err| format!("Failed appending mesh stage bytes: {err}"))?;
+    appender
+        .writer
+        .flush()
+        .map_err(|err| format!("Failed flushing mesh stage bytes: {err}"))?;
     appender.len = appender.len.saturating_add(bytes.len() as u64);
 
     Ok(appender.len)
+}
+
+#[tauri::command]
+async fn finish_mesh_stage_write(path: String) -> Result<u64, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("finish_mesh_stage_write requires a non-empty path".into());
+    }
+
+    let mut appender_lock = staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    if let Some(appender) = appender_lock.as_mut() {
+        if appender.path == trimmed {
+            use std::io::Write;
+            appender
+                .writer
+                .flush()
+                .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            let len = appender.len;
+            *appender_lock = None; // release OS file handle immediately
+            return Ok(len);
+        }
+    }
+
+    // No open appender for this path (already closed or never opened).
+    Ok(0)
 }
 
 #[tauri::command]
@@ -1882,6 +1932,21 @@ async fn focus_main_window_command(app: tauri::AppHandle) -> Result<(), String> 
     Ok(())
 }
 
+/// Reveals the main window without calling set_focus().
+/// Used at startup to avoid triggering the Windows focus-stealing prevention
+/// mechanism, which plays an error sound when SetForegroundWindow is called
+/// from a process that does not currently own the foreground.
+#[tauri::command]
+async fn reveal_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let is_visible = window.is_visible().unwrap_or(true);
+        if !is_visible {
+            let _ = window.show();
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn read_print_file_bytes(source_path: String) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
@@ -2270,6 +2335,7 @@ fn main() {
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
+            finish_mesh_stage_write,
             stage_mesh_file_path,
             stage_mesh_binary_set,
             stage_mesh_binary_chunk,
@@ -2285,6 +2351,7 @@ fn main() {
             get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
+            reveal_main_window_command,
             write_bytes_to_path,
             read_print_file_bytes,
             read_print_layer_png,

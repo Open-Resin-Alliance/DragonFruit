@@ -635,16 +635,29 @@ export async function writeChunkedToNativePath(
     throw new Error('Chunked file writing is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
-  let offset = 0;
-  while (offset < bytes.length) {
-    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
-    await core.invoke<number>('append_mesh_stage_chunk', chunk, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'x-mesh-stage-path': destinationPath,
-      },
-    });
-    offset += chunk.length;
+  try {
+    let offset = 0;
+    while (offset < bytes.length) {
+      const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+      await core.invoke<number>('append_mesh_stage_chunk', chunk, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'x-mesh-stage-path': destinationPath,
+          'x-mesh-stage-offset': String(offset),
+        },
+      });
+      offset += chunk.length;
+    }
+  } finally {
+    // Always close the backend writer for this path so the destination file
+    // handle is released immediately (important for Explorer thumbnail reads).
+    try {
+      await core.invoke<number>('finish_mesh_stage_write', {
+        path: destinationPath,
+      });
+    } catch (error) {
+      console.warn('[nativeSlicerBridge] Failed finishing chunked write appender.', error);
+    }
   }
 }
 
