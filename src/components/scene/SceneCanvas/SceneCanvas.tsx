@@ -42,6 +42,7 @@ import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hove
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
+import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
 
 import { GhostOverlay } from '@/components/lys-import/GhostOverlay';
@@ -469,6 +470,11 @@ export function SceneCanvas({
     getSupportSnapshot,
     getSupportSnapshot,
   );
+  const supportSettings = React.useSyncExternalStore(
+    subscribeToSettings,
+    getSettings,
+    getSettings,
+  );
   const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
 
@@ -615,6 +621,9 @@ export function SceneCanvas({
 
   const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
   const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
+  const supportPlacementGuideRafRef = React.useRef<number | null>(null);
+  const supportPlacementGuidePendingZRef = React.useRef<number | null>(null);
+  const [supportPlacementGuideZ, setSupportPlacementGuideZ] = React.useState<number | null>(null);
 
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
 
@@ -1351,6 +1360,105 @@ export function SceneCanvas({
 
   const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
   const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive || supportHoverTargetActive || sceneHoveredSupportId !== null;
+
+  const queueSupportPlacementGuideZ = React.useCallback((nextZ: number | null) => {
+    supportPlacementGuidePendingZRef.current = nextZ;
+    if (supportPlacementGuideRafRef.current !== null) return;
+
+    supportPlacementGuideRafRef.current = requestAnimationFrame(() => {
+      supportPlacementGuideRafRef.current = null;
+      const pendingZ = supportPlacementGuidePendingZRef.current;
+      supportPlacementGuidePendingZRef.current = null;
+      setSupportPlacementGuideZ((previous) => {
+        if (previous === null && pendingZ === null) return previous;
+        if (previous !== null && pendingZ !== null && Math.abs(previous - pendingZ) <= 0.02) return previous;
+        return pendingZ;
+      });
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (supportPlacementGuideRafRef.current !== null) {
+        cancelAnimationFrame(supportPlacementGuideRafRef.current);
+        supportPlacementGuideRafRef.current = null;
+      }
+      supportPlacementGuidePendingZRef.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (mode === 'support' && !blockSupportPlacement) return;
+    queueSupportPlacementGuideZ(null);
+  }, [blockSupportPlacement, mode, queueSupportPlacementGuideZ]);
+
+  const handleSupportHover = React.useCallback((hit: THREE.Intersection | null) => {
+    if (mode === 'support' && !blockSupportPlacement) {
+      const nextZ = hit && Number.isFinite(hit.point.z) ? hit.point.z : null;
+      queueSupportPlacementGuideZ(nextZ);
+    } else {
+      queueSupportPlacementGuideZ(null);
+    }
+
+    onSupportHover?.(hit);
+  }, [blockSupportPlacement, mode, onSupportHover, queueSupportPlacementGuideZ]);
+
+  const supportPlacementIndicatorPlaneZ = React.useMemo(() => {
+    if (mode !== 'support' || blockSupportPlacement) return null;
+    if (supportPlacementGuideZ == null || !Number.isFinite(supportPlacementGuideZ)) return null;
+    return supportPlacementGuideZ;
+  }, [blockSupportPlacement, mode, supportPlacementGuideZ]);
+
+  const supportPlacementGuideLineWidthMm = React.useMemo(() => {
+    const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm * 0.3);
+
+    const pickPreviewContactDiameterMm = (preview: SupportData | null | undefined): number | null => {
+      if (!preview) return null;
+
+      const diameters: number[] = [];
+
+      const pushDiameter = (value: number | null | undefined) => {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return;
+        diameters.push(value);
+      };
+
+      pushDiameter(preview.contactCone?.profile?.contactDiameterMm);
+      preview.contactCones?.forEach((cone) => pushDiameter(cone.profile?.contactDiameterMm));
+      preview.contactDisks?.forEach((disk) => pushDiameter(disk.contactDiameterMm));
+
+      if (diameters.length === 0) return null;
+      return Math.max(...diameters);
+    };
+
+    const orderedPreviews: Array<SupportData | null | undefined> = [];
+
+    if (isBranchPlacementActive) orderedPreviews.push(branchPlacementPreview);
+    if (isLeafPlacementActive) orderedPreviews.push(leafPlacementPreview);
+    if (isKickstandPlacementActive) orderedPreviews.push(kickstandPlacementPreview);
+
+    orderedPreviews.push(
+      trunkPlacementPreview,
+      branchPlacementPreview,
+      leafPlacementPreview,
+      kickstandPlacementPreview,
+    );
+
+    for (const preview of orderedPreviews) {
+      const diameter = pickPreviewContactDiameterMm(preview);
+      if (diameter != null) return toGuideWidthMm(diameter);
+    }
+
+    return toGuideWidthMm(supportSettings.tip.contactDiameterMm || DEFAULT_TIP_CONTACT_DIAMETER_MM);
+  }, [
+    branchPlacementPreview,
+    isBranchPlacementActive,
+    isKickstandPlacementActive,
+    isLeafPlacementActive,
+    kickstandPlacementPreview,
+    leafPlacementPreview,
+    supportSettings.tip.contactDiameterMm,
+    trunkPlacementPreview,
+  ]);
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition
@@ -4314,7 +4422,7 @@ export function SceneCanvas({
                       isActiveModel={isActive}
                       onSmoothingGeometryActivate={onSmoothingGeometryActivate}
                       onSupportClick={onSupportClick}
-                      onSupportHover={onSupportHover}
+                      onSupportHover={handleSupportHover}
                       onActiveModelChange={onActiveModelChange}
                       disableRaycast={disableRaycast}
                       blockSupportPlacement={isGizmoDragging || blockSupportPlacement}
@@ -4342,6 +4450,10 @@ export function SceneCanvas({
                       outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
+                      supportPlacementGuidePlaneZ={!thumbnailCaptureActive && isActive ? supportPlacementIndicatorPlaneZ : null}
+                      supportPlacementGuideColor="#baf72e"
+                      supportPlacementGuideLineWidthMm={supportPlacementGuideLineWidthMm}
+                      supportPlacementGuideOpacity={0.62}
                       suppressModelInteraction={suppressModelInteraction}
                       isExternallyHovered={hoveredModelId === model.id}
                       deferExternalTransformUpdates={
