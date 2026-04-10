@@ -2,15 +2,38 @@ import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { getTrunks, getBranches, getSelectedId, getTrunkById, getRootById, getBranchById, getKnotById, setInteractionWarning } from '../../state';
+import {
+    getTrunks,
+    getBranches,
+    getTwigs,
+    getSticks,
+    getSelectedId,
+    getTrunkById,
+    getRootById,
+    getBranchById,
+    getTwigById,
+    getStickById,
+    getKnotById,
+    setInteractionWarning,
+    updateTwig,
+    updateStick,
+} from '../../state';
 import { getTrunkSegmentEndpoints } from '../Knot/knotUtils';
-import { Vec3, Trunk, Branch, Roots } from '../../types';
+import { Vec3, Trunk, Branch, Roots, Twig, Stick, ContactDisk } from '../../types';
 import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
-import { clearJointDragPositionPreview, clearSupportDragPreview, emitJointDragPositionPreview, isJointInteractionLocked, setJointInteractionLock } from './jointDragRuntime';
+import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
+import {
+    clearJointDragPositionPreview,
+    clearSupportDragPreview,
+    emitJointDragPositionPreview,
+    emitSupportDragPreview,
+    isJointInteractionLocked,
+    setJointInteractionLock,
+} from './jointDragRuntime';
 import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview } from './jointDragController';
 import { subscribeSupportInteractionReset } from '../../interaction/supportInteractionReset';
 
@@ -36,6 +59,8 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeTrunkId = useRef<string | null>(null);
     const activeBranchId = useRef<string | null>(null);
     const activeKickstandId = useRef<string | null>(null);
+    const activeTwigId = useRef<string | null>(null);
+    const activeStickId = useRef<string | null>(null);
     const dragPlane = useRef<THREE.Plane>(new THREE.Plane());
     const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
     const planeIntersectionRef = useRef<THREE.Vector3>(new THREE.Vector3());
@@ -46,11 +71,13 @@ export function useJointInteraction(enabled: boolean = true) {
     const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
     const liveTrunkPreviewRef = useRef<Trunk | null>(null);
     const liveBranchPreviewRef = useRef<Branch | null>(null);
+    const liveTwigPreviewRef = useRef<Twig | null>(null);
+    const liveStickPreviewRef = useRef<Stick | null>(null);
     const lastResolvedJointPosRef = useRef<Vec3 | null>(null);
     const lastPublishedClampedJointPosRef = useRef<Vec3 | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
-    const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
+    const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand'; supportId: string }>>(new Map());
     const activeJointBindingRef = useRef<{ jointId: string; segmentIndex: number; jointKey: 'topJoint' | 'bottomJoint' } | null>(null);
     const jointDragUpdatePendingRef = useRef(false);
     const jointDragListenersAttachedRef = useRef(false);
@@ -63,6 +90,145 @@ export function useJointInteraction(enabled: boolean = true) {
     const savedControlsEnabledRef = useRef<boolean | null>(null);
 
     const cloneTrunk = (trunk: Trunk): Trunk => JSON.parse(JSON.stringify(trunk));
+
+    const updateSegmentsJointPos = useCallback((segments: any[], jointId: string, pos: Vec3) => {
+        return segments.map((seg) => {
+            let changed = false;
+            let topJoint = seg.topJoint;
+            let bottomJoint = seg.bottomJoint;
+
+            if (topJoint?.id === jointId) {
+                topJoint = { ...topJoint, pos };
+                changed = true;
+            }
+            if (bottomJoint?.id === jointId) {
+                bottomJoint = { ...bottomJoint, pos };
+                changed = true;
+            }
+
+            return changed ? { ...seg, topJoint, bottomJoint } : seg;
+        });
+    }, []);
+
+    const recomputeConeForSocket = useCallback((cone: any, socketPos: { x: number; y: number; z: number }) => {
+        const effectiveSurfaceNormal = cone.surfaceNormal || cone.normal;
+        let axis = new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z);
+        if (axis.lengthSq() < 0.000001) axis.set(0, 0, 1);
+        axis.normalize();
+
+        let offset = 0;
+        if (cone.profile?.type === 'disk') {
+            if (cone.diskLengthOverride !== undefined) {
+                offset = cone.diskLengthOverride;
+            } else {
+                offset = calculateDiskThickness(effectiveSurfaceNormal, { x: axis.x, y: axis.y, z: axis.z }, cone.profile);
+            }
+        }
+
+        const contactPos = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
+        const sn = new THREE.Vector3(effectiveSurfaceNormal.x, effectiveSurfaceNormal.y, effectiveSurfaceNormal.z);
+        const socket = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+
+        let startPos = contactPos.clone().add(sn.clone().multiplyScalar(offset));
+        for (let i = 0; i < 3; i += 1) {
+            const v = socket.clone().sub(startPos);
+            if (v.length() > 0.0001) {
+                axis = v.clone().normalize();
+            }
+            if (cone.profile?.type === 'disk' && cone.diskLengthOverride === undefined) {
+                offset = calculateDiskThickness(effectiveSurfaceNormal, { x: axis.x, y: axis.y, z: axis.z }, cone.profile);
+                startPos = contactPos.clone().add(sn.clone().multiplyScalar(offset));
+            }
+        }
+
+        const finalStart = contactPos.clone().add(sn.clone().multiplyScalar(offset));
+        const lengthMm = Math.max(0.1, socket.distanceTo(finalStart));
+
+        return {
+            ...cone,
+            normal: { x: axis.x, y: axis.y, z: axis.z },
+            profile: {
+                ...cone.profile,
+                lengthMm,
+            },
+        };
+    }, []);
+
+    const getTwigDiskTipCenter = useCallback((disk: ContactDisk) => {
+        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+        return {
+            x: disk.pos.x + disk.surfaceNormal.x * thickness,
+            y: disk.pos.y + disk.surfaceNormal.y * thickness,
+            z: disk.pos.z + disk.surfaceNormal.z * thickness,
+        };
+    }, []);
+
+    const recomputeTwigDiskForSocket = useCallback((
+        disk: ContactDisk,
+        desiredSocketPos: { x: number; y: number; z: number },
+        axisHint?: THREE.Vector3,
+    ) => {
+        const contactPos = new THREE.Vector3(disk.pos.x, disk.pos.y, disk.pos.z);
+        const desiredSocket = new THREE.Vector3(desiredSocketPos.x, desiredSocketPos.y, desiredSocketPos.z);
+        const contactToDesiredSocket = desiredSocket.clone().sub(contactPos);
+
+        let surfaceNormal = contactToDesiredSocket.clone();
+        if (surfaceNormal.lengthSq() < 0.000001) {
+            surfaceNormal = new THREE.Vector3(disk.surfaceNormal.x, disk.surfaceNormal.y, disk.surfaceNormal.z);
+        }
+        if (surfaceNormal.lengthSq() < 0.000001) {
+            surfaceNormal.set(0, 0, 1);
+        }
+        surfaceNormal.normalize();
+
+        let axis = axisHint?.clone() ?? contactToDesiredSocket.clone();
+        if (axis.lengthSq() < 0.000001) {
+            axis = new THREE.Vector3(disk.coneAxis.x, disk.coneAxis.y, disk.coneAxis.z);
+        }
+        if (axis.lengthSq() < 0.000001) {
+            axis = surfaceNormal.clone();
+        }
+        axis.normalize();
+
+        const desiredDistance = contactToDesiredSocket.length();
+        const fallbackThickness = disk.diskLengthOverride ?? calculateDiskThickness(
+            { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
+            { x: axis.x, y: axis.y, z: axis.z },
+            disk.profile,
+        );
+        const thickness = Number.isFinite(desiredDistance) && desiredDistance > 0.000001
+            ? Math.max(0.001, desiredDistance)
+            : Math.max(0.001, fallbackThickness);
+
+        const snappedSocket = contactPos.clone().add(surfaceNormal.clone().multiplyScalar(thickness));
+
+        return {
+            disk: {
+                ...disk,
+                pos: {
+                    x: contactPos.x,
+                    y: contactPos.y,
+                    z: contactPos.z,
+                },
+                surfaceNormal: {
+                    x: surfaceNormal.x,
+                    y: surfaceNormal.y,
+                    z: surfaceNormal.z,
+                },
+                coneAxis: {
+                    x: axis.x,
+                    y: axis.y,
+                    z: axis.z,
+                },
+                diskLengthOverride: thickness,
+            } as ContactDisk,
+            socket: {
+                x: snappedSocket.x,
+                y: snappedSocket.y,
+                z: snappedSocket.z,
+            },
+        };
+    }, []);
 
     const applyInteractionWarning = useCallback((warning: 'SHAFT_ANGLE_TOO_FLAT' | null) => {
         if (lastWarningRef.current === warning) return;
@@ -166,15 +332,25 @@ export function useJointInteraction(enabled: boolean = true) {
         if (activeKickstandId.current) {
             clearSupportDragPreview('kickstand', activeKickstandId.current);
         }
+        if (activeTwigId.current) {
+            clearSupportDragPreview('twig', activeTwigId.current);
+        }
+        if (activeStickId.current) {
+            clearSupportDragPreview('stick', activeStickId.current);
+        }
 
         activeJointId.current = null;
         activeTrunkId.current = null;
         activeBranchId.current = null;
         activeKickstandId.current = null;
+        activeTwigId.current = null;
+        activeStickId.current = null;
         initialTrunkSnapshot.current = null;
         initialEditSnapshotRef.current = null;
         liveTrunkPreviewRef.current = null;
         liveBranchPreviewRef.current = null;
+        liveTwigPreviewRef.current = null;
+        liveStickPreviewRef.current = null;
         forceEndDragRef.current = false;
         lastAppliedDragPosRef.current = null;
         lastResolvedJointPosRef.current = null;
@@ -233,6 +409,20 @@ export function useJointInteraction(enabled: boolean = true) {
         for (const kickstand of Object.values(getKickstandSnapshot().kickstands)) {
             if (resolveJointPosFromSegments(kickstand.segments as any[], jointId)) {
                 jointParentCacheRef.current.set(jointId, { kind: 'kickstand', supportId: kickstand.id });
+                return;
+            }
+        }
+
+        for (const twig of getTwigs()) {
+            if (resolveJointPosFromSegments(twig.segments as any[], jointId)) {
+                jointParentCacheRef.current.set(jointId, { kind: 'twig', supportId: twig.id });
+                return;
+            }
+        }
+
+        for (const stick of getSticks()) {
+            if (resolveJointPosFromSegments(stick.segments as any[], jointId)) {
+                jointParentCacheRef.current.set(jointId, { kind: 'stick', supportId: stick.id });
                 return;
             }
         }
@@ -304,6 +494,8 @@ export function useJointInteraction(enabled: boolean = true) {
             let foundTrunk: Trunk | null = null;
             let foundBranch: Branch | null = null;
             let foundKickstand: Kickstand | null = null;
+            let foundTwig: Twig | null = null;
+            let foundStick: Stick | null = null;
             let foundJointPos: Vec3 | null = null;
 
             const resolveJointPosFromSegments = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, targetJointId: string): Vec3 | null => {
@@ -331,6 +523,24 @@ export function useJointInteraction(enabled: boolean = true) {
                     const pos = branch ? resolveJointPosFromSegments(branch.segments as any[], jointId) : null;
                     if (branch && pos) {
                         foundBranch = branch;
+                        foundJointPos = pos;
+                    } else {
+                        jointParentCacheRef.current.delete(jointId);
+                    }
+                } else if (cachedParent.kind === 'twig') {
+                    const twig = getTwigById(cachedParent.supportId);
+                    const pos = twig ? resolveJointPosFromSegments(twig.segments as any[], jointId) : null;
+                    if (twig && pos) {
+                        foundTwig = twig;
+                        foundJointPos = pos;
+                    } else {
+                        jointParentCacheRef.current.delete(jointId);
+                    }
+                } else if (cachedParent.kind === 'stick') {
+                    const stick = getStickById(cachedParent.supportId);
+                    const pos = stick ? resolveJointPosFromSegments(stick.segments as any[], jointId) : null;
+                    if (stick && pos) {
+                        foundStick = stick;
                         foundJointPos = pos;
                     } else {
                         jointParentCacheRef.current.delete(jointId);
@@ -389,9 +599,35 @@ export function useJointInteraction(enabled: boolean = true) {
                         }
                     }
                 }
+
+                if (!foundTrunk && !foundBranch && !foundKickstand) {
+                    const twigs = getTwigs();
+                    for (const twig of twigs) {
+                        const pos = resolveJointPosFromSegments(twig.segments as any[], jointId);
+                        if (pos) {
+                            foundTwig = twig;
+                            foundJointPos = pos;
+                            jointParentCacheRef.current.set(jointId, { kind: 'twig', supportId: twig.id });
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundTrunk && !foundBranch && !foundKickstand && !foundTwig) {
+                    const sticks = getSticks();
+                    for (const stick of sticks) {
+                        const pos = resolveJointPosFromSegments(stick.segments as any[], jointId);
+                        if (pos) {
+                            foundStick = stick;
+                            foundJointPos = pos;
+                            jointParentCacheRef.current.set(jointId, { kind: 'stick', supportId: stick.id });
+                            break;
+                        }
+                    }
+                }
             }
 
-            const foundParent = foundTrunk || foundBranch || foundKickstand;
+            const foundParent = foundTrunk || foundBranch || foundKickstand || foundTwig || foundStick;
             if (foundParent && foundJointPos) {
                 // Check if interaction is allowed: parent or joint itself must be selected
                 const selectedId = getSelectedId();
@@ -461,6 +697,18 @@ export function useJointInteraction(enabled: boolean = true) {
                         activeConstraintStartRef.current = { x: rPos.x, y: rPos.y, z: startZ };
                     }
                     initialEditSnapshotRef.current = captureSupportEditSnapshot();
+                } else if (foundTwig) {
+                    activeTwigId.current = foundTwig.id;
+                    liveTwigPreviewRef.current = foundTwig;
+                    activeConstraintRootRef.current = undefined;
+                    activeConstraintStartRef.current = undefined;
+                    initialEditSnapshotRef.current = captureSupportEditSnapshot();
+                } else if (foundStick) {
+                    activeStickId.current = foundStick.id;
+                    liveStickPreviewRef.current = foundStick;
+                    activeConstraintRootRef.current = undefined;
+                    activeConstraintStartRef.current = undefined;
+                    initialEditSnapshotRef.current = captureSupportEditSnapshot();
                 }
 
                 emitJointDragPositionPreview(jointId, foundJointPos);
@@ -492,7 +740,7 @@ export function useJointInteraction(enabled: boolean = true) {
         const activeJointIdAtEnd = activeJointId.current;
         const shouldEndDrag = (!isDragging || forceEndDragRef.current)
             && activeJointIdAtEnd
-            && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current);
+            && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current || activeTwigId.current || activeStickId.current);
 
         if (shouldEndDrag) {
             // Drag ended
@@ -555,6 +803,97 @@ export function useJointInteraction(enabled: boolean = true) {
                         });
                         commitJointDragSupport('kickstand', resolved);
                     }
+                } else if (activeTwigId.current) {
+                    const twig = getTwigById(activeTwigId.current);
+                    if (twig) {
+                        const nextSegments = updateSegmentsJointPos(twig.segments as any[], activeJointIdAtEnd, lastDragPos.current) as any[];
+                        const firstSegment = nextSegments[0];
+                        const lastSegment = nextSegments[nextSegments.length - 1];
+                        const movingBottomEndpoint = firstSegment?.bottomJoint?.id === activeJointIdAtEnd;
+                        const movingTopEndpoint = lastSegment?.topJoint?.id === activeJointIdAtEnd;
+
+                        let nextDiskA: ContactDisk = twig.contactDiskA;
+                        let nextDiskB: ContactDisk = twig.contactDiskB;
+                        let adjustedSegments = nextSegments;
+
+                        if (movingBottomEndpoint && firstSegment?.bottomJoint) {
+                            const otherSocket = lastSegment?.topJoint?.pos ?? getTwigDiskTipCenter(nextDiskB);
+                            const desiredSocketA = firstSegment.bottomJoint.pos;
+                            const axisHint = new THREE.Vector3(
+                                otherSocket.x - desiredSocketA.x,
+                                otherSocket.y - desiredSocketA.y,
+                                otherSocket.z - desiredSocketA.z,
+                            );
+
+                            const recomputedA = recomputeTwigDiskForSocket(twig.contactDiskA, desiredSocketA, axisHint);
+                            nextDiskA = recomputedA.disk;
+
+                            adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
+                                if (index !== 0 || !segment.bottomJoint) return segment;
+                                return {
+                                    ...segment,
+                                    bottomJoint: {
+                                        ...segment.bottomJoint,
+                                        pos: recomputedA.socket,
+                                    },
+                                };
+                            });
+                        }
+
+                        if (movingTopEndpoint && lastSegment?.topJoint) {
+                            const firstAfterAdjust = adjustedSegments[0];
+                            const otherSocket = firstAfterAdjust?.bottomJoint?.pos ?? getTwigDiskTipCenter(nextDiskA);
+                            const desiredSocketB = lastSegment.topJoint.pos;
+                            const axisHint = new THREE.Vector3(
+                                otherSocket.x - desiredSocketB.x,
+                                otherSocket.y - desiredSocketB.y,
+                                otherSocket.z - desiredSocketB.z,
+                            );
+
+                            const recomputedB = recomputeTwigDiskForSocket(twig.contactDiskB, desiredSocketB, axisHint);
+                            nextDiskB = recomputedB.disk;
+
+                            adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
+                                if (index !== adjustedSegments.length - 1 || !segment.topJoint) return segment;
+                                return {
+                                    ...segment,
+                                    topJoint: {
+                                        ...segment.topJoint,
+                                        pos: recomputedB.socket,
+                                    },
+                                };
+                            });
+                        }
+
+                        const committedTwig: Twig = {
+                            ...twig,
+                            segments: adjustedSegments,
+                            contactDiskA: nextDiskA,
+                            contactDiskB: nextDiskB,
+                        };
+
+                        updateTwig(committedTwig);
+                    }
+                } else if (activeStickId.current) {
+                    const stick = getStickById(activeStickId.current);
+                    if (stick) {
+                        const nextSegments = updateSegmentsJointPos(stick.segments as any[], activeJointIdAtEnd, lastDragPos.current) as any;
+                        const nextConeA = stick.contactConeA?.socketJointId === activeJointIdAtEnd
+                            ? recomputeConeForSocket(stick.contactConeA as any, lastDragPos.current)
+                            : stick.contactConeA;
+                        const nextConeB = stick.contactConeB?.socketJointId === activeJointIdAtEnd
+                            ? recomputeConeForSocket(stick.contactConeB as any, lastDragPos.current)
+                            : stick.contactConeB;
+
+                        const committedStick: Stick = {
+                            ...stick,
+                            segments: nextSegments,
+                            contactConeA: nextConeA,
+                            contactConeB: nextConeB,
+                        };
+
+                        updateStick(committedStick);
+                    }
                 }
             }
 
@@ -577,16 +916,32 @@ export function useJointInteraction(enabled: boolean = true) {
                     pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
                 } else if (activeKickstandId.current) {
                     pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+                } else if (activeTwigId.current) {
+                    pushSupportEditHistory('Move twig joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+                } else if (activeStickId.current) {
+                    pushSupportEditHistory('Move stick joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
                 }
             }
+
+            if (activeTwigId.current) {
+                clearSupportDragPreview('twig', activeTwigId.current);
+            }
+            if (activeStickId.current) {
+                clearSupportDragPreview('stick', activeStickId.current);
+            }
+
             activeJointId.current = null;
             activeTrunkId.current = null;
             activeBranchId.current = null;
             activeKickstandId.current = null;
+            activeTwigId.current = null;
+            activeStickId.current = null;
             initialTrunkSnapshot.current = null;
             initialEditSnapshotRef.current = null;
             liveTrunkPreviewRef.current = null;
             liveBranchPreviewRef.current = null;
+            liveTwigPreviewRef.current = null;
+            liveStickPreviewRef.current = null;
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
             lastResolvedJointPosRef.current = null;
@@ -641,11 +996,11 @@ export function useJointInteraction(enabled: boolean = true) {
     // Update loop
     useFrame(() => {
         if (!jointDragUpdatePendingRef.current) return;
-        if (!(activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current))) return;
+        if (!(activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current || activeTwigId.current || activeStickId.current))) return;
 
         jointDragUpdatePendingRef.current = false;
 
-        if (activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current)) {
+        if (activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current || activeTwigId.current || activeStickId.current)) {
             raycaster.setFromCamera(pointer, camera);
             const intersection = planeIntersectionRef.current;
             const intersected = raycaster.ray.intersectPlane(dragPlane.current, intersection);
@@ -758,6 +1113,113 @@ export function useJointInteraction(enabled: boolean = true) {
 
                         emitPreviewJointPos(clampedKickstandJointPos, newPosVec3);
                         applyWarningForDragDelta(clampedKickstandJointPos, newPosVec3);
+                    }
+                } else if (activeTwigId.current) {
+                    const twig = getTwigById(activeTwigId.current);
+                    if (twig) {
+                        const nextSegments = updateSegmentsJointPos(twig.segments as any[], activeJointId.current!, newPosVec3) as any[];
+                        const firstSegment = nextSegments[0];
+                        const lastSegment = nextSegments[nextSegments.length - 1];
+                        const movingBottomEndpoint = firstSegment?.bottomJoint?.id === activeJointId.current!;
+                        const movingTopEndpoint = lastSegment?.topJoint?.id === activeJointId.current!;
+
+                        let nextDiskA: ContactDisk = twig.contactDiskA;
+                        let nextDiskB: ContactDisk = twig.contactDiskB;
+                        let adjustedSegments = nextSegments;
+
+                        if (movingBottomEndpoint && firstSegment?.bottomJoint) {
+                            const otherSocket = lastSegment?.topJoint?.pos ?? getTwigDiskTipCenter(nextDiskB);
+                            const desiredSocketA = firstSegment.bottomJoint.pos;
+                            const axisHint = new THREE.Vector3(
+                                otherSocket.x - desiredSocketA.x,
+                                otherSocket.y - desiredSocketA.y,
+                                otherSocket.z - desiredSocketA.z,
+                            );
+
+                            const recomputedA = recomputeTwigDiskForSocket(twig.contactDiskA, desiredSocketA, axisHint);
+                            nextDiskA = recomputedA.disk;
+
+                            adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
+                                if (index !== 0 || !segment.bottomJoint) return segment;
+                                return {
+                                    ...segment,
+                                    bottomJoint: {
+                                        ...segment.bottomJoint,
+                                        pos: recomputedA.socket,
+                                    },
+                                };
+                            });
+                        }
+
+                        if (movingTopEndpoint && lastSegment?.topJoint) {
+                            const firstAfterAdjust = adjustedSegments[0];
+                            const otherSocket = firstAfterAdjust?.bottomJoint?.pos ?? getTwigDiskTipCenter(nextDiskA);
+                            const desiredSocketB = lastSegment.topJoint.pos;
+                            const axisHint = new THREE.Vector3(
+                                otherSocket.x - desiredSocketB.x,
+                                otherSocket.y - desiredSocketB.y,
+                                otherSocket.z - desiredSocketB.z,
+                            );
+
+                            const recomputedB = recomputeTwigDiskForSocket(twig.contactDiskB, desiredSocketB, axisHint);
+                            nextDiskB = recomputedB.disk;
+
+                            adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
+                                if (index !== adjustedSegments.length - 1 || !segment.topJoint) return segment;
+                                return {
+                                    ...segment,
+                                    topJoint: {
+                                        ...segment.topJoint,
+                                        pos: recomputedB.socket,
+                                    },
+                                };
+                            });
+                        }
+
+                        const newTwig: Twig = {
+                            ...twig,
+                            segments: adjustedSegments,
+                            contactDiskA: nextDiskA,
+                            contactDiskB: nextDiskB,
+                        };
+
+                        const clampedTwigJointPos = resolveJointPosById(newTwig.segments, activeJointId.current!);
+                        const shouldPublish = shouldPublishForClampedPos(clampedTwigJointPos);
+                        if (liveTwigPreviewRef.current !== newTwig && shouldPublish) {
+                            liveTwigPreviewRef.current = newTwig;
+                            emitSupportDragPreview('twig', newTwig.id, newTwig);
+                            markPublishedClampedPos(clampedTwigJointPos);
+                        }
+
+                        emitPreviewJointPos(clampedTwigJointPos, newPosVec3);
+                    }
+                } else if (activeStickId.current) {
+                    const stick = getStickById(activeStickId.current);
+                    if (stick) {
+                        const nextSegments = updateSegmentsJointPos(stick.segments as any[], activeJointId.current!, newPosVec3) as any;
+                        const nextConeA = stick.contactConeA?.socketJointId === activeJointId.current!
+                            ? recomputeConeForSocket(stick.contactConeA as any, newPosVec3)
+                            : stick.contactConeA;
+                        const nextConeB = stick.contactConeB?.socketJointId === activeJointId.current!
+                            ? recomputeConeForSocket(stick.contactConeB as any, newPosVec3)
+                            : stick.contactConeB;
+
+                        const newStick: Stick = {
+                            ...stick,
+                            segments: nextSegments,
+                            contactConeA: nextConeA,
+                            contactConeB: nextConeB,
+                        };
+
+                        const clampedStickJointPos = resolveJointPosById(newStick.segments, activeJointId.current!);
+                        const shouldPublish = shouldPublishForClampedPos(clampedStickJointPos);
+                        if (liveStickPreviewRef.current !== newStick && shouldPublish) {
+                            liveStickPreviewRef.current = newStick;
+                            emitSupportDragPreview('stick', newStick.id, newStick);
+                            markPublishedClampedPos(clampedStickJointPos);
+                        }
+
+                        emitPreviewJointPos(clampedStickJointPos, newPosVec3);
                     }
                 }
             }

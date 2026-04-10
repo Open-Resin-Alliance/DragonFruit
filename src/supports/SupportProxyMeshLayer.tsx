@@ -104,6 +104,28 @@ function getDiskTipCenter(disk: ContactDisk): Vec3 {
   };
 }
 
+function toProxyConeFromTwigDisk(disk: ContactDisk, supportId: string, modelId: string): InstancedContactCone {
+  return {
+    id: disk.id,
+    supportId,
+    modelId,
+    pos: disk.pos,
+    normal: disk.coneAxis,
+    surfaceNormal: disk.surfaceNormal,
+    diskLengthOverride: disk.diskLengthOverride,
+    profile: {
+      type: 'disk',
+      contactDiameterMm: disk.contactDiameterMm,
+      bodyDiameterMm: disk.contactDiameterMm,
+      lengthMm: 0.001,
+      penetrationMm: 0,
+      diskThicknessMm: disk.profile.diskThicknessMm,
+      maxStandoffMm: disk.profile.maxStandoffMm,
+      standoffAngleThreshold: disk.profile.standoffAngleThreshold,
+    },
+  };
+}
+
 export function SupportProxyMeshLayer({
   mode,
   clipLower,
@@ -460,6 +482,11 @@ export function SupportProxyMeshLayer({
     }
 
     for (const twig of Object.values(supportTwigs)) {
+      if (includeDetailedPrimitives) {
+        pushCone(toProxyConeFromTwigDisk(twig.contactDiskA, twig.id, twig.modelId));
+        pushCone(toProxyConeFromTwigDisk(twig.contactDiskB, twig.id, twig.modelId));
+      }
+
       for (const segment of twig.segments) {
         if (includeDetailedPrimitives && segment.bottomJoint) {
           pushJoint({
