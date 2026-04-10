@@ -58,6 +58,7 @@ export function ContactDiskRenderer({
 }: ContactDiskRendererProps) {
     const groupRef = React.useRef<any>(null);
     const pickIdRef = React.useRef<number | null>(null);
+    const [isHovered, setIsHovered] = React.useState(false);
     const { register, unregister } = usePicking();
     
     // Calculate geometry based on angle between Surface Normal and Cone Axis
@@ -83,7 +84,10 @@ export function ContactDiskRenderer({
     // Tip Center is at Local Y = +thickness / 2.
 
     const effectivePenetration = Math.max(0, penetrationMm);
+    const hoverVisible = isHovered && isInteractable && isParentSelected;
     const displayColor = isContactDiskSelected ? '#c11f61' : color;
+    const displayEmissive = hoverVisible ? '#efd8c2' : '#000000';
+    const displayEmissiveIntensity = hoverVisible ? 0.16 : 0;
 
     const handleClick = (e: any) => {
         if (!id) return;
@@ -91,11 +95,15 @@ export function ContactDiskRenderer({
     };
 
     const handlePointerMove = React.useCallback((e: any) => {
-        if (!id || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+        if (!id || !isInteractable || (!isParentSelected && !isContactDiskSelected)) {
+            setIsHovered(false);
+            return;
+        }
 
         if (isSupportEditInteractionActive()) {
             emitImmediateModelHover(null);
             setHoveredState('none', null);
+            setIsHovered(false);
             return;
         }
 
@@ -103,14 +111,17 @@ export function ContactDiskRenderer({
         if (frontModelId) {
             emitImmediateModelHover(frontModelId);
             setHoveredState('none', null);
+            setIsHovered(false);
             return;
         }
 
         emitImmediateModelHover(null);
         setHoveredState('contactDisk', id);
+        setIsHovered(true);
     }, [id, isInteractable, isParentSelected, isContactDiskSelected]);
 
     const handlePointerOut = React.useCallback(() => {
+        setIsHovered(false);
         if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
 
         if (isSupportEditInteractionActive()) {
@@ -195,15 +206,17 @@ export function ContactDiskRenderer({
     return (
         <group ref={groupRef} position={[center.x, center.y, center.z]} quaternion={rotation}>
             {isContactDiskSelected ? (
-                <ContactDiskHud
-                    radius={radius}
-                    color="#ffffff"
-                    isInteractable={true}
-                    onHoverChange={handleHudHoverChange}
-                    onDragStateChange={handleHudDragStateChange}
-                    onPointerDown={handleHudPointerDown}
-                    onPointerUp={handleHudPointerUp}
-                />
+                <group position={[0, -thickness / 2, 0]}>
+                    <ContactDiskHud
+                        radius={radius}
+                        color="#ffffff"
+                        isInteractable={true}
+                        onHoverChange={handleHudHoverChange}
+                        onDragStateChange={handleHudDragStateChange}
+                        onPointerDown={handleHudPointerDown}
+                        onPointerUp={handleHudPointerUp}
+                    />
+                </group>
             ) : null}
             <mesh position={[0, -effectivePenetration / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 {/*
@@ -215,6 +228,8 @@ export function ContactDiskRenderer({
                 <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, radialSegments]} />
                 <meshStandardMaterial
                     color={displayColor}
+                    emissive={displayEmissive}
+                    emissiveIntensity={displayEmissiveIntensity}
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
@@ -229,6 +244,8 @@ export function ContactDiskRenderer({
                 <sphereGeometry args={[radius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                 <meshStandardMaterial
                     color={displayColor}
+                    emissive={displayEmissive}
+                    emissiveIntensity={displayEmissiveIntensity}
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
