@@ -4020,6 +4020,7 @@ export function SceneCanvas({
     includeBuildPlateDuringCapture,
   } = useExportThumbnailCapture({
     models,
+    meshColor,
     modelWorldBounds,
     computeModelWorldBounds,
     buildVolumeBounds,
@@ -4030,6 +4031,8 @@ export function SceneCanvas({
     sceneRef,
     cameraRef,
     buildVolumeBoundsOverlayRef,
+    selectedTintColor,
+    selectedTintStrength,
     exportThumbnailRenderOptions,
     onRegisterExportThumbnailCapture,
   });
@@ -4309,8 +4312,9 @@ export function SceneCanvas({
                       blockSupportPlacement={isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
                       isSelected={
-                        isSelectedModel &&
+                        isCaptureTintModel ||
                         (
+                          isSelectedModel &&
                           effectiveModelSelected && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
                         )
                       }

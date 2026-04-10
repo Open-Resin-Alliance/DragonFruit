@@ -5,6 +5,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { computeApproxModelWorldBounds } from '@/utils/modelBounds';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { blendTintColor } from '@/features/shaders/mesh/tint';
 
 import { getBoxCorners } from './SceneCanvasGeometry';
 
@@ -28,6 +29,7 @@ export type ExportThumbnailRenderOptions = {
 
 type UseExportThumbnailCaptureArgs = {
   models: LoadedModel[];
+  meshColor?: string;
   modelWorldBounds: Map<string, THREE.Box3>;
   computeModelWorldBounds: (
     model: LoadedModel,
@@ -42,12 +44,15 @@ type UseExportThumbnailCaptureArgs = {
   sceneRef: React.RefObject<THREE.Scene | null>;
   cameraRef: React.RefObject<THREE.Camera | null>;
   buildVolumeBoundsOverlayRef: React.RefObject<THREE.Group | null>;
+  selectedTintColor?: string;
+  selectedTintStrength?: number;
   exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
 };
 
 export function useExportThumbnailCapture({
   models,
+  meshColor,
   modelWorldBounds,
   computeModelWorldBounds,
   buildVolumeBounds,
@@ -58,10 +63,12 @@ export function useExportThumbnailCapture({
   sceneRef,
   cameraRef,
   buildVolumeBoundsOverlayRef,
+  selectedTintColor,
+  selectedTintStrength,
   exportThumbnailRenderOptions,
   onRegisterExportThumbnailCapture,
 }: UseExportThumbnailCaptureArgs) {
-  const [thumbnailCaptureActive] = React.useState(false);
+  const thumbnailCaptureActive = false;
 
   const captureExportThumbnailPng = React.useCallback(async (): Promise<Uint8Array | null> => {
     const renderer = rendererRef.current;
@@ -205,9 +212,12 @@ export function useExportThumbnailCapture({
     const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
     const visibilityRestores: Array<{ node: THREE.Object3D; visible: boolean }> = [];
     const lightRestores: Array<{ light: THREE.Light; position: THREE.Vector3 }> = [];
+    const colorRestores: Array<{ material: THREE.Material & { color: THREE.Color }; color: THREE.Color }> = [];
     const helperOriginalVisibility = new WeakMap<THREE.Object3D, boolean>();
     const buildPlateHelperNodes: THREE.Object3D[] = [];
     const gridHelperNodes: THREE.Object3D[] = [];
+    const fallbackModelBaseColor = meshColor ?? '#a3a3a3';
+    const captureSelectedTintStrength = THREE.MathUtils.clamp(selectedTintStrength ?? 0.75, 0, 1);
 
     const hideHelperForFit = (node: THREE.Object3D) => {
       if (!helperOriginalVisibility.has(node)) {
@@ -230,10 +240,34 @@ export function useExportThumbnailCapture({
         entry.light.position.copy(entry.position);
         entry.light.updateMatrixWorld(true);
       }
+      for (let i = colorRestores.length - 1; i >= 0; i -= 1) {
+        const entry = colorRestores[i];
+        entry.material.color.copy(entry.color);
+        entry.material.needsUpdate = true;
+      }
       for (let i = visibilityRestores.length - 1; i >= 0; i -= 1) {
         const entry = visibilityRestores[i];
         entry.node.visible = entry.visible;
       }
+    };
+
+    const tintMaterialForCapture = (material: THREE.Material, modelId?: string) => {
+      const colorMaterial = material as THREE.Material & { color?: THREE.Color };
+      if (!(colorMaterial.color instanceof THREE.Color)) return;
+
+      if (colorRestores.every((entry) => entry.material !== colorMaterial)) {
+        colorRestores.push({ material: colorMaterial as THREE.Material & { color: THREE.Color }, color: colorMaterial.color.clone() });
+      }
+
+      const model = modelId ? models.find((entry) => entry.id === modelId) : null;
+      const baseColor = model?.color ?? fallbackModelBaseColor;
+      const blended = blendTintColor(baseColor, selectedTintColor, captureSelectedTintStrength);
+      try {
+        colorMaterial.color.setStyle(blended);
+      } catch {
+        colorMaterial.color.setStyle('#ec2a77');
+      }
+      colorMaterial.needsUpdate = true;
     };
 
     let captureRenderer: THREE.WebGLRenderer | null = null;
@@ -463,6 +497,31 @@ export function useExportThumbnailCapture({
 
       sceneGraph.traverse((node) => {
         const helperType = (node.userData as Record<string, unknown> | undefined)?.thumbnailHelperType;
+        const isGizmoNode = Boolean((node.userData as Record<string, unknown> | undefined)?.isGizmoHandle);
+        const isModelTintTarget = (node.userData as Record<string, unknown> | undefined)?.thumbnailTintTarget === 'modelMesh';
+        const modelId = typeof (node.userData as Record<string, unknown> | undefined)?.modelId === 'string'
+          ? ((node.userData as Record<string, unknown>).modelId as string)
+          : undefined;
+        const shouldExcludeFromThumbnail = Boolean((node.userData as Record<string, unknown> | undefined)?.thumbnailCaptureExclude);
+
+        if (shouldExcludeFromThumbnail) {
+          hideHelperForFit(node);
+          return;
+        }
+
+        if (isGizmoNode) {
+          hideHelperForFit(node);
+        }
+
+        if (isModelTintTarget && node instanceof THREE.Mesh) {
+          const material = node.material;
+          if (Array.isArray(material)) {
+            material.forEach((entry) => tintMaterialForCapture(entry, modelId));
+          } else if (material) {
+            tintMaterialForCapture(material, modelId);
+          }
+        }
+
         if (helperType === 'buildPlate') {
           buildPlateHelperNodes.push(node);
           hideHelperForFit(node);
@@ -740,8 +799,11 @@ export function useExportThumbnailCapture({
     computeModelWorldBounds,
     defaultCamera,
     exportThumbnailRenderOptions,
+    meshColor,
     modelWorldBounds,
     models,
+    selectedTintColor,
+    selectedTintStrength,
     rendererRef,
     sceneRef,
     cameraRef,

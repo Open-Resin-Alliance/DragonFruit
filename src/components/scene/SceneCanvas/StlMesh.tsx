@@ -503,7 +503,7 @@ function StlMeshComponent({
           if (typeof actualMeshRef === 'function') actualMeshRef(node);
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
         }}
-        userData={{ modelId }}
+        userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
         geometry={geometry}
         position={meshLocalOffset}
         renderOrder={baseShaderType === 'xray' || isSupportDimmed ? 2 : 0}
