@@ -504,8 +504,6 @@ export function LocalBackupsSettingsTab() {
     const targetDirectory = selectedDirectory.trim();
     if (!targetDirectory) return;
 
-    if (!window.confirm('Delete this local backup snapshot? This cannot be undone.')) return;
-
     try {
       await invokeDesktop<boolean>('local_backup_delete_history_item', {
         directoryPath: targetDirectory,
