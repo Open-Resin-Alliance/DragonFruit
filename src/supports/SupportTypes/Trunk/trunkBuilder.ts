@@ -15,6 +15,7 @@ import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
 import { calculateSmartPlacement } from '../../PlacementLogic/SmartPlacement';
+import { calculateSmartPlacementV2, getOrCreateSDFCache } from '../../PlacementLogic/Pathfinding';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
@@ -105,9 +106,51 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         rootsTopZ
     };
 
-    const placement = mesh
-        ? calculateSmartPlacement({ ...placementInput, mesh, modelId })
-        : calculateStandardPlacement(placementInput);
+    let placement: TrunkPlacementResult;
+    if (mesh) {
+        // V2 grid A* pathfinder (SDF-backed, no raycast bundles)
+        const v2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId });
+        if (v2Result.error === 'COLLISION_WITH_MODEL') {
+            // Fallback to V1 raycast-based search, then SDF post-validate.
+            // V1 uses 9-ray bundles which have gaps — verify every segment
+            // of V1's result against the SDF before accepting it.
+            const v1Result = calculateSmartPlacement({ ...placementInput, mesh, modelId });
+            if (v1Result.error) {
+                placement = v1Result; // V1 also failed — pass error through
+            } else {
+                const sdf = getOrCreateSDFCache(mesh);
+                sdf.refreshMatrix();
+                const shaftRadius = settings.shaft.diameterMm / 2;
+                const sdfClearance = shaftRadius + 0.25;
+                // Build the chain: rootTopTarget → joints → socketPos
+                const v1RootTop: Vec3 = { x: v1Result.basePos.x, y: v1Result.basePos.y, z: rootsTopZ };
+                const v1Chain: Vec3[] = [
+                    v1RootTop,
+                    ...(v1Result.joints ?? []),
+                    v1Result.socketPos,
+                ];
+                let v1Clips = false;
+                for (let i = 0; i < v1Chain.length - 1; i++) {
+                    const a = v1Chain[i];
+                    const b = v1Chain[i + 1];
+                    if (sdf.segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, sdfClearance)) {
+                        v1Clips = true;
+                        break;
+                    }
+                }
+                if (v1Clips) {
+                    // V1's path clips the model — reject it
+                    placement = { ...v1Result, error: 'COLLISION_WITH_MODEL' };
+                } else {
+                    placement = v1Result;
+                }
+            }
+        } else {
+            placement = v2Result;
+        }
+    } else {
+        placement = calculateStandardPlacement(placementInput);
+    }
 
     return buildTrunkDataFromPlacement(input, placement);
 }

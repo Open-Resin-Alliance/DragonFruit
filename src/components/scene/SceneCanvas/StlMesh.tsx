@@ -150,6 +150,24 @@ function StlMeshComponent({
   const supportDimCameraLocalPointRef = React.useRef(new THREE.Vector3());
   const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
+  const supportDimShaderUniformsRef = React.useRef<{ uDitherAmount: THREE.IUniform<number> } | null>(null);
+  const supportDimRaycastBlockedRef = React.useRef(false);
+  const shiftHeldRef = React.useRef(false);
+  // Updated each render — readable inside stable callbacks without causing re-renders.
+  const isSupportDimmedRef = React.useRef(false);
+  // Stable shim that delegates to THREE.Mesh.prototype.raycast unless the ghost is
+  // currently dissolved close to the camera. Assigned to mesh.raycast on mount so
+  // there is one consistent owner — no two code paths fight over the value.
+  const supportDimRaycastRef = React.useRef<THREE.Mesh['raycast']>(
+    function supportDimRaycast(
+      this: THREE.Mesh,
+      raycaster: THREE.Raycaster,
+      intersects: THREE.Intersection[],
+    ) {
+      if (isSupportDimmedRef.current && supportDimRaycastBlockedRef.current) return;
+      THREE.Mesh.prototype.raycast.call(this, raycaster, intersects);
+    } as THREE.Mesh['raycast'],
+  );
 
   // Build clipping planes directly from current props so clipping never lags
   // by one frame when layer slider updates.
@@ -321,9 +339,9 @@ function StlMeshComponent({
         console.log('[Raycast] DISABLED - performance mode active');
         mesh.raycast = () => { };
       } else {
-        // Restore normal raycasting behavior
+        // Restore to our stable shim (which checks proximity-block ref internally).
         console.log('[Raycast] ENABLED - normal interaction mode');
-        mesh.raycast = THREE.Mesh.prototype.raycast;
+        mesh.raycast = supportDimRaycastRef.current;
       }
     }
   }, [effectiveDisableRaycast]);
@@ -373,19 +391,87 @@ function StlMeshComponent({
     : (isExternallyHoveredModel || isHoveredModelFromPicking);
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
+  isSupportDimmedRef.current = isSupportDimmed; // keep ref current every render
   const dimmedBaseOpacity = isSupportDimmed
     ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
     : null;
-  const dimmedInsideOpacity = isSupportDimmed
-    ? 0.0
-    : null;
+
+  // Imperative material with Bayer 4×4 dither injected via onBeforeCompile.
+  // Created once (stable across re-renders) so the shader is compiled exactly once.
+  const supportDimMaterialObj = React.useMemo(() => {
+    if (!isSupportDimmed) return null;
+    const mat = new THREE.MeshStandardMaterial({
+      color: meshColor ?? '#c8c8ce',
+      transparent: true,
+      opacity: dimmedBaseOpacity ?? 0.5,
+      roughness: 0.55,
+      metalness: 0.02,
+      side: THREE.FrontSide,
+      depthWrite: true,
+    });
+    // Custom cache key ensures this program is never shared with other MeshStandardMaterials.
+    mat.customProgramCacheKey = () => 'df-support-dim-dither';
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms['uDitherAmount'] = { value: 0.0 };
+      supportDimShaderUniformsRef.current = shader.uniforms as unknown as { uDitherAmount: THREE.IUniform<number> };
+      shader.fragmentShader = 'uniform float uDitherAmount;\n' + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+if (uDitherAmount > 0.0) {
+  int _bx = int(mod(gl_FragCoord.x, 4.0));
+  int _by = int(mod(gl_FragCoord.y, 4.0));
+  vec4 _brow;
+  if      (_by == 0) _brow = vec4( 0.0,  8.0,  2.0, 10.0);
+  else if (_by == 1) _brow = vec4(12.0,  4.0, 14.0,  6.0);
+  else if (_by == 2) _brow = vec4( 3.0, 11.0,  1.0,  9.0);
+  else               _brow = vec4(15.0,  7.0, 13.0,  5.0);
+  float _bv;
+  if      (_bx == 0) _bv = _brow.x;
+  else if (_bx == 1) _bv = _brow.y;
+  else if (_bx == 2) _bv = _brow.z;
+  else               _bv = _brow.w;
+  if (uDitherAmount > _bv / 16.0) discard;
+}`,
+      );
+    };
+    return mat;
+  // dimmedBaseOpacity is always 0.5 at runtime but included for correctness.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSupportDimmed, meshColor, dimmedBaseOpacity]);
+
+  // Keep supportDimMaterialRef in sync (used by useFrame) and update clipping planes.
+  React.useLayoutEffect(() => {
+    supportDimMaterialRef.current = supportDimMaterialObj;
+    if (!supportDimMaterialObj) { supportDimShaderUniformsRef.current = null; return; }
+    supportDimMaterialObj.clippingPlanes = planes;
+    return () => { supportDimMaterialRef.current = null; };
+  }, [supportDimMaterialObj, planes]);
+
+  // Dispose GPU resources when material is recreated or component unmounts.
+  React.useEffect(() => {
+    return () => { supportDimMaterialObj?.dispose(); };
+  }, [supportDimMaterialObj]);
+
+  // Track Shift key so dissolved ghost models can still be selected with Shift+click.
+  React.useEffect(() => {
+    if (!isSupportDimmed) return;
+    const onKey = (e: KeyboardEvent) => { shiftHeldRef.current = e.shiftKey; };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+      shiftHeldRef.current = false;
+    };
+  }, [isSupportDimmed]);
 
   useFrame(() => {
     if (!isSupportDimmed) return;
 
     const mesh = internalMeshRef.current;
     const material = supportDimMaterialRef.current;
-    if (!mesh || !material || dimmedBaseOpacity == null || dimmedInsideOpacity == null) return;
+    if (!mesh || !material || dimmedBaseOpacity == null) return;
 
     const localPoint = supportDimCameraLocalPointRef.current;
     localPoint.copy(camera.position);
@@ -400,11 +486,13 @@ function StlMeshComponent({
     );
     const distanceToBoundsMm = localDistanceToBounds * distanceScaleFactor;
 
-    const proximityFadeRangeMm = 24;
+    // Wider range so ghosting starts dissolving well before the camera reaches the model.
+    const proximityFadeRangeMm = 80;
     const proximityT = THREE.MathUtils.clamp(1 - (distanceToBoundsMm / proximityFadeRangeMm), 0, 1);
-    const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, dimmedInsideOpacity, proximityT);
-    const nextOpacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 0.18);
 
+    // Opacity: 0.5 (far) → 0.08 (close). Dithering handles the remaining visibility.
+    const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, 0.08, proximityT);
+    const nextOpacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 0.18);
     if (Math.abs(nextOpacity - material.opacity) > 0.0005) {
       material.opacity = nextOpacity;
     }
@@ -413,6 +501,23 @@ function StlMeshComponent({
     if (material.depthWrite !== shouldDepthWrite) {
       material.depthWrite = shouldDepthWrite;
       material.needsUpdate = true;
+    }
+
+    // Bayer dither dissolve — ramps 0 (far, no dither) → 1 (close, fully discarded).
+    const ditherUniforms = supportDimShaderUniformsRef.current;
+    if (ditherUniforms) {
+      const currentDither = ditherUniforms.uDitherAmount.value;
+      const nextDither = THREE.MathUtils.lerp(currentDither, proximityT, 0.18);
+      if (Math.abs(nextDither - currentDither) > 0.0005) {
+        ditherUniforms.uDitherAmount.value = nextDither;
+      }
+    }
+
+    // Update proximity block — supportDimRaycastRef reads this ref at call time,
+    // so no direct mesh.raycast mutation is needed here.
+    const shouldBlockRaycast = proximityT >= 0.25 && !shiftHeldRef.current;
+    if (supportDimRaycastBlockedRef.current !== shouldBlockRaycast) {
+      supportDimRaycastBlockedRef.current = shouldBlockRaycast;
     }
   });
 
@@ -608,6 +713,16 @@ function StlMeshComponent({
         renderOrder={baseShaderType === 'xray' || isSupportDimmed ? 2 : 0}
         onClick={(e) => {
           if (isSupportShiftGesture(e)) {
+            // In support mode, Shift+click on an inactive ghost should explicitly
+            // switch active model, even when close-range pass-through is enabled.
+            if (mode === 'support' && onActiveModelChange && !isActiveModel) {
+              e.stopPropagation();
+              onActiveModelChange(modelId);
+              return;
+            }
+
+            // Keep existing behavior for active model interactions: Shift should
+            // not place supports via mesh click.
             e.stopPropagation();
             return;
           }
@@ -825,17 +940,7 @@ function StlMeshComponent({
             depthWrite={false}
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
-          <meshStandardMaterial
-            ref={supportDimMaterialRef}
-            color={meshColor ?? '#c8c8ce'}
-            transparent
-            opacity={dimmedBaseOpacity ?? 0.5}
-            roughness={0.55}
-            metalness={0.02}
-            clippingPlanes={planes}
-            side={THREE.FrontSide}
-            depthWrite
-          />
+          <primitive object={supportDimMaterialObj} attach="material" />
         ) : interactionLodActive ? (
           <meshStandardMaterial
             vertexColors={hasVertexColorAttribute}

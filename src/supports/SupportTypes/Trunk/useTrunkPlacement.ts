@@ -214,12 +214,13 @@ export function useTrunkPlacementV2() {
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
 
-        // If invalid placement (ERROR), ignore click.
-        // If it's just a WARNING, allow placement.
-        if (result.error) return;
+        // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
+        // Only bail on trunk errors when grid is disabled (direct placement path).
+        const settings = getSettings();
+        if (result.error && !settings.grid?.enabled) return;
 
         const decision = decideGridPlacement({
-            settings: getSettings(),
+            settings,
             snapshot: getSnapshot(),
             candidate: result,
             tipPos,

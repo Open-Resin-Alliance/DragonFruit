@@ -2970,35 +2970,6 @@ export function SceneCanvas({
 
   const supportAutoTargetModelIdRef = React.useRef<string | null | undefined>(undefined);
 
-  React.useEffect(() => {
-    if (mode !== 'support') {
-      supportAutoTargetModelIdRef.current = undefined;
-      return;
-    }
-    if (spaceMouseNavigationActive) return;
-
-    const currentModelId = activeModelId ?? null;
-    const hasModelContextChanged = supportAutoTargetModelIdRef.current !== currentModelId;
-    if (!hasModelContextChanged) {
-      return;
-    }
-
-    supportAutoTargetModelIdRef.current = currentModelId;
-
-    if (selectedSpaceMousePivotPoint) {
-      setOrbitTargetFromPoint(selectedSpaceMousePivotPoint);
-      return;
-    }
-
-    // Only fall back to build-volume center when the scene is truly empty.
-    // When models exist, auto-select will fire shortly and provide the
-    // proper pivot; animating to the build-volume center first causes
-    // a jarring double-animation on first open.
-    if (activeModelId == null && models.length === 0) {
-      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone(), { animate: false });
-    }
-  }, [activeModelId, buildVolumeCenterTarget, mode, models.length, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
-
   const spaceMousePivotCandidates = React.useMemo(() => {
     const centers: THREE.Vector3[] = [];
 
@@ -4767,6 +4738,7 @@ export function SceneCanvas({
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
+                  hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
                   clipUpper={clipUpper}
@@ -5451,7 +5423,7 @@ export function SceneCanvas({
               {/* Uses tip contact diameter to match actual tip size */}
               {branchHoverDotVisible && branchHoverPosition && (
                 <mesh position={[branchHoverPosition.x, branchHoverPosition.y, branchHoverPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial
                     color="#00ff00"
                     transparent
@@ -5466,7 +5438,7 @@ export function SceneCanvas({
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
               {isBranchPlacementActive && branchTipPosition && !branchPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[branchTipPosition.x, branchTipPosition.y, branchTipPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
                 </mesh>
               )}
@@ -5475,7 +5447,7 @@ export function SceneCanvas({
               {/* Uses tip contact diameter to match actual tip size */}
               {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafHoverPosition.x, leafHoverPosition.y, leafHoverPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial
                     color="#00ff00"
                     transparent
@@ -5490,7 +5462,7 @@ export function SceneCanvas({
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
               {isLeafPlacementActive && leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafTipPosition.x, leafTipPosition.y, leafTipPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
                 </mesh>
               )}

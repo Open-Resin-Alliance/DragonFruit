@@ -26,43 +26,51 @@ export interface LeafBuildResult {
     supportData: SupportData;
 }
 
+// Pooled scratch vectors — reused across calls to avoid per-frame GC pressure.
+const _tip = new THREE.Vector3();
+const _sn = new THREE.Vector3();
+const _knot = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+const _start = new THREE.Vector3();
+const _coneVec = new THREE.Vector3();
+
 function computeLeafConeAxisAndLength(
     tipPos: Vec3,
     surfaceNormal: Vec3,
     knotPos: Vec3,
     baseProfile: SupportTipProfile
 ): { axis: Vec3; lengthMm: number; diskThicknessMm: number } {
-    const tip = new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z);
-    const sn = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
-    const knot = new THREE.Vector3(knotPos.x, knotPos.y, knotPos.z);
+    _tip.set(tipPos.x, tipPos.y, tipPos.z);
+    _sn.set(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
+    _knot.set(knotPos.x, knotPos.y, knotPos.z);
 
-    let axis = knot.clone().sub(tip);
-    if (axis.lengthSq() < 0.000001) {
-        axis.set(sn.x, sn.y, sn.z);
+    _axis.copy(_knot).sub(_tip);
+    if (_axis.lengthSq() < 0.000001) {
+        _axis.copy(_sn);
     }
-    axis.normalize();
+    _axis.normalize();
 
     let finalThickness = 0;
-    let finalLength = Math.max(0.1, knot.distanceTo(tip));
+    let finalLength = Math.max(0.1, _knot.distanceTo(_tip));
 
     for (let i = 0; i < 3; i++) {
-        const axisVec3 = { x: axis.x, y: axis.y, z: axis.z };
+        const axisVec3 = { x: _axis.x, y: _axis.y, z: _axis.z };
         const thickness = baseProfile.type === 'disk'
             ? calculateDiskThickness(surfaceNormal, axisVec3, baseProfile)
             : 0;
         finalThickness = thickness;
 
-        const start = tip.clone().add(sn.clone().multiplyScalar(thickness));
-        const coneVec = knot.clone().sub(start);
-        const len = coneVec.length();
+        _start.copy(_tip).addScaledVector(_sn, thickness);
+        _coneVec.copy(_knot).sub(_start);
+        const len = _coneVec.length();
         if (len > 0.000001) {
-            axis = coneVec.normalize();
+            _axis.copy(_coneVec).normalize();
             finalLength = Math.max(0.1, len);
         }
     }
 
     return {
-        axis: { x: axis.x, y: axis.y, z: axis.z },
+        axis: { x: _axis.x, y: _axis.y, z: _axis.z },
         lengthMm: finalLength,
         diskThicknessMm: finalThickness,
     };

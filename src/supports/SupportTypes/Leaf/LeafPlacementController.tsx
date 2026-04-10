@@ -22,11 +22,17 @@ import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, buildSuppor
 import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
 }
+
+// Pooled scratch objects — reused each frame to avoid per-frame GC pressure.
+const _buildPlate = new THREE.Plane();
+const _upVec = new THREE.Vector3();
+const _planeHit = new THREE.Vector3();
 
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
@@ -40,6 +46,7 @@ export function LeafPlacementController() {
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const rearmFrameRef = useRef<number | null>(null);
     const supportEditSuppressedRef = useRef(false);
+    const lastPreviewSignatureRef = useRef<string | null>(null);
 
     useEffect(() => {
         const meshes: THREE.Object3D[] = [];
@@ -162,6 +169,7 @@ export function LeafPlacementController() {
         }
 
         if (!liveActive || liveStage !== 'awaitingBase' || !tipPosition || !surfaceNormal) {
+            lastPreviewSignatureRef.current = null;
             return;
         }
 
@@ -281,15 +289,13 @@ export function LeafPlacementController() {
                 }
 
                 if (!knotPos) {
-                    const buildPlate = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-                    const intersection = new THREE.Vector3();
-                    if (raycaster.ray.intersectPlane(buildPlate, intersection)) {
-                        const dist = Math.sqrt(
-                            Math.pow(intersection.x - tipPosition.x, 2) +
-                            Math.pow(intersection.y - tipPosition.y, 2)
-                        );
+                    _buildPlate.set(_upVec.set(0, 0, 1), 0);
+                    if (raycaster.ray.intersectPlane(_buildPlate, _planeHit)) {
+                        const dx = _planeHit.x - tipPosition.x;
+                        const dy = _planeHit.y - tipPosition.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
                         if (dist < 100) {
-                            knotPos = { x: intersection.x, y: intersection.y, z: 0 };
+                            knotPos = { x: _planeHit.x, y: _planeHit.y, z: 0 };
                         }
                     }
                 }
@@ -303,43 +309,61 @@ export function LeafPlacementController() {
             const fallbackHostDiameterMm = settings.shaft.diameterMm;
             const resolvedHostDiameter = hostDiameterMm ?? fallbackHostDiameterMm;
 
-            const parentKnot: Knot = {
-                id: 'preview-knot',
-                parentShaftId: segmentId,
-                t,
-                pos: knotPos,
-                diameter: resolvedHostDiameter + 0.1,
-            };
-
-            const buildResult = buildLeafData({
-                tipPos: tipPosition,
-                surfaceNormal,
+            const previewSignature = [
+                'leaf',
                 modelId,
-                parentKnot,
-                hostDiameterMm: resolvedHostDiameter,
-            });
+                segmentId,
+                previewVecKey(knotPos),
+                quantizePreviewValue(t ?? 0),
+                quantizePreviewValue(resolvedHostDiameter),
+                previewVecKey(tipPosition),
+                previewNormalKey(surfaceNormal),
+            ].join('|');
 
-            const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
-            const tip = new THREE.Vector3(tipPosition.x, tipPosition.y, tipPosition.z);
-            const knot = new THREE.Vector3(knotPos.x, knotPos.y, knotPos.z);
-            const v = new THREE.Vector3().subVectors(tip, knot);
-            const lenSq = v.lengthSq();
-            const angleFromUpDeg = lenSq < 0.000001 ? 0 : THREE.MathUtils.radToDeg(v.angleTo(new THREE.Vector3(0, 0, 1)));
+            if (lastPreviewSignatureRef.current !== previewSignature) {
+                lastPreviewSignatureRef.current = previewSignature;
 
-            const epsilonZ = 0.0001;
-            const knotAboveTip = knotPos.z > tipPosition.z + epsilonZ;
-            const tooFlat = angleFromUpDeg > maxAngleDeg;
+                const parentKnot: Knot = {
+                    id: 'preview-knot',
+                    parentShaftId: segmentId,
+                    t,
+                    pos: knotPos,
+                    diameter: resolvedHostDiameter + 0.1,
+                };
 
-            const previewData: SupportData = {
-                ...buildResult.supportData,
-                angle: angleFromUpDeg,
-                error: knotAboveTip ? 'KNOT_ABOVE_TIP' : undefined,
-                warning: !knotAboveTip && tooFlat ? 'SHAFT_ANGLE_TOO_FLAT' : undefined,
-            };
+                const buildResult = buildLeafData({
+                    tipPos: tipPosition,
+                    surfaceNormal,
+                    modelId,
+                    parentKnot,
+                    hostDiameterMm: resolvedHostDiameter,
+                });
 
-            leafPlacementStore.setPreviewData(previewData);
+                const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
+                const vx = tipPosition.x - knotPos.x;
+                const vy = tipPosition.y - knotPos.y;
+                const vz = tipPosition.z - knotPos.z;
+                const lenSq = vx * vx + vy * vy + vz * vz;
+                const angleFromUpDeg = lenSq < 0.000001
+                    ? 0
+                    : THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.max(-1, vz / Math.sqrt(lenSq)))));
+
+                const epsilonZ = 0.0001;
+                const knotAboveTip = knotPos.z > tipPosition.z + epsilonZ;
+                const tooFlat = angleFromUpDeg > maxAngleDeg;
+
+                leafPlacementStore.setPreviewData({
+                    ...buildResult.supportData,
+                    angle: angleFromUpDeg,
+                    error: knotAboveTip ? 'KNOT_ABOVE_TIP' : undefined,
+                    warning: !knotAboveTip && tooFlat ? 'SHAFT_ANGLE_TOO_FLAT' : undefined,
+                });
+            }
         } else {
-            leafPlacementStore.setPreviewData(null);
+            if (lastPreviewSignatureRef.current !== 'leaf:clear') {
+                lastPreviewSignatureRef.current = 'leaf:clear';
+                leafPlacementStore.setPreviewData(null);
+            }
         }
     });
 
