@@ -2032,6 +2032,113 @@ async fn local_backup_restore_history_item(
     .map_err(|err| format!("Restore local backup history item task failed to join: {err}"))?
 }
 
+// ---------------------------------------------------------------------------
+// Scene Autosave
+// ---------------------------------------------------------------------------
+
+const SCENE_AUTOSAVE_DIR_NAME: &str = "autosave";
+const SCENE_AUTOSAVE_VOXL_FILE: &str = "scene.voxl";
+const SCENE_AUTOSAVE_MANIFEST_FILE: &str = "manifest.json";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SceneAutosaveManifest {
+    saved_at: String,
+    clean: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SceneAutosavePaths {
+    voxl_path: String,
+    manifest_path: String,
+}
+
+fn scene_autosave_resolve_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Failed resolving app data dir: {err}"))?;
+    let dir = base.join(SCENE_AUTOSAVE_DIR_NAME);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("Failed creating autosave dir '{}': {err}", dir.display()))?;
+    Ok(dir)
+}
+
+#[tauri::command]
+async fn scene_autosave_get_paths(app: tauri::AppHandle) -> Result<SceneAutosavePaths, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        Ok(SceneAutosavePaths {
+            voxl_path: dir
+                .join(SCENE_AUTOSAVE_VOXL_FILE)
+                .to_string_lossy()
+                .to_string(),
+            manifest_path: dir
+                .join(SCENE_AUTOSAVE_MANIFEST_FILE)
+                .to_string_lossy()
+                .to_string(),
+        })
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_get_paths task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn scene_autosave_write_manifest(
+    app: tauri::AppHandle,
+    saved_at: String,
+    clean: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let manifest = SceneAutosaveManifest { saved_at, clean };
+        let json = serde_json::to_string(&manifest)
+            .map_err(|err| format!("Failed serializing autosave manifest: {err}"))?;
+        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+        std::fs::write(&path, json.as_bytes())
+            .map_err(|err| format!("Failed writing autosave manifest: {err}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_write_manifest task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn scene_autosave_read_manifest(
+    app: tauri::AppHandle,
+) -> Result<Option<SceneAutosaveManifest>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|err| format!("Failed reading autosave manifest: {err}"))?;
+        let manifest: SceneAutosaveManifest = serde_json::from_str(&content)
+            .map_err(|err| format!("Failed parsing autosave manifest: {err}"))?;
+        Ok(Some(manifest))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_read_manifest task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn scene_autosave_read_voxl_bytes(app: tauri::AppHandle) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let path = dir.join(SCENE_AUTOSAVE_VOXL_FILE);
+        if !path.exists() {
+            return Err("No autosaved scene file found".to_string());
+        }
+        std::fs::read(&path).map_err(|err| format!("Failed reading autosaved scene: {err}"))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_read_voxl_bytes task failed: {err}"))?
+}
+
 fn is_scene_file_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -2756,6 +2863,10 @@ fn main() {
             local_backup_read_history_item,
             local_backup_delete_history_item,
             local_backup_restore_history_item,
+            scene_autosave_get_paths,
+            scene_autosave_write_manifest,
+            scene_autosave_read_manifest,
+            scene_autosave_read_voxl_bytes,
             reveal_in_file_manager,
             set_log_level_pref,
             read_log_tail,

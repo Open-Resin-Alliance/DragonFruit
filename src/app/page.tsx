@@ -155,6 +155,8 @@ import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayer
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
+import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -770,6 +772,7 @@ export default function Home() {
   const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
   const [sceneSaveChoiceFileName, setSceneSaveChoiceFileName] = React.useState<string | null>(null);
   const [sceneSaveChoicePath, setSceneSaveChoicePath] = React.useState<string | null>(null);
+  const [autosaveRecovery, setAutosaveRecovery] = React.useState<{ savedAt: string } | null>(null);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
@@ -788,6 +791,12 @@ export default function Home() {
   const sceneSaveQueuedRef = React.useRef(false);
   const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
   const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
+
+  const { clearAutosave } = useSceneAutosave({
+    models: scene.models,
+    activeModelId: scene.activeModelId,
+    selectedModelIds: scene.selectedModelIds,
+  });
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -6283,8 +6292,29 @@ export default function Home() {
         setIsExportSuccessToastVisible(false);
         exportSuccessToastFadeTimeoutRef.current = null;
       }, 3800);
+
+      void clearAutosave();
     }
-  }, [activeSceneFilePath, scene.activeModelId, scene.models, scene.selectedModelIds]);
+  }, [activeSceneFilePath, clearAutosave, scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const handleAutosaveRestore = React.useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const bytes = await invoke<number[]>('scene_autosave_read_voxl_bytes');
+      const uint8 = new Uint8Array(bytes);
+      const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
+      suppressSceneAutosave(60_000);
+      await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
+      await clearAutosave();
+    } finally {
+      setAutosaveRecovery(null);
+    }
+  }, [clearAutosave, importSceneFile]);
+
+  const handleAutosaveDiscard = React.useCallback(async () => {
+    setAutosaveRecovery(null);
+    await clearAutosave();
+  }, [clearAutosave]);
 
   const queueTopBarSaveScene = React.useCallback((nativePathOverride?: string | null) => {
     queuedSceneSavePathOverrideRef.current = nativePathOverride;
@@ -6430,6 +6460,27 @@ export default function Home() {
       queuedSceneSavePathOverrideRef.current = undefined;
       preferredOverwriteScenePathRef.current = null;
       setIsSceneSaveInProgress(false);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const manifest = await invoke<{ savedAt: string; clean: boolean } | null>('scene_autosave_read_manifest');
+        if (!cancelled && manifest && !manifest.clean) {
+          setAutosaveRecovery({ savedAt: manifest.savedAt });
+        }
+      } catch {
+        // Non-fatal: no autosave recovery available.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -13416,6 +13467,14 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {autosaveRecovery && (
+        <SceneAutosaveRecoveryModal
+          savedAt={autosaveRecovery.savedAt}
+          onRestore={handleAutosaveRestore}
+          onDiscard={handleAutosaveDiscard}
+        />
       )}
 
       {showLysImportWarningModal && (
