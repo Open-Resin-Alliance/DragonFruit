@@ -1538,25 +1538,28 @@ export function useSceneCollectionManager() {
 
         const sizeBytes = Number.isFinite(file.size) ? file.size : undefined;
 
-        const matches = next.filter(
-          (entry) => entry.kind === kind
-            && entry.name === name
-            && entry.sizeBytes === sizeBytes
-            && (kind !== 'scene' || (entry.sourcePath ?? null) === (sourcePath ?? null)),
-        );
+        // When a concrete sourcePath is known, use it as the primary dedup key,
+        // ignoring sizeBytes. This prevents duplicates when Ctrl+S re-saves the
+        // file with an updated thumbnail (changing its size).
+        const matchBySourcePath = kind === 'scene' && sourcePath != null;
+
+        const isMatchingEntry = (entry: RecentOpenedFileEntry): boolean => {
+          if (entry.kind !== kind || entry.name !== name) return false;
+          if (matchBySourcePath) {
+            return (entry.sourcePath ?? null) === sourcePath;
+          }
+          return entry.sizeBytes === sizeBytes
+            && (kind !== 'scene' || (entry.sourcePath ?? null) === (sourcePath ?? null));
+        };
+
+        const matches = next.filter(isMatchingEntry);
 
         const existingId = matches.length > 0 ? matches[matches.length - 1].id : generateRecentEntryId();
         const duplicateIds = matches.slice(0, -1).map((entry) => entry.id);
 
         if (matches.length > 0) {
           for (let i = next.length - 1; i >= 0; i -= 1) {
-            const entry = next[i];
-            if (
-              entry.kind === kind
-              && entry.name === name
-              && entry.sizeBytes === sizeBytes
-              && (kind !== 'scene' || (entry.sourcePath ?? null) === (sourcePath ?? null))
-            ) {
+            if (isMatchingEntry(next[i])) {
               next.splice(i, 1);
             }
           }
