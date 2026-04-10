@@ -24,6 +24,12 @@ export interface TwigBuildResult {
     twig: Twig;
 }
 
+// Pooled scratch vectors — reused across calls to avoid per-frame GC pressure.
+const _aVec = new THREE.Vector3();
+const _bVec = new THREE.Vector3();
+const _axisA = new THREE.Vector3();
+const _axisB = new THREE.Vector3();
+
 export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     const { modelId, aPos, aNormal, bPos, bNormal } = input;
 
@@ -40,16 +46,16 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     const shaftDiameter = settings.tip.contactDiameterMm;
     const jointDiameter = getJointDiameter(shaftDiameter);
 
-    const aVec = new THREE.Vector3(aPos.x, aPos.y, aPos.z);
-    const bVec = new THREE.Vector3(bPos.x, bPos.y, bPos.z);
+    _aVec.set(aPos.x, aPos.y, aPos.z);
+    _bVec.set(bPos.x, bPos.y, bPos.z);
 
-    let axisA = bVec.clone().sub(aVec);
-    if (axisA.lengthSq() < 0.000001) axisA = new THREE.Vector3(0, 0, 1);
-    axisA.normalize();
-    const axisB = axisA.clone().multiplyScalar(-1);
+    _axisA.copy(_bVec).sub(_aVec);
+    if (_axisA.lengthSq() < 0.000001) _axisA.set(0, 0, 1);
+    _axisA.normalize();
+    _axisB.copy(_axisA).multiplyScalar(-1);
 
-    const diskThicknessA = calculateDiskThickness(aNormal, { x: axisA.x, y: axisA.y, z: axisA.z }, diskProfile);
-    const diskThicknessB = calculateDiskThickness(bNormal, { x: axisB.x, y: axisB.y, z: axisB.z }, diskProfile);
+    const diskThicknessA = calculateDiskThickness(aNormal, { x: _axisA.x, y: _axisA.y, z: _axisA.z }, diskProfile);
+    const diskThicknessB = calculateDiskThickness(bNormal, { x: _axisB.x, y: _axisB.y, z: _axisB.z }, diskProfile);
 
     // Shaft connects to the center of the disk tip sphere at each end.
     const jointPosA: Vec3 = {
@@ -90,7 +96,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         profile: diskProfile,
         contactDiameterMm: settings.tip.contactDiameterMm,
         diskLengthOverride: undefined,
-        coneAxis: { x: axisA.x, y: axisA.y, z: axisA.z },
+        coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
     };
 
     const contactDiskB: ContactDisk = {
@@ -100,7 +106,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         profile: diskProfile,
         contactDiameterMm: settings.tip.contactDiameterMm,
         diskLengthOverride: undefined,
-        coneAxis: { x: axisB.x, y: axisB.y, z: axisB.z },
+        coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
     };
 
     const twigId = uuid();
