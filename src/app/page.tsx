@@ -809,6 +809,7 @@ export default function Home() {
     enabled: sceneAutosaveSettings.enabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     capMs: sceneAutosaveSettings.capMs,
+    preferredSavePath: preferredOverwriteScenePathRef.current,
   });
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);

@@ -2067,14 +2067,35 @@ fn scene_autosave_resolve_dir(app: &tauri::AppHandle) -> Result<std::path::PathB
 }
 
 #[tauri::command]
-async fn scene_autosave_get_paths(app: tauri::AppHandle) -> Result<SceneAutosavePaths, String> {
+async fn scene_autosave_get_paths(
+    app: tauri::AppHandle,
+    preferred_save_path: Option<String>,
+) -> Result<SceneAutosavePaths, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
-        Ok(SceneAutosavePaths {
-            voxl_path: dir
-                .join(SCENE_AUTOSAVE_VOXL_FILE)
+
+        // Determine VOXL autosave path: if user has explicitly saved to a .voxl file,
+        // autosave directly to that file. Otherwise use the generic recovery location.
+        let voxl_path = if let Some(preferred) = preferred_save_path {
+            let path = std::path::Path::new(&preferred);
+            if is_scene_file_path(path) && path.exists() {
+                // User has explicitly saved; autosave directly to that file
+                preferred
+            } else {
+                // Not a valid scene file or doesn't exist; fall back to generic recovery
+                dir.join(SCENE_AUTOSAVE_VOXL_FILE)
+                    .to_string_lossy()
+                    .to_string()
+            }
+        } else {
+            // No preferred path; use generic recovery location
+            dir.join(SCENE_AUTOSAVE_VOXL_FILE)
                 .to_string_lossy()
-                .to_string(),
+                .to_string()
+        };
+
+        Ok(SceneAutosavePaths {
+            voxl_path,
             manifest_path: dir
                 .join(SCENE_AUTOSAVE_MANIFEST_FILE)
                 .to_string_lossy()

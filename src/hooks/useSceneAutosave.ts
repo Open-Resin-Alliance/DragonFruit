@@ -9,8 +9,8 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 // Config
 // ---------------------------------------------------------------------------
 
-const AUTOSAVE_DEBOUNCE_MS = 90_000;  // 90 s of quiet → write
-const AUTOSAVE_CAP_MS = 5 * 60_000;  // write at most every 5 min even under churn
+const AUTOSAVE_DEBOUNCE_MS = 30_000;  // 30 s of quiet → write
+const AUTOSAVE_CAP_MS = 2 * 60_000;  // write at most every 2 min even under churn
 
 // ---------------------------------------------------------------------------
 // Tauri helpers
@@ -20,10 +20,19 @@ type AutosavePaths = { voxlPath: string; manifestPath: string };
 
 let cachedPaths: AutosavePaths | null = null;
 
-async function getAutosavePaths(): Promise<AutosavePaths> {
+async function getAutosavePaths(preferredSavePath?: string | null): Promise<AutosavePaths> {
+  // Invalidate cache if preferredSavePath changes
+  if (cachedPaths && preferredSavePath !== cachedPaths._preferredSavePath) {
+    cachedPaths = null;
+  }
   if (cachedPaths) return cachedPaths;
   const { invoke } = await import('@tauri-apps/api/core');
-  cachedPaths = await invoke<AutosavePaths>('scene_autosave_get_paths');
+  const result = await invoke<AutosavePaths & { _preferredSavePath?: string | null }>(
+    'scene_autosave_get_paths',
+    preferredSavePath ? { preferredSavePath } : {},
+  );
+  cachedPaths = result as AutosavePaths;
+  (cachedPaths as any)._preferredSavePath = preferredSavePath;
   return cachedPaths;
 }
 
@@ -47,6 +56,7 @@ export type UseSceneAutosaveOptions = {
   enabled?: boolean;
   debounceMs?: number;
   capMs?: number;
+  preferredSavePath?: string | null;
 };
 
 export type UseSceneAutosaveResult = {
@@ -62,6 +72,7 @@ export function useSceneAutosave({
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   capMs = AUTOSAVE_CAP_MS,
+  preferredSavePath = null,
 }: UseSceneAutosaveOptions): UseSceneAutosaveResult {
   const [isAutosaving, setIsAutosaving] = React.useState(false);
   const [lastAutosaveAt, setLastAutosaveAt] = React.useState<string | null>(null);
@@ -79,6 +90,8 @@ export function useSceneAutosave({
   debounceMsRef.current = debounceMs;
   const capMsRef = React.useRef(capMs);
   capMsRef.current = capMs;
+  const preferredSavePathRef = React.useRef(preferredSavePath);
+  preferredSavePathRef.current = preferredSavePath;
 
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const capRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,7 +112,7 @@ export function useSceneAutosave({
     setIsAutosaving(true);
 
     try {
-      const { voxlPath } = await getAutosavePaths();
+      const { voxlPath } = await getAutosavePaths(preferredSavePathRef.current);
 
       await ExportManager.exportScene(
         null,
