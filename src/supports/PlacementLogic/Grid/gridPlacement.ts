@@ -17,9 +17,11 @@ import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Kno
 import { checkShaftCollision } from '../CollisionUtils';
 import * as THREE from 'three';
 import { generateUuid } from '../../../utils/uuid';
+import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 
 const MIN_TRUNK_CLEARANCE_MM = 0.5;
 const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
+const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
 
 function withResolvedSnappedRoute(
     candidate: TrunkBuildResult,
@@ -438,6 +440,12 @@ function trunkCollidesWithMesh(
 
 export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacementDecision {
     const { settings, snapshot, candidate, tipPos, tipNormal, modelId, mesh } = args;
+
+    // Near-plate contacts get a minimal anchor support instead of trunk/branch
+    if (tipPos.z < ANCHOR_HEIGHT_THRESHOLD_MM) {
+        const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId });
+        return { kind: 'place_anchor', anchor, supportData };
+    }
 
     if (!settings.grid?.enabled) {
         return {

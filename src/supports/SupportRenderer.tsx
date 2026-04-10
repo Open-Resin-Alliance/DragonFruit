@@ -10,6 +10,7 @@ import { BraceRenderer } from './SupportTypes/Brace/BraceRenderer';
 import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
 import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
 import { KickstandRenderer } from './SupportTypes/Kickstand/KickstandRenderer';
+import { AnchorRenderer } from './SupportTypes/Anchor/AnchorRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
@@ -663,6 +664,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const twigList = useMemo(() => Object.values(state.twigs), [state.twigs]);
     const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
+    const anchorList = useMemo(() => Object.values(state.anchors), [state.anchors]);
     const kickstandList = useMemo(() => Object.values(kickstandState.kickstands), [kickstandState.kickstands]);
     const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
     const kickstandKnotList = useMemo(() => Object.values(kickstandState.knots), [kickstandState.knots]);
@@ -945,8 +947,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const supportIdByContactDiskId = useMemo(() => {
         const map = new Map<string, string>();
         for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByContactDiskId)) map.set(id, supportId);
+        // Add anchor contact cones (not indexed by render lookup worker)
+        for (const anchor of anchorList) {
+            if (anchor.contactCone?.id) map.set(anchor.contactCone.id, anchor.id);
+        }
         return map;
-    }, [supportRenderLookup.supportIdByContactDiskId]);
+    }, [supportRenderLookup.supportIdByContactDiskId, anchorList]);
 
     const hoveredSupportIdFromPicking = useMemo(() => {
         return resolveHoveredSupportOwnerId(
@@ -1355,6 +1361,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             || selectedCategory === 'twig'
             || selectedCategory === 'stick'
             || selectedCategory === 'brace'
+            || selectedCategory === 'anchor'
         ) {
             return selectedId;
         }
@@ -1474,6 +1481,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return selected;
     }, [singleSelectedSupportId, selectedSupportIdSet, state.sticks, useMultiSelectionDetail]);
+
+    const selectedAnchorIds = useMemo(() => {
+        const selected = new Set<string>();
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.anchors[supportId]) selected.add(supportId);
+            }
+        }
+
+        if (singleSelectedSupportId && state.anchors[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
+        }
+
+        return selected;
+    }, [singleSelectedSupportId, selectedSupportIdSet, state.anchors, useMultiSelectionDetail]);
 
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
@@ -4162,6 +4184,30 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
+
+            {/* Render Anchors */}
+            {anchorList.map(anchor => {
+                if (!isModelVisible(anchor.modelId, anchor.id)) return null;
+                const effectiveSelected = selectedAnchorIds.has(anchor.id);
+                const isAnchorHovered = hoveredSupportIdForVisual === anchor.id
+                    || marqueeHoveredSupportIdSet.has(anchor.id);
+
+                return (
+                    <group key={anchor.id}>
+                    <AnchorRenderer
+                        key={anchor.id}
+                        anchor={anchor}
+                        isSelected={effectiveSelected}
+                        selectedId={effectiveSelected ? selectedId : null}
+                        dimNonSelected={dimNonSelected}
+                        isHovered={isAnchorHovered}
+                        baseColor={resolveBaseColor(anchor.modelId)}
+                        suppressHover={suppressHover}
+                        isInteractable={isInteractable}
+                    />
+                    </group>
+                );
+            })}
 
             {/*
               Auto-bracing debug overlay mount point.

@@ -1,4 +1,4 @@
-import type { Roots, Trunk, Leaf, Knot, Branch, Brace, Twig, Stick, SupportState } from '../types';
+import type { Anchor, Roots, Trunk, Leaf, Knot, Branch, Brace, Twig, Stick, SupportState } from '../types';
 import type { KickstandBuildResult, KickstandRemoveResult, KickstandState } from '../SupportTypes/Kickstand/types';
 
 export const SUPPORT_ADD_TRUNK = 'support:add-trunk' as const;
@@ -20,6 +20,9 @@ export const SUPPORT_REMOVE_STICK = 'support:remove-stick' as const;
 
 export const SUPPORT_ADD_BRACE = 'support:add-brace' as const;
 export const SUPPORT_REMOVE_BRACE = 'support:remove-brace' as const;
+
+export const SUPPORT_ADD_ANCHOR = 'support:add-anchor' as const;
+export const SUPPORT_REMOVE_ANCHOR = 'support:remove-anchor' as const;
 
 export const SUPPORT_ADD_KICKSTAND = 'support:add-kickstand' as const;
 export const SUPPORT_REMOVE_KICKSTAND = 'support:remove-kickstand' as const;
@@ -43,6 +46,8 @@ export type SupportHistoryActionType =
   | typeof SUPPORT_REMOVE_STICK
   | typeof SUPPORT_ADD_BRACE
   | typeof SUPPORT_REMOVE_BRACE
+  | typeof SUPPORT_ADD_ANCHOR
+  | typeof SUPPORT_REMOVE_ANCHOR
   | typeof SUPPORT_ADD_KICKSTAND
   | typeof SUPPORT_REMOVE_KICKSTAND
   | typeof SUPPORT_REPLACE_TRUNK
@@ -115,6 +120,10 @@ export interface BraceLinkPayload {
   brace: Brace;
   startKnot?: Knot | null;
   endKnot?: Knot | null;
+}
+
+export interface SupportAnchorPayload {
+  anchor: Anchor;
 }
 
 export interface SupportKickstandPayload {

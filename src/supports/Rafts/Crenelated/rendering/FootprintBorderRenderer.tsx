@@ -118,13 +118,22 @@ export default function FootprintBorderRenderer({
     const allPoints: THREE.Vector2[] = [];
 
     // 1. Add raft outer boundary points
-    const circles: SupportBaseCircle[] = Object.values(supportState.roots)
-      .filter((root) => !modelId || root.modelId === modelId)
-      .map(root => ({
-        x: root.transform.pos.x,
-        y: root.transform.pos.y,
-        r: root.diameter / 2,
-      }));
+    const circles: SupportBaseCircle[] = [
+      ...Object.values(supportState.roots)
+        .filter((root) => !modelId || root.modelId === modelId)
+        .map(root => ({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        })),
+      ...Object.values(supportState.anchors)
+        .filter((anchor) => !modelId || anchor.modelId === modelId)
+        .map(anchor => ({
+          x: anchor.rootPos.x,
+          y: anchor.rootPos.y,
+          r: anchor.rootBaseDiameter / 2,
+        })),
+    ];
 
     if (circles.length > 0) {
       const baseProfile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });

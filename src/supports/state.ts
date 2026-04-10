@@ -1,4 +1,4 @@
-import { SupportState, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, Knot, Vec3, Leaf, Brace, Twig, Stick } from './types';
+import { SupportState, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, Knot, Vec3, Leaf, Brace, Twig, Stick, Anchor } from './types';
 import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
 import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
 import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
@@ -49,6 +49,7 @@ const initialState: SupportState = {
     twigs: {},
     sticks: {},
     braces: {},
+    anchors: {},
     knots: {},
     selectedId: null,
     hoveredId: null,
@@ -65,7 +66,7 @@ let supportSettingsHexCache: SupportSettingsHexCache = {
     leaf: {},
 };
 
-type SelectionCategory = 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
+type SelectionCategory = 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'anchor' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
 
 interface SelectionLookupCache {
     trunksRef: SupportState['trunks'];
@@ -73,6 +74,7 @@ interface SelectionLookupCache {
     leavesRef: SupportState['leaves'];
     twigsRef: SupportState['twigs'];
     sticksRef: SupportState['sticks'];
+    anchorsRef: SupportState['anchors'];
     kickstandsRef: Record<string, Kickstand>;
     jointIds: Set<string>;
     segmentIds: Set<string>;
@@ -93,6 +95,7 @@ function getSelectionLookupCache(): SelectionLookupCache {
         && selectionLookupCache.leavesRef === state.leaves
         && selectionLookupCache.twigsRef === state.twigs
         && selectionLookupCache.sticksRef === state.sticks
+        && selectionLookupCache.anchorsRef === state.anchors
         && selectionLookupCache.kickstandsRef === kickstands
     ) {
         return selectionLookupCache;
@@ -155,6 +158,12 @@ function getSelectionLookupCache(): SelectionLookupCache {
         if (stick.contactConeB?.id) contactDiskIds.add(stick.contactConeB.id);
     }
 
+    for (const anchor of Object.values(state.anchors)) {
+        if (anchor.contactCone?.id) {
+            contactDiskIds.add(anchor.contactCone.id);
+        }
+    }
+
     for (const kickstand of Object.values(kickstands)) {
         kickstandIds.add(kickstand.id);
         for (const segment of kickstand.segments) {
@@ -170,6 +179,7 @@ function getSelectionLookupCache(): SelectionLookupCache {
         leavesRef: state.leaves,
         twigsRef: state.twigs,
         sticksRef: state.sticks,
+        anchorsRef: state.anchors,
         kickstandsRef: kickstands,
         jointIds,
         segmentIds,
@@ -190,6 +200,7 @@ function resolveSelectionCategory(id: string): SelectionCategory {
     if (state.twigs[id]) return 'twig';
     if (state.sticks[id]) return 'stick';
     if (state.braces[id]) return 'brace';
+    if (state.anchors[id]) return 'anchor';
 
     const lookup = getSelectionLookupCache();
     if (lookup.kickstandIds.has(id)) return 'brace';
@@ -1015,6 +1026,7 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
     let nextTwigs = state.twigs;
     let nextSticks = state.sticks;
     let nextBraces = state.braces;
+    let nextAnchors = state.anchors;
 
     for (const root of Object.values(state.roots)) {
         if (root.modelId === modelId) continue;
@@ -1079,6 +1091,15 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
         nextBraces[brace.id] = { ...brace, modelId };
     }
 
+    for (const anchor of Object.values(state.anchors)) {
+        if (anchor.modelId === modelId) continue;
+        if (!changed) {
+            nextAnchors = { ...state.anchors };
+            changed = true;
+        }
+        nextAnchors[anchor.id] = { ...anchor, modelId };
+    }
+
     if (changed) {
         state = {
             ...state,
@@ -1089,6 +1110,7 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
             twigs: nextTwigs,
             sticks: nextSticks,
             braces: nextBraces,
+            anchors: nextAnchors,
         };
         notify();
     }
@@ -1566,6 +1588,25 @@ export function transformSupportsForModel(
         };
     }
 
+    let nextAnchors = state.anchors;
+    for (const anchor of Object.values(state.anchors)) {
+        if (anchor.modelId !== modelId) continue;
+        if (!changed) {
+            nextAnchors = { ...state.anchors };
+            changed = true;
+        }
+        nextAnchors[anchor.id] = {
+            ...anchor,
+            rootPos: transformVec3(anchor.rootPos, deltaMatrix),
+            joint: {
+                ...anchor.joint,
+                pos: transformVec3(anchor.joint.pos, deltaMatrix),
+            },
+            segments: anchor.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+            contactCone: transformContactCone(anchor.contactCone, deltaMatrix, normalMatrix),
+        };
+    }
+
     for (const knot of Object.values(state.knots)) {
         const parentShaftId = knot.parentShaftId;
         const isLeafConeKnot = parentShaftId.startsWith('leafCone:')
@@ -1600,6 +1641,7 @@ export function transformSupportsForModel(
             twigs: nextTwigs,
             sticks: nextSticks,
             braces: nextBraces,
+            anchors: nextAnchors,
             knots: nextKnots,
         };
         notify();
@@ -1725,6 +1767,20 @@ export function transformAllSupportsForSingleModel(
         };
     }
 
+    const nextAnchors: Record<string, Anchor> = {};
+    for (const anchor of Object.values(state.anchors)) {
+        nextAnchors[anchor.id] = {
+            ...anchor,
+            rootPos: transformVec3(anchor.rootPos, deltaMatrix),
+            joint: {
+                ...anchor.joint,
+                pos: transformVec3(anchor.joint.pos, deltaMatrix),
+            },
+            segments: anchor.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+            contactCone: transformContactCone(anchor.contactCone, deltaMatrix, normalMatrix),
+        };
+    }
+
     const nextKnots: Record<string, Knot> = {};
     for (const knot of Object.values(state.knots)) {
         nextKnots[knot.id] = {
@@ -1742,6 +1798,7 @@ export function transformAllSupportsForSingleModel(
         twigs: nextTwigs,
         sticks: nextSticks,
         braces: nextBraces,
+        anchors: nextAnchors,
         knots: nextKnots,
     };
     notify();
@@ -2030,6 +2087,7 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         twigs: {},
         sticks: {},
         braces: {},
+        anchors: {},
         knots: {},
         selectedId: null,
         hoveredId: null,
@@ -2077,6 +2135,13 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         newState.braces[br.id] = br;
     });
 
+    // Populate Anchors
+    if (data.anchors) {
+        data.anchors.forEach(a => {
+            newState.anchors[a.id] = a;
+        });
+    }
+
     // Populate Knots
     if (data.knots) {
         data.knots.forEach(k => {
@@ -2103,6 +2168,7 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         twigs: Object.keys(state.twigs).length,
         sticks: Object.keys(state.sticks).length,
         braces: Object.keys(state.braces).length,
+        anchors: Object.keys(state.anchors).length,
         knots: Object.keys(state.knots).length,
         kickstands: Object.keys(getKickstandSnapshot().kickstands).length,
     });
@@ -2389,6 +2455,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
         twigs: { ...state.twigs },
         sticks: { ...state.sticks },
         braces: { ...state.braces },
+        anchors: { ...state.anchors },
         knots: { ...state.knots },
     };
 
@@ -2399,6 +2466,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
     if (isolated.twigs) { isolated.twigs.forEach(t => { merged.twigs[t.id] = t; }); }
     if (isolated.sticks) { isolated.sticks.forEach(s => { merged.sticks[s.id] = s; }); }
     isolated.braces.forEach(br => { merged.braces[br.id] = br; });
+    if (isolated.anchors) { isolated.anchors.forEach(a => { merged.anchors[a.id] = a; }); }
     if (isolated.knots) { isolated.knots.forEach(k => { merged.knots[k.id] = k; }); }
 
     for (const kickstandBuild of isolated.kickstands ?? []) {
@@ -2420,6 +2488,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
         twigs: Object.keys(state.twigs).length,
         sticks: Object.keys(state.sticks).length,
         braces: Object.keys(state.braces).length,
+        anchors: Object.keys(state.anchors).length,
         knots: Object.keys(state.knots).length,
         kickstands: Object.keys(getKickstandSnapshot().kickstands).length,
     });
@@ -2633,6 +2702,32 @@ export function addStick(stick: Stick) {
         sticks: { ...state.sticks, [stick.id]: stick },
     };
     notify();
+}
+
+export function addAnchor(anchor: Anchor) {
+    state = {
+        ...state,
+        anchors: { ...state.anchors, [anchor.id]: anchor },
+    };
+    notify();
+}
+
+export function updateAnchor(anchor: Anchor) {
+    if (!state.anchors[anchor.id]) return;
+    state = {
+        ...state,
+        anchors: { ...state.anchors, [anchor.id]: anchor },
+    };
+    notify();
+}
+
+export function removeAnchor(anchorId: string): { anchor: Anchor } | null {
+    const anchor = state.anchors[anchorId];
+    if (!anchor) return null;
+    const { [anchorId]: _, ...rest } = state.anchors;
+    state = { ...state, anchors: rest };
+    notify();
+    return { anchor };
 }
 
 export function updateTwig(twig: Twig) {
@@ -3641,6 +3736,14 @@ export function getBraces() {
     return Object.values(state.braces);
 }
 
+export function getAnchors() {
+    return Object.values(state.anchors);
+}
+
+export function getAnchorById(anchorId: string) {
+    return state.anchors[anchorId] ?? null;
+}
+
 export function getKnotsMap() {
     return state.knots;
 }
@@ -3684,6 +3787,7 @@ export function getModelIdForSupportEntityId(id: string | null | undefined): str
     if (state.twigs[id]) return state.twigs[id].modelId ?? null;
     if (state.sticks[id]) return state.sticks[id].modelId ?? null;
     if (state.braces[id]) return state.braces[id].modelId ?? null;
+    if (state.anchors[id]) return state.anchors[id].modelId ?? null;
 
     const kickstandState = getKickstandSnapshot();
     const directKickstand = kickstandState.kickstands[id];
