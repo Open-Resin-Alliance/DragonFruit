@@ -7,12 +7,13 @@ import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { LocalBackupsSettingsTab } from '@/components/settings/LocalBackupsSettingsTab';
+import { SceneAutosaveSettingsTab } from '@/components/settings/SceneAutosaveSettingsTab';
 import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab } from '@/components/settings/PerformanceSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -136,7 +137,7 @@ type SettingsModalProps = {
   activeOutputFormat?: string | null;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -516,6 +517,12 @@ export function SettingsModal({
       icon: Plug,
       tone: 'secondary',
     },
+    sceneAutosave: {
+      label: 'Scene Autosave',
+      description: 'Autosave and crash recovery behavior',
+      icon: HardDrive,
+      tone: 'secondary',
+    },
     backups: {
       label: 'Backups',
       description: 'Local on-disk backup snapshots',
@@ -537,7 +544,7 @@ export function SettingsModal({
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'logging', 'about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'sceneAutosave', 'backups', 'logging', 'about'];
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
@@ -823,6 +830,7 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'plugins' && <PluginsSettingsTab />}
+              {activeTab === 'sceneAutosave' && <SceneAutosaveSettingsTab />}
               {activeTab === 'backups' && <LocalBackupsSettingsTab />}
               {activeTab === 'logging' && (
                 <LoggingSettingsTab

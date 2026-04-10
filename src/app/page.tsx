@@ -96,6 +96,11 @@ import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import {
+  getSceneAutosaveSettingsServerSnapshot,
+  getSceneAutosaveSettingsSnapshot,
+  subscribeToSceneAutosaveSettings,
+} from '@/components/settings/sceneAutosavePreferences';
+import {
   getSavedWorkspaceCameraSettings,
   getWorkspaceCameraSettingsServerSnapshot,
   getWorkspaceCameraSettingsSnapshot,
@@ -638,6 +643,11 @@ export default function Home() {
   const recentOpenedFiles = scene.recentOpenedFiles;
   const reopenRecentOpenedFile = scene.reopenRecentOpenedFile;
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const sceneAutosaveSettings = React.useSyncExternalStore(
+    subscribeToSceneAutosaveSettings,
+    getSceneAutosaveSettingsSnapshot,
+    getSceneAutosaveSettingsServerSnapshot,
+  );
   const workspaceCameraSettings = React.useSyncExternalStore(
     subscribeToWorkspaceCameraSettings,
     getWorkspaceCameraSettingsSnapshot,
@@ -792,10 +802,13 @@ export default function Home() {
   const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
   const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
 
-  const { clearAutosave } = useSceneAutosave({
+  const { isAutosaving, clearAutosave } = useSceneAutosave({
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
+    enabled: sceneAutosaveSettings.enabled,
+    debounceMs: sceneAutosaveSettings.debounceMs,
+    capMs: sceneAutosaveSettings.capMs,
   });
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
@@ -6464,6 +6477,10 @@ export default function Home() {
   }, []);
 
   React.useEffect(() => {
+    if (!sceneAutosaveSettings.recoveryPromptEnabled) {
+      setAutosaveRecovery(null);
+      return;
+    }
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
 
     let cancelled = false;
@@ -6482,7 +6499,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sceneAutosaveSettings.recoveryPromptEnabled]);
 
   const isDesktopRuntime = React.useCallback(() => {
     if (typeof window === 'undefined') return false;
@@ -16033,7 +16050,7 @@ export default function Home() {
         </div>
       )}
 
-      {isSceneSaveInProgress && (
+      {(isSceneSaveInProgress || isAutosaving) && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[126] flex justify-center px-3">
           <div
             className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
@@ -16044,7 +16061,7 @@ export default function Home() {
             }}
           >
             <RefreshCw className="h-4 w-4 animate-spin" />
-            Saving…
+            {isSceneSaveInProgress ? 'Saving…' : 'Autosaving…'}
           </div>
         </div>
       )}

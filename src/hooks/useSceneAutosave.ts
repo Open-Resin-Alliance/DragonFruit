@@ -45,6 +45,8 @@ export type UseSceneAutosaveOptions = {
   activeModelId: string | null;
   selectedModelIds: string[];
   enabled?: boolean;
+  debounceMs?: number;
+  capMs?: number;
 };
 
 export type UseSceneAutosaveResult = {
@@ -58,6 +60,8 @@ export function useSceneAutosave({
   activeModelId,
   selectedModelIds,
   enabled = true,
+  debounceMs = AUTOSAVE_DEBOUNCE_MS,
+  capMs = AUTOSAVE_CAP_MS,
 }: UseSceneAutosaveOptions): UseSceneAutosaveResult {
   const [isAutosaving, setIsAutosaving] = React.useState(false);
   const [lastAutosaveAt, setLastAutosaveAt] = React.useState<string | null>(null);
@@ -71,6 +75,10 @@ export function useSceneAutosave({
   selectedModelIdsRef.current = selectedModelIds;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
+  const debounceMsRef = React.useRef(debounceMs);
+  debounceMsRef.current = debounceMs;
+  const capMsRef = React.useRef(capMs);
+  capMsRef.current = capMs;
 
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const capRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -135,7 +143,7 @@ export function useSceneAutosave({
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null;
       void performAutosave();
-    }, AUTOSAVE_DEBOUNCE_MS);
+    }, debounceMsRef.current);
 
     // Ensure we still fire within the cap if the scene is continuously dirty
     if (capRef.current === null) {
@@ -148,7 +156,7 @@ export function useSceneAutosave({
           }
           void performAutosave();
         }
-      }, AUTOSAVE_CAP_MS);
+      }, capMsRef.current);
     }
   }, [performAutosave]);
 
