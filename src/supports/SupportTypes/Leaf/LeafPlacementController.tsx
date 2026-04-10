@@ -314,7 +314,7 @@ export function LeafPlacementController() {
                 modelId,
                 segmentId,
                 previewVecKey(knotPos),
-                quantizePreviewValue(t),
+                quantizePreviewValue(t ?? 0),
                 quantizePreviewValue(resolvedHostDiameter),
                 previewVecKey(tipPosition),
                 previewNormalKey(surfaceNormal),
