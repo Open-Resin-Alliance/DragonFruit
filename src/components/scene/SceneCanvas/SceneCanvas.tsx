@@ -4738,6 +4738,7 @@ export function SceneCanvas({
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
+                  hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
                   clipUpper={clipUpper}

@@ -15,6 +15,7 @@ export type ModelAttachedSupportLayerProps = {
   excludeModelId?: string | null;
   excludeModelIds?: string[];
   hideRaftPrimitives?: boolean;
+  hideRaftPrimitivesForInactiveModels?: boolean;
   hidePlateContactPrimitives?: boolean;
   clipLower?: number | null;
   clipUpper?: number | null;
@@ -54,6 +55,7 @@ export function ModelAttachedSupportLayer({
   excludeModelId = null,
   excludeModelIds = [],
   hideRaftPrimitives = false,
+  hideRaftPrimitivesForInactiveModels = false,
   hidePlateContactPrimitives = false,
   clipLower,
   clipUpper,
@@ -96,12 +98,12 @@ export function ModelAttachedSupportLayer({
     <>
       {!hideRaftPrimitives && useUltraLazySupports && (
         <RaftProxyMeshLayer
+          modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
           clipLower={clipLower}
           clipUpper={clipUpper}
           activeModelId={activeModelId}
           selectedModelIds={selectedModelIds}
           hoverModelId={hoverModelId}
-          modelFilterId={modelFilterId}
           excludeModelId={excludeModelId}
           excludeModelIds={excludeModelIds}
           ghostOpacity={ghostOpacity}
@@ -127,7 +129,7 @@ export function ModelAttachedSupportLayer({
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
             hoverModelId={hoverModelId}
-            modelFilterId={modelFilterId}
+            modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
             excludeModelId={excludeModelId}
             excludeModelIds={excludeModelIds}
             navigationLodActive={navigationLodActive}
@@ -143,7 +145,7 @@ export function ModelAttachedSupportLayer({
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
             hoverModelId={hoverModelId}
-            modelFilterId={modelFilterId}
+            modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
             excludeModelId={excludeModelId}
             excludeModelIds={excludeModelIds}
             navigationLodActive={navigationLodActive}
