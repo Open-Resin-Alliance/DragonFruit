@@ -2970,35 +2970,6 @@ export function SceneCanvas({
 
   const supportAutoTargetModelIdRef = React.useRef<string | null | undefined>(undefined);
 
-  React.useEffect(() => {
-    if (mode !== 'support') {
-      supportAutoTargetModelIdRef.current = undefined;
-      return;
-    }
-    if (spaceMouseNavigationActive) return;
-
-    const currentModelId = activeModelId ?? null;
-    const hasModelContextChanged = supportAutoTargetModelIdRef.current !== currentModelId;
-    if (!hasModelContextChanged) {
-      return;
-    }
-
-    supportAutoTargetModelIdRef.current = currentModelId;
-
-    if (selectedSpaceMousePivotPoint) {
-      setOrbitTargetFromPoint(selectedSpaceMousePivotPoint);
-      return;
-    }
-
-    // Only fall back to build-volume center when the scene is truly empty.
-    // When models exist, auto-select will fire shortly and provide the
-    // proper pivot; animating to the build-volume center first causes
-    // a jarring double-animation on first open.
-    if (activeModelId == null && models.length === 0) {
-      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone(), { animate: false });
-    }
-  }, [activeModelId, buildVolumeCenterTarget, mode, models.length, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
-
   const spaceMousePivotCandidates = React.useMemo(() => {
     const centers: THREE.Vector3[] = [];
 
