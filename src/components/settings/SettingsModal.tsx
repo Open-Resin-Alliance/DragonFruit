@@ -6,7 +6,7 @@ import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
-import { BackupsSettingsTab } from '@/components/settings/BackupsSettingsTab';
+import { LocalBackupsSettingsTab } from '@/components/settings/LocalBackupsSettingsTab';
 import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
@@ -518,7 +518,7 @@ export function SettingsModal({
     },
     backups: {
       label: 'Backups',
-      description: 'Private GitHub settings sync',
+      description: 'Local on-disk backup snapshots',
       icon: ArchiveRestore,
       tone: 'secondary',
     },
@@ -671,14 +671,13 @@ export function SettingsModal({
                   const Icon = meta.icon;
                   const active = activeTab === tab;
                   const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
-                  const tabDisabled = tab === 'backups';
 
                   return (
                     <button
                       key={tab}
                       type="button"
-                      aria-disabled={tabDisabled}
-                      onClick={tabDisabled ? undefined : () => setActiveTab(tab)}
+                      aria-disabled={false}
+                      onClick={() => setActiveTab(tab)}
                       className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
                       style={{
                         ...(active
@@ -691,7 +690,6 @@ export function SettingsModal({
                             borderColor: 'var(--border-subtle)',
                             background: 'var(--surface-1)',
                           }),
-                        ...(tabDisabled ? { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' } : {}),
                       }}
                     >
                       <div className="flex items-start gap-2.5">
@@ -825,7 +823,7 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'plugins' && <PluginsSettingsTab />}
-              {activeTab === 'backups' && <BackupsSettingsTab />}
+              {activeTab === 'backups' && <LocalBackupsSettingsTab />}
               {activeTab === 'logging' && (
                 <LoggingSettingsTab
                   logLevel={draftLogLevel}
