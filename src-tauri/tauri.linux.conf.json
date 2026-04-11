@@ -1,4 +1,7 @@
 {
+  "build": {
+    "beforeBundleCommand": "bash scripts/bundle-cef-libs.sh"
+  },
   "bundle": {
     "linux": {
       "deb": {
