@@ -893,9 +893,23 @@ if (uDitherAmount > 0.0) {
           // propagate so the support can receive hover — even if the model
           // hit itself is in the visible zone (the ray may graze the outer
           // wall on the way to a support visible through the opening).
+          //
+          // Also propagate when the primary model hit is in the clipped
+          // (invisible) zone — supports & instanced meshes inside the cavity
+          // must receive hover events even if they don't appear in the R3F
+          // intersection list at this stage.  In that case we still fall
+          // through to the placement-preview logic below so the clip-aware
+          // inner-wall hover preview can show.
           const crossSectionActive = clipUpper != null || clipLower != null;
-          if (crossSectionActive && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
-            // Don't stop propagation — support behind the clipped surface will handle it.
+          const primaryInClippedZone = crossSectionActive && (
+            (clipUpper != null && e.point.z > clipUpper) ||
+            (clipLower != null && e.point.z < clipLower)
+          );
+          // Let events propagate when non-model geometry is behind the model.
+          const propagateForNonModel = crossSectionActive && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper);
+          if (propagateForNonModel && !primaryInClippedZone) {
+            // Non-model is visible but model hit is in visible zone — suppress
+            // model hover and don't consume the event.
             if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
@@ -906,12 +920,25 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          e.stopPropagation();
+          // For clipped-zone hits, don't stop propagation but fall through
+          // to the placement-preview section so inner-wall hover still works.
+          if (!primaryInClippedZone) {
+            e.stopPropagation();
+          }
 
-          if (!hasExternalHoverSource) schedulePointerHover(true);
-          onModelHoverPointChange?.(e.point.clone());
-          onModelHoverModelChange?.(modelId);
-          emitImmediateModelHover(modelId);
+          if (primaryInClippedZone) {
+            // Primary hit is invisible — suppress model hover highlight but
+            // continue to the placement-preview section below.
+            if (!hasExternalHoverSource) schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
+          } else {
+            if (!hasExternalHoverSource) schedulePointerHover(true);
+            onModelHoverPointChange?.(e.point.clone());
+            onModelHoverModelChange?.(modelId);
+            emitImmediateModelHover(modelId);
+          }
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
