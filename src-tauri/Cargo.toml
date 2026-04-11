@@ -11,10 +11,11 @@ tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef"
 [dependencies]
 # default-features = false — runtime backend chosen via tauri-wry / tauri-cef features.
 tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["compression", "dynamic-acl"] }
-# Disabled: these plugins pull tauri with default features (wry), causing E0252
-# collision when tauri-cef is also active. Needs upstream feature-gated re-export.
-# tauri-plugin-log = "2"
-# tauri-plugin-single-instance = "2"
+# These plugins pull tauri with default features (wry). On CEF builds this
+# causes E0252 collision — plugin init is gated in main.rs, but the deps
+# must remain so macOS/Windows get logging and single-instance support.
+tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
