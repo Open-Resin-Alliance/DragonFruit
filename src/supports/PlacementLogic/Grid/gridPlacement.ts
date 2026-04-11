@@ -417,6 +417,9 @@ function findNearestReachableHostTrunkAttachment(args: {
         : null;
 }
 
+// Reusable raycaster for trunk collision checks — avoids allocating one per call.
+const _trunkCollisionRaycaster = new THREE.Raycaster();
+
 function trunkCollidesWithMesh(
     candidate: TrunkBuildResult,
     settings: DecideGridPlacementArgs['settings'],
@@ -425,7 +428,7 @@ function trunkCollidesWithMesh(
     const trunk = candidate.trunk;
     const root = candidate.root;
     const collisionRadius = settings.shaft.diameterMm / 2 + MIN_TRUNK_CLEARANCE_MM;
-    const raycaster = new THREE.Raycaster();
+    const raycaster = _trunkCollisionRaycaster;
 
     for (let segIndex = 0; segIndex < trunk.segments.length; segIndex++) {
         const endpoints = getTrunkSegmentEndpointsWithSettings(trunk, root, segIndex, settings);

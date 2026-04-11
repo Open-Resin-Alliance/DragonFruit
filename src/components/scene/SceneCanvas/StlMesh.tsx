@@ -25,12 +25,32 @@ import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
 
+// Mini-cache for clip-aware fallback raycasts.  Near the clip boundary the
+// primary hit oscillates between visible/clipped zones, causing a BVH
+// raycast on ~50% of pointer-move frames.  Caching the previous fallback
+// result by quantised ray origin + direction eliminates redundant raycasts
+// when the pointer hasn't moved meaningfully.
+const _clipCacheQuant = 0.15; // mm position quantisation
+let _clipCacheKey = '';
+let _clipCacheResult: THREE.Intersection | null = null;
+
+function clipRayCacheKey(ray: THREE.Ray): string {
+    const Q = _clipCacheQuant;
+    const o = ray.origin;
+    const d = ray.direction;
+    // Quantise origin (position) and direction (unit vector × 1000 for precision).
+    return `${Math.round(o.x / Q)},${Math.round(o.y / Q)},${Math.round(o.z / Q)},${Math.round(d.x * 1000)},${Math.round(d.y * 1000)},${Math.round(d.z * 1000)}`;
+}
+
 /**
  * When the primary ray hit falls in the clipped (hidden) portion of a mesh,
  * find the nearest hit within the visible Z range by raycasting with `near`
  * set just past the clipped surface. This skips the outer wall entirely and
  * uses firstHitOnly=true so the BVH stops at the very first triangle hit —
  * O(log n) instead of scanning all faces.
+ *
+ * Results are cached by quantised ray so near-duplicate pointer moves
+ * (common at clip boundaries) skip the BVH entirely.
  */
 function findClipAwareHit(
   ray: THREE.Ray,
@@ -39,6 +59,12 @@ function findClipAwareHit(
   clipUpper: number | null | undefined,
   primaryDistance: number,
 ): THREE.Intersection | null {
+  // Check ray cache — skip BVH if the ray hasn't changed meaningfully.
+  const cacheKey = clipRayCacheKey(ray) + `,${clipLower ?? ''},${clipUpper ?? ''}`;
+  if (cacheKey === _clipCacheKey) {
+    return _clipCacheResult;
+  }
+
   const rc = _clipFallbackRaycaster;
   rc.ray.copy(ray);
   // Skip past the already-found clipped surface.
@@ -52,14 +78,22 @@ function findClipAwareHit(
   rc.near = 0;
   rc.far = Infinity;
   (rc as any).firstHitOnly = false;
-  if (hits.length === 0) return null;
+  if (hits.length === 0) {
+    _clipCacheKey = cacheKey;
+    _clipCacheResult = null;
+    return null;
+  }
   const hit = hits[0];
   if (
     (clipUpper != null && hit.point.z > clipUpper) ||
     (clipLower != null && hit.point.z < clipLower)
   ) {
+    _clipCacheKey = cacheKey;
+    _clipCacheResult = null;
     return null;
   }
+  _clipCacheKey = cacheKey;
+  _clipCacheResult = hit;
   return hit;
 }
 

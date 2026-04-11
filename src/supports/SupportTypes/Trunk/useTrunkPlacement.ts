@@ -49,16 +49,30 @@ function buildCavityStick(
     const hits = _cavityRaycaster.intersectObject(mesh, false);
     if (hits.length === 0) return null;
 
-    // Pick the closest downward hit that is strictly below the tip.
-    const floorHit = hits.find((h) => h.point.z < tipPos.z - 0.1);
-    if (!floorHit || !floorHit.face) return null;
-
-    // Compute the floor normal in world space.
+    // Prefer a true "floor" hit (normal has meaningful +Z) so the bottom
+    // endpoint clings vertically down when possible. Only fall back to any
+    // below-tip hit (e.g. sidewall) if no floor-like surface is found.
+    const BELOW_EPS_MM = 0.1;
+    const FLOOR_Z_MIN = 0.35;
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
-    const floorNormal = floorHit.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
 
-    const bPos = { x: floorHit.point.x, y: floorHit.point.y, z: floorHit.point.z };
-    const bNormal = { x: floorNormal.x, y: floorNormal.y, z: floorNormal.z };
+    type Candidate = { hit: THREE.Intersection; normal: THREE.Vector3 };
+    const belowCandidates: Candidate[] = [];
+
+    for (const h of hits) {
+        if (h.point.z >= tipPos.z - BELOW_EPS_MM) continue;
+        if (!h.face) continue;
+        const n = h.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
+        belowCandidates.push({ hit: h, normal: n });
+    }
+
+    if (belowCandidates.length === 0) return null;
+
+    const floorCandidate = belowCandidates.find((c) => c.normal.z >= FLOOR_Z_MIN);
+    const chosen = floorCandidate ?? belowCandidates[0];
+
+    const bPos = { x: chosen.hit.point.x, y: chosen.hit.point.y, z: chosen.hit.point.z };
+    const bNormal = { x: chosen.normal.x, y: chosen.normal.y, z: chosen.normal.z };
 
     const { stick } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
 
@@ -73,8 +87,8 @@ function buildCavityStick(
 
 export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
-    const HOVER_POS_EPSILON_MM = 0.06;
-    const HOVER_NORMAL_DOT_MIN = 0.999;
+    const HOVER_POS_EPSILON_MM = 0.1;
+    const HOVER_NORMAL_DOT_MIN = 0.998;
 
     const [previewData, setPreviewData] = useState<SupportData | null>(null);
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
@@ -190,12 +204,11 @@ export function useTrunkPlacementV2() {
 
         // Pass mesh for collision detection
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh, isPreview: true });
 
-        // Fast-path for cavity hover: if the pathfinder stagnated, the tip is
-        // inside a closed cavity.  Try to find the cavity floor and show a
-        // cavity-stick preview instead of an error.
-        if (result.stagnated) {
+        // Fast-path for cavity hover: if the pathfinder stagnated or exhausted its
+        // reduced preview budget, try to find the cavity floor and show a stick preview.
+        if (result.stagnated || result.exhaustedBudget) {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -251,10 +264,29 @@ export function useTrunkPlacementV2() {
 
         // reject
         if (decision.trunkBuild) {
+            if (mesh && decision.trunkBuild.error === 'COLLISION_WITH_MODEL') {
+                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                if (cavityStick) {
+                    setPreviewData(cavityStick.supportData);
+                    setPreviewError(null);
+                    setPreviewWarning(null);
+                    return;
+                }
+            }
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(decision.trunkBuild.error || null);
             setPreviewWarning(decision.trunkBuild.warning || null);
             return;
+        }
+
+        if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
+            const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+            if (cavityStick) {
+                setPreviewData(cavityStick.supportData);
+                setPreviewError(null);
+                setPreviewWarning(null);
+                return;
+            }
         }
 
         setPreviewData((prev) => (prev === null ? prev : null));
@@ -291,10 +323,11 @@ export function useTrunkPlacementV2() {
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
 
-        // When the pathfinder stagnates the tip is inside a closed cavity and
-        // can't reach the build plate.  Fall back to a cavity stick that spans
-        // straight down to the nearest cavity floor surface.
-        if (result.stagnated) {
+        // When the pathfinder stagnates (or exhausts its preview budget) the tip
+        // is effectively trapped in a cavity and can't route to the build plate.
+        // Fall back to a cavity stick that spans straight down to the nearest
+        // suitable surface.
+        if (result.stagnated || result.exhaustedBudget) {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -314,7 +347,21 @@ export function useTrunkPlacementV2() {
         // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
         // Only bail on trunk errors when grid is disabled (direct placement path).
         const settings = getSettings();
-        if (result.error && !settings.grid?.enabled) return;
+        if (result.error && !settings.grid?.enabled) {
+            if (result.error === 'COLLISION_WITH_MODEL' && mesh) {
+                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                if (cavityStick) {
+                    addStick(cavityStick.stick);
+                    pushHistory({
+                        type: SUPPORT_ADD_STICK,
+                        payload: { stick: cavityStick.stick },
+                    });
+                    clearSupportSelection();
+                    return;
+                }
+            }
+            return;
+        }
 
         const decision = decideGridPlacement({
             settings,
@@ -407,6 +454,18 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'reject') {
+            if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
+                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                if (cavityStick) {
+                    addStick(cavityStick.stick);
+                    pushHistory({
+                        type: SUPPORT_ADD_STICK,
+                        payload: { stick: cavityStick.stick },
+                    });
+                    clearSupportSelection();
+                    return;
+                }
+            }
             return;
         }
 

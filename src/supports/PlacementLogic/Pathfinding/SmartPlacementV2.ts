@@ -38,13 +38,16 @@ export interface SmartPlacementV2Input extends TrunkPlacementInput {
 
 export interface SmartPlacementV2Context {
     /** Cached SDF for the model mesh. Reuse across placements for same model. */
-    sdfCache: SDFCache;
+    sdfCache?: SDFCache;
     /** Tracks placed support geometry. Optional — omit to skip support-to-support avoidance. */
     occupancy?: SupportOccupancy;
     /** Warm-start state from previous frame's search. Pass null for first frame. */
     warmStart?: WarmStartState | null;
     /** Support ID being placed (to ignore self in occupancy). */
     placingSupportId?: string;
+    /** Override the A* expansion budget (default 2000). Pass a lower value for
+     *  hover preview to reduce first-frame cost at transition-zone positions. */
+    maxExpansions?: number;
 }
 
 // ---------- Constants ----------
@@ -227,6 +230,7 @@ export function calculateSmartPlacementV2(
     // 3. Quick check: is the straight-down path clear AND do the roots fit at the base?
     const rootTopZ = input.rootsTopZ;
     const socketPos = standard.socketPos;
+
     const straightClear = !sdf.segmentBlocked(
         socketPos.x, socketPos.y, socketPos.z,
         socketPos.x, socketPos.y, rootTopZ,
@@ -305,7 +309,7 @@ export function calculateSmartPlacementV2(
         minAngleFromVerticalDeg: 90 - minRoutedTrunkAngleDeg,
         occupancy: context?.occupancy,
         ignoreSupportId: context?.placingSupportId,
-        maxExpansions: 2000,
+        maxExpansions: context?.maxExpansions ?? 2000,
         stepMm: 2.0, // Coarse grid for pathfinding; fine SDF checking at cellSize
         goalValidator,
     }, warmStart);
@@ -326,6 +330,7 @@ export function calculateSmartPlacementV2(
             ...standard,
             error: 'COLLISION_WITH_MODEL',
             stagnated: result.stagnated,
+            exhaustedBudget: result.hitExpansionLimit,
         };
     }
 
@@ -448,7 +453,7 @@ export function calculateSmartPlacementV2(
     }
 
     // 9. Build the result
-    return {
+    const finalResult: TrunkPlacementResult = {
         socketPos,
         joints: simplifiedJoints,
         constructionJoints: [],
@@ -459,6 +464,8 @@ export function calculateSmartPlacementV2(
         angle: standard.angle,
         coneAxis: standard.coneAxis,
     };
+
+    return finalResult;
 }
 
 // ---------- SDF-based joint simplification ----------

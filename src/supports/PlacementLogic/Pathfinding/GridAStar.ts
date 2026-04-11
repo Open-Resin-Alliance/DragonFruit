@@ -62,6 +62,10 @@ export interface GridAStarResult {
     reached: boolean;
     /** True if the search was terminated early due to lack of Z progress (cavity). */
     stagnated: boolean;
+    /** True if the search exhausted its expansion budget without reaching the goal.
+     *  Distinct from stagnated: the search was making progress but ran out of budget.
+     *  When true, V1 raycast fallback is also very unlikely to succeed. */
+    hitExpansionLimit: boolean;
     /** Reusable warm-start state for the next frame. */
     warmState: WarmStartState | null;
 }
@@ -368,6 +372,7 @@ export function gridAStar(
 
     // ---- Reconstruct path ----
     const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
+    const hitExpansionLimit = !goalEntry && !stagnated && expansions >= maxExp;
 
     if (!goalEntry) {
         return {
@@ -375,9 +380,10 @@ export function gridAStar(
             expansions,
             reached: false,
             stagnated,
+            hitExpansionLimit,
             warmState: stagnated ? null : {
                 socketPos: { ...startPos },
-                openEntries: openSet.slice(0, 64), // keep top entries for next frame
+                openEntries: openSet.slice(0, 64),
                 gScores: gScore,
                 cameFrom,
             },
@@ -430,6 +436,7 @@ export function gridAStar(
         expansions,
         reached: true,
         stagnated: false,
+        hitExpansionLimit: false,
         warmState: {
             socketPos: { ...startPos },
             openEntries: [], // search complete, no reuse needed
