@@ -63,6 +63,30 @@ function findClipAwareHit(
   return hit;
 }
 
+/**
+ * Check whether any non-model intersection exists in the visible clip zone.
+ * Used to decide if a clipped model-mesh hit should let events propagate
+ * through to support objects behind the clipped surface.
+ */
+function hasVisibleNonModelIntersection(
+  intersections: THREE.Intersection[],
+  modelObject: THREE.Object3D,
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+): boolean {
+  for (const int of intersections) {
+    // Skip the model mesh itself (can appear multiple times for inner wall)
+    if (int.object === modelObject) continue;
+    // Skip gizmo handles
+    if (int.object.userData?.isGizmoHandle) continue;
+    // Check the hit is within visible clip bounds
+    if (clipUpper != null && int.point.z > clipUpper) continue;
+    if (clipLower != null && int.point.z < clipLower) continue;
+    return true;
+  }
+  return false;
+}
+
 function StlMeshComponent({
   geometry,
   clipLower,
@@ -813,6 +837,11 @@ if (uDitherAmount > 0.0) {
               (clipUpper != null && e.point.z > clipUpper) ||
               (clipLower != null && e.point.z < clipLower)
             ) {
+              // If a visible support is behind the clipped surface, let the
+              // click propagate to it instead of consuming it for placement.
+              if (hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
+                return; // Don't stop propagation — support will handle the click.
+              }
               // Primary hit is in the clipped (hidden) zone. Cast directly
               // against this mesh to find the nearest visible-zone hit.
               const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
@@ -846,6 +875,24 @@ if (uDitherAmount > 0.0) {
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
             if (!hasExternalHoverSource) schedulePointerHover(false);
+            return;
+          }
+
+          // If the primary hit is in the clipped (invisible) zone and there is a
+          // visible support (or other non-model object) behind it, let the event
+          // propagate so the support can receive its hover event instead.
+          const primaryClipped =
+            (clipUpper != null && e.point.z > clipUpper) ||
+            (clipLower != null && e.point.z < clipLower);
+          if (primaryClipped && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
+            // Don't stop propagation — support behind the clipped surface will handle it.
+            if (!hasExternalHoverSource) schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
+            if (mode === 'support' && onSupportHover) {
+              onSupportHover(null);
+            }
             return;
           }
 
