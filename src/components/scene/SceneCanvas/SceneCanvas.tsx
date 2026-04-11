@@ -4256,7 +4256,6 @@ export function SceneCanvas({
         key={`scene-canvas-${canvasRecoveryNonce}`}
         style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
         camera={defaultCamera}
-        frameloop={isLinux ? 'demand' : 'always'}
         shadows={!isLinux}
         dpr={dynamicDpr}
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
