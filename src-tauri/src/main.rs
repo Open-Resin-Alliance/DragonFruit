@@ -2761,7 +2761,7 @@ fn main() {
     // before any GTK/WebKit init forces the SHM fallback path, which is
     // slightly slower but stable. Only applies to the wry (WebKitGTK) path;
     // CEF uses its own compositor and is unaffected.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(feature = "tauri-cef")))]
     {
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             // NOTE: called at the very start of main, single-threaded, before
