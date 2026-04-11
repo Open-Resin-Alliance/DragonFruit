@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'react';
+import React, { useSyncExternalStore, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
 import * as THREE from 'three';
@@ -553,24 +553,13 @@ export function JointGizmo() {
         applyMoveDelta(delta);
     }, [applyMoveDelta]);
 
-    const scheduleMoveFlush = useCallback(() => {
-        if (typeof window === 'undefined') return;
-        if (moveRafRef.current !== null) return;
-
-        moveRafRef.current = window.requestAnimationFrame(() => {
-            moveRafRef.current = null;
-            flushPendingMove();
-
-            if (pendingDeltaRef.current.lengthSq() > MOVE_DELTA_EPS_SQ) {
-                scheduleMoveFlush();
-            }
-        });
-    }, [flushPendingMove]);
-
     const handleMove = (delta: THREE.Vector3) => {
         if (!joint) return;
+        // Apply immediately so support geometry stays in lockstep with gizmo.
+        // rAF-batching introduces a persistent one-frame lag where the cone
+        // appears pseudo-detached from the dragged socket joint.
         pendingDeltaRef.current.add(delta);
-        scheduleMoveFlush();
+        flushPendingMove();
     };
 
     const handleMoveEnd = () => {
@@ -642,11 +631,22 @@ export function JointGizmo() {
         liveKickstandPreviewRef.current = null;
     };
 
+    // Sync gizmo group position to joint.pos, but only when not dragging.
+    // Do NOT use a declarative R3F `position` prop on the group — on every React re-render
+    // (caused by the deferred useActiveJointDragPreview state update), R3F would re-apply
+    // the committed (old) joint position to the Three.js group, overwriting the imperative
+    // position.set() from applyMoveDelta and creating a persistent 1-frame cone/ball desync.
+    useLayoutEffect(() => {
+        if (!gizmoTargetRef.current || !joint) return;
+        if (dragPosRef.current !== null) return; // skip during active drag
+        gizmoTargetRef.current.position.set(joint.pos.x, joint.pos.y, joint.pos.z);
+    }, [joint?.pos.x, joint?.pos.y, joint?.pos.z]);
+
     if (!joint) return null;
 
     return (
         <>
-            <group ref={gizmoTargetRef as React.MutableRefObject<THREE.Group>} position={[joint.pos.x, joint.pos.y, joint.pos.z]} />
+            <group ref={gizmoTargetRef as React.MutableRefObject<THREE.Group>} />
             <ScreenSpaceGizmo
                 meshRef={gizmoTargetRef as React.RefObject<THREE.Group>}
                 position={[joint.pos.x, joint.pos.y, joint.pos.z]}
