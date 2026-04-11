@@ -15,6 +15,23 @@ use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
 use tauri::Manager;
 
+// dragonfruit-83-6 CEF spike: in the feat/cef branch, DragonFruitAppHandle is no
+// longer defaulted to `AppHandle<Wry>` unless the `wry` feature is explicitly
+// enabled (the default_runtime proc-macro hard-codes Wry). When building with
+// --features tauri-cef, we need to reference a concrete runtime type. This
+// alias selects Cef on the spike path and Wry otherwise, so the rest of the
+// file can keep saying `DragonFruitAppHandle` without caring which runtime
+// is active.
+#[cfg(feature = "tauri-cef")]
+type DragonFruitAppHandle = tauri::AppHandle<tauri::Cef>;
+#[cfg(not(feature = "tauri-cef"))]
+type DragonFruitAppHandle = tauri::AppHandle<tauri::Wry>;
+
+#[cfg(feature = "tauri-cef")]
+type DragonFruitWindow = tauri::Window<tauri::Cef>;
+#[cfg(not(feature = "tauri-cef"))]
+type DragonFruitWindow = tauri::Window<tauri::Wry>;
+
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     let stamp = std::time::SystemTime::now()
@@ -419,7 +436,7 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
 /// always emitted immediately.  Intermediate updates are skipped if fewer than
 /// 16 ms have elapsed since the last emit.
 fn make_throttled_progress_cb(
-    win: tauri::Window,
+    win: DragonFruitWindow,
 ) -> dragonfruit_slicing_engine::types::ProgressCallbackV3 {
     use std::sync::Mutex;
     use std::time::Instant;
@@ -782,7 +799,7 @@ async fn export_mesh_file(
 }
 
 #[tauri::command]
-async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<Response, String> {
+async fn slice_solid_native(window: DragonFruitWindow, job_json: String) -> Result<Response, String> {
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
 
@@ -1112,7 +1129,7 @@ async fn stage_mesh_binary_chunk(
 
 #[tauri::command]
 async fn slice_solid_native_to_temp_path(
-    window: tauri::Window,
+    window: DragonFruitWindow,
     job_json: String,
 ) -> Result<NativeSliceTempPathResult, String> {
     // Take the pre-staged mesh bytes (set by stage_mesh_binary)
@@ -1382,7 +1399,7 @@ struct NativeRleLabels {
 
 #[tauri::command]
 async fn run_island_scan_native(
-    window: tauri::Window,
+    window: DragonFruitWindow,
     params_json: String,
 ) -> Result<NativeIslandScanResult, String> {
     // Take staged mesh bytes
@@ -2399,7 +2416,7 @@ async fn get_launch_scene_files() -> Result<Vec<PickedOpenFile>, String> {
     .map_err(|err| format!("Launch scene-files task failed to join: {err}"))?
 }
 
-fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str) {
+fn emit_scene_file_handoff(app: &DragonFruitAppHandle, args: &[String], source: &str) {
     let paths = collect_scene_file_paths_from_args(args);
     if paths.is_empty() {
         return;
@@ -2413,7 +2430,7 @@ fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str
     let _ = app.emit("dragonfruit://scene-file-handoff", payload);
 }
 
-fn focus_main_window(app: &tauri::AppHandle) {
+fn focus_main_window(app: &DragonFruitAppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
@@ -2438,14 +2455,14 @@ fn get_slicer_engine_version() -> &'static str {
 }
 
 #[tauri::command]
-async fn notify_launch_scene_handoff(app: tauri::AppHandle) -> Result<(), String> {
+async fn notify_launch_scene_handoff(app: DragonFruitAppHandle) -> Result<(), String> {
     let args = std::env::args().collect::<Vec<_>>();
     emit_scene_file_handoff(&app, &args, "primary-launch");
     Ok(())
 }
 
 #[tauri::command]
-async fn focus_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
     focus_main_window(&app);
     Ok(())
 }
@@ -2499,7 +2516,13 @@ async fn read_print_layer_png(
 
         match format_hint.trim() {
             f if f == ".ctb" || f.starts_with("ctb") => {
-                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::ctb_encoder::read_layer_preview_png(&source, layer_number)
+                // dragonfruit-83-6 CEF spike: ctb plugin does not yet implement
+                // read_layer_preview_png (present only in athena plugin). This
+                // is a pre-existing gap on the dev branch and is unrelated to
+                // the CEF work. Stub with an error for now so the build
+                // completes — the real fix is to implement ctb::read_layer_preview_png
+                // or route both formats through a shared trait.
+                Err("layer preview PNG not yet supported for .ctb files".to_string())
             }
             _ => {
                 // Default: NanoDLP ZIP archive (.nanodlp, athena, and any unknown format)
@@ -2663,7 +2686,7 @@ async fn set_log_level_pref(level: String) -> Result<(), String> {
 /// Return the last `lines` lines of the log file for the live viewer in Settings.
 /// Returns an empty string if the file does not yet exist.
 #[tauri::command]
-async fn read_log_tail(app: tauri::AppHandle, lines: usize) -> Result<String, String> {
+async fn read_log_tail(app: DragonFruitAppHandle, lines: usize) -> Result<String, String> {
     use tauri::Manager;
     let log_dir = app
         .path()
@@ -2689,7 +2712,7 @@ async fn read_log_tail(app: tauri::AppHandle, lines: usize) -> Result<String, St
 
 /// Open the log file in the OS default text editor / viewer.
 #[tauri::command]
-async fn open_log_file(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_log_file(app: DragonFruitAppHandle) -> Result<(), String> {
     use tauri::Manager;
     let log_dir = app
         .path()
@@ -2727,7 +2750,7 @@ async fn open_log_file(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Delete the log file so it starts fresh on the next write.
 #[tauri::command]
-async fn delete_log_file(app: tauri::AppHandle) -> Result<(), String> {
+async fn delete_log_file(app: DragonFruitAppHandle) -> Result<(), String> {
     use tauri::Manager;
     let log_dir = app
         .path()
@@ -2796,7 +2819,12 @@ fn main() {
         cfg!(debug_assertions)
     );
 
-    let log_level = read_log_level_pref();
+    let _log_level = read_log_level_pref();
+    // dragonfruit-83-6 CEF spike: tauri-plugin-log pulls tauri with default
+    // features including wry, which collides with the cef runtime at link
+    // time (webview_version re-exports). Gate the plugin init behind the
+    // non-cef feature path.
+    #[cfg(not(feature = "tauri-cef"))]
     let log_plugin = {
         use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
         LogBuilder::new()
@@ -2807,7 +2835,7 @@ fn main() {
                 }),
                 Target::new(TargetKind::Webview),
             ])
-            .level(log_level)
+            .level(_log_level)
             // Suppress chatty low-level transport crates — these flood the log
             // at DEBUG/TRACE and contain no actionable application information.
             .level_for("tungstenite", log::LevelFilter::Warn)
@@ -2822,8 +2850,10 @@ fn main() {
             .build()
     };
 
-    let builder = tauri::Builder::default()
-        .plugin(log_plugin)
+    let builder = tauri::Builder::default();
+    #[cfg(not(feature = "tauri-cef"))]
+    let builder = builder.plugin(log_plugin);
+    let builder = builder
         .setup(|app| {
             use tauri::WebviewWindowBuilder;
 
@@ -2845,19 +2875,23 @@ fn main() {
 
             log::info!("Main window created successfully");
             Ok(())
-        })
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            log::info!("Single-instance activated: second launch detected (args={argv:?})");
-            let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
-            emit_scene_file_handoff(app, &argv, "single-instance");
+        });
 
-            // Only force foreground when this second launch is handing off a scene file.
-            // Avoiding unconditional focus here reduces Windows "error" chimes when users
-            // launch the app again while it's already running.
-            if has_scene_files {
-                focus_main_window(app);
-            }
-        }));
+    // dragonfruit-83-6 CEF spike: single-instance plugin also pulls the wry
+    // default feature transitively. Gate behind the non-cef path.
+    #[cfg(not(feature = "tauri-cef"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        log::info!("Single-instance activated: second launch detected (args={argv:?})");
+        let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
+        emit_scene_file_handoff(app, &argv, "single-instance");
+
+        // Only force foreground when this second launch is handing off a scene file.
+        // Avoiding unconditional focus here reduces Windows "error" chimes when users
+        // launch the app again while it's already running.
+        if has_scene_files {
+            focus_main_window(app);
+        }
+    }));
 
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_plugin_macos_fps::init());
