@@ -6,7 +6,7 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
   - org.freedesktop.Sdk.Extension.node22
 
-command: dragonfruit-launch
+command: dragonfruit-desktop
 
 finish-args:
   # Display — Wayland preferred, X11 fallback
@@ -52,15 +52,12 @@ modules:
           - node_modules
 
   # ── 2. Tauri + CEF binary ────────────────────────────────────────
-  # CEF-only build is intentional for Flatpak. The wry/WebKitGTK path is
-  # used for the AppImage. CEF avoids the DMA-BUF/GBM crash class (#83)
-  # and delivers consistent Chromium rendering across all Linux distros.
   - name: dragonfruit-desktop
     buildsystem: simple
     build-commands:
+      # Build with CEF runtime for Linux
       - cd src-tauri && cargo build --release --no-default-features --features custom-protocol,tauri-cef
       - install -Dm755 src-tauri/target/release/dragonfruit-desktop /app/bin/dragonfruit-desktop
-      - install -Dm755 flatpak/dragonfruit-launch.sh /app/bin/dragonfruit-launch
     sources:
       - type: dir
         path: ..
@@ -75,10 +72,7 @@ modules:
         CEF_OUT=$(find src-tauri/target/release/build -path '*/cef-dll-sys-*/out/cef_linux_x86_64' -type d | head -1)
         if [ -z "$CEF_OUT" ]; then echo "CEF output dir not found"; exit 1; fi
         install -d /app/lib/cef
-        # .so files are required — fail loudly if missing
-        cp -a "$CEF_OUT"/*.so /app/lib/cef/
-        # Resource files may not all be present depending on CEF version
-        cp -a "$CEF_OUT"/*.bin "$CEF_OUT"/*.dat "$CEF_OUT"/*.pak /app/lib/cef/ 2>/dev/null || true
+        cp -a "$CEF_OUT"/*.so "$CEF_OUT"/*.bin "$CEF_OUT"/*.dat "$CEF_OUT"/*.pak /app/lib/cef/ 2>/dev/null || true
         cp -a "$CEF_OUT"/locales /app/lib/cef/ 2>/dev/null || true
     sources:
       - type: dir
