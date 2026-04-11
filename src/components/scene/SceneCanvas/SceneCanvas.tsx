@@ -78,6 +78,7 @@ import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, LoggingHelper, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
+import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
   getSavedCameraProjectionSettings,
@@ -476,6 +477,7 @@ export function SceneCanvas({
     getSettings,
     getSettings,
   );
+  const isLinux = useIsLinux();
   const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
 
@@ -2997,9 +2999,11 @@ export function SceneCanvas({
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
-  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging || isGizmoRetargeting)
-    ? ([1, 1.5] as [number, number])
-    : ([1, 10] as [number, number]);
+  const dynamicDpr: [number, number] = isLinux
+    ? [1, 1]
+    : (isIntroAnimating || isDropAnimating || isGizmoDragging || isGizmoRetargeting)
+      ? [1, 1.5]
+      : [1, 10];
 
   React.useEffect(() => {
     modelDropOffsetsRef.current = entryDropOffsets;
@@ -4257,7 +4261,7 @@ export function SceneCanvas({
         key={`scene-canvas-${canvasRecoveryNonce}`}
         style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
         camera={defaultCamera}
-        shadows
+        shadows={!isLinux}
         dpr={dynamicDpr}
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}

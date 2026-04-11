@@ -4,13 +4,17 @@ version = "0.1.2"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# All tauri crates use the feat/cef branch which adds the CEF runtime backend.
+# macOS/Windows use wry (default); Linux builds pass --features tauri-cef.
+tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-log = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-macos-fps = "0.1.0"
+# default-features = false — runtime backend chosen via tauri-wry / tauri-cef features.
+tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["compression", "dynamic-acl"] }
+# Optional: pulled in by tauri-wry feature. On CEF builds these are excluded
+# to avoid E0252 collision (they pull tauri with default wry feature).
+tauri-plugin-log = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -28,9 +32,31 @@ dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 flate2 = "1.1.9"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-macos-fps = "0.1.0"
+
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "tauri-wry"]
 custom-protocol = ["tauri/custom-protocol"]
+# Runtime backend features — mutually exclusive.
+# Default: tauri-wry (WebKitGTK/WebView2/WebKit)
+# Linux CEF: --no-default-features --features custom-protocol,tauri-cef
+tauri-wry = ["tauri/wry", "dep:tauri-plugin-log", "dep:tauri-plugin-single-instance"]
+tauri-cef = ["tauri/cef"]
+
+# Redirect all transitive tauri crate deps to the feat/cef branch so Cargo
+# resolves a single tauri version tree. Safe for macOS/Windows since wry
+# remains the default feature on feat/cef.
+# To revert to stable: delete this block and switch deps back to crates.io.
+[patch.crates-io]
+tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 
 # Compile ALL dependencies with full optimizations in dev builds.
 # The slicer and its deps (flate2, crc32fast, png, zip, rayon) are
