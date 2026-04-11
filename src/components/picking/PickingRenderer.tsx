@@ -197,6 +197,22 @@ export function PickingRenderer({
       pick.matrix.copy(source.matrix);
       pick.matrixWorld.copy(source.matrixWorld);
 
+      // Sync clipping planes from the source material so the model's cross-
+      // section clip is respected in the pick render.  Without this, the
+      // full unclipped model occludes support geometry behind it.
+      if ((source as THREE.Mesh).isMesh && (pick as THREE.Mesh).isMesh) {
+        const srcMatRaw = (source as THREE.Mesh).material;
+        const srcMat = (Array.isArray(srcMatRaw) ? srcMatRaw[0] : srcMatRaw) as THREE.Material & { clippingPlanes?: THREE.Plane[] | null } | undefined;
+        const pickMat = (pick as THREE.Mesh).material as THREE.Material & { clippingPlanes?: THREE.Plane[] | null };
+        if (srcMat && pickMat) {
+          const srcPlanes = srcMat.clippingPlanes ?? null;
+          if (pickMat.clippingPlanes !== srcPlanes) {
+            pickMat.clippingPlanes = srcPlanes;
+            pickMat.needsUpdate = true;
+          }
+        }
+      }
+
       const sourceChildren = source.children;
       const pickChildren = pick.children;
       const childCount = Math.min(sourceChildren.length, pickChildren.length);

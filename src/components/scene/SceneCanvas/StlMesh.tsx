@@ -77,8 +77,9 @@ function hasVisibleNonModelIntersection(
   for (const int of intersections) {
     // Skip the model mesh itself (can appear multiple times for inner wall)
     if (int.object === modelObject) continue;
-    // Skip gizmo handles
-    if (int.object.userData?.isGizmoHandle) continue;
+    // Gizmo handles don't need the clip-bounds check — they are always
+    // rendered in their own layer and should be treated as visible.
+    if (int.object.userData?.isGizmoHandle) return true;
     // Check the hit is within visible clip bounds
     if (clipUpper != null && int.point.z > clipUpper) continue;
     if (clipLower != null && int.point.z < clipLower) continue;
@@ -868,7 +869,12 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
+          // Check both GPU pick (may lag 1 frame) and raw intersection list
+          // so gizmo hover works even when gizmos are excluded from picking.
+          const hasGizmoIntersection = e.intersections.some(
+            (h) => h.object.userData?.isGizmoHandle === true,
+          );
+          if (shouldSuppressModelInteraction || isGizmoHoverCategory || hasGizmoIntersection) {
             if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);

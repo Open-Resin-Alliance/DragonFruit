@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { isSupportEditInteractionActive } from './gizmoInteractionLock';
+import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 
 type PointerIntersectionLike = {
     object?: THREE.Object3D | null;
+    point?: THREE.Vector3 | null;
 };
 
 type PointerEventLike = {
@@ -30,13 +32,24 @@ export function getFrontBlockingModelId(event: PointerEventLike | null | undefin
     if (!targetRoot) return null;
 
     const intersections = Array.isArray(event?.intersections) ? event.intersections : [];
+    const { clipLower, clipUpper } = getClipBounds();
     for (const entry of intersections) {
         const object = entry?.object ?? null;
         if (!object) continue;
         if (isWithinTargetSubtree(object, targetRoot)) return null;
 
         const modelId = object.userData?.modelId;
-        if (typeof modelId === 'string' && modelId.length > 0) return modelId;
+        if (typeof modelId === 'string' && modelId.length > 0) {
+            // When cross-section is active, skip model hits whose intersection
+            // point falls in the clipped (invisible) zone — the surface is
+            // visually removed and should not block interactions behind it.
+            const pt = (entry as { point?: THREE.Vector3 | null }).point;
+            if (pt) {
+                if (clipUpper != null && pt.z > clipUpper) continue;
+                if (clipLower != null && pt.z < clipLower) continue;
+            }
+            return modelId;
+        }
     }
 
     return null;
