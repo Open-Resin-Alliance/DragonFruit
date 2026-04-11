@@ -1,8 +1,8 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addAnchor, addBranch, addKnot, addRoot, addTrunk, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
+import { addAnchor, addBranch, addKnot, addRoot, addStick, addTrunk, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_TRUNK } from '../../history/actionTypes';
+import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
@@ -13,6 +13,63 @@ import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { buildStick } from '../Stick/stickBuilder';
+
+// ---------------------------------------------------------------------------
+// Cavity stick helpers
+// ---------------------------------------------------------------------------
+
+const _cavityRaycaster = new THREE.Raycaster();
+const _downDir = new THREE.Vector3(0, 0, -1);
+
+/**
+ * When A* stagnates (tip is inside a closed cavity), attempt to find the
+ * cavity floor by raycasting straight down.  Returns a buildStick result +
+ * a SupportData preview object, or null if no lower surface is found.
+ */
+function buildCavityStick(
+    tipPos: { x: number; y: number; z: number },
+    tipNormal: { x: number; y: number; z: number },
+    modelId: string,
+    mesh: THREE.Mesh,
+): { supportData: SupportData; stick: ReturnType<typeof buildStick>['stick'] } | null {
+    _cavityRaycaster.set(
+        new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z),
+        _downDir,
+    );
+    // Offset origin slightly inward along tip normal so we don't self-hit the
+    // surface we just clicked.
+    const OFFSET_MM = 0.5;
+    _cavityRaycaster.ray.origin.addScaledVector(
+        new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
+        OFFSET_MM,
+    );
+    _cavityRaycaster.ray.origin.z -= OFFSET_MM * 0.1; // nudge down past origin surface
+
+    const hits = _cavityRaycaster.intersectObject(mesh, false);
+    if (hits.length === 0) return null;
+
+    // Pick the closest downward hit that is strictly below the tip.
+    const floorHit = hits.find((h) => h.point.z < tipPos.z - 0.1);
+    if (!floorHit || !floorHit.face) return null;
+
+    // Compute the floor normal in world space.
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    const floorNormal = floorHit.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
+
+    const bPos = { x: floorHit.point.x, y: floorHit.point.y, z: floorHit.point.z };
+    const bNormal = { x: floorNormal.x, y: floorNormal.y, z: floorNormal.z };
+
+    const { stick } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
+
+    const supportData: SupportData = {
+        id: stick.id,
+        segments: stick.segments,
+        contactCones: [stick.contactConeA, stick.contactConeB],
+    };
+
+    return { stick, supportData };
+}
 
 export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
@@ -135,10 +192,19 @@ export function useTrunkPlacementV2() {
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
 
-        // Fast-path for cavity hover: if the pathfinder stagnated, there's
-        // no valid support path. Skip grid placement entirely — it would just
-        // burn cycles re-evaluating an unsolvable position.
+        // Fast-path for cavity hover: if the pathfinder stagnated, the tip is
+        // inside a closed cavity.  Try to find the cavity floor and show a
+        // cavity-stick preview instead of an error.
         if (result.stagnated) {
+            if (mesh) {
+                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                if (cavityStick) {
+                    setPreviewData(cavityStick.supportData);
+                    setPreviewError(null);
+                    setPreviewWarning(null);
+                    return;
+                }
+            }
             setPreviewData(result.supportData);
             setPreviewError(result.error || null);
             setPreviewWarning(null);
@@ -224,6 +290,26 @@ export function useTrunkPlacementV2() {
         // Pass mesh for collision detection
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
+
+        // When the pathfinder stagnates the tip is inside a closed cavity and
+        // can't reach the build plate.  Fall back to a cavity stick that spans
+        // straight down to the nearest cavity floor surface.
+        if (result.stagnated) {
+            if (mesh) {
+                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                if (cavityStick) {
+                    addStick(cavityStick.stick);
+                    pushHistory({
+                        type: SUPPORT_ADD_STICK,
+                        payload: { stick: cavityStick.stick },
+                    });
+                    clearSupportSelection();
+                    return;
+                }
+            }
+            // No cavity floor found — bail silently; hover preview already shows the error.
+            return;
+        }
 
         // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
         // Only bail on trunk errors when grid is disabled (direct placement path).
