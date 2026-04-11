@@ -111,6 +111,12 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         // V2 grid A* pathfinder (SDF-backed, no raycast bundles)
         const v2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId });
         if (v2Result.error === 'COLLISION_WITH_MODEL') {
+            // If V2's A* stagnated (trapped in a cavity with no Z progress),
+            // V1's raycast-bundle search is equally futile. Skip it entirely
+            // to avoid ~160 expansions × ~1500 raycasts each.
+            if (v2Result.stagnated) {
+                placement = v2Result;
+            } else {
             // Fallback to V1 raycast-based search, then SDF post-validate.
             // V1 uses 9-ray bundles which have gaps — verify every segment
             // of V1's result against the SDF before accepting it.
@@ -145,6 +151,7 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
                     placement = v1Result;
                 }
             }
+            } // end if (!stagnated)
         } else {
             placement = v2Result;
         }
