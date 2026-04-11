@@ -2742,6 +2742,20 @@ async fn delete_log_file(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn main() {
+    // Issue #83: on Linux with Nvidia+Wayland, WebKitGTK's DMA-BUF renderer
+    // can crash inside gbm_bo_create_with_modifiers. Setting this env var
+    // before any GTK/WebKit init forces the SHM fallback path, which is
+    // slightly slower but stable. Only applies to the wry (WebKitGTK) path;
+    // CEF uses its own compositor and is unaffected.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            // SAFETY: called at the very start of main, single-threaded, before
+            // any other threads or libraries are initialized.
+            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        }
+    }
+
     // Install a panic hook that writes the panic location and message to the
     // DragonFruit log before the default handler runs.  This ensures that even
     // hard crashes leave a human-readable trace in the log file rather than
