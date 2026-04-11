@@ -22,6 +22,47 @@ import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
+// Scratch raycaster reused for clip-zone fallback raycasts.
+const _clipFallbackRaycaster = new THREE.Raycaster();
+
+/**
+ * When the primary ray hit falls in the clipped (hidden) portion of a mesh,
+ * find the nearest hit within the visible Z range by raycasting with `near`
+ * set just past the clipped surface. This skips the outer wall entirely and
+ * uses firstHitOnly=true so the BVH stops at the very first triangle hit —
+ * O(log n) instead of scanning all faces.
+ */
+function findClipAwareHit(
+  ray: THREE.Ray,
+  mesh: THREE.Object3D,
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+  primaryDistance: number,
+): THREE.Intersection | null {
+  const rc = _clipFallbackRaycaster;
+  rc.ray.copy(ray);
+  // Skip past the already-found clipped surface.
+  rc.near = primaryDistance + 0.05;
+  // Bound the search — models fit within the build volume.
+  rc.far = primaryDistance + 500;
+  (rc as any).firstHitOnly = true;
+  const hits: THREE.Intersection[] = [];
+  (mesh as THREE.Mesh).raycast(rc, hits);
+  // Reset to safe defaults.
+  rc.near = 0;
+  rc.far = Infinity;
+  (rc as any).firstHitOnly = false;
+  if (hits.length === 0) return null;
+  const hit = hits[0];
+  if (
+    (clipUpper != null && hit.point.z > clipUpper) ||
+    (clipLower != null && hit.point.z < clipLower)
+  ) {
+    return null;
+  }
+  return hit;
+}
+
 function StlMeshComponent({
   geometry,
   clipLower,
@@ -767,8 +808,19 @@ if (uDitherAmount > 0.0) {
           // Support placement in support mode
           if (mode === 'support' && onSupportClick) {
             if (blockSupportPlacement) return;
+            let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
+            if (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            ) {
+              // Primary hit is in the clipped (hidden) zone. Cast directly
+              // against this mesh to find the nearest visible-zone hit.
+              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              if (!fallback) return;
+              clickHit = fallback;
+            }
             e.stopPropagation();
-            onSupportClick(e as unknown as THREE.Intersection);
+            onSupportClick(clickHit);
           }
         }}
         onPointerMove={(e) => {
@@ -843,7 +895,24 @@ if (uDitherAmount > 0.0) {
               return;
             }
 
-            onSupportHover(e);
+            let hoverHit: THREE.Intersection = e as unknown as THREE.Intersection;
+            if (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            ) {
+              // Primary hit is in the clipped (hidden) zone. Cast directly
+              // against this mesh to find the nearest visible-zone hit.
+              // (R3F + BVH may only provide one intersection per mesh via
+              // firstHitOnly, so we cannot rely on e.intersections here.)
+              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              if (!fallback) {
+                onSupportHover(null);
+                return;
+              }
+              hoverHit = fallback;
+            }
+
+            onSupportHover(hoverHit);
           }
         }}
         onPointerOut={(e) => {

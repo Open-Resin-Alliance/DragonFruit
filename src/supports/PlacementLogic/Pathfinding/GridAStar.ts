@@ -55,6 +55,8 @@ export interface GridAStarResult {
     expansions: number;
     /** Whether the path reached the goal region. */
     reached: boolean;
+    /** True if the search was terminated early due to lack of Z progress (cavity). */
+    stagnated: boolean;
     /** Reusable warm-start state for the next frame. */
     warmState: WarmStartState | null;
 }
@@ -223,11 +225,27 @@ export function gridAStar(
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
 
+    // Stagnation detection: bail early when the search is trapped in a
+    // cavity and cannot make downward progress. Track the lowest Z reached
+    // and the expansion count when it last improved. If 250 expansions pass
+    // without any Z improvement, the search is stuck and will never reach
+    // the goal — abort instead of burning the full 2000-expansion budget.
+    const STAGNATION_LIMIT = 250;
+    let bestZReached = sqz;
+    let lastZProgressAt = 0;
+
     while (openSet.length > 0 && expansions < maxExp) {
         const current = heapPop(openSet)!;
         if (closedSet.has(current.key)) continue;
         closedSet.add(current.key);
         expansions++;
+
+        // Track Z progress for stagnation detection
+        if (current.z < bestZReached) {
+            bestZReached = current.z;
+            lastZProgressAt = expansions;
+        }
+        if (expansions - lastZProgressAt > STAGNATION_LIMIT) break;
 
         // Goal check: reached the target Z layer
         if (current.z <= gqz) {
@@ -316,12 +334,15 @@ export function gridAStar(
     }
 
     // ---- Reconstruct path ----
+    const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
+
     if (!goalEntry) {
         return {
             path: [],
             expansions,
             reached: false,
-            warmState: {
+            stagnated,
+            warmState: stagnated ? null : {
                 socketPos: { ...startPos },
                 openEntries: openSet.slice(0, 64), // keep top entries for next frame
                 gScores: gScore,
@@ -375,6 +396,7 @@ export function gridAStar(
         path: simplified,
         expansions,
         reached: true,
+        stagnated: false,
         warmState: {
             socketPos: { ...startPos },
             openEntries: [], // search complete, no reuse needed

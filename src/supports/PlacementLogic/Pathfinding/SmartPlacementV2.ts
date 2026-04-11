@@ -197,6 +197,30 @@ export function calculateSmartPlacementV2(
         return standard; // Shaft is clear and roots fit — no routing needed
     }
 
+    // 3b. Quick vertical solvability check: sample a few points along the
+    //     straight-down axis. If the majority are deeply inside the mesh
+    //     (negative SDF), the A* has no realistic chance of finding a path
+    //     around the obstruction — bail early to avoid burning 2000 expansions.
+    //     This is the common case for contact points on interior cavity walls,
+    //     where the support path must cross through solid mesh to reach the
+    //     build plate.
+    const vertSpan = socketPos.z - rootTopZ;
+    if (vertSpan > 1) {
+        const VERT_SAMPLES = 5;
+        const deepThreshold = -clearance * 2;
+        let deeplyBlockedCount = 0;
+        for (let i = 1; i <= VERT_SAMPLES; i++) {
+            const t = i / (VERT_SAMPLES + 1);
+            const sz = socketPos.z - t * vertSpan;
+            if (sdf.distanceAt(socketPos.x, socketPos.y, sz) < deepThreshold) {
+                deeplyBlockedCount++;
+            }
+        }
+        if (deeplyBlockedCount >= 3) {
+            return { ...standard, error: 'COLLISION_WITH_MODEL' };
+        }
+    }
+
     // 4. Run grid A* from socket down to rootTopZ.
     //    The goalValidator integrates roots collision into the search:
     //    when A* reaches a cell at rootTopZ, it checks that the full roots
@@ -228,6 +252,7 @@ export function calculateSmartPlacementV2(
         return {
             ...standard,
             error: 'COLLISION_WITH_MODEL',
+            stagnated: result.stagnated,
         };
     }
 
