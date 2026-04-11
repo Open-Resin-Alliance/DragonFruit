@@ -15,13 +15,8 @@ use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
 use tauri::Manager;
 
-// dragonfruit-83-6 CEF spike: in the feat/cef branch, DragonFruitAppHandle is no
-// longer defaulted to `AppHandle<Wry>` unless the `wry` feature is explicitly
-// enabled (the default_runtime proc-macro hard-codes Wry). When building with
-// --features tauri-cef, we need to reference a concrete runtime type. This
-// alias selects Cef on the spike path and Wry otherwise, so the rest of the
-// file can keep saying `DragonFruitAppHandle` without caring which runtime
-// is active.
+// Runtime type aliases — the feat/cef branch requires an explicit runtime
+// generic. These select Cef or Wry based on the active cargo feature.
 #[cfg(feature = "tauri-cef")]
 type DragonFruitAppHandle = tauri::AppHandle<tauri::Cef>;
 #[cfg(not(feature = "tauri-cef"))]
@@ -2516,12 +2511,8 @@ async fn read_print_layer_png(
 
         match format_hint.trim() {
             f if f == ".ctb" || f.starts_with("ctb") => {
-                // dragonfruit-83-6 CEF spike: ctb plugin does not yet implement
-                // read_layer_preview_png (present only in athena plugin). This
-                // is a pre-existing gap on the dev branch and is unrelated to
-                // the CEF work. Stub with an error for now so the build
-                // completes — the real fix is to implement ctb::read_layer_preview_png
-                // or route both formats through a shared trait.
+                // ctb plugin does not yet implement read_layer_preview_png
+                // (present only in athena). Stub until ctb adds support.
                 Err("layer preview PNG not yet supported for .ctb files".to_string())
             }
             _ => {
@@ -2820,10 +2811,8 @@ fn main() {
     );
 
     let _log_level = read_log_level_pref();
-    // dragonfruit-83-6 CEF spike: tauri-plugin-log pulls tauri with default
-    // features including wry, which collides with the cef runtime at link
-    // time (webview_version re-exports). Gate the plugin init behind the
-    // non-cef feature path.
+    // Log plugin disabled on CEF — it pulls tauri/wry transitively, causing
+    // E0252 collision. See Cargo.toml comment.
     #[cfg(not(feature = "tauri-cef"))]
     let log_plugin = {
         use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
@@ -2877,8 +2866,7 @@ fn main() {
             Ok(())
         });
 
-    // dragonfruit-83-6 CEF spike: single-instance plugin also pulls the wry
-    // default feature transitively. Gate behind the non-cef path.
+    // Single-instance plugin also disabled on CEF (same wry collision).
     #[cfg(not(feature = "tauri-cef"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         log::info!("Single-instance activated: second launch detected (args={argv:?})");
