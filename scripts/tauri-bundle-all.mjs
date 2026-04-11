@@ -62,9 +62,15 @@ const failures = [];
 
 for (const target of targets) {
       const bundleArg = bundlesByTarget[target];
-      const cmdArgs = bundleArg
+      let cmdArgs = bundleArg
             ? ["tauri", "build", "--target", target, "--bundles", bundleArg]
             : ["tauri", "build", "--target", target];
+
+      // Linux builds use CEF instead of WebKitGTK (issue #83). Pass cargo
+      // feature flags after "--" so the binary links against tauri-cef.
+      if (target.includes("linux")) {
+            cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
+      }
       console.log(`\n=== Building target: ${target} ===`);
       console.log(`${npxCmd} ${cmdArgs.join(" ")}`);
 
