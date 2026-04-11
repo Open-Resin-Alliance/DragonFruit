@@ -1767,7 +1767,7 @@ fn extract_backup_document_updated_at(raw: &str) -> Option<String> {
 }
 
 #[tauri::command]
-async fn local_backup_default_directory(app: tauri::AppHandle) -> Result<String, String> {
+async fn local_backup_default_directory(app: DragonFruitAppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager;
 
@@ -2066,7 +2066,7 @@ struct SceneAutosavePaths {
     manifest_path: String,
 }
 
-fn scene_autosave_resolve_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+fn scene_autosave_resolve_dir(app: &DragonFruitAppHandle) -> Result<std::path::PathBuf, String> {
     use tauri::Manager;
     let base = app
         .path()
@@ -2080,7 +2080,7 @@ fn scene_autosave_resolve_dir(app: &tauri::AppHandle) -> Result<std::path::PathB
 
 #[tauri::command]
 async fn scene_autosave_get_paths(
-    app: tauri::AppHandle,
+    app: DragonFruitAppHandle,
     preferred_save_path: Option<String>,
 ) -> Result<SceneAutosavePaths, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2120,7 +2120,7 @@ async fn scene_autosave_get_paths(
 
 #[tauri::command]
 async fn scene_autosave_write_manifest(
-    app: tauri::AppHandle,
+    app: DragonFruitAppHandle,
     saved_at: String,
     clean: bool,
 ) -> Result<(), String> {
@@ -2140,7 +2140,7 @@ async fn scene_autosave_write_manifest(
 
 #[tauri::command]
 async fn scene_autosave_read_manifest(
-    app: tauri::AppHandle,
+    app: DragonFruitAppHandle,
 ) -> Result<Option<SceneAutosaveManifest>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
@@ -2159,7 +2159,7 @@ async fn scene_autosave_read_manifest(
 }
 
 #[tauri::command]
-async fn scene_autosave_read_voxl_bytes(app: tauri::AppHandle) -> Result<Vec<u8>, String> {
+async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Vec<u8>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
         let path = dir.join(SCENE_AUTOSAVE_VOXL_FILE);
@@ -2467,7 +2467,7 @@ async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), Stri
 /// mechanism, which plays an error sound when SetForegroundWindow is called
 /// from a process that does not currently own the foreground.
 #[tauri::command]
-async fn reveal_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
