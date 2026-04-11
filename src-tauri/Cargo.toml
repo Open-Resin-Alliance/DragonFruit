@@ -11,11 +11,10 @@ tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef"
 [dependencies]
 # default-features = false — runtime backend chosen via tauri-wry / tauri-cef features.
 tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["compression", "dynamic-acl"] }
-# These plugins pull tauri with default features (wry). On CEF builds this
-# causes E0252 collision — plugin init is gated in main.rs, but the deps
-# must remain so macOS/Windows get logging and single-instance support.
-tauri-plugin-log = "2"
-tauri-plugin-single-instance = "2"
+# Optional: pulled in by tauri-wry feature. On CEF builds these are excluded
+# to avoid E0252 collision (they pull tauri with default wry feature).
+tauri-plugin-log = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -42,7 +41,7 @@ custom-protocol = ["tauri/custom-protocol"]
 # Runtime backend features — mutually exclusive.
 # Default: tauri-wry (WebKitGTK/WebView2/WebKit)
 # Linux CEF: --no-default-features --features custom-protocol,tauri-cef
-tauri-wry = ["tauri/wry"]
+tauri-wry = ["tauri/wry", "dep:tauri-plugin-log", "dep:tauri-plugin-single-instance"]
 tauri-cef = ["tauri/cef"]
 
 # Redirect all transitive tauri crate deps to the feat/cef branch so Cargo
