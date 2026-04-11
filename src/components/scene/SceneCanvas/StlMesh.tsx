@@ -832,16 +832,20 @@ if (uDitherAmount > 0.0) {
           // Support placement in support mode
           if (mode === 'support' && onSupportClick) {
             if (blockSupportPlacement) return;
+
+            // When cross-section is active and a visible support is behind
+            // the model surface, let the click propagate to the support
+            // instead of consuming it for placement.
+            const crossSectionActiveClick = clipUpper != null || clipLower != null;
+            if (crossSectionActiveClick && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
+              return; // Don't stop propagation — support will handle the click.
+            }
+
             let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
             if (
               (clipUpper != null && e.point.z > clipUpper) ||
               (clipLower != null && e.point.z < clipLower)
             ) {
-              // If a visible support is behind the clipped surface, let the
-              // click propagate to it instead of consuming it for placement.
-              if (hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
-                return; // Don't stop propagation — support will handle the click.
-              }
               // Primary hit is in the clipped (hidden) zone. Cast directly
               // against this mesh to find the nearest visible-zone hit.
               const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
@@ -878,13 +882,13 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          // If the primary hit is in the clipped (invisible) zone and there is a
-          // visible support (or other non-model object) behind it, let the event
-          // propagate so the support can receive its hover event instead.
-          const primaryClipped =
-            (clipUpper != null && e.point.z > clipUpper) ||
-            (clipLower != null && e.point.z < clipLower);
-          if (primaryClipped && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
+          // When cross-section is active and a visible support (or other
+          // non-model object) exists behind the model surface, let the event
+          // propagate so the support can receive hover — even if the model
+          // hit itself is in the visible zone (the ray may graze the outer
+          // wall on the way to a support visible through the opening).
+          const crossSectionActive = clipUpper != null || clipLower != null;
+          if (crossSectionActive && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
             // Don't stop propagation — support behind the clipped surface will handle it.
             if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
