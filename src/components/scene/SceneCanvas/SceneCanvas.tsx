@@ -77,6 +77,7 @@ import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanv
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, LoggingHelper, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
+import { setClipBounds } from './clipBoundsStore';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
   getSavedCameraProjectionSettings,
@@ -477,6 +478,10 @@ export function SceneCanvas({
   );
   const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
+
+  // Sync clip bounds to the module-level store so BranchPlacementController
+  // (and other independent raycasters) can skip hits on clipped geometry.
+  setClipBounds(clipLower, clipUpper);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
