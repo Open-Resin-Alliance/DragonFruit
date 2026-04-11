@@ -23,9 +23,13 @@ if (isLinux) {
 
 console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")}`);
 
+// Set RUSTFLAGS in the environment.
+process.env.RUSTFLAGS = "-C target-feature=+avx2,+fma";
+
+// Use shell:true to work around Windows spawnSync EINVAL issues with npx.cmd
 const result = spawnSync(npxCmd, cmdArgs, {
   stdio: "inherit",
-  env: { ...process.env, RUSTFLAGS: "-C target-feature=+avx2,+fma" },
+  shell: true,
 });
 
 process.exit(result.status ?? 1);
