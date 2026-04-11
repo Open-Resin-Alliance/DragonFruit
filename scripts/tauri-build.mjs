@@ -21,15 +21,16 @@ if (isLinux) {
   cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
 }
 
-console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")}`);
+const rustflags = "-C target-feature=+avx2,+fma";
+console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")} (RUSTFLAGS=${rustflags})`);
 
-// Set RUSTFLAGS in the environment.
-process.env.RUSTFLAGS = "-C target-feature=+avx2,+fma";
-
-// Use shell:true to work around Windows spawnSync EINVAL issues with npx.cmd
+// On Windows, .cmd files cannot be spawned directly — they require the shell
+// (cmd.exe) to execute them. Pass RUSTFLAGS explicitly through env so it is
+// guaranteed to reach cargo/rustc regardless of inherited process.env state.
 const result = spawnSync(npxCmd, cmdArgs, {
   stdio: "inherit",
-  shell: true,
+  shell: process.platform === "win32",
+  env: { ...process.env, RUSTFLAGS: rustflags },
 });
 
 process.exit(result.status ?? 1);
