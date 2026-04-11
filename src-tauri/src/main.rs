@@ -2750,9 +2750,10 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-            // SAFETY: called at the very start of main, single-threaded, before
-            // any other threads or libraries are initialized.
-            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+            // NOTE: called at the very start of main, single-threaded, before
+            // any other threads or libraries are initialized. On Rust edition
+            // 2024+ this will require an unsafe block (set_var became unsafe).
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
     }
 
