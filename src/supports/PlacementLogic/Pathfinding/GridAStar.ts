@@ -230,7 +230,7 @@ export function gridAStar(
     // and the expansion count when it last improved. If 250 expansions pass
     // without any Z improvement, the search is stuck and will never reach
     // the goal — abort instead of burning the full 2000-expansion budget.
-    const STAGNATION_LIMIT = 250;
+    const STAGNATION_LIMIT = 100;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 

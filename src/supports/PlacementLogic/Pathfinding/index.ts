@@ -14,5 +14,6 @@ export {
     clearAllSDFCaches,
     clearWarmStart,
     clearAllWarmStarts,
+    clearStagnationCache,
 } from './SmartPlacementV2';
 export type { SmartPlacementV2Input, SmartPlacementV2Context } from './SmartPlacementV2';
