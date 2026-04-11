@@ -12,6 +12,11 @@
  *   protrusions — without this, any geometry below the socket is impassable
  * - **Goal validation**: roots collision check integrated into goal acceptance
  * - **Frame-coherent warm-start**: reuses open set between frames
+ *
+ * Cost priorities (in order):
+ * 1. **Shortest collision-free path** — base euclidean distance (moveCost)
+ * 2. **Greatest verticality**         — lateral XY movement is penalised
+ * 3. **Least shallow angles**         — quadratic penalty on lateral/drop ratio
  */
 
 import { Vec3 } from '../../types';
@@ -184,7 +189,7 @@ export function gridAStar(
 
     // Maximum upward climb in grid cells — allows routing over protrusions
     // but prevents the path from going far above the socket
-    const maxClimbCells = Math.max(3, Math.ceil(10 / step)); // up to ~10mm above start
+    const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
 
     const q = (v: number) => Math.round(v / step);
 
@@ -230,7 +235,7 @@ export function gridAStar(
     // and the expansion count when it last improved. If 250 expansions pass
     // without any Z improvement, the search is stuck and will never reach
     // the goal — abort instead of burning the full 2000-expansion budget.
-    const STAGNATION_LIMIT = 100;
+    const STAGNATION_LIMIT = 250;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 
@@ -314,13 +319,41 @@ export function gridAStar(
             // Support occupancy check
             if (occupancy && occupancy.isOccupied(wx, wy, wz, ignoreSupportId)) continue;
 
-            // Cost: base movement cost + proximity penalty (prefer paths with more clearance)
+            // ---- Priority-based cost function ----
+            //
+            // 1. Shortest collision-free path (base euclidean distance)
+            // 2. Greatest verticality   (penalise lateral XY movement)
+            // 3. Least shallow angles   (penalise high lateral-to-drop ratio)
+
+            // (1) Base movement cost — euclidean distance in mm
+            const moveCost = n.cost * step;
+
+            // (2) Verticality penalty — pure-vertical moves are free;
+            //     lateral component is penalised proportionally.
+            const lateralCells = Math.sqrt(n.dx * n.dx + n.dy * n.dy);
+            const verticalityPenalty = lateralCells * step * 1.5;
+
+            // (3) Shallow-angle penalty — quadratic in lateral/drop ratio
+            //     so near-vertical moves are cheap; near-horizontal expensive.
+            let shallowAnglePenalty = 0;
+            if (lateralCells > 0) {
+                if (n.dz !== 0) {
+                    const ratio = lateralCells / Math.abs(n.dz);
+                    shallowAnglePenalty = ratio * ratio * step * 0.8;
+                } else {
+                    // Pure horizontal: maximum angle penalty
+                    shallowAnglePenalty = step * 4.0;
+                }
+            }
+
+            // Proximity penalty — prefer paths with more clearance from mesh
             const dist = sdf.distanceAt(wx, wy, wz);
             const clearancePenalty = dist < clearance * 2 ? (clearance * 2 - dist) * 0.5 : 0;
-            // Penalize upward movement heavily to prefer downward paths
+
+            // Climb penalty — heavily discourage upward movement
             const climbPenalty = n.dz > 0 ? step * 3 : 0;
-            const moveCost = n.cost * step;
-            const tentativeG = current.g + moveCost + clearancePenalty + climbPenalty;
+
+            const tentativeG = current.g + moveCost + verticalityPenalty + shallowAnglePenalty + clearancePenalty + climbPenalty;
 
             const existingG = gScore.get(nKey);
             if (existingG !== undefined && tentativeG >= existingG) continue;

@@ -211,7 +211,7 @@ export function calculateSmartPlacementV2(
     const diskHeight = settings.roots.diskHeightMm;
     const coneHeight = settings.roots.coneHeightMm;
     const minRoutedTrunkAngleDeg = settings.grid.minRoutedTrunkAngleDeg;
-    const maxTotalLateralMm = Math.max(18, settings.grid.spacingMm * 5);
+    const maxTotalLateralMm = Math.max(30, settings.grid.spacingMm * 8);
 
     // 1. Standard placement (baseline — no collision check)
     const standard = calculateStandardPlacement(input);
@@ -252,15 +252,13 @@ export function calculateSmartPlacementV2(
         return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
     }
 
-    // 3c. Quick vertical solvability check: sample a few points along the
-    //     straight-down axis. If the majority are deeply inside the mesh
-    //     (negative SDF), the A* has no realistic chance of finding a path
-    //     around the obstruction — bail early to avoid burning expansions.
-    //     This catches thick-walled cavities before any A* work.
+    // 3c. Quick vertical solvability check: sample points along the
+    //     straight-down axis AND at lateral offsets.  Only bail if the
+    //     obstruction is thick AND there's no lateral escape route.
     const vertSpan = socketPos.z - rootTopZ;
     if (vertSpan > 1) {
-        const VERT_SAMPLES = 5;
-        const deepThreshold = -clearance * 2;
+        const VERT_SAMPLES = 7;
+        const deepThreshold = -clearance * 3;
         let deeplyBlockedCount = 0;
         for (let i = 1; i <= VERT_SAMPLES; i++) {
             const t = i / (VERT_SAMPLES + 1);
@@ -269,9 +267,24 @@ export function calculateSmartPlacementV2(
                 deeplyBlockedCount++;
             }
         }
-        if (deeplyBlockedCount >= 3) {
-            recordStagnation(mesh.uuid, socketPos);
-            return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
+        // Only bail if almost ALL samples are deeply blocked — meaning true
+        // cavity with no thin-wall escape.  Also probe a few lateral offsets
+        // to confirm there's no nearby gap the A* could exploit.
+        if (deeplyBlockedCount >= 6) {
+            const PROBE_OFFSETS = [clearance * 4, -clearance * 4];
+            let anyLateralClear = false;
+            const probeZ = socketPos.z - vertSpan * 0.5;
+            for (const off of PROBE_OFFSETS) {
+                if (sdf.distanceAt(socketPos.x + off, socketPos.y, probeZ) > clearance ||
+                    sdf.distanceAt(socketPos.x, socketPos.y + off, probeZ) > clearance) {
+                    anyLateralClear = true;
+                    break;
+                }
+            }
+            if (!anyLateralClear) {
+                recordStagnation(mesh.uuid, socketPos);
+                return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
+            }
         }
     }
 
