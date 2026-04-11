@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.openresinalliance.dragonfruit</id>
+  <name>DragonFruit</name>
+  <summary>Open-source resin 3D printer slicer</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="org.openresinalliance">
+    <name>Open Resin Alliance</name>
+  </developer>
+  <description>
+    <p>
+      DragonFruit is a cross-platform resin slicer for MSLA/DLP 3D printers.
+      It supports CTB, GOO, and other print formats with real-time 3D preview,
+      island detection, automatic support generation, and multi-printer fleet
+      management via SDCP.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/Open-Resin-Alliance/DragonFruit</url>
+  <url type="bugtracker">https://github.com/Open-Resin-Alliance/DragonFruit/issues</url>
+  <launchable type="desktop-id">org.openresinalliance.dragonfruit.desktop</launchable>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.2" date="2026-04-11">
+      <description>
+        <p>Linux performance improvements: DMA-BUF renderer safety, DPR capping,
+        demand-driven rendering, and shadow reduction on Linux.</p>
+      </description>
+    </release>
+  </releases>
+</component>

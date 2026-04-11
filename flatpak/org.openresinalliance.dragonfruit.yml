@@ -1,0 +1,92 @@
+app-id: org.openresinalliance.dragonfruit
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
+
+command: dragonfruit-desktop
+
+finish-args:
+  # Display — Wayland preferred, X11 fallback
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+
+  # GPU acceleration (required for WebGL / CEF rendering)
+  - --device=dri
+
+  # Network — printer discovery (SDCP), RTSP relay, update checks
+  - --share=network
+
+  # File access — loading STL/3MF, saving print files
+  - --filesystem=home
+
+  # Desktop integration
+  - --talk-name=org.freedesktop.Notifications
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin
+  env:
+    CARGO_HOME: /run/build/dragonfruit/cargo
+    npm_config_nodedir: /usr/lib/sdk/node22
+
+modules:
+  # ── 1. Frontend (Next.js static export) ──────────────────────────
+  - name: frontend
+    buildsystem: simple
+    build-options:
+      env:
+        NODE_OPTIONS: --max-old-space-size=4096
+    build-commands:
+      - npm ci --ignore-scripts
+      - npx next build
+    sources:
+      - type: dir
+        path: ..
+        # Only the frontend sources — exclude Rust target dir, build artifacts
+        skip:
+          - src-tauri/target
+          - .git
+          - node_modules
+
+  # ── 2. Tauri + CEF binary ────────────────────────────────────────
+  - name: dragonfruit-desktop
+    buildsystem: simple
+    build-commands:
+      # Build with CEF runtime for Linux
+      - cd src-tauri && cargo build --release --no-default-features --features custom-protocol,tauri-cef
+      - install -Dm755 src-tauri/target/release/dragonfruit-desktop /app/bin/dragonfruit-desktop
+    sources:
+      - type: dir
+        path: ..
+
+  # ── 3. CEF binaries ──────────────────────────────────────────────
+  # The CEF shared libraries are built by cef-dll-sys during cargo build.
+  # Copy them alongside the binary so the dynamic linker finds them.
+  - name: cef-libs
+    buildsystem: simple
+    build-commands:
+      - |
+        CEF_OUT=$(find src-tauri/target/release/build -path '*/cef-dll-sys-*/out/cef_linux_x86_64' -type d | head -1)
+        if [ -z "$CEF_OUT" ]; then echo "CEF output dir not found"; exit 1; fi
+        install -d /app/lib/cef
+        cp -a "$CEF_OUT"/*.so "$CEF_OUT"/*.bin "$CEF_OUT"/*.dat "$CEF_OUT"/*.pak /app/lib/cef/ 2>/dev/null || true
+        cp -a "$CEF_OUT"/locales /app/lib/cef/ 2>/dev/null || true
+    sources:
+      - type: dir
+        path: ..
+
+  # ── 4. Desktop integration ──────────────────────────────────────
+  - name: metadata
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 flatpak/org.openresinalliance.dragonfruit.desktop /app/share/applications/org.openresinalliance.dragonfruit.desktop
+      - install -Dm644 flatpak/org.openresinalliance.dragonfruit.metainfo.xml /app/share/metainfo/org.openresinalliance.dragonfruit.metainfo.xml
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/org.openresinalliance.dragonfruit.png
+      - install -Dm644 src-tauri/icons/64x64.png /app/share/icons/hicolor/64x64/apps/org.openresinalliance.dragonfruit.png
+      - install -Dm644 src-tauri/icons/32x32.png /app/share/icons/hicolor/32x32/apps/org.openresinalliance.dragonfruit.png
+    sources:
+      - type: dir
+        path: ..

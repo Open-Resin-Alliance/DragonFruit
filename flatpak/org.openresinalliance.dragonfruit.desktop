@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=DragonFruit
+GenericName=Resin Slicer
+Comment=Open-source resin 3D printer slicer
+Exec=dragonfruit-desktop %F
+Icon=org.openresinalliance.dragonfruit
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=slicer;resin;3d;printing;stl;
+MimeType=model/stl;application/vnd.ms-package.3dmanufacturing-3dmodel+xml;
+StartupWMClass=dragonfruit-desktop
+StartupNotify=true
