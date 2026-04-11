@@ -940,7 +940,7 @@ if (uDitherAmount > 0.0) {
             depthWrite={false}
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
-          <primitive object={supportDimMaterialObj} attach="material" />
+          <primitive object={supportDimMaterialObj!} attach="material" />
         ) : interactionLodActive ? (
           <meshStandardMaterial
             vertexColors={hasVertexColorAttribute}
