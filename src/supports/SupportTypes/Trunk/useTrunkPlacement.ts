@@ -134,6 +134,17 @@ export function useTrunkPlacementV2() {
         // Pass mesh for collision detection
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
+
+        // Fast-path for cavity hover: if the pathfinder stagnated, there's
+        // no valid support path. Skip grid placement entirely — it would just
+        // burn cycles re-evaluating an unsolvable position.
+        if (result.stagnated) {
+            setPreviewData(result.supportData);
+            setPreviewError(result.error || null);
+            setPreviewWarning(null);
+            return;
+        }
+
         const decision = decideGridPlacement({
             settings: getSettings(),
             snapshot: getSnapshot(),

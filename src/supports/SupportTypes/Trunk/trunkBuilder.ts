@@ -70,6 +70,8 @@ export interface TrunkBuildResult {
     route: TrunkRouteResult | SnappedTrunkRouteResult;
     error?: LimitationCode;
     warning?: WarningCode;
+    /** True if the pathfinder stagnated (trapped in a cavity). */
+    stagnated?: boolean;
 }
 
 /**
@@ -359,5 +361,5 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         angle: angle // Required for gradient color
     };
 
-    return { root, trunk, supportData, route, error, warning };
+    return { root, trunk, supportData, route, error, warning, stagnated: placement.stagnated };
 }

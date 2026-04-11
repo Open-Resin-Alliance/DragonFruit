@@ -135,17 +135,63 @@ export function clearSDFCacheForMesh(meshUuid: string): void {
         cache.clear();
         sdfCachePool.delete(meshUuid);
     }
+    stagnationCache.delete(meshUuid);
 }
 
 export function clearAllSDFCaches(): void {
     for (const cache of sdfCachePool.values()) cache.clear();
     sdfCachePool.clear();
+    stagnationCache.clear();
 }
 
 // ---------- Main API ----------
 
 /** Warm-start storage keyed by modelId for frame-coherent preview. */
 const warmStartByModel = new Map<string, WarmStartState>();
+
+/**
+ * Spatial stagnation cache — records socketPos positions where the A*
+ * search stagnated (trapped in a cavity). On subsequent hover frames,
+ * if the socketPos is within STAGNATION_RADIUS_MM of a cached point,
+ * the search is skipped entirely, turning cavity hover from ~150
+ * A* expansions to a single distance check.
+ *
+ * Keyed by mesh uuid so it auto-invalidates when the model changes.
+ * Entries are cleared when the model matrix changes (SDF refresh),
+ * when SDF caches are cleared, or when warm-starts are cleared.
+ */
+const STAGNATION_RADIUS_MM = 3;
+const STAGNATION_RADIUS_SQ = STAGNATION_RADIUS_MM * STAGNATION_RADIUS_MM;
+const MAX_STAGNATION_ENTRIES = 512;
+const stagnationCache = new Map<string, Vec3[]>();
+
+function isNearStagnationPoint(meshUuid: string, pos: Vec3): boolean {
+    const points = stagnationCache.get(meshUuid);
+    if (!points || points.length === 0) return false;
+    for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const dx = pos.x - p.x;
+        const dy = pos.y - p.y;
+        const dz = pos.z - p.z;
+        if (dx * dx + dy * dy + dz * dz < STAGNATION_RADIUS_SQ) return true;
+    }
+    return false;
+}
+
+function recordStagnation(meshUuid: string, pos: Vec3): void {
+    let points = stagnationCache.get(meshUuid);
+    if (!points) {
+        points = [];
+        stagnationCache.set(meshUuid, points);
+    }
+    // Don't add if already near an existing entry
+    if (isNearStagnationPoint(meshUuid, pos)) return;
+    if (points.length >= MAX_STAGNATION_ENTRIES) {
+        // Evict oldest entries
+        points.splice(0, points.length - MAX_STAGNATION_ENTRIES + 1);
+    }
+    points.push({ x: pos.x, y: pos.y, z: pos.z });
+}
 
 /**
  * Calculates smart placement using grid A* pathfinding.
@@ -197,13 +243,20 @@ export function calculateSmartPlacementV2(
         return standard; // Shaft is clear and roots fit — no routing needed
     }
 
-    // 3b. Quick vertical solvability check: sample a few points along the
+    // 3b. Spatial stagnation cache: if a previous search from a nearby
+    //     socketPos already stagnated (cavity), skip entirely.
+    //     This is the primary performance win for cavity hovers — turns
+    //     repeated probes at similar positions from ~150 A* expansions to
+    //     a single distance check.
+    if (isNearStagnationPoint(mesh.uuid, socketPos)) {
+        return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
+    }
+
+    // 3c. Quick vertical solvability check: sample a few points along the
     //     straight-down axis. If the majority are deeply inside the mesh
     //     (negative SDF), the A* has no realistic chance of finding a path
-    //     around the obstruction — bail early to avoid burning 2000 expansions.
-    //     This is the common case for contact points on interior cavity walls,
-    //     where the support path must cross through solid mesh to reach the
-    //     build plate.
+    //     around the obstruction — bail early to avoid burning expansions.
+    //     This catches thick-walled cavities before any A* work.
     const vertSpan = socketPos.z - rootTopZ;
     if (vertSpan > 1) {
         const VERT_SAMPLES = 5;
@@ -217,7 +270,8 @@ export function calculateSmartPlacementV2(
             }
         }
         if (deeplyBlockedCount >= 3) {
-            return { ...standard, error: 'COLLISION_WITH_MODEL' };
+            recordStagnation(mesh.uuid, socketPos);
+            return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
         }
     }
 
@@ -243,9 +297,15 @@ export function calculateSmartPlacementV2(
         goalValidator,
     }, warmStart);
 
-    // Store warm-start for next frame
+    // Store warm-start for next frame (don't save stagnated searches)
     if (result.warmState) {
         warmStartByModel.set(modelId, result.warmState);
+    }
+    if (result.stagnated) {
+        // Clear warm-start so the next nearby search starts fresh
+        warmStartByModel.delete(modelId);
+        // Record this position so future hovers skip the A* entirely
+        recordStagnation(mesh.uuid, socketPos);
     }
 
     if (!result.reached || result.path.length < 2) {
@@ -450,4 +510,13 @@ export function clearWarmStart(modelId: string): void {
 
 export function clearAllWarmStarts(): void {
     warmStartByModel.clear();
+    stagnationCache.clear();
+}
+
+export function clearStagnationCache(meshUuid?: string): void {
+    if (meshUuid) {
+        stagnationCache.delete(meshUuid);
+    } else {
+        stagnationCache.clear();
+    }
 }
