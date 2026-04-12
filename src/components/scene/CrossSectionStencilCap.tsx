@@ -428,13 +428,17 @@ function CrossSectionStencilCapInner({
   const stencilBack = React.useMemo(() => {
     const material = stencilBase.clone();
     material.side = THREE.BackSide;
+    // IMPORTANT: Keep stencil source clipped by the PRIMARY plane only.
+    // Clipping stencil source by both boundaries makes the source geometry
+    // open at both ends, which can corrupt winding parity (e.g. bottom cap
+    // appearing both up into the model and down out of it).
     material.clippingPlanes = [clipPlaneRef.current];
     const op = effectiveStencilMode === 'mirrored' ? THREE.DecrementWrapStencilOp : THREE.IncrementWrapStencilOp;
     material.stencilFail = op;
     material.stencilZFail = op;
     material.stencilZPass = op;
     return material;
-  }, [effectiveStencilMode, stencilBase]);
+  }, [clipPlaneRef, effectiveStencilMode, stencilBase]);
 
   const stencilFront = React.useMemo(() => {
     const material = stencilBase.clone();
@@ -445,7 +449,7 @@ function CrossSectionStencilCapInner({
     material.stencilZFail = op;
     material.stencilZPass = op;
     return material;
-  }, [effectiveStencilMode, stencilBase]);
+  }, [clipPlaneRef, effectiveStencilMode, stencilBase]);
 
   const capPlaneGeometry = React.useMemo(() => {
     return new THREE.PlaneGeometry(
