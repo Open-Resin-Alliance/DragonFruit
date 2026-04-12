@@ -29,6 +29,7 @@ type CrossSectionStencilCapProps = {
   glowThicknessMm?: number;
   glowOpacity?: number;
   glowColor?: string;
+  direction?: 'top' | 'bottom';
 };
 
 type StaticStencilMeshEntry = {
@@ -314,12 +315,24 @@ function CrossSectionStencilCapInner({
   glowThicknessMm = 0,
   glowOpacity = 0,
   glowColor,
+  direction = 'top',
 }: CrossSectionStencilCapProps) {
-  const clipPlaneRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 0, -1), y));
-  
+  const isBottom = direction === 'bottom';
+  const clipPlaneRef = React.useRef(
+    isBottom
+      ? new THREE.Plane(new THREE.Vector3(0, 0, 1), -y)
+      : new THREE.Plane(new THREE.Vector3(0, 0, -1), y)
+  );
+
   React.useLayoutEffect(() => {
-    clipPlaneRef.current.constant = y;
-  }, [y]);
+    if (isBottom) {
+      clipPlaneRef.current.normal.set(0, 0, 1);
+      clipPlaneRef.current.constant = -y;
+    } else {
+      clipPlaneRef.current.normal.set(0, 0, -1);
+      clipPlaneRef.current.constant = y;
+    }
+  }, [isBottom, y]);
 
   const stencilBase = React.useMemo(() => {
     const material = new THREE.MeshBasicMaterial();
@@ -778,7 +791,7 @@ function CrossSectionStencilCapInner({
       <mesh
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
-        position={[0, 0, y + 1e-4]}
+        position={[0, 0, isBottom ? y - 1e-4 : y + 1e-4]}
         renderOrder={STENCIL_CAP_ORDER}
         frustumCulled
         raycast={() => null}
@@ -809,6 +822,7 @@ const areCrossSectionStencilCapPropsEqual = (
     && prev.glowThicknessMm === next.glowThicknessMm
     && prev.glowOpacity === next.glowOpacity
     && prev.glowColor === next.glowColor
+    && prev.direction === next.direction
   );
 };
 

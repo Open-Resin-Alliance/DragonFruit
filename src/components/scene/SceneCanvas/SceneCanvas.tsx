@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
@@ -3646,7 +3646,7 @@ export function SceneCanvas({
       }
 
       benchmarkRunIdRef.current = requestId;
-      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweeps…` });
+      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweepsΓÇª` });
 
       const startedAt = performance.now();
       const startedAtIso = new Date().toISOString();
@@ -4798,6 +4798,22 @@ export function SceneCanvas({
                 />
               )}
 
+              {clipLower != null && !hideCrossSectionCap && (
+                <CrossSectionStencilCap
+                  entries={crossSectionCapEntries}
+                  sourceObject={supportDragGroupRef?.current ?? null}
+                  sourceObjectVersion={crossSectionStencilSourceVersion}
+                  y={clipLower}
+                  direction="bottom"
+                  color="#FFFFFF"
+                  planeWidthMm={crossSectionPlaneWidthMm}
+                  planeHeightMm={crossSectionPlaneHeightMm}
+                  capOpacity={1}
+                  capDepthTest={true}
+                  visible={!hideCrossSectionCap}
+                />
+              )}
+
               {!hideRaftPrimitives
                 && !thumbnailCaptureActive
                 && !isGizmoDragging
@@ -5629,7 +5645,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Loading brush…
+            Loading brushΓÇª
           </div>
         </div>
       )}
@@ -5646,7 +5662,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Smoothing… {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
+            SmoothingΓÇª {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
           </div>
         </div>
       )}
@@ -5699,7 +5715,7 @@ export function SceneCanvas({
           }}
           title={outOfBoundsModels.map((m) => m.name).join(', ')}
         >
-          <span style={{ marginRight: 6 }}>⚠</span>
+          <span style={{ marginRight: 6 }}>ΓÜá</span>
           {outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume
         </div>
       )}

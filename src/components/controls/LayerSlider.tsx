@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React from 'react';
 
@@ -20,9 +20,12 @@ type LayerSliderProps = {
   embedded?: boolean;
   expandToContainer?: boolean;
   dragBatchMode?: 'raf' | 'immediate';
+  lowerValue?: number;
+  onLowerChange?: (next: number) => void;
+  lowerCurrentHeightMm?: number;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf' }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -32,6 +35,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const [isShiftHeld, setIsShiftHeld] = React.useState(false);
   const [isDraggingThumb, setIsDraggingThumb] = React.useState(false);
   const dragShiftModeRef = React.useRef<boolean>(false); // Lock shift mode for entire drag
+  const lowerValueRef = React.useRef(0);
+  const activeDraggingThumbRef = React.useRef<'upper' | 'lower'>('upper');
 
   const formatMm = React.useCallback((mm: number) => {
     if (!Number.isFinite(mm)) return '0';
@@ -66,6 +71,18 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     onChange(next);
   }, [clamp, onChange, snap]);
 
+  // Keep lowerValueRef in sync
+  React.useEffect(() => {
+    lowerValueRef.current = lowerValue ?? min;
+  }, [lowerValue, min]);
+
+  const emitLowerChange = React.useCallback((rawNext: number) => {
+    if (!onLowerChange) return;
+    const next = Math.min(clamp(snap(rawNext)), valueRef.current);
+    if (next === lowerValueRef.current) return;
+    onLowerChange(next);
+  }, [clamp, onLowerChange, snap]);
+
   const setByClientY = React.useCallback((clientY: number, shiftKey: boolean = false) => {
     const el = containerRef.current;
     if (!el) return;
@@ -88,6 +105,23 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, [emitChange, max, min]);
 
+  const setLowerByClientY = React.useCallback((clientY: number, shiftKey: boolean = false) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const rel = (clientY - rect.top) / rect.height;
+    const inv = 1 - rel;
+    const span = Math.max(1e-6, max - min);
+    if (shiftKey) {
+      const currentPercent = (lowerValueRef.current - min) / span;
+      const delta = (inv - currentPercent) * 0.1;
+      const newPercent = currentPercent + delta;
+      emitLowerChange(min + newPercent * span);
+    } else {
+      emitLowerChange(min + inv * span);
+    }
+  }, [emitLowerChange, max, min]);
+
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -96,14 +130,41 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     setIsDraggingThumb(true);
     dragShiftModeRef.current = e.shiftKey;
     setIsShiftHeld(e.shiftKey);
-    setByClientY(e.clientY, e.shiftKey);
+    // Determine which thumb to drag based on proximity
+    if (lowerValue != null && onLowerChange != null) {
+      const el = containerRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const clickInv = 1 - (e.clientY - rect.top) / rect.height;
+        const span = Math.max(1e-6, max - min);
+        const upperPos = (valueRef.current - min) / span;
+        const lowerPos = (lowerValueRef.current - min) / span;
+        if (Math.abs(clickInv - lowerPos) < Math.abs(clickInv - upperPos)) {
+          activeDraggingThumbRef.current = 'lower';
+          setLowerByClientY(e.clientY, e.shiftKey);
+        } else {
+          activeDraggingThumbRef.current = 'upper';
+          setByClientY(e.clientY, e.shiftKey);
+        }
+      } else {
+        activeDraggingThumbRef.current = 'upper';
+        setByClientY(e.clientY, e.shiftKey);
+      }
+    } else {
+      activeDraggingThumbRef.current = 'upper';
+      setByClientY(e.clientY, e.shiftKey);
+    }
 
     let rafId: number | null = null;
     let pendingClientY = e.clientY;
 
     const flushMove = () => {
       rafId = null;
-      setByClientY(pendingClientY, dragShiftModeRef.current);
+      if (activeDraggingThumbRef.current === 'lower') {
+        setLowerByClientY(pendingClientY, dragShiftModeRef.current);
+      } else {
+        setByClientY(pendingClientY, dragShiftModeRef.current);
+      }
     };
     
     const onMove = (ev: MouseEvent) => {
@@ -114,7 +175,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       }
 
       if (dragBatchMode === 'immediate') {
-        setByClientY(ev.clientY, dragShiftModeRef.current);
+        if (activeDraggingThumbRef.current === 'lower') {
+          setLowerByClientY(ev.clientY, dragShiftModeRef.current);
+        } else {
+          setByClientY(ev.clientY, dragShiftModeRef.current);
+        }
         return;
       }
 
@@ -148,7 +213,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [dragBatchMode, onScrubEnd, onScrubStart, setByClientY]);
+  }, [dragBatchMode, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
@@ -239,6 +304,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   }, []);
 
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
+  const lowerPercent = lowerValue != null
+    ? Math.min(100, Math.max(0, ((lowerValue - min) / Math.max(1, (max - min))) * 100))
+    : null;
   const railBadgeClass = 'inline-flex items-center rounded-md border px-1 py-0.5 text-[9px] font-semibold tabular-nums';
   const railBadgeStyle: React.CSSProperties = {
     color: 'var(--text-muted)',
@@ -291,7 +359,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
               }}
             >
-              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'}
+              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö'}
             </div>
             {typeof maxHeightMm === 'number' && !embedded && (
               <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
@@ -322,7 +390,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           tabIndex={0}
           onKeyDown={onKeyDown}
           title={isMinimalRail
-            ? `Layer ${value} • ${typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'} • Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
+            ? `Layer ${value} ΓÇó ${typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö'} ΓÇó Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
             : undefined}
         >
           {!isMinimalRail && (
@@ -353,15 +421,71 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
             {/* Progress fill */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 bottom-0 w-1.5 rounded-full"
+              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
               style={{
-                height: `${percent}%`,
+                bottom: `${lowerPercent ?? 0}%`,
+                height: `${percent - (lowerPercent ?? 0)}%`,
                 background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))',
                 boxShadow: '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)',
               }}
             />
 
-            {/* Thumb */}
+            {/* Lower thumb */}
+            {lowerPercent != null && (
+              <div
+                className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
+                style={{
+                  top: `${100 - lowerPercent}%`,
+                  transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                }}
+              >
+                <div className="relative">
+                  {showValue && typeof lowerCurrentHeightMm === 'number' && (
+                    <div
+                      className={isMinimalRail
+                        ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none top-3`
+                        : 'absolute right-full mr-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] shadow tabular-nums pointer-events-none'}
+                      style={isMinimalRail
+                        ? railCurrentBadgeStyle
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'color-mix(in srgb, var(--surface-0), transparent 12%)',
+                            color: 'var(--text-strong)',
+                          }}
+                    >
+                      {isMinimalRail ? `${lowerValue}` : `${formatMm(lowerCurrentHeightMm)} mm`}
+                    </div>
+                  )}
+                  {crossSectionMode === 'rasterized' ? (
+                    <div
+                      className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                      style={{
+                        borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
+                        background: 'repeating-linear-gradient(90deg, color-mix(in srgb, var(--accent), white 8%) 0 4px, color-mix(in srgb, var(--accent), black 8%) 4px 8px)',
+                        boxShadow: isDraggingThumb
+                          ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
+                          : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                        opacity: 0.75,
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                      style={{
+                        borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
+                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent), white 20%), var(--accent), color-mix(in srgb, var(--accent), white 20%))',
+                        boxShadow: isDraggingThumb
+                          ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
+                          : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                        opacity: 0.75,
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Upper thumb */}
             <div
               className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{
@@ -388,7 +512,6 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                       : `${formatMm(currentHeightMm)} mm`}
                   </div>
                 )}
-
             {crossSectionMode === 'rasterized' ? (
               <div
                 className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}

@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useCallback, type SetStateAction } from 'react';
-import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 
 interface SlicingStateProps {
   hasGeometry: boolean;
@@ -10,6 +9,7 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   const [layerHeightMicron, setLayerHeightMicron] = useState<number>(50);
   const [crossSectionMode, setCrossSectionMode] = useState<'smooth' | 'rasterized'>('smooth');
   const [layerIndex, setLayerIndexState] = useState<number>(0);
+  const [lowerLayerIndex, setLowerLayerIndexState] = useState<number>(0);
 
   const layerHeightMm = useMemo(() => layerHeightMicron / 1000, [layerHeightMicron]);
 
@@ -29,7 +29,7 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     heightMm > 0 && layerHeightMm > 0 ? Math.ceil(heightMm / layerHeightMm) : 0
   ), [heightMm, layerHeightMm]);
 
-  const clampLayerIndex = useCallback((value: number) => {
+  const clampLayerIndex = useCallback((value: number): number => {
     const safeValue = Number.isFinite(value) ? Math.round(value) : 0;
     const maxLayer = Math.max(0, numLayers);
     return Math.max(0, Math.min(maxLayer, safeValue));
@@ -45,6 +45,16 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     });
   }, [clampLayerIndex]);
 
+  const setLowerLayerIndex = useCallback((next: SetStateAction<number>) => {
+    setLowerLayerIndexState((previous) => {
+      const resolved = typeof next === 'function'
+        ? (next as (prevState: number) => number)(previous)
+        : next;
+      const clamped = clampLayerIndex(resolved);
+      return previous === clamped ? previous : clamped;
+    });
+  }, [clampLayerIndex]);
+
   useEffect(() => {
     setLayerIndexState((previous) => {
       const clamped = clampLayerIndex(previous);
@@ -52,20 +62,46 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     });
   }, [clampLayerIndex]);
 
+  useEffect(() => {
+    setLowerLayerIndexState((previous) => {
+      const clamped = clampLayerIndex(previous);
+      return previous === clamped ? previous : clamped;
+    });
+  }, [clampLayerIndex]);
+
+  // Derive an ordered layer pair for clipping so lower-slider drags cannot
+  // accidentally invalidate clipping (e.g. transient lower > upper).
+  const orderedLayerRange = useMemo(() => {
+    const upper = Math.max(layerIndex, lowerLayerIndex);
+    const lower = Math.min(layerIndex, lowerLayerIndex);
+    return { lower, upper };
+  }, [layerIndex, lowerLayerIndex]);
+
   const currentHeightMm = useMemo(() => {
     if (!hasGeometry) return 0;
-    const height = layerIndex * layerHeightMm;
+    const height = orderedLayerRange.upper * layerHeightMm;
     return Math.min(Math.max(height, 0), Math.max(heightMm, 0));
-  }, [hasGeometry, layerIndex, layerHeightMm, heightMm]);
+  }, [hasGeometry, orderedLayerRange.upper, layerHeightMm, heightMm]);
 
-  const clipLower = useMemo(() => null, []); // Always show from bottom
+  const lowerCurrentHeightMm = useMemo(() => {
+    if (!hasGeometry) return 0;
+    const height = orderedLayerRange.lower * layerHeightMm;
+    return Math.min(Math.max(height, 0), Math.max(heightMm, 0));
+  }, [hasGeometry, orderedLayerRange.lower, layerHeightMm, heightMm]);
+
+  const clipLower = useMemo(() => {
+    if (!hasGeometry || orderedLayerRange.lower === 0) return null;
+    const EPS = 1e-6;
+    const lower = zRange.min + (orderedLayerRange.lower * layerHeightMm) - EPS;
+    return Math.min(Math.max(lower, zRange.min - EPS), zRange.max);
+  }, [hasGeometry, orderedLayerRange.lower, zRange, layerHeightMm]);
 
   const clipUpper = useMemo(() => {
-    if (!hasGeometry || layerIndex === 0) return null;
+    if (!hasGeometry || orderedLayerRange.upper === 0) return null;
     const EPS = 1e-6;
-    const upper = zRange.min + (layerIndex * layerHeightMm) + EPS;
+    const upper = zRange.min + (orderedLayerRange.upper * layerHeightMm) + EPS;
     return Math.min(Math.max(upper, zRange.min), zRange.max + EPS);
-  }, [hasGeometry, layerIndex, zRange, layerHeightMm]);
+  }, [hasGeometry, orderedLayerRange.upper, zRange, layerHeightMm]);
 
   return {
     layerHeightMicron,
@@ -74,9 +110,12 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     setCrossSectionMode,
     layerIndex,
     setLayerIndex,
+    lowerLayerIndex,
+    setLowerLayerIndex,
     layerHeightMm,
     heightMm,
     currentHeightMm,
+    lowerCurrentHeightMm,
     numLayers,
     clipLower,
     clipUpper

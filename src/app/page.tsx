@@ -12869,6 +12869,9 @@ export default function Home() {
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
             crossSectionMode={slicing.crossSectionMode}
+            lowerLayerIndex={slicing.lowerLayerIndex}
+            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
+            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
           />
         )}
 

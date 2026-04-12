@@ -33,7 +33,6 @@ export function WireframeMaterial({
     <meshBasicMaterial
       color={wireColor}
       clippingPlanes={clippingPlanes}
-      clipIntersection
       side={THREE.FrontSide}
       wireframe
       polygonOffset
