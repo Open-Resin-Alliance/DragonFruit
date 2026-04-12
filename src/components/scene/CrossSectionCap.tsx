@@ -323,6 +323,9 @@ type CrossSectionCapProps = {
   projectedContextVersion?: unknown;
   y: number;
   color?: string;
+  side?: THREE.Side;
+  offsetMm?: number;
+  depthTest?: boolean;
   transformMatrix?: THREE.Matrix4;
   mode?: 'smooth' | 'rasterized';
   pxMm?: number;
@@ -345,6 +348,9 @@ function CrossSectionCapInner({
   projectedContextVersion,
   y,
   color = '#ffffff',
+  side = THREE.FrontSide,
+  offsetMm = 1e-4,
+  depthTest = true,
   transformMatrix,
   mode = 'smooth',
   pxMm = 0.1,
@@ -438,7 +444,7 @@ function CrossSectionCapInner({
     );
 
     if (projectedModels && projectedModels.length > 0) {
-      const cacheKey = `${projectedContextVersionKey}|${projectedModelSignature}|${effectiveY.toFixed(3)}`;
+      const cacheKey = `${projectedContextVersionKey}|${projectedModelSignature}|${effectiveY.toFixed(3)}|off:${offsetMm.toFixed(4)}`;
       if (canUseProjectedCaches) {
         projectedCacheKey = cacheKey;
       }
@@ -578,16 +584,16 @@ function CrossSectionCapInner({
             transparent: true,
             alphaTest: 0.5,
             depthWrite: true,
-            depthTest: true,
+            depthTest,
             opacity: 1.0,
-            side: THREE.FrontSide,
+            side,
             polygonOffset: true,
             polygonOffsetFactor: -1,
             polygonOffsetUnits: -1,
           });
 
           const plane = new THREE.Mesh(planeGeom, mat);
-          plane.position.set(originX + ((width - 1) * pxMm * 0.5), originY + ((height - 1) * pxMm * 0.5), effectiveY + 1e-4);
+          plane.position.set(originX + ((width - 1) * pxMm * 0.5), originY + ((height - 1) * pxMm * 0.5), effectiveY + offsetMm);
           group.add(plane);
         }
       }
@@ -607,7 +613,7 @@ function CrossSectionCapInner({
           });
 
           shapeGeom = new THREE.ShapeGeometry(shapes);
-          shapeGeom.translate(0, 0, effectiveY + 1e-4);
+          shapeGeom.translate(0, 0, effectiveY + offsetMm);
           projectedShapeGeometryCacheRef.current.set(projectedCacheKey, shapeGeom);
           if (projectedShapeGeometryCacheRef.current.size > SHAPE_GEOMETRY_CACHE_LIMIT) {
             const oldestKey = projectedShapeGeometryCacheRef.current.keys().next().value;
@@ -628,16 +634,16 @@ function CrossSectionCapInner({
         });
 
         shapeGeom = new THREE.ShapeGeometry(shapes);
-        shapeGeom.translate(0, 0, effectiveY + 1e-4);
+        shapeGeom.translate(0, 0, effectiveY + offsetMm);
       }
 
       const mat = new THREE.MeshBasicMaterial({
         color,
         depthWrite: true,
-        depthTest: true,
+        depthTest,
         transparent: false,
         opacity: 1.0,
-        side: THREE.FrontSide,
+        side,
         polygonOffset: true,
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -1,
@@ -649,14 +655,17 @@ function CrossSectionCapInner({
     return group;
   }, [
     color,
+    depthTest,
     geometry,
     interactive,
     interactiveZStepMm,
     mode,
+    offsetMm,
     preferProjectedOnlyDuringInteractive,
     projectedModelSignature,
     projectedContextVersionKey,
     pxMm,
+    side,
     sourceObject,
     transformMatrix,
     visible,
@@ -680,6 +689,9 @@ const areCrossSectionCapPropsEqual = (
     && prev.projectedModels === next.projectedModels
     && prev.projectedContextVersion === next.projectedContextVersion
     && prev.color === next.color
+    && prev.side === next.side
+    && prev.offsetMm === next.offsetMm
+    && prev.depthTest === next.depthTest
     && prev.transformMatrix === next.transformMatrix
     && prev.mode === next.mode
     && prev.pxMm === next.pxMm
