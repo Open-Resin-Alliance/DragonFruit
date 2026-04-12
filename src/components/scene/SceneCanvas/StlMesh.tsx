@@ -703,7 +703,6 @@ if (uDitherAmount > 0.0) {
       depthTest: true,
       depthWrite: false,
       clippingPlanes: planes,
-      clipIntersection: true,
       side: THREE.FrontSide,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -1135,7 +1134,6 @@ if (uDitherAmount > 0.0) {
             roughness={materialRoughness ?? 0.9}
             metalness={0.0}
             clippingPlanes={planes}
-            clipIntersection
             side={THREE.FrontSide}
           />
         ) : (

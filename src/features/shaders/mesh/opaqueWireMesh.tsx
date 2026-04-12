@@ -9,7 +9,6 @@ export function OpaqueWireOverlayMaterial({
     <meshBasicMaterial
       color="#AAAAAA"
       clippingPlanes={clippingPlanes}
-      clipIntersection
       side={THREE.DoubleSide}
       wireframe
       polygonOffset
