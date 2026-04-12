@@ -40,7 +40,7 @@ import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmooth
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton } from '@/components/ui/primitives';
+import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
@@ -16338,37 +16338,21 @@ export default function Home() {
       )}
 
       {(isSceneSaveInProgress || isAutosaving) && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[126] flex justify-center px-3">
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-            }}
-          >
+        <ToastViewport zIndex={126} offset="1.25rem">
+          <Toast tone="info" className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4 animate-spin" />
             {isSceneSaveInProgress ? 'Saving…' : 'Autosaving…'}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {historyActionToast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: historyActionToast.direction === 'undo'
-                ? 'color-mix(in srgb, #fbbf24, var(--border-subtle) 50%)'
-                : 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
-              background: historyActionToast.direction === 'undo'
-                ? 'color-mix(in srgb, #fbbf24, var(--surface-0) 90%)'
-                : 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isHistoryActionToastVisible ? 1 : 0,
-              transform: `translateY(${isHistoryActionToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={historyActionToast.direction === 'undo' ? 'warning' : 'info'}
+            animated
+            visible={isHistoryActionToastVisible}
+            className="flex items-center gap-2"
           >
             {historyActionToast.direction === 'undo' ? (
               <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
@@ -16376,74 +16360,51 @@ export default function Home() {
               <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
             )}
             {historyActionToast.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {printingMonitorErrorToast && (
-        <div
-          className="pointer-events-none fixed inset-x-0 z-[126] flex justify-center px-3"
-          style={{ bottom: (historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem' }}
+        <ToastViewport
+          zIndex={126}
+          offset={(historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem'}
         >
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isPrintingMonitorErrorToastVisible ? 1 : 0,
-              transform: `translateY(${isPrintingMonitorErrorToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+          <Toast
+            tone="error"
+            animated
+            visible={isPrintingMonitorErrorToastVisible}
+            className="flex items-center gap-2"
           >
             <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
             {printingMonitorErrorToast.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {scene.sceneImportReport && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: scene.sceneImportReport.tone === 'error'
-                ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={
+              scene.sceneImportReport.tone === 'error'
+                ? 'error'
                 : scene.sceneImportReport.tone === 'warning'
-                  ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)'
-                  : 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-              background: scene.sceneImportReport.tone === 'error'
-                ? 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)'
-                : scene.sceneImportReport.tone === 'warning'
-                  ? 'color-mix(in srgb, #f59e0b, var(--surface-0) 90%)'
-                  : 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isSceneImportToastVisible ? 1 : 0,
-              transform: `translateY(${isSceneImportToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+                  ? 'warning'
+                  : 'success'
+            }
+            animated
+            visible={isSceneImportToastVisible}
           >
             {scene.sceneImportReport.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {exportSuccessToast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isExportSuccessToastVisible ? 1 : 0,
-              transform: `translateY(${isExportSuccessToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
-          >
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="success" animated visible={isExportSuccessToastVisible}>
             Saved to: {exportSuccessToast.path}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
     </div>
