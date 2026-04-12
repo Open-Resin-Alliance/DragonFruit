@@ -4883,7 +4883,10 @@ export function SceneCanvas({
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
-                  skipSourceZBounds={clipUpper == null}
+                  // During slider scrubbing, avoid expensive source z-bound
+                  // traversal/bucketing work. Stencil clipping still constrains
+                  // fragments correctly, so this is a safe CPU optimization.
+                  skipSourceZBounds={clipUpper == null || isLayerScrubbing}
                   y={(clipUpper ?? indicatorPlaneZ)!}
                   otherClipY={clipLower}
                   color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
@@ -4911,7 +4914,12 @@ export function SceneCanvas({
                   offsetMm={bottomCpuCapOffsetMm}
                   depthTest={bottomCpuCapDepthTest}
                   mode="smooth"
-                  interactive={false}
+                  // Keep CPU bottom-cap winding/offset semantics untouched; only
+                  // enable quantized interactive updates while scrubbing so the
+                  // expensive loop/shape rebuild path doesn't run every tick.
+                  interactive={isLayerScrubbing}
+                  interactiveZStepMm={Math.max(0.1, layerHeightMm ?? 0.05)}
+                  preferProjectedOnlyDuringInteractive
                   visible={!hideCrossSectionCap}
                 />
               )}
