@@ -48,6 +48,10 @@ export interface SmartPlacementV2Context {
     /** Override the A* expansion budget (default 2000). Pass a lower value for
      *  hover preview to reduce first-frame cost at transition-zone positions. */
     maxExpansions?: number;
+    /** When true, enables the preview-exhausted spatial cache so positions where A*
+     *  exhausts its reduced preview budget are fast-failed on subsequent hover frames.
+     *  Must NOT be set for click-time placement — only for hover preview. */
+    isPreview?: boolean;
 }
 
 // ---------- Constants ----------
@@ -58,6 +62,84 @@ const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 const ROOTS_DISK_PERIMETER_SAMPLES = 16;
 /** Safety margin in mm added to all roots volume checks. */
 const ROOTS_DISK_SAFETY_MM = 0.5;
+
+/**
+ * Preview-mode coarse sampling constants.
+ *
+ * The SDF cache cell size is 0.5mm; segmentBlocked samples at that interval,
+ * so a 50mm straight-down shaft triggers ~100 BVH closestPointToPoint calls
+ * on first hover (cold cache). rootsDiskBlocked compounds it with up to 170
+ * more per check. On cold cache every call is a full BVH traversal (~0.1ms
+ * on complex meshes), causing a visible hitch on the very first hover over
+ * any new area of the model.
+ *
+ * For hover preview we use 2mm steps (matching A* step size) for segment
+ * checks and a 3-slice/6-point roots sweep. This reduces first-hover BVH
+ * queries from ~270 to ~50 — a 5× reduction — while keeping accuracy
+ * sufficient for preview (click-time always uses full resolution).
+ */
+const PREVIEW_SEGMENT_STEP_MM = 2.0;   // matches A* step size
+const ROOTS_DISK_QUICK_Z_SLICES = 3;   // vs max(4, ceil(rootTopZ/0.5)) ≈ 10
+const ROOTS_DISK_QUICK_PERIMETER_SAMPLES = 6;  // vs 16
+
+/**
+ * Coarse segment-blocked check for hover preview.
+ * Samples at `stepMm` intervals instead of the SDF cell size (0.5mm),
+ * trading the ability to detect very thin (< 2mm) geometry for ~4× fewer
+ * BVH queries. Acceptable for preview; click-time uses the full sdf method.
+ */
+function segmentBlockedCoarse(
+    sdf: SDFCache,
+    ax: number, ay: number, az: number,
+    bx: number, by: number, bz: number,
+    clearance: number,
+    stepMm: number,
+): boolean {
+    const dx = bx - ax, dy = by - ay, dz = bz - az;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 0.01) return sdf.isBlocked(ax, ay, az, clearance);
+    const steps = Math.max(1, Math.ceil(len / stepMm));
+    const inv = 1 / steps;
+    for (let i = 0; i <= steps; i++) {
+        const t = i * inv;
+        if (sdf.isBlocked(ax + dx * t, ay + dy * t, az + dz * t, clearance)) return true;
+    }
+    return false;
+}
+
+/**
+ * Quick (reduced-sample) roots-disk blocked check for hover preview.
+ * Uses 3 Z slices and 6 perimeter points vs the full sweep (~10 slices × 17
+ * points). Reduces first-hover BVH calls from ~170 to ~28 for this check.
+ */
+function quickRootsDiskBlocked(
+    sdf: SDFCache,
+    centerX: number,
+    centerY: number,
+    diskHeight: number,
+    coneHeight: number,
+    rootsRadius: number,
+    shaftRadius: number,
+): boolean {
+    const safety = ROOTS_DISK_SAFETY_MM;
+    const rootTopZ = diskHeight + coneHeight;
+    for (let zi = 0; zi <= ROOTS_DISK_QUICK_Z_SLICES; zi++) {
+        const z = (zi / ROOTS_DISK_QUICK_Z_SLICES) * rootTopZ;
+        let radiusAtZ: number;
+        if (z <= diskHeight) {
+            radiusAtZ = rootsRadius;
+        } else {
+            const t = coneHeight > 0 ? (z - diskHeight) / coneHeight : 1;
+            radiusAtZ = rootsRadius + t * (shaftRadius - rootsRadius);
+        }
+        if (sdf.isBlocked(centerX, centerY, z, safety)) return true;
+        for (let i = 0; i < ROOTS_DISK_QUICK_PERIMETER_SAMPLES; i++) {
+            const angle = (i / ROOTS_DISK_QUICK_PERIMETER_SAMPLES) * Math.PI * 2;
+            if (sdf.isBlocked(centerX + Math.cos(angle) * radiusAtZ, centerY + Math.sin(angle) * radiusAtZ, z, safety)) return true;
+        }
+    }
+    return false;
+}
 
 // ---------- Roots cone volume check ----------
 
@@ -139,12 +221,14 @@ export function clearSDFCacheForMesh(meshUuid: string): void {
         sdfCachePool.delete(meshUuid);
     }
     stagnationCache.delete(meshUuid);
+    previewExhaustedCache.delete(meshUuid);
 }
 
 export function clearAllSDFCaches(): void {
     for (const cache of sdfCachePool.values()) cache.clear();
     sdfCachePool.clear();
     stagnationCache.clear();
+    previewExhaustedCache.clear();
 }
 
 // ---------- Main API ----------
@@ -168,8 +252,19 @@ const STAGNATION_RADIUS_SQ = STAGNATION_RADIUS_MM * STAGNATION_RADIUS_MM;
 const MAX_STAGNATION_ENTRIES = 512;
 const stagnationCache = new Map<string, Vec3[]>();
 
-function isNearStagnationPoint(meshUuid: string, pos: Vec3): boolean {
-    const points = stagnationCache.get(meshUuid);
+/**
+ * Preview-exhausted cache — records socketPos positions where the A* exhausted
+ * its REDUCED preview budget (≠ true stagnation) so that subsequent hover frames
+ * at similar positions skip the 600-expansion A* run entirely.
+ *
+ * Separate from stagnationCache so click-time placement (full 2000-expansion
+ * budget) is never affected — only hover preview fast-paths through this cache.
+ * Keyed by mesh uuid; cleared alongside stagnationCache.
+ */
+const previewExhaustedCache = new Map<string, Vec3[]>();
+
+function isNearSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3): boolean {
+    const points = cache.get(meshUuid);
     if (!points || points.length === 0) return false;
     for (let i = 0; i < points.length; i++) {
         const p = points[i];
@@ -181,19 +276,25 @@ function isNearStagnationPoint(meshUuid: string, pos: Vec3): boolean {
     return false;
 }
 
-function recordStagnation(meshUuid: string, pos: Vec3): void {
-    let points = stagnationCache.get(meshUuid);
+function recordSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3): void {
+    let points = cache.get(meshUuid);
     if (!points) {
         points = [];
-        stagnationCache.set(meshUuid, points);
+        cache.set(meshUuid, points);
     }
-    // Don't add if already near an existing entry
-    if (isNearStagnationPoint(meshUuid, pos)) return;
+    if (isNearSpatialPoint(cache, meshUuid, pos)) return;
     if (points.length >= MAX_STAGNATION_ENTRIES) {
-        // Evict oldest entries
         points.splice(0, points.length - MAX_STAGNATION_ENTRIES + 1);
     }
     points.push({ x: pos.x, y: pos.y, z: pos.z });
+}
+
+function isNearStagnationPoint(meshUuid: string, pos: Vec3): boolean {
+    return isNearSpatialPoint(stagnationCache, meshUuid, pos);
+}
+
+function recordStagnation(meshUuid: string, pos: Vec3): void {
+    recordSpatialPoint(stagnationCache, meshUuid, pos);
 }
 
 /**
@@ -230,30 +331,36 @@ export function calculateSmartPlacementV2(
     // 3. Quick check: is the straight-down path clear AND do the roots fit at the base?
     const rootTopZ = input.rootsTopZ;
     const socketPos = standard.socketPos;
+    const isPreview = context?.isPreview ?? false;
 
-    const straightClear = !sdf.segmentBlocked(
-        socketPos.x, socketPos.y, socketPos.z,
-        socketPos.x, socketPos.y, rootTopZ,
-        clearance,
-    );
-    // Volumetric roots check at the standard base position: sweeps the full
-    // roots disk+cone geometry with cone-accurate radius at each Z slice.
+    // For hover preview, use coarse sampling (2mm steps) to cut first-hover
+    // BVH cache-miss queries from ~100 to ~25 for the shaft check, and from
+    // ~170 to ~28 for the roots check.  Click-time always uses full resolution.
+    const straightClear = isPreview
+        ? !segmentBlockedCoarse(sdf, socketPos.x, socketPos.y, socketPos.z, socketPos.x, socketPos.y, rootTopZ, clearance, PREVIEW_SEGMENT_STEP_MM)
+        : !sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, socketPos.x, socketPos.y, rootTopZ, clearance);
+
+    // Volumetric roots check at the standard base position.
     const baseXY = standard.basePos;
-    const rootsFitStandard = !rootsDiskBlocked(
-        sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius,
-    );
+    const rootsFitStandard = isPreview
+        ? !quickRootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
+        : !rootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
 
     if (straightClear && rootsFitStandard) {
         return standard; // Shaft is clear and roots fit — no routing needed
     }
 
-    // 3b. Spatial stagnation cache: if a previous search from a nearby
-    //     socketPos already stagnated (cavity), skip entirely.
-    //     This is the primary performance win for cavity hovers — turns
-    //     repeated probes at similar positions from ~150 A* expansions to
-    //     a single distance check.
+    // 3b. Spatial caches: skip A* if a previous search from a nearby socketPos
+    //     already stagnated (cavity) or exhausted the preview budget.
+    //     This turns repeated probes at similar positions from ~600 A* expansions
+    //     to a single distance check — the primary performance win for interior hovers.
     if (isNearStagnationPoint(mesh.uuid, socketPos)) {
         return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
+    }
+    // Preview-exhausted fast-fail: if this is a preview call and a nearby position
+    // already exhausted the reduced budget, skip A* for this frame too.
+    if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos)) {
+        return { ...standard, error: 'COLLISION_WITH_MODEL', exhaustedBudget: true };
     }
 
     // 3c. Quick vertical solvability check: sample points along the
@@ -299,8 +406,12 @@ export function calculateSmartPlacementV2(
     //    to find a valid position — proper 3D pathfinding for the whole support.
     const warmStart = context?.warmStart ?? warmStartByModel.get(modelId) ?? null;
 
+    // For preview: use the quick (reduced-sample) roots check in the goal validator.
+    // The full-resolution check is reserved for click-time placement.
     const goalValidator = (wx: number, wy: number, _wz: number) => {
-        return !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
+        return isPreview
+            ? !quickRootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius)
+            : !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
     };
 
     const result = gridAStar(sdf, socketPos, rootTopZ, {
@@ -312,6 +423,13 @@ export function calculateSmartPlacementV2(
         maxExpansions: context?.maxExpansions ?? 2000,
         stepMm: 2.0, // Coarse grid for pathfinding; fine SDF checking at cellSize
         goalValidator,
+        // For hover preview, use endpoint-only SDF checks in the A* neighbor loop.
+        // The default segmentBlocked samples at 0.5mm intervals on a 2mm grid — all
+        // intermediate sub-grid points are permanent cold BVH cache misses, causing
+        // ~30k–60k uncacheable BVH queries per hover frame on interior surfaces.
+        // Endpoint-only checks hit grid-aligned cells that ARE cached after first
+        // visit, dropping first-frame cold cost from ~30k to ~600 BVH calls.
+        endpointOnlyCollisionCheck: isPreview,
     }, warmStart);
 
     // Store warm-start for next frame (don't save stagnated searches)
@@ -323,6 +441,12 @@ export function calculateSmartPlacementV2(
         warmStartByModel.delete(modelId);
         // Record this position so future hovers skip the A* entirely
         recordStagnation(mesh.uuid, socketPos);
+    }
+    // Preview-exhausted: record budget-exhausted positions so subsequent preview
+    // hover frames at similar positions skip the A* instead of re-running it.
+    // Only recorded for isPreview calls — doesn't affect click-time placement.
+    if (result.hitExpansionLimit && context?.isPreview) {
+        recordSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos);
     }
 
     if (!result.reached || result.path.length < 2) {

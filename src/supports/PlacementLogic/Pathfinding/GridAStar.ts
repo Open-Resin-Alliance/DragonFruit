@@ -51,6 +51,26 @@ export interface GridAStarOptions {
      * rejects those positions so the A* keeps searching.
      */
     goalValidator?: (wx: number, wy: number, wz: number) => boolean;
+    /**
+     * When true, each neighbor edge collision check uses `sdf.isBlocked` on
+     * the endpoint cell only instead of the full `sdf.segmentBlocked` sweep.
+     *
+     * **Why this matters for preview performance:**
+     * The A* grid step is 2mm but the SDF cell size is 0.5mm. `segmentBlocked`
+     * samples at 0.5mm intervals, generating 5–8 BVH queries per edge. The
+     * intermediate sample points are never grid-aligned → they can NEVER hit
+     * the SDF cache → permanent cold BVH misses on every A* frame. With 26
+     * neighbors × 600 expansions this means ~30,000–60,000 uncacheable BVH
+     * queries per hover frame regardless of how warm the cache is.
+     *
+     * With endpoint-only checks, each neighbor issues exactly 1 BVH query at a
+     * grid-aligned position that IS cached after first visit. Cold cost drops
+     * from ~30k to ~600 BVH calls on first approach to a new region.
+     *
+     * Trade-off: geometry thinner than the grid step (2mm) is not detected.
+     * Acceptable for hover preview — click-time always uses full resolution.
+     */
+    endpointOnlyCollisionCheck?: boolean;
 }
 
 export interface GridAStarResult {
@@ -307,10 +327,13 @@ export function gridAStar(
             }
             // n.dz > 0 (upward) — no angle constraint, always allowed if within climb limit
 
-            // SDF collision check: validate the entire edge from current → neighbor
-            // using fine-resolution segment checks (SDF cellSize intervals).
-            // The pathfinding grid is coarser than the SDF grid, so we must
-            // check intermediate points to catch geometry between grid cells.
+            // SDF collision check.
+            // Full mode: fine-resolution segment check at SDF cellSize intervals.
+            // Endpoint-only mode (preview): just check the destination cell.
+            //   The intermediate sample points in segmentBlocked are NOT grid-aligned
+            //   and can never hit the SDF cache, producing permanent cold BVH misses
+            //   on every frame. Endpoint cells ARE on the 2mm grid and are cached
+            //   after first visit, so preview A* becomes cheap on revisits.
             const cwx = current.x * step;
             const cwy = current.y * step;
             const cwz = current.z * step;
@@ -318,7 +341,10 @@ export function gridAStar(
             const wy = ny * step;
             const wz = nz * step;
 
-            if (sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)) continue;
+            if (opts.endpointOnlyCollisionCheck
+                ? sdf.isBlocked(wx, wy, wz, clearance)
+                : sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)
+            ) continue;
 
             // Support occupancy check
             if (occupancy && occupancy.isOccupied(wx, wy, wz, ignoreSupportId)) continue;

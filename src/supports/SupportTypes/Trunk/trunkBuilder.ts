@@ -174,8 +174,11 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         // V2 grid A* pathfinder (SDF-backed, no raycast bundles).
         // For hover preview, use a reduced A* budget (600 vs 2000) and skip the
         // expensive V1 raycast fallback entirely — hover preview doesn't need
-        // perfect accuracy. Click placement always uses full budget + V1 fallback.
-        const v2Context = isPreview ? { maxExpansions: 600 } : undefined;
+        // perfect accuracy. `isPreview` also enables the preview-exhausted spatial
+        // cache so budget-exhausted positions near steep/internal surfaces are
+        // fast-failed on subsequent hover frames instead of re-running 600 expansions.
+        // Click placement always uses full budget + V1 fallback.
+        const v2Context = isPreview ? { maxExpansions: 600, isPreview: true } : undefined;
         const v2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
         if (v2Result.error === 'COLLISION_WITH_MODEL') {
             if (isPreview) {
