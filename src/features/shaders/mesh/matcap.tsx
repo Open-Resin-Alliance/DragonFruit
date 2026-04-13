@@ -98,7 +98,6 @@ export function MatcapMaterial({
       color={tintColor}
       matcap={matcap}
       clippingPlanes={clippingPlanes}
-      clipIntersection
       side={THREE.FrontSide}
     />
   );

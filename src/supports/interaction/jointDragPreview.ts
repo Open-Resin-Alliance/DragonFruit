@@ -1,4 +1,5 @@
 import React from 'react';
+import { flushSync } from 'react-dom';
 import type { Branch, Knot, Roots, Trunk } from '../types';
 import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type JointDragPreviewContext, type JointDragPreviewKind, type JointDragPreviewPayload, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
 import type { PartDragPreviewPayload } from './partDragPreview';
@@ -214,21 +215,18 @@ export function useActiveJointDragPreview() {
 
   const schedulePreview = React.useCallback((nextPreview: JointDragPreviewSnapshot | null) => {
     const nextPreviewKey = buildPreviewSnapshotKey(nextPreview);
-    const currentKey = frameRef.current !== null
-      ? pendingPreviewKeyRef.current
-      : committedPreviewKeyRef.current;
-
-    if (nextPreviewKey === currentKey) return;
+    if (nextPreviewKey === committedPreviewKeyRef.current) return;
 
     pendingPreviewRef.current = nextPreview;
     pendingPreviewKeyRef.current = nextPreviewKey;
-    if (frameRef.current !== null) return;
+    committedPreviewKeyRef.current = nextPreviewKey;
 
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = null;
-      committedPreviewKeyRef.current = pendingPreviewKeyRef.current;
-      setPreview(pendingPreviewRef.current);
-    });
+    // flushSync forces a synchronous React commit so InstancedContactConeGroup's
+    // useLayoutEffect runs and updates instance matrices before R3F renders the
+    // next frame. Without this, React 18 auto-batches the update and flushes it
+    // asynchronously, letting R3F render the gizmo ball (imperative) at the new
+    // position while the cone (React props) is still one frame behind.
+    flushSync(() => setPreview(nextPreview));
   }, []);
 
   React.useEffect(() => {

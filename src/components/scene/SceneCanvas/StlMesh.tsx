@@ -22,6 +22,106 @@ import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
+// Scratch raycaster reused for clip-zone fallback raycasts.
+const _clipFallbackRaycaster = new THREE.Raycaster();
+
+// Mini-cache for clip-aware fallback raycasts.  Near the clip boundary the
+// primary hit oscillates between visible/clipped zones, causing a BVH
+// raycast on ~50% of pointer-move frames.  Caching the previous fallback
+// result by quantised ray origin + direction eliminates redundant raycasts
+// when the pointer hasn't moved meaningfully.
+const _clipCacheQuant = 0.15; // mm position quantisation
+let _clipCacheKey = '';
+let _clipCacheResult: THREE.Intersection | null = null;
+
+function clipRayCacheKey(ray: THREE.Ray): string {
+    const Q = _clipCacheQuant;
+    const o = ray.origin;
+    const d = ray.direction;
+    // Quantise origin (position) and direction (unit vector × 1000 for precision).
+    return `${Math.round(o.x / Q)},${Math.round(o.y / Q)},${Math.round(o.z / Q)},${Math.round(d.x * 1000)},${Math.round(d.y * 1000)},${Math.round(d.z * 1000)}`;
+}
+
+/**
+ * When the primary ray hit falls in the clipped (hidden) portion of a mesh,
+ * find the nearest hit within the visible Z range by raycasting with `near`
+ * set just past the clipped surface. This skips the outer wall entirely and
+ * uses firstHitOnly=true so the BVH stops at the very first triangle hit —
+ * O(log n) instead of scanning all faces.
+ *
+ * Results are cached by quantised ray so near-duplicate pointer moves
+ * (common at clip boundaries) skip the BVH entirely.
+ */
+function findClipAwareHit(
+  ray: THREE.Ray,
+  mesh: THREE.Object3D,
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+  primaryDistance: number,
+): THREE.Intersection | null {
+  // Check ray cache — skip BVH if the ray hasn't changed meaningfully.
+  const cacheKey = clipRayCacheKey(ray) + `,${clipLower ?? ''},${clipUpper ?? ''}`;
+  if (cacheKey === _clipCacheKey) {
+    return _clipCacheResult;
+  }
+
+  const rc = _clipFallbackRaycaster;
+  rc.ray.copy(ray);
+  // Skip past the already-found clipped surface.
+  rc.near = primaryDistance + 0.05;
+  // Bound the search — models fit within the build volume.
+  rc.far = primaryDistance + 500;
+  (rc as any).firstHitOnly = true;
+  const hits: THREE.Intersection[] = [];
+  (mesh as THREE.Mesh).raycast(rc, hits);
+  // Reset to safe defaults.
+  rc.near = 0;
+  rc.far = Infinity;
+  (rc as any).firstHitOnly = false;
+  if (hits.length === 0) {
+    _clipCacheKey = cacheKey;
+    _clipCacheResult = null;
+    return null;
+  }
+  const hit = hits[0];
+  if (
+    (clipUpper != null && hit.point.z > clipUpper) ||
+    (clipLower != null && hit.point.z < clipLower)
+  ) {
+    _clipCacheKey = cacheKey;
+    _clipCacheResult = null;
+    return null;
+  }
+  _clipCacheKey = cacheKey;
+  _clipCacheResult = hit;
+  return hit;
+}
+
+/**
+ * Check whether any non-model intersection exists in the visible clip zone.
+ * Used to decide if a clipped model-mesh hit should let events propagate
+ * through to support objects behind the clipped surface.
+ */
+function hasVisibleNonModelIntersection(
+  intersections: THREE.Intersection[],
+  modelObject: THREE.Object3D,
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+): boolean {
+  for (const int of intersections) {
+    // Skip the model mesh itself (can appear multiple times for inner wall)
+    if (int.object === modelObject) continue;
+    // Gizmo handles don't need the clip-bounds check — they are always
+    // rendered in their own layer and should be treated as visible.
+    if (int.object.userData?.isGizmoHandle) return true;
+    // Check the hit is within visible clip bounds
+    if (clipUpper != null && int.point.z > clipUpper) continue;
+    if (clipLower != null && int.point.z < clipLower) continue;
+    return true;
+  }
+  return false;
+}
+
 function StlMeshComponent({
   geometry,
   clipLower,
@@ -603,7 +703,6 @@ if (uDitherAmount > 0.0) {
       depthTest: true,
       depthWrite: false,
       clippingPlanes: planes,
-      clipIntersection: true,
       side: THREE.FrontSide,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -767,8 +866,28 @@ if (uDitherAmount > 0.0) {
           // Support placement in support mode
           if (mode === 'support' && onSupportClick) {
             if (blockSupportPlacement) return;
+
+            // When cross-section is active and a visible support is behind
+            // the model surface, let the click propagate to the support
+            // instead of consuming it for placement.
+            const crossSectionActiveClick = clipUpper != null || clipLower != null;
+            if (crossSectionActiveClick && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
+              return; // Don't stop propagation — support will handle the click.
+            }
+
+            let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
+            if (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            ) {
+              // Primary hit is in the clipped (hidden) zone. Cast directly
+              // against this mesh to find the nearest visible-zone hit.
+              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              if (!fallback) return;
+              clickHit = fallback;
+            }
             e.stopPropagation();
-            onSupportClick(e as unknown as THREE.Intersection);
+            onSupportClick(clickHit);
           }
         }}
         onPointerMove={(e) => {
@@ -783,7 +902,12 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
+          // Check both GPU pick (may lag 1 frame) and raw intersection list
+          // so gizmo hover works even when gizmos are excluded from picking.
+          const hasGizmoIntersection = e.intersections.some(
+            (h) => h.object.userData?.isGizmoHandle === true,
+          );
+          if (shouldSuppressModelInteraction || isGizmoHoverCategory || hasGizmoIntersection) {
             if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
@@ -797,12 +921,57 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          e.stopPropagation();
+          // When cross-section is active and a visible support (or other
+          // non-model object) exists behind the model surface, let the event
+          // propagate so the support can receive hover — even if the model
+          // hit itself is in the visible zone (the ray may graze the outer
+          // wall on the way to a support visible through the opening).
+          //
+          // Also propagate when the primary model hit is in the clipped
+          // (invisible) zone — supports & instanced meshes inside the cavity
+          // must receive hover events even if they don't appear in the R3F
+          // intersection list at this stage.  In that case we still fall
+          // through to the placement-preview logic below so the clip-aware
+          // inner-wall hover preview can show.
+          const crossSectionActive = clipUpper != null || clipLower != null;
+          const primaryInClippedZone = crossSectionActive && (
+            (clipUpper != null && e.point.z > clipUpper) ||
+            (clipLower != null && e.point.z < clipLower)
+          );
+          // Let events propagate when non-model geometry is behind the model.
+          const propagateForNonModel = crossSectionActive && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper);
+          if (propagateForNonModel && !primaryInClippedZone) {
+            // Non-model is visible but model hit is in visible zone — suppress
+            // model hover and don't consume the event.
+            if (!hasExternalHoverSource) schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
+            if (mode === 'support' && onSupportHover) {
+              onSupportHover(null);
+            }
+            return;
+          }
 
-          if (!hasExternalHoverSource) schedulePointerHover(true);
-          onModelHoverPointChange?.(e.point.clone());
-          onModelHoverModelChange?.(modelId);
-          emitImmediateModelHover(modelId);
+          // For clipped-zone hits, don't stop propagation but fall through
+          // to the placement-preview section so inner-wall hover still works.
+          if (!primaryInClippedZone) {
+            e.stopPropagation();
+          }
+
+          if (primaryInClippedZone) {
+            // Primary hit is invisible — suppress model hover highlight but
+            // continue to the placement-preview section below.
+            if (!hasExternalHoverSource) schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
+          } else {
+            if (!hasExternalHoverSource) schedulePointerHover(true);
+            onModelHoverPointChange?.(e.point.clone());
+            onModelHoverModelChange?.(modelId);
+            emitImmediateModelHover(modelId);
+          }
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
@@ -843,7 +1012,24 @@ if (uDitherAmount > 0.0) {
               return;
             }
 
-            onSupportHover(e);
+            let hoverHit: THREE.Intersection = e as unknown as THREE.Intersection;
+            if (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            ) {
+              // Primary hit is in the clipped (hidden) zone. Cast directly
+              // against this mesh to find the nearest visible-zone hit.
+              // (R3F + BVH may only provide one intersection per mesh via
+              // firstHitOnly, so we cannot rely on e.intersections here.)
+              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              if (!fallback) {
+                onSupportHover(null);
+                return;
+              }
+              hoverHit = fallback;
+            }
+
+            onSupportHover(hoverHit);
           }
         }}
         onPointerOut={(e) => {
@@ -940,7 +1126,7 @@ if (uDitherAmount > 0.0) {
             depthWrite={false}
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
-          <primitive object={supportDimMaterialObj!} attach="material" />
+          supportDimMaterialObj ? <primitive object={supportDimMaterialObj} attach="material" /> : null
         ) : interactionLodActive ? (
           <meshStandardMaterial
             vertexColors={hasVertexColorAttribute}
@@ -948,7 +1134,6 @@ if (uDitherAmount > 0.0) {
             roughness={materialRoughness ?? 0.9}
             metalness={0.0}
             clippingPlanes={planes}
-            clipIntersection
             side={THREE.FrontSide}
           />
         ) : (

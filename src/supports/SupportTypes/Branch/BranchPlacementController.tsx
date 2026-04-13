@@ -20,6 +20,7 @@ import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { subscribe, getSnapshot, addBranch, addKnot, addTwig, addStick } from '../../state';
 import { pushHistory } from '@/history/historyStore';
+import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TWIG, SUPPORT_ADD_STICK } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
 import { Vec3, Knot } from '../../types';
@@ -46,6 +47,40 @@ import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
+}
+
+// Scratch raycaster reused for clip-zone fallback raycasts (same pattern as StlMesh).
+const _branchClipFallbackRaycaster = new THREE.Raycaster();
+
+/**
+ * When a raycast hit falls in the clipped (invisible) portion of the mesh,
+ * re-raycast starting just past that surface to find the visible inner wall.
+ */
+function findClipAwareHitForBranch(
+  ray: THREE.Ray,
+  meshes: THREE.Object3D[],
+  clipLower: number | null,
+  clipUpper: number | null,
+  primaryDistance: number,
+): THREE.Intersection | null {
+  const rc = _branchClipFallbackRaycaster;
+  rc.ray.copy(ray);
+  rc.near = primaryDistance + 0.05;
+  rc.far = primaryDistance + 500;
+  (rc as any).firstHitOnly = true;
+  const hits = rc.intersectObjects(meshes, false);
+  rc.near = 0;
+  rc.far = Infinity;
+  (rc as any).firstHitOnly = false;
+  if (hits.length === 0) return null;
+  const hit = hits[0];
+  if (
+    (clipUpper != null && hit.point.z > clipUpper) ||
+    (clipLower != null && hit.point.z < clipLower)
+  ) {
+    return null;
+  }
+  return hit;
 }
 
 export function BranchPlacementController() {
@@ -509,6 +544,22 @@ export function BranchPlacementController() {
                     const intersects = raycaster.intersectObjects(modelMeshes, false);
                     if (intersects.length > 0) {
                         meshHit = intersects[0];
+
+                        // If the hit falls within the clipped (invisible) region,
+                        // re-raycast past the clipped surface to find the visible inner wall.
+                        const { clipLower, clipUpper } = getClipBounds();
+                        const clipped =
+                          (clipUpper != null && meshHit.point.z > clipUpper) ||
+                          (clipLower != null && meshHit.point.z < clipLower);
+                        if (clipped) {
+                            meshHit = findClipAwareHitForBranch(
+                              raycaster.ray,
+                              modelMeshes,
+                              clipLower,
+                              clipUpper,
+                              meshHit.distance,
+                            );
+                        }
                     }
                 }
 

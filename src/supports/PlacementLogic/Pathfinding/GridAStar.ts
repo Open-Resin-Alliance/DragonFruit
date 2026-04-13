@@ -12,6 +12,11 @@
  *   protrusions — without this, any geometry below the socket is impassable
  * - **Goal validation**: roots collision check integrated into goal acceptance
  * - **Frame-coherent warm-start**: reuses open set between frames
+ *
+ * Cost priorities (in order):
+ * 1. **Shortest collision-free path** — base euclidean distance (moveCost)
+ * 2. **Greatest verticality**         — lateral XY movement is penalised
+ * 3. **Least shallow angles**         — quadratic penalty on lateral/drop ratio
  */
 
 import { Vec3 } from '../../types';
@@ -46,6 +51,26 @@ export interface GridAStarOptions {
      * rejects those positions so the A* keeps searching.
      */
     goalValidator?: (wx: number, wy: number, wz: number) => boolean;
+    /**
+     * When true, each neighbor edge collision check uses `sdf.isBlocked` on
+     * the endpoint cell only instead of the full `sdf.segmentBlocked` sweep.
+     *
+     * **Why this matters for preview performance:**
+     * The A* grid step is 2mm but the SDF cell size is 0.5mm. `segmentBlocked`
+     * samples at 0.5mm intervals, generating 5–8 BVH queries per edge. The
+     * intermediate sample points are never grid-aligned → they can NEVER hit
+     * the SDF cache → permanent cold BVH misses on every A* frame. With 26
+     * neighbors × 600 expansions this means ~30,000–60,000 uncacheable BVH
+     * queries per hover frame regardless of how warm the cache is.
+     *
+     * With endpoint-only checks, each neighbor issues exactly 1 BVH query at a
+     * grid-aligned position that IS cached after first visit. Cold cost drops
+     * from ~30k to ~600 BVH calls on first approach to a new region.
+     *
+     * Trade-off: geometry thinner than the grid step (2mm) is not detected.
+     * Acceptable for hover preview — click-time always uses full resolution.
+     */
+    endpointOnlyCollisionCheck?: boolean;
 }
 
 export interface GridAStarResult {
@@ -55,6 +80,12 @@ export interface GridAStarResult {
     expansions: number;
     /** Whether the path reached the goal region. */
     reached: boolean;
+    /** True if the search was terminated early due to lack of Z progress (cavity). */
+    stagnated: boolean;
+    /** True if the search exhausted its expansion budget without reaching the goal.
+     *  Distinct from stagnated: the search was making progress but ran out of budget.
+     *  When true, V1 raycast fallback is also very unlikely to succeed. */
+    hitExpansionLimit: boolean;
     /** Reusable warm-start state for the next frame. */
     warmState: WarmStartState | null;
 }
@@ -182,7 +213,7 @@ export function gridAStar(
 
     // Maximum upward climb in grid cells — allows routing over protrusions
     // but prevents the path from going far above the socket
-    const maxClimbCells = Math.max(3, Math.ceil(10 / step)); // up to ~10mm above start
+    const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
 
     const q = (v: number) => Math.round(v / step);
 
@@ -223,11 +254,27 @@ export function gridAStar(
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
 
+    // Stagnation detection: bail early when the search is trapped in a
+    // cavity and cannot make downward progress. Track the lowest Z reached
+    // and the expansion count when it last improved. If 250 expansions pass
+    // without any Z improvement, the search is stuck and will never reach
+    // the goal — abort instead of burning the full 2000-expansion budget.
+    const STAGNATION_LIMIT = 250;
+    let bestZReached = sqz;
+    let lastZProgressAt = 0;
+
     while (openSet.length > 0 && expansions < maxExp) {
         const current = heapPop(openSet)!;
         if (closedSet.has(current.key)) continue;
         closedSet.add(current.key);
         expansions++;
+
+        // Track Z progress for stagnation detection
+        if (current.z < bestZReached) {
+            bestZReached = current.z;
+            lastZProgressAt = expansions;
+        }
+        if (expansions - lastZProgressAt > STAGNATION_LIMIT) break;
 
         // Goal check: reached the target Z layer
         if (current.z <= gqz) {
@@ -280,10 +327,13 @@ export function gridAStar(
             }
             // n.dz > 0 (upward) — no angle constraint, always allowed if within climb limit
 
-            // SDF collision check: validate the entire edge from current → neighbor
-            // using fine-resolution segment checks (SDF cellSize intervals).
-            // The pathfinding grid is coarser than the SDF grid, so we must
-            // check intermediate points to catch geometry between grid cells.
+            // SDF collision check.
+            // Full mode: fine-resolution segment check at SDF cellSize intervals.
+            // Endpoint-only mode (preview): just check the destination cell.
+            //   The intermediate sample points in segmentBlocked are NOT grid-aligned
+            //   and can never hit the SDF cache, producing permanent cold BVH misses
+            //   on every frame. Endpoint cells ARE on the 2mm grid and are cached
+            //   after first visit, so preview A* becomes cheap on revisits.
             const cwx = current.x * step;
             const cwy = current.y * step;
             const cwz = current.z * step;
@@ -291,18 +341,49 @@ export function gridAStar(
             const wy = ny * step;
             const wz = nz * step;
 
-            if (sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)) continue;
+            if (opts.endpointOnlyCollisionCheck
+                ? sdf.isBlocked(wx, wy, wz, clearance)
+                : sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)
+            ) continue;
 
             // Support occupancy check
             if (occupancy && occupancy.isOccupied(wx, wy, wz, ignoreSupportId)) continue;
 
-            // Cost: base movement cost + proximity penalty (prefer paths with more clearance)
+            // ---- Priority-based cost function ----
+            //
+            // 1. Shortest collision-free path (base euclidean distance)
+            // 2. Greatest verticality   (penalise lateral XY movement)
+            // 3. Least shallow angles   (penalise high lateral-to-drop ratio)
+
+            // (1) Base movement cost — euclidean distance in mm
+            const moveCost = n.cost * step;
+
+            // (2) Verticality penalty — pure-vertical moves are free;
+            //     lateral component is penalised proportionally.
+            const lateralCells = Math.sqrt(n.dx * n.dx + n.dy * n.dy);
+            const verticalityPenalty = lateralCells * step * 1.5;
+
+            // (3) Shallow-angle penalty — quadratic in lateral/drop ratio
+            //     so near-vertical moves are cheap; near-horizontal expensive.
+            let shallowAnglePenalty = 0;
+            if (lateralCells > 0) {
+                if (n.dz !== 0) {
+                    const ratio = lateralCells / Math.abs(n.dz);
+                    shallowAnglePenalty = ratio * ratio * step * 0.8;
+                } else {
+                    // Pure horizontal: maximum angle penalty
+                    shallowAnglePenalty = step * 4.0;
+                }
+            }
+
+            // Proximity penalty — prefer paths with more clearance from mesh
             const dist = sdf.distanceAt(wx, wy, wz);
             const clearancePenalty = dist < clearance * 2 ? (clearance * 2 - dist) * 0.5 : 0;
-            // Penalize upward movement heavily to prefer downward paths
+
+            // Climb penalty — heavily discourage upward movement
             const climbPenalty = n.dz > 0 ? step * 3 : 0;
-            const moveCost = n.cost * step;
-            const tentativeG = current.g + moveCost + clearancePenalty + climbPenalty;
+
+            const tentativeG = current.g + moveCost + verticalityPenalty + shallowAnglePenalty + clearancePenalty + climbPenalty;
 
             const existingG = gScore.get(nKey);
             if (existingG !== undefined && tentativeG >= existingG) continue;
@@ -316,14 +397,19 @@ export function gridAStar(
     }
 
     // ---- Reconstruct path ----
+    const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
+    const hitExpansionLimit = !goalEntry && !stagnated && expansions >= maxExp;
+
     if (!goalEntry) {
         return {
             path: [],
             expansions,
             reached: false,
-            warmState: {
+            stagnated,
+            hitExpansionLimit,
+            warmState: stagnated ? null : {
                 socketPos: { ...startPos },
-                openEntries: openSet.slice(0, 64), // keep top entries for next frame
+                openEntries: openSet.slice(0, 64),
                 gScores: gScore,
                 cameFrom,
             },
@@ -375,6 +461,8 @@ export function gridAStar(
         path: simplified,
         expansions,
         reached: true,
+        stagnated: false,
+        hitExpansionLimit: false,
         warmState: {
             socketPos: { ...startPos },
             openEntries: [], // search complete, no reuse needed
