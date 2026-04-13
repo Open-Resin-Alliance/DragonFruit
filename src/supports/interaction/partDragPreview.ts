@@ -1,4 +1,5 @@
 import React from 'react';
+import { flushSync } from 'react-dom';
 
 const EVENT_NAME = 'dragonfruit-part-drag-update';
 
@@ -21,6 +22,7 @@ export function clearPartDragUpdate(kind: PartDragPreviewKind, supportId: string
 
 export function usePartDragUpdate<T>(kind: PartDragPreviewKind, supportId: string): T | null {
   const [preview, setPreview] = React.useState<T | null>(null);
+  const previewRef = React.useRef<T | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -29,7 +31,11 @@ export function usePartDragUpdate<T>(kind: PartDragPreviewKind, supportId: strin
       const detail = (event as CustomEvent<PartDragPreviewPayload<T>>).detail;
       if (!detail) return;
       if (detail.kind !== kind || detail.supportId !== supportId) return;
-      setPreview(detail.support ?? null);
+      const nextPreview = detail.support ?? null;
+      if (Object.is(previewRef.current, nextPreview)) return;
+      previewRef.current = nextPreview;
+      // Keep support geometry in lockstep with gizmo movement.
+      flushSync(() => setPreview(nextPreview));
     };
 
     window.addEventListener(EVENT_NAME, handlePreview);

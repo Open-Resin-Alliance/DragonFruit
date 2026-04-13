@@ -13,6 +13,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { RENDER_TARGET, TIMING } from './constants';
 import { majorityVote, encodePickId } from './pickingUtils';
 import { reportPickingRenderSample } from './pickingDiagnostics';
+import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import type { PickableRegistration, PickingConfig } from './types';
 
 interface PickingRendererProps {
@@ -294,6 +295,13 @@ export function PickingRenderer({
     
     pickCameraRef.current = pickCamera;
     
+    // When cross-section clip bounds are active, exclude the model from
+    // the pick scene entirely so it cannot occlude supports, joints, or
+    // gizmos inside the cavity.  Support placement uses R3F raycasting
+    // (not GPU picking), so it is unaffected.
+    const { clipLower, clipUpper } = getClipBounds();
+    const crossSectionActive = clipLower != null || clipUpper != null;
+
     // Sync cached transforms and dynamic visibility.
     let visiblePickObjects = 0;
     for (const [pickId, registration] of registrations.entries()) {
@@ -302,7 +310,9 @@ export function PickingRenderer({
 
       const hasAllowedCategories = Array.isArray(config.allowedCategories) && config.allowedCategories.length > 0;
       const categoryAllowed = !hasAllowedCategories || config.allowedCategories!.includes(registration.category);
-      const includeCategory = categoryAllowed && !(registration.category === 'gizmo' && !config.includeGizmo);
+      const includeCategory = categoryAllowed
+        && !(registration.category === 'gizmo' && !config.includeGizmo)
+        && !(crossSectionActive && registration.category === 'model');
       cached.pickObject.visible = includeCategory;
       if (!includeCategory) continue;
 

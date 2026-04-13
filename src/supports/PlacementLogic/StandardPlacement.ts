@@ -23,6 +23,11 @@ export interface TrunkPlacementResult {
     warning?: WarningCode; // Allow with warning
     angle?: number; // Surface angle in degrees (0=Up, 90=Vert, 180=Down)
     coneAxis?: Vec3; // Cone axis used for socket placement (may differ from surface normal)
+    /** True if the pathfinder stagnated (trapped in cavity). Signals that fallback searches are futile. */
+    stagnated?: boolean;
+    /** True if A* exhausted its expansion budget without reaching the goal.
+     *  When true, the V1 raycast fallback is very unlikely to succeed and can be skipped. */
+    exhaustedBudget?: boolean;
 }
 
 /**

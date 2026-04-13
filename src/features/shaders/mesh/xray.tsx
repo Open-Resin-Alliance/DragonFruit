@@ -47,7 +47,6 @@ export function XrayMaterial({
       opacity={opacity ?? 0.25}
       depthWrite={false}
       clippingPlanes={clippingPlanes}
-      clipIntersection
       side={THREE.DoubleSide}
     />
   );

@@ -23,6 +23,7 @@ import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
+import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -283,8 +284,30 @@ export function LeafPlacementController() {
                 if (modelMeshes.length > 0) {
                     const intersects = raycaster.intersectObjects(modelMeshes, false);
                     if (intersects.length > 0) {
-                        const hit = intersects[0];
-                        knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+                        let hit = intersects[0];
+
+                        // Skip hits in the clipped (hidden) zone to find the
+                        // visible inner wall in cross-section view.
+                        const { clipLower: cl, clipUpper: cu } = getClipBounds();
+                        const isClipped =
+                          (cu != null && hit.point.z > cu) ||
+                          (cl != null && hit.point.z < cl);
+                        if (isClipped) {
+                            let fallback: THREE.Intersection | null = null;
+                            for (let i = 1; i < intersects.length; i++) {
+                                const h = intersects[i];
+                                if (cu != null && h.point.z > cu) continue;
+                                if (cl != null && h.point.z < cl) continue;
+                                fallback = h;
+                                break;
+                            }
+                            if (fallback) hit = fallback;
+                            else hit = null as any;
+                        }
+
+                        if (hit) {
+                            knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+                        }
                     }
                 }
 

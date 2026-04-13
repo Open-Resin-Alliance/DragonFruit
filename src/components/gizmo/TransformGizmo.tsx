@@ -81,7 +81,9 @@ export function TransformGizmo({
 
     gizmoRootRef.current.traverse((obj) => {
       obj.frustumCulled = false;
-      obj.renderOrder = 2500;
+      // Cross-section stencil cap renders at ~9800. Gizmo must be above
+      // that so handles are never obscured by the cap fill.
+      obj.renderOrder = 9900;
       // Mark only renderable gizmo handle geometry so pointer handlers can detect
       // gizmo involvement from intersections. Do NOT tag lights/targets; those
       // should not be hidden during thumbnail capture because it changes lighting.
@@ -276,7 +278,7 @@ export function TransformGizmo({
   }, [suppressHover]);
 
   return (
-    <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
+    <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={9900}>
       {enableMove && showCenter && (
         <GizmoCenter
           isHovered={!suppressHover && hoveredPart === 'center'}

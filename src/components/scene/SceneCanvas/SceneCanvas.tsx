@@ -1,10 +1,15 @@
-"use client";
+﻿"use client";
 
 import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { OrbitControls } from '@react-three/drei';
-import { CrossSectionStencilCap, type CrossSectionStencilCapEntry } from '@/components/scene/CrossSectionStencilCap';
+import {
+  CrossSectionStencilCap,
+  type CrossSectionCapDebugOverrides,
+  type CrossSectionStencilCapEntry,
+} from '@/components/scene/CrossSectionStencilCap';
+import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
@@ -77,6 +82,7 @@ import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanv
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, LoggingHelper, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
+import { setClipBounds } from './clipBoundsStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -181,6 +187,35 @@ function GhostPreviewInstances({
     </instancedMesh>
   );
 }
+
+type CrossSectionCapDebugPanelState = {
+  enabled: boolean;
+  top: CrossSectionCapDebugOverrides;
+  bottom: CrossSectionCapDebugOverrides;
+};
+
+const CROSS_SECTION_CAP_DEBUG_STORAGE_KEY = 'df:cross-section-cap-debug:v4';
+const CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED = false;
+
+const DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE: CrossSectionCapDebugPanelState = {
+  enabled: false,
+  top: {
+    side: 'front',
+    offsetMm: 1e-4,
+    rotationXDeg: 0,
+    clipMode: 'upper',
+    stencilMode: 'standard',
+    depthTest: true,
+  },
+  bottom: {
+    side: 'back',
+    offsetMm: -1e-4,
+    rotationXDeg: 0,
+    clipMode: 'lower',
+    stencilMode: 'standard',
+    depthTest: false,
+  },
+};
 
 export function SceneCanvas({
   models: modelsProp = [],
@@ -479,6 +514,10 @@ export function SceneCanvas({
   const isLinux = useIsLinux();
   const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
+
+  // Sync clip bounds to the module-level store so BranchPlacementController
+  // (and other independent raycasters) can skip hits on clipped geometry.
+  setClipBounds(clipLower, clipUpper);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3641,7 +3680,7 @@ export function SceneCanvas({
       }
 
       benchmarkRunIdRef.current = requestId;
-      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweeps…` });
+      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweepsΓÇª` });
 
       const startedAt = performance.now();
       const startedAtIso = new Date().toISOString();
@@ -4242,6 +4281,70 @@ export function SceneCanvas({
     };
   }, []);
 
+  const [showCrossSectionCapDebugPanel, setShowCrossSectionCapDebugPanel] = React.useState(false);
+  const [crossSectionCapDebugState, setCrossSectionCapDebugState] = React.useState<CrossSectionCapDebugPanelState>(
+    DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE,
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(CROSS_SECTION_CAP_DEBUG_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<CrossSectionCapDebugPanelState>;
+      setCrossSectionCapDebugState((prev) => ({
+        enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : prev.enabled,
+        top: { ...prev.top, ...(parsed.top ?? {}) },
+        bottom: { ...prev.bottom, ...(parsed.bottom ?? {}) },
+      }));
+    } catch {
+      // Ignore malformed debug state.
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(CROSS_SECTION_CAP_DEBUG_STORAGE_KEY, JSON.stringify(crossSectionCapDebugState));
+    } catch {
+      // Ignore storage write failures in temporary debug tooling.
+    }
+  }, [crossSectionCapDebugState]);
+
+  React.useEffect(() => {
+    if (!CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isToggle = event.ctrlKey
+        && event.shiftKey
+        && (event.code === 'KeyK' || event.key.toLowerCase() === 'k');
+      if (!isToggle) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowCrossSectionCapDebugPanel((prev) => !prev);
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, []);
+
+  const topCapDebugOverrides = crossSectionCapDebugState.enabled
+    ? crossSectionCapDebugState.top
+    : undefined;
+  const bottomCapDebugOverrides = crossSectionCapDebugState.enabled
+    ? crossSectionCapDebugState.bottom
+    : undefined;
+  const bottomCpuCapSide = React.useMemo<THREE.Side>(() => {
+    const side = bottomCapDebugOverrides?.side ?? 'back';
+    if (side === 'back') return THREE.BackSide;
+    if (side === 'double') return THREE.DoubleSide;
+    return THREE.FrontSide;
+  }, [bottomCapDebugOverrides?.side]);
+  const bottomCpuCapOffsetMm = bottomCapDebugOverrides?.offsetMm ?? -1e-4;
+  const bottomCpuCapDepthTest = bottomCapDebugOverrides?.depthTest ?? false;
+
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -4776,11 +4879,16 @@ export function SceneCanvas({
 
               {(clipUpper != null || indicatorPlaneZ != null) && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
+                  key="cross-section-cap-top"
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
-                  skipSourceZBounds={clipUpper == null}
+                  // During slider scrubbing, avoid expensive source z-bound
+                  // traversal/bucketing work. Stencil clipping still constrains
+                  // fragments correctly, so this is a safe CPU optimization.
+                  skipSourceZBounds={clipUpper == null || isLayerScrubbing}
                   y={(clipUpper ?? indicatorPlaneZ)!}
+                  otherClipY={clipLower}
                   color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
@@ -4790,6 +4898,29 @@ export function SceneCanvas({
                   glowOpacity={clipUpper != null ? 0 : 0.44}
                   glowColor={clipUpper != null ? undefined : (indicatorPlaneColor ?? '#ec2a77')}
                   visible={!hideCrossSectionCap && (clipUpper != null || indicatorPlaneZ != null)}
+                  debugOverrides={topCapDebugOverrides}
+                />
+              )}
+
+              {clipLower != null && !hideCrossSectionCap && (
+                <CrossSectionCap
+                  key="cross-section-cap-bottom-cpu"
+                  projectedModels={models}
+                  projectedContextVersion={crossSectionStencilSourceVersion}
+                  sourceObject={supportDragGroupRef?.current ?? null}
+                  y={clipLower}
+                  color="#FFFFFF"
+                  side={bottomCpuCapSide}
+                  offsetMm={bottomCpuCapOffsetMm}
+                  depthTest={bottomCpuCapDepthTest}
+                  mode="smooth"
+                  // Keep CPU bottom-cap winding/offset semantics untouched; only
+                  // enable quantized interactive updates while scrubbing so the
+                  // expensive loop/shape rebuild path doesn't run every tick.
+                  interactive={isLayerScrubbing}
+                  interactiveZStepMm={Math.max(0.1, layerHeightMm ?? 0.05)}
+                  preferProjectedOnlyDuringInteractive
+                  visible={!hideCrossSectionCap}
                 />
               )}
 
@@ -5624,7 +5755,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Loading brush…
+            Loading brushΓÇª
           </div>
         </div>
       )}
@@ -5641,7 +5772,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Smoothing… {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
+            SmoothingΓÇª {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
           </div>
         </div>
       )}
@@ -5664,6 +5795,162 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
+
+      {showCrossSectionCapDebugPanel && (
+        <div
+          className="absolute right-3 top-3 z-[70] w-[360px] rounded-lg border p-3 shadow-xl"
+          style={{
+            pointerEvents: 'auto',
+            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+            background: 'color-mix(in srgb, var(--surface-0), black 6%)',
+            color: 'var(--text-strong)',
+          }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-semibold">Cross-Section Cap Debug (temporary)</div>
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-[10px]"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+              onClick={() => setShowCrossSectionCapDebugPanel(false)}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between gap-2 rounded border p-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <label className="flex items-center gap-2 text-[11px]">
+              <input
+                type="checkbox"
+                checked={crossSectionCapDebugState.enabled}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setCrossSectionCapDebugState((prev) => ({ ...prev, enabled }));
+                }}
+              />
+              Enable overrides
+            </label>
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-[10px]"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+              onClick={() => setCrossSectionCapDebugState(DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE)}
+            >
+              Reset defaults
+            </button>
+          </div>
+
+          {(['top', 'bottom'] as const).map((which) => {
+            const settings = crossSectionCapDebugState[which];
+            const setSettings = (partial: Partial<CrossSectionCapDebugOverrides>) => {
+              setCrossSectionCapDebugState((prev) => ({
+                ...prev,
+                [which]: { ...prev[which], ...partial },
+              }));
+            };
+
+            return (
+              <div key={which} className="mt-2 rounded border p-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[11px] font-semibold uppercase" style={{ color: 'var(--text-muted)' }}>
+                  {which} cap
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <label className="flex flex-col gap-1">
+                    <span>Side</span>
+                    <select
+                      value={settings.side ?? 'front'}
+                      onChange={(e) => setSettings({ side: e.target.value as 'front' | 'back' | 'double' })}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="front">front</option>
+                      <option value="back">back</option>
+                      <option value="double">double</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Depth test</span>
+                    <select
+                      value={settings.depthTest ? 'on' : 'off'}
+                      onChange={(e) => setSettings({ depthTest: e.target.value === 'on' })}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="on">on</option>
+                      <option value="off">off</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Clip mode</span>
+                    <select
+                      value={settings.clipMode ?? (which === 'bottom' ? 'lower' : 'upper')}
+                      onChange={(e) => setSettings({ clipMode: e.target.value as 'upper' | 'lower' })}
+                      disabled={which === 'bottom'}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="upper">upper (z ≤ y)</option>
+                      <option value="lower">lower (z ≥ y)</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Stencil mode</span>
+                    <select
+                      value={settings.stencilMode ?? 'standard'}
+                      onChange={(e) => setSettings({ stencilMode: e.target.value as 'standard' | 'mirrored' })}
+                      disabled={which === 'bottom'}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="standard">standard</option>
+                      <option value="mirrored">mirrored</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Offset (mm)</span>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      value={settings.offsetMm ?? (which === 'bottom' ? -0.0001 : 0.0001)}
+                      onChange={(e) => setSettings({ offsetMm: Number(e.target.value) })}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Rotation X (deg)</span>
+                    <input
+                      type="number"
+                      step="1"
+                      value={settings.rotationXDeg ?? 0}
+                      onChange={(e) => setSettings({ rotationXDeg: Number(e.target.value) })}
+                      disabled={which === 'bottom'}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    />
+                  </label>
+                </div>
+
+                {which === 'bottom' && (
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Bottom cap uses CPU slice loops right now (side/offset/depth-test apply; clip/stencil/rotation ignored).
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            Toggle panel: Ctrl+Shift+K · Settings persist locally.
+          </div>
+        </div>
+      )}
 
       {marqueeSelection && (
         <div
@@ -5694,7 +5981,7 @@ export function SceneCanvas({
           }}
           title={outOfBoundsModels.map((m) => m.name).join(', ')}
         >
-          <span style={{ marginRight: 6 }}>⚠</span>
+          <span style={{ marginRight: 6 }}>ΓÜá</span>
           {outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume
         </div>
       )}

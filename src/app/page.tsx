@@ -40,7 +40,7 @@ import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmooth
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton } from '@/components/ui/primitives';
+import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
@@ -774,6 +774,9 @@ export default function Home() {
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
+  const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
+  const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
+  const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
   const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
   const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
   const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
@@ -810,6 +813,10 @@ export default function Home() {
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
   const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const saveToastHideTimeoutRef = React.useRef<number | null>(null);
+  const saveToastClearTimeoutRef = React.useRef<number | null>(null);
+  const saveToastEnterRafRef = React.useRef<number | null>(null);
+  const saveToastShownAtRef = React.useRef<number | null>(null);
   const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
   const sceneSaveInFlightRef = React.useRef(false);
   const sceneSaveQueuedRef = React.useRef(false);
@@ -825,6 +832,84 @@ export default function Home() {
     capMs: sceneAutosaveSettings.capMs,
     preferredSavePath: preferredOverwriteScenePathRef.current,
   });
+
+  React.useEffect(() => {
+    const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
+    const TOAST_ANIMATION_MS = 220;
+    const hasActiveSaveWork = isSceneSaveInProgress || isAutosaving;
+
+    if (hasActiveSaveWork) {
+      if (saveToastHideTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastHideTimeoutRef.current);
+        saveToastHideTimeoutRef.current = null;
+      }
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+        saveToastClearTimeoutRef.current = null;
+      }
+      if (saveToastEnterRafRef.current !== null) {
+        window.cancelAnimationFrame(saveToastEnterRafRef.current);
+        saveToastEnterRafRef.current = null;
+      }
+
+      setSaveToastLabel(isSceneSaveInProgress ? 'Saving…' : 'Autosaving…');
+
+      if (!isSaveToastVisible) {
+        saveToastShownAtRef.current = Date.now();
+        setIsSaveToastVisible(true);
+        setIsSaveToastAnimatedVisible(false);
+        saveToastEnterRafRef.current = window.requestAnimationFrame(() => {
+          saveToastEnterRafRef.current = null;
+          setIsSaveToastAnimatedVisible(true);
+        });
+      } else if (!isSaveToastAnimatedVisible) {
+        setIsSaveToastAnimatedVisible(true);
+      }
+      return;
+    }
+
+    if (!isSaveToastVisible) {
+      saveToastShownAtRef.current = null;
+      return;
+    }
+
+    const shownAt = saveToastShownAtRef.current ?? Date.now();
+    const elapsed = Date.now() - shownAt;
+    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
+
+    if (saveToastHideTimeoutRef.current !== null) {
+      window.clearTimeout(saveToastHideTimeoutRef.current);
+    }
+    saveToastHideTimeoutRef.current = window.setTimeout(() => {
+      saveToastHideTimeoutRef.current = null;
+      setIsSaveToastAnimatedVisible(false);
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+      }
+      saveToastClearTimeoutRef.current = window.setTimeout(() => {
+        saveToastClearTimeoutRef.current = null;
+        saveToastShownAtRef.current = null;
+        setIsSaveToastVisible(false);
+      }, TOAST_ANIMATION_MS);
+    }, remaining);
+  }, [isAutosaving, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+
+  React.useEffect(() => {
+    return () => {
+      if (saveToastHideTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastHideTimeoutRef.current);
+        saveToastHideTimeoutRef.current = null;
+      }
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+        saveToastClearTimeoutRef.current = null;
+      }
+      if (saveToastEnterRafRef.current !== null) {
+        window.cancelAnimationFrame(saveToastEnterRafRef.current);
+        saveToastEnterRafRef.current = null;
+      }
+    };
+  }, []);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -1147,6 +1232,9 @@ export default function Home() {
   const [isHistoryPreviewActive, setIsHistoryPreviewActive] = React.useState(false);
   const historyPreviewBaselineRef = React.useRef<{ undo: number; redo: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
+  const [isTemporarilyDisablingCrossSectionForThumbnail, setIsTemporarilyDisablingCrossSectionForThumbnail] = React.useState(false);
+  const [isCrossSectionEnabled, setIsCrossSectionEnabled] = React.useState(true);
+  const handleToggleCrossSection = React.useCallback(() => setIsCrossSectionEnabled((prev) => !prev), []);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
@@ -6310,10 +6398,17 @@ export default function Home() {
     // Capture a thumbnail from the live scene canvas — same path as the export panel.
     let exportThumbnailPng: Uint8Array | null = null;
     try {
+      // Temporarily disable cross-section clipping while taking the scene thumbnail.
+      setIsTemporarilyDisablingCrossSectionForThumbnail(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
       const runCapture = exportThumbnailCaptureRunnerRef.current;
       if (runCapture) exportThumbnailPng = await runCapture();
     } catch {
       // Non-fatal: save proceeds without thumbnail.
+    } finally {
+      setIsTemporarilyDisablingCrossSectionForThumbnail(false);
     }
 
     const savedPath = await ExportManager.exportScene(
@@ -11109,14 +11204,18 @@ export default function Home() {
   const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
 
   const sceneClipLower = React.useMemo(() => {
+    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
+    if (!isCrossSectionEnabled) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipLower;
-  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
 
   const sceneClipUpper = React.useMemo(() => {
+    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
+    if (!isCrossSectionEnabled) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipUpper;
-  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
@@ -12869,6 +12968,11 @@ export default function Home() {
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
             crossSectionMode={slicing.crossSectionMode}
+            lowerLayerIndex={slicing.lowerLayerIndex}
+            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
+            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
+            crossSectionEnabled={isCrossSectionEnabled}
+            onToggleCrossSection={handleToggleCrossSection}
           />
         )}
 
@@ -16334,38 +16438,22 @@ export default function Home() {
         </div>
       )}
 
-      {(isSceneSaveInProgress || isAutosaving) && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[126] flex justify-center px-3">
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-            }}
-          >
+      {isSaveToastVisible && (
+        <ToastViewport zIndex={126} offset="1.25rem">
+          <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4 animate-spin" />
-            {isSceneSaveInProgress ? 'Saving…' : 'Autosaving…'}
-          </div>
-        </div>
+            {saveToastLabel}
+          </Toast>
+        </ToastViewport>
       )}
 
       {historyActionToast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: historyActionToast.direction === 'undo'
-                ? 'color-mix(in srgb, #fbbf24, var(--border-subtle) 50%)'
-                : 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
-              background: historyActionToast.direction === 'undo'
-                ? 'color-mix(in srgb, #fbbf24, var(--surface-0) 90%)'
-                : 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isHistoryActionToastVisible ? 1 : 0,
-              transform: `translateY(${isHistoryActionToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={historyActionToast.direction === 'undo' ? 'warning' : 'info'}
+            animated
+            visible={isHistoryActionToastVisible}
+            className="flex items-center gap-2"
           >
             {historyActionToast.direction === 'undo' ? (
               <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
@@ -16373,74 +16461,51 @@ export default function Home() {
               <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
             )}
             {historyActionToast.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {printingMonitorErrorToast && (
-        <div
-          className="pointer-events-none fixed inset-x-0 z-[126] flex justify-center px-3"
-          style={{ bottom: (historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem' }}
+        <ToastViewport
+          zIndex={126}
+          offset={(historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem'}
         >
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isPrintingMonitorErrorToastVisible ? 1 : 0,
-              transform: `translateY(${isPrintingMonitorErrorToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+          <Toast
+            tone="error"
+            animated
+            visible={isPrintingMonitorErrorToastVisible}
+            className="flex items-center gap-2"
           >
             <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
             {printingMonitorErrorToast.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {scene.sceneImportReport && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: scene.sceneImportReport.tone === 'error'
-                ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={
+              scene.sceneImportReport.tone === 'error'
+                ? 'error'
                 : scene.sceneImportReport.tone === 'warning'
-                  ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)'
-                  : 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-              background: scene.sceneImportReport.tone === 'error'
-                ? 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)'
-                : scene.sceneImportReport.tone === 'warning'
-                  ? 'color-mix(in srgb, #f59e0b, var(--surface-0) 90%)'
-                  : 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isSceneImportToastVisible ? 1 : 0,
-              transform: `translateY(${isSceneImportToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+                  ? 'warning'
+                  : 'success'
+            }
+            animated
+            visible={isSceneImportToastVisible}
           >
             {scene.sceneImportReport.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {exportSuccessToast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isExportSuccessToastVisible ? 1 : 0,
-              transform: `translateY(${isExportSuccessToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
-          >
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="success" animated visible={isExportSuccessToastVisible}>
             Saved to: {exportSuccessToast.path}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
     </div>

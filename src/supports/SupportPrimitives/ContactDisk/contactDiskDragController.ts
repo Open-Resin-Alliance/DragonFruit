@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import type { Vec3 } from '../../types';
+import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 
 export interface ContactDiskDragHit {
     point: Vec3;
@@ -73,8 +74,29 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
         if (modelMeshes.length === 0) return;
 
         const hits = raycaster.intersectObjects(modelMeshes, true);
-        const hit = hits[0];
+        let hit = hits[0];
         if (!hit) return;
+
+        // If the hit is in the clipped (invisible) zone, skip past it to
+        // find the visible inner wall so contact disks attach correctly
+        // when editing supports inside a cross-section view.
+        const { clipLower, clipUpper } = getClipBounds();
+        const clipped =
+          (clipUpper != null && hit.point.z > clipUpper) ||
+          (clipLower != null && hit.point.z < clipLower);
+        if (clipped) {
+          // Find first hit within visible bounds
+          let fallback: THREE.Intersection | null = null;
+          for (let i = 1; i < hits.length; i++) {
+            const h = hits[i];
+            if (clipUpper != null && h.point.z > clipUpper) continue;
+            if (clipLower != null && h.point.z < clipLower) continue;
+            fallback = h;
+            break;
+          }
+          if (!fallback) return;
+          hit = fallback;
+        }
 
         onHit({
             point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },

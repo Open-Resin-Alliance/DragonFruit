@@ -58,6 +58,17 @@ tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef"
 tauri-codegen = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 tauri-plugin = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
 
+# Maximum release optimisation: fat LTO collapses all codegen units into one
+# link step, enabling inlining and dead-code elimination across crate boundaries.
+# Critical for the slicing engine — cross-crate SIMD and rayon dispatch paths
+# are 15-30% faster with fat LTO than the default thin/no-LTO build.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+strip = "none"  # keep debug info for crash reports; strip handled by Tauri bundler
+
 # Compile ALL dependencies with full optimizations in dev builds.
 # The slicer and its deps (flate2, crc32fast, png, zip, rayon) are
 # 50-200x slower in debug mode due to heavy numerical/compression work.
