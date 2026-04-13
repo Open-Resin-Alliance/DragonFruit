@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, type SetStateAction } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type SetStateAction } from 'react';
 
 interface SlicingStateProps {
   hasGeometry: boolean;
@@ -10,6 +10,7 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   const [crossSectionMode, setCrossSectionMode] = useState<'smooth' | 'rasterized'>('smooth');
   const [layerIndex, setLayerIndexState] = useState<number>(0);
   const [lowerLayerIndex, setLowerLayerIndexState] = useState<number>(0);
+  const topSliderInitializedRef = useRef(false);
 
   const layerHeightMm = useMemo(() => layerHeightMicron / 1000, [layerHeightMicron]);
 
@@ -69,6 +70,28 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     });
   }, [clampLayerIndex]);
 
+  // Default UX: on a fresh geometry session, keep bottom slider at 0 and
+  // initialize the top slider to max so users start with full-height view.
+  // Do this once per "no-geometry -> geometry" transition only.
+  useEffect(() => {
+    if (!hasGeometry) {
+      topSliderInitializedRef.current = false;
+      return;
+    }
+
+    if (numLayers <= 0) return;
+    if (topSliderInitializedRef.current) return;
+
+    // Respect pre-existing/restored layer state if it was already set.
+    if (layerIndex !== 0 || lowerLayerIndex !== 0) {
+      topSliderInitializedRef.current = true;
+      return;
+    }
+
+    setLayerIndexState(numLayers);
+    topSliderInitializedRef.current = true;
+  }, [hasGeometry, layerIndex, lowerLayerIndex, numLayers]);
+
   // Derive an ordered layer pair for clipping so lower-slider drags cannot
   // accidentally invalidate clipping (e.g. transient lower > upper).
   const orderedLayerRange = useMemo(() => {
@@ -97,11 +120,18 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   }, [hasGeometry, orderedLayerRange.lower, zRange, layerHeightMm]);
 
   const clipUpper = useMemo(() => {
-    if (!hasGeometry || orderedLayerRange.upper === 0) return null;
+    if (!hasGeometry) return null;
+
+    // Disable upper clipping at either edge of the slider range.
+    // - upper=0: historical behavior
+    // - upper=max: new default-rest behavior (top slider parked at max)
+    const maxLayer = Math.max(0, numLayers);
+    if (orderedLayerRange.upper === 0 || orderedLayerRange.upper >= maxLayer) return null;
+
     const EPS = 1e-6;
     const upper = zRange.min + (orderedLayerRange.upper * layerHeightMm) + EPS;
     return Math.min(Math.max(upper, zRange.min), zRange.max + EPS);
-  }, [hasGeometry, orderedLayerRange.upper, zRange, layerHeightMm]);
+  }, [hasGeometry, numLayers, orderedLayerRange.upper, zRange, layerHeightMm]);
 
   return {
     layerHeightMicron,
