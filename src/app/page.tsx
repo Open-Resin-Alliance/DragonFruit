@@ -1232,6 +1232,7 @@ export default function Home() {
   const [isHistoryPreviewActive, setIsHistoryPreviewActive] = React.useState(false);
   const historyPreviewBaselineRef = React.useRef<{ undo: number; redo: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
+  const [isTemporarilyDisablingCrossSectionForThumbnail, setIsTemporarilyDisablingCrossSectionForThumbnail] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
@@ -6395,10 +6396,17 @@ export default function Home() {
     // Capture a thumbnail from the live scene canvas — same path as the export panel.
     let exportThumbnailPng: Uint8Array | null = null;
     try {
+      // Temporarily disable cross-section clipping while taking the scene thumbnail.
+      setIsTemporarilyDisablingCrossSectionForThumbnail(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
       const runCapture = exportThumbnailCaptureRunnerRef.current;
       if (runCapture) exportThumbnailPng = await runCapture();
     } catch {
       // Non-fatal: save proceeds without thumbnail.
+    } finally {
+      setIsTemporarilyDisablingCrossSectionForThumbnail(false);
     }
 
     const savedPath = await ExportManager.exportScene(
@@ -11194,14 +11202,16 @@ export default function Home() {
   const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
 
   const sceneClipLower = React.useMemo(() => {
+    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipLower;
-  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
+  }, [isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
 
   const sceneClipUpper = React.useMemo(() => {
+    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipUpper;
-  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
+  }, [isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
