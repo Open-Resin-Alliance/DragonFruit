@@ -24,9 +24,11 @@ type LayerSliderProps = {
   onLowerChange?: (next: number) => void;
   lowerCurrentHeightMm?: number;
   showModeIndicator?: boolean;
+  crossSectionEnabled?: boolean;
+  onToggleCrossSection?: () => void;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -413,6 +415,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, []);
 
+  const thumbColor = crossSectionEnabled ? 'var(--accent)' : 'var(--text-muted)';
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
   const lowerPercent = lowerValue != null
     ? Math.min(100, Math.max(0, ((lowerValue - min) / Math.max(1, (max - min))) * 100))
@@ -496,6 +499,12 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           data-no-drag="true"
           className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? 'w-5' : 'w-7') : 'w-10'} cursor-pointer`}
           onMouseDown={onPointerDown}
+          onDoubleClick={(e) => {
+            if (!onToggleCrossSection) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleCrossSection();
+          }}
           onContextMenu={(e) => {
             if (!onCrossSectionModeChange) return;
             e.preventDefault();
@@ -536,12 +545,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
             {/* Progress fill */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
+              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full transition-[background,box-shadow] duration-200"
               style={{
                 bottom: `${lowerPercent ?? 0}%`,
                 height: `${percent - (lowerPercent ?? 0)}%`,
-                background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))',
-                boxShadow: '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)',
+                background: crossSectionEnabled
+                  ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
+                  : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
+                boxShadow: crossSectionEnabled
+                  ? '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)'
+                  : 'none',
+                opacity: crossSectionEnabled ? 1 : 0.45,
               }}
             />
 
@@ -573,25 +587,25 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   )}
                   {crossSectionMode === 'rasterized' ? (
                     <div
-                      className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                      className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
                       style={{
-                        borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
-                        background: 'repeating-linear-gradient(90deg, color-mix(in srgb, var(--accent), white 8%) 0 4px, color-mix(in srgb, var(--accent), black 8%) 4px 8px)',
+                        borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
+                        background: `repeating-linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 8%) 0 4px, color-mix(in srgb, ${thumbColor}, black 8%) 4px 8px)`,
                         boxShadow: isDraggingThumb
-                          ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
-                          : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                          ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
+                          : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
                         opacity: 0.75,
                       }}
                     />
                   ) : (
                     <div
-                      className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                      className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
                       style={{
-                        borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
-                        background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent), white 20%), var(--accent), color-mix(in srgb, var(--accent), white 20%))',
+                        borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
+                        background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
                         boxShadow: isDraggingThumb
-                          ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
-                          : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                          ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
+                          : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
                         opacity: 0.75,
                       }}
                     />
@@ -629,24 +643,24 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 )}
             {crossSectionMode === 'rasterized' ? (
               <div
-                className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
                 style={{
-                  borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
-                  background: 'repeating-linear-gradient(90deg, color-mix(in srgb, var(--accent), white 8%) 0 4px, color-mix(in srgb, var(--accent), black 8%) 4px 8px)',
+                  borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
+                  background: `repeating-linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 8%) 0 4px, color-mix(in srgb, ${thumbColor}, black 8%) 4px 8px)`,
                   boxShadow: isDraggingThumb
-                    ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
-                    : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                    ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
+                    : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
                 }}
               />
             ) : (
               <div
-                className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
                 style={{
-                  borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
-                  background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent), white 20%), var(--accent), color-mix(in srgb, var(--accent), white 20%))',
+                  borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
+                  background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
                   boxShadow: isDraggingThumb
-                    ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
-                    : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                    ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
+                    : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
                 }}
               />
             )}
