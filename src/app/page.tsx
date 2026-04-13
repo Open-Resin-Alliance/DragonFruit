@@ -1233,6 +1233,8 @@ export default function Home() {
   const historyPreviewBaselineRef = React.useRef<{ undo: number; redo: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [isTemporarilyDisablingCrossSectionForThumbnail, setIsTemporarilyDisablingCrossSectionForThumbnail] = React.useState(false);
+  const [isCrossSectionEnabled, setIsCrossSectionEnabled] = React.useState(true);
+  const handleToggleCrossSection = React.useCallback(() => setIsCrossSectionEnabled((prev) => !prev), []);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
@@ -11203,15 +11205,17 @@ export default function Home() {
 
   const sceneClipLower = React.useMemo(() => {
     if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
+    if (!isCrossSectionEnabled) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipLower;
-  }, [isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
 
   const sceneClipUpper = React.useMemo(() => {
     if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
+    if (!isCrossSectionEnabled) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipUpper;
-  }, [isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
@@ -12967,6 +12971,8 @@ export default function Home() {
             lowerLayerIndex={slicing.lowerLayerIndex}
             onLowerLayerIndexChange={slicing.setLowerLayerIndex}
             lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
+            crossSectionEnabled={isCrossSectionEnabled}
+            onToggleCrossSection={handleToggleCrossSection}
           />
         )}
 
