@@ -1197,10 +1197,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    // Initialize clipping planes once (update in-place to avoid recreation)
-    const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-    React.useEffect(() => {
+    // Derive clipping planes synchronously so a freshly mounted renderer
+    // (e.g. after support refresh key changes) is clipped correctly on its
+    // very first render, without waiting for a post-commit effect.
+    const clippingPlanes = useMemo(() => {
         const planes: THREE.Plane[] = [];
 
         if (clipLower != null) {
@@ -1211,10 +1211,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
         }
 
-        clippingPlanesRef.current = planes;
+        return planes;
     }, [clipLower, clipUpper]);
-
-    const clippingPlanes = clippingPlanesRef.current;
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#9a9a9a';
@@ -3638,7 +3636,28 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 applyMaterialGhostOpacity(mesh.material);
             }
         });
-    }, [clippingPlanes, ghostOpacityClamped, ghostTransparent, ghostRenderOrder, selectedId]);
+    }, [
+        clippingPlanes,
+        ghostOpacityClamped,
+        ghostTransparent,
+        ghostRenderOrder,
+        selectedId,
+        // Re-apply clipping when committed support geometry collections change.
+        // Without this, newly added meshes can miss clipping until some other
+        // dependency (like slider movement) forces a re-run.
+        state.roots,
+        state.trunks,
+        state.branches,
+        state.leaves,
+        state.twigs,
+        state.sticks,
+        state.braces,
+        state.anchors,
+        state.knots,
+        kickstandState.roots,
+        kickstandState.kickstands,
+        kickstandState.knots,
+    ]);
 
     return (
         <group ref={groupRef}>
