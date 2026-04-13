@@ -57,6 +57,7 @@ export function VisualSettingsPanel({
             lowerValue={lowerLayerIndex}
             onLowerChange={onLowerLayerIndexChange}
             lowerCurrentHeightMm={lowerCurrentHeightMm}
+            showModeIndicator={false}
             docked
             embedded
             expandToContainer

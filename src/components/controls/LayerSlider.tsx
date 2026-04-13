@@ -23,9 +23,10 @@ type LayerSliderProps = {
   lowerValue?: number;
   onLowerChange?: (next: number) => void;
   lowerCurrentHeightMm?: number;
+  showModeIndicator?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -36,7 +37,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const [isDraggingThumb, setIsDraggingThumb] = React.useState(false);
   const dragShiftModeRef = React.useRef<boolean>(false); // Lock shift mode for entire drag
   const lowerValueRef = React.useRef(0);
-  const activeDraggingThumbRef = React.useRef<'upper' | 'lower'>('upper');
+  const activeDraggingThumbRef = React.useRef<'upper' | 'lower' | 'window'>('upper');
+  const windowDragStartClientYRef = React.useRef(0);
+  const windowDragStartUpperRef = React.useRef(0);
+  const windowDragStartLowerRef = React.useRef(0);
 
   const formatMm = React.useCallback((mm: number) => {
     if (!Number.isFinite(mm)) return '0';
@@ -82,6 +86,52 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     if (next === lowerValueRef.current) return;
     onLowerChange(next);
   }, [clamp, onLowerChange, snap]);
+
+  const emitWindowChange = React.useCallback((rawLower: number, rawUpper: number) => {
+    if (!onLowerChange) return;
+
+    const minMaxSpan = Math.max(0, max - min);
+    let targetLower = rawLower;
+    let targetUpper = rawUpper;
+
+    // Keep ordered and within range.
+    if (targetLower > targetUpper) {
+      const swap = targetLower;
+      targetLower = targetUpper;
+      targetUpper = swap;
+    }
+
+    const windowSpan = Math.min(minMaxSpan, Math.max(0, targetUpper - targetLower));
+
+    if (targetLower < min) {
+      targetLower = min;
+      targetUpper = min + windowSpan;
+    }
+    if (targetUpper > max) {
+      targetUpper = max;
+      targetLower = max - windowSpan;
+    }
+
+    const snappedLower = clamp(snap(targetLower));
+    let snappedUpper = snappedLower + windowSpan;
+
+    if (snappedUpper > max) {
+      snappedUpper = max;
+    }
+    if (snappedUpper < snappedLower) {
+      snappedUpper = snappedLower;
+    }
+
+    const finalUpper = clamp(snap(snappedUpper));
+    const finalLower = Math.min(clamp(snap(snappedLower)), finalUpper);
+
+    if (finalLower !== lowerValueRef.current) {
+      onLowerChange(finalLower);
+    }
+    if (finalUpper !== valueRef.current) {
+      onChange(finalUpper);
+    }
+  }, [clamp, max, min, onChange, onLowerChange, snap]);
 
   const setByClientY = React.useCallback((clientY: number, shiftKey: boolean = false) => {
     const el = containerRef.current;
@@ -139,7 +189,19 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         const span = Math.max(1e-6, max - min);
         const upperPos = (valueRef.current - min) / span;
         const lowerPos = (lowerValueRef.current - min) / span;
-        if (Math.abs(clickInv - lowerPos) < Math.abs(clickInv - upperPos)) {
+        const lowerDistance = Math.abs(clickInv - lowerPos);
+        const upperDistance = Math.abs(clickInv - upperPos);
+        const thumbGrabThreshold = 0.035;
+        const inWindowRegion = clickInv >= Math.min(lowerPos, upperPos) && clickInv <= Math.max(lowerPos, upperPos);
+
+        // If user grabs the pink region between thumbs (not near either handle),
+        // move the entire window while preserving its thickness.
+        if (inWindowRegion && lowerDistance > thumbGrabThreshold && upperDistance > thumbGrabThreshold) {
+          activeDraggingThumbRef.current = 'window';
+          windowDragStartClientYRef.current = e.clientY;
+          windowDragStartLowerRef.current = lowerValueRef.current;
+          windowDragStartUpperRef.current = valueRef.current;
+        } else if (lowerDistance < upperDistance) {
           activeDraggingThumbRef.current = 'lower';
           setLowerByClientY(e.clientY, e.shiftKey);
         } else {
@@ -162,6 +224,30 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       rafId = null;
       if (activeDraggingThumbRef.current === 'lower') {
         setLowerByClientY(pendingClientY, dragShiftModeRef.current);
+      } else if (activeDraggingThumbRef.current === 'window') {
+        const el = containerRef.current;
+        if (!el) return;
+
+        const rect = el.getBoundingClientRect();
+        const span = Math.max(1e-6, max - min);
+        const dragDeltaInv = -((pendingClientY - windowDragStartClientYRef.current) / Math.max(1, rect.height));
+        const precisionFactor = dragShiftModeRef.current ? 0.1 : 1;
+        const deltaValue = dragDeltaInv * span * precisionFactor;
+
+        const windowSpan = windowDragStartUpperRef.current - windowDragStartLowerRef.current;
+        let nextLower = windowDragStartLowerRef.current + deltaValue;
+        let nextUpper = nextLower + windowSpan;
+
+        if (nextLower < min) {
+          nextLower = min;
+          nextUpper = min + windowSpan;
+        }
+        if (nextUpper > max) {
+          nextUpper = max;
+          nextLower = max - windowSpan;
+        }
+
+        emitWindowChange(nextLower, nextUpper);
       } else {
         setByClientY(pendingClientY, dragShiftModeRef.current);
       }
@@ -177,6 +263,30 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       if (dragBatchMode === 'immediate') {
         if (activeDraggingThumbRef.current === 'lower') {
           setLowerByClientY(ev.clientY, dragShiftModeRef.current);
+        } else if (activeDraggingThumbRef.current === 'window') {
+          const el = containerRef.current;
+          if (!el) return;
+
+          const rect = el.getBoundingClientRect();
+          const span = Math.max(1e-6, max - min);
+          const dragDeltaInv = -((ev.clientY - windowDragStartClientYRef.current) / Math.max(1, rect.height));
+          const precisionFactor = dragShiftModeRef.current ? 0.1 : 1;
+          const deltaValue = dragDeltaInv * span * precisionFactor;
+
+          const windowSpan = windowDragStartUpperRef.current - windowDragStartLowerRef.current;
+          let nextLower = windowDragStartLowerRef.current + deltaValue;
+          let nextUpper = nextLower + windowSpan;
+
+          if (nextLower < min) {
+            nextLower = min;
+            nextUpper = min + windowSpan;
+          }
+          if (nextUpper > max) {
+            nextUpper = max;
+            nextLower = max - windowSpan;
+          }
+
+          emitWindowChange(nextLower, nextUpper);
         } else {
           setByClientY(ev.clientY, dragShiftModeRef.current);
         }
@@ -213,7 +323,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [dragBatchMode, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
+  }, [dragBatchMode, emitWindowChange, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
@@ -307,6 +417,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const lowerPercent = lowerValue != null
     ? Math.min(100, Math.max(0, ((lowerValue - min) / Math.max(1, (max - min))) * 100))
     : null;
+  const EDGE_BADGE_HIDE_EPS = 1e-6;
+  const hideUpperFloatingBadge = percent <= EDGE_BADGE_HIDE_EPS || percent >= (100 - EDGE_BADGE_HIDE_EPS);
+  const hideLowerFloatingBadge = lowerPercent != null
+    ? (lowerPercent <= EDGE_BADGE_HIDE_EPS || lowerPercent >= (100 - EDGE_BADGE_HIDE_EPS))
+    : false;
   const railBadgeClass = 'inline-flex items-center rounded-md border px-1 py-0.5 text-[9px] font-semibold tabular-nums';
   const railBadgeStyle: React.CSSProperties = {
     color: 'var(--text-muted)',
@@ -440,7 +555,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 }}
               >
                 <div className="relative">
-                  {showValue && typeof lowerCurrentHeightMm === 'number' && (
+                  {showValue && typeof lowerCurrentHeightMm === 'number' && !hideLowerFloatingBadge && (
                     <div
                       className={isMinimalRail
                         ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none top-3`
@@ -494,7 +609,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               }}
             >
               <div className="relative">
-                {showValue && typeof currentHeightMm === 'number' && (
+                {showValue && typeof currentHeightMm === 'number' && !hideUpperFloatingBadge && (
                   <div
                     className={isMinimalRail
                       ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
@@ -627,13 +742,15 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             >
               {min}
             </div>
-            <div
-              className={railBadgeClass}
-              style={railBadgeStyle}
-              title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
-            >
-              {crossSectionMode === 'smooth' ? 'S' : 'R'}
-            </div>
+            {showModeIndicator && (
+              <div
+                className={railBadgeClass}
+                style={railBadgeStyle}
+                title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
+              >
+                {crossSectionMode === 'smooth' ? 'S' : 'R'}
+              </div>
+            )}
           </div>
         )}
 

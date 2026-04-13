@@ -72,7 +72,7 @@ const PANEL_GAP = 12;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
-  'visual-settings': 72,
+  'visual-settings': 56,
   'prepare-smoothing-settings': 340,
   'transform-debug-overlay': 420,
 };
@@ -721,13 +721,13 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       const supportUltrawideBoost = panelId === 'support-settings'
         ? (panelWidthScale >= 1.14 ? 1.1 : panelWidthScale >= 1.08 ? 1.06 : 1)
         : 1;
-      return Math.max(72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
+      return Math.max(panelId === 'visual-settings' ? 52 : 72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
     }
     const analysisCompactFactor = panelId.startsWith('analysis-')
       ? (panelWidthScale < 1 ? 0.88 : 1)
       : 1;
     const scaledWidth = Math.round(baseWidth * panelWidthScale * analysisCompactFactor);
-    return Math.max(72, scaledWidth);
+    return Math.max(panelId === 'visual-settings' ? 52 : 72, scaledWidth);
   }, [panelWidthScale]);
 
   const getPanelSize = React.useCallback((panelId: string): PanelSize => {
