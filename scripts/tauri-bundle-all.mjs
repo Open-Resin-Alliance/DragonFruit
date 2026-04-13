@@ -60,6 +60,10 @@ if (dryRun) {
 const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const failures = [];
 
+function rustflagsForTarget(targetTriple) {
+      return targetTriple.startsWith("x86_64") ? "-C target-feature=+avx2,+fma" : undefined;
+}
+
 for (const target of targets) {
       const bundleArg = bundlesByTarget[target];
       let cmdArgs = bundleArg
@@ -78,12 +82,16 @@ for (const target of targets) {
             continue;
       }
 
+      const rustflags = rustflagsForTarget(target);
+
       const result = spawnSync(npxCmd, cmdArgs, {
             stdio: "inherit",
             // Use +avx2 (supported on all CPUs since ~2013) for good vectorization
             // without the illegal-instruction crashes that "target-cpu=native" causes
             // on older hardware (STATUS_ILLEGAL_INSTRUCTION / 0xC000001D).
-            env: { ...process.env, RUSTFLAGS: "-C target-feature=+avx2,+fma" },
+            env: rustflags
+                  ? { ...process.env, RUSTFLAGS: rustflags }
+                  : { ...process.env },
       });
 
       if (result.status !== 0) {
