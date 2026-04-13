@@ -774,6 +774,9 @@ export default function Home() {
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
+  const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
+  const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
+  const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
   const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
   const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
   const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
@@ -810,6 +813,10 @@ export default function Home() {
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
   const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const saveToastHideTimeoutRef = React.useRef<number | null>(null);
+  const saveToastClearTimeoutRef = React.useRef<number | null>(null);
+  const saveToastEnterRafRef = React.useRef<number | null>(null);
+  const saveToastShownAtRef = React.useRef<number | null>(null);
   const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
   const sceneSaveInFlightRef = React.useRef(false);
   const sceneSaveQueuedRef = React.useRef(false);
@@ -825,6 +832,84 @@ export default function Home() {
     capMs: sceneAutosaveSettings.capMs,
     preferredSavePath: preferredOverwriteScenePathRef.current,
   });
+
+  React.useEffect(() => {
+    const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
+    const TOAST_ANIMATION_MS = 220;
+    const hasActiveSaveWork = isSceneSaveInProgress || isAutosaving;
+
+    if (hasActiveSaveWork) {
+      if (saveToastHideTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastHideTimeoutRef.current);
+        saveToastHideTimeoutRef.current = null;
+      }
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+        saveToastClearTimeoutRef.current = null;
+      }
+      if (saveToastEnterRafRef.current !== null) {
+        window.cancelAnimationFrame(saveToastEnterRafRef.current);
+        saveToastEnterRafRef.current = null;
+      }
+
+      setSaveToastLabel(isSceneSaveInProgress ? 'Saving…' : 'Autosaving…');
+
+      if (!isSaveToastVisible) {
+        saveToastShownAtRef.current = Date.now();
+        setIsSaveToastVisible(true);
+        setIsSaveToastAnimatedVisible(false);
+        saveToastEnterRafRef.current = window.requestAnimationFrame(() => {
+          saveToastEnterRafRef.current = null;
+          setIsSaveToastAnimatedVisible(true);
+        });
+      } else if (!isSaveToastAnimatedVisible) {
+        setIsSaveToastAnimatedVisible(true);
+      }
+      return;
+    }
+
+    if (!isSaveToastVisible) {
+      saveToastShownAtRef.current = null;
+      return;
+    }
+
+    const shownAt = saveToastShownAtRef.current ?? Date.now();
+    const elapsed = Date.now() - shownAt;
+    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
+
+    if (saveToastHideTimeoutRef.current !== null) {
+      window.clearTimeout(saveToastHideTimeoutRef.current);
+    }
+    saveToastHideTimeoutRef.current = window.setTimeout(() => {
+      saveToastHideTimeoutRef.current = null;
+      setIsSaveToastAnimatedVisible(false);
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+      }
+      saveToastClearTimeoutRef.current = window.setTimeout(() => {
+        saveToastClearTimeoutRef.current = null;
+        saveToastShownAtRef.current = null;
+        setIsSaveToastVisible(false);
+      }, TOAST_ANIMATION_MS);
+    }, remaining);
+  }, [isAutosaving, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+
+  React.useEffect(() => {
+    return () => {
+      if (saveToastHideTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastHideTimeoutRef.current);
+        saveToastHideTimeoutRef.current = null;
+      }
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+        saveToastClearTimeoutRef.current = null;
+      }
+      if (saveToastEnterRafRef.current !== null) {
+        window.cancelAnimationFrame(saveToastEnterRafRef.current);
+        saveToastEnterRafRef.current = null;
+      }
+    };
+  }, []);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -16337,11 +16422,11 @@ export default function Home() {
         </div>
       )}
 
-      {(isSceneSaveInProgress || isAutosaving) && (
+      {isSaveToastVisible && (
         <ToastViewport zIndex={126} offset="1.25rem">
-          <Toast tone="info" className="flex items-center gap-2">
+          <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4 animate-spin" />
-            {isSceneSaveInProgress ? 'Saving…' : 'Autosaving…'}
+            {saveToastLabel}
           </Toast>
         </ToastViewport>
       )}
