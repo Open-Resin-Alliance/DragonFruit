@@ -48,6 +48,13 @@ import {
   type CameraFeelPreset,
 } from '@/components/settings/cameraFeelPreferences';
 import {
+  DEFAULT_CAMERA_TRACKPAD_SETTINGS,
+  getSavedCameraTrackpadSettings,
+  saveCameraTrackpadSettings,
+  type CameraTrackpadPrimaryAction,
+  type CameraTrackpadModifierKey,
+} from '@/components/settings/cameraTrackpadPreferences';
+import {
   DEFAULT_WORKSPACE_CAMERA_SETTINGS,
   getSavedWorkspaceCameraSettings,
   saveWorkspaceCameraSettings,
@@ -204,6 +211,10 @@ export function SettingsModal({
   const [draftHoverColor, setDraftHoverColor] = useState(hoverColor);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
+  const [draftCameraTrackpadPrimaryAction, setDraftCameraTrackpadPrimaryAction] = useState<CameraTrackpadPrimaryAction>(() => getSavedCameraTrackpadSettings().primaryAction);
+  const [draftCameraTrackpadModifierKey, setDraftCameraTrackpadModifierKey] = useState<CameraTrackpadModifierKey>(() => getSavedCameraTrackpadSettings().modifierKey);
+  const [draftCameraTrackpadPanAcceleration, setDraftCameraTrackpadPanAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().panAcceleration);
+  const [draftCameraTrackpadOrbitAcceleration, setDraftCameraTrackpadOrbitAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().orbitAcceleration);
   const [draftCameraScope, setDraftCameraScope] = useState<CameraScopeMode>(() => getSavedWorkspaceCameraSettings().scope);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
@@ -238,6 +249,10 @@ export function SettingsModal({
     setDraftHoverColor(hoverColor);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
+    setDraftCameraTrackpadPrimaryAction(getSavedCameraTrackpadSettings().primaryAction);
+    setDraftCameraTrackpadModifierKey(getSavedCameraTrackpadSettings().modifierKey);
+    setDraftCameraTrackpadPanAcceleration(getSavedCameraTrackpadSettings().panAcceleration);
+    setDraftCameraTrackpadOrbitAcceleration(getSavedCameraTrackpadSettings().orbitAcceleration);
     setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(getSavedThemePreset());
@@ -253,6 +268,7 @@ export function SettingsModal({
     ambientIntensity,
     directionalIntensity,
     flatUseVertexColors,
+    meshColor,
     toonSteps,
     matcapVariant,
     materialRoughness,
@@ -316,6 +332,10 @@ export function SettingsModal({
     setDraftHoverColor('#ec2a77');
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
+    setDraftCameraTrackpadPrimaryAction(DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction);
+    setDraftCameraTrackpadModifierKey(DEFAULT_CAMERA_TRACKPAD_SETTINGS.modifierKey);
+    setDraftCameraTrackpadPanAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.panAcceleration);
+    setDraftCameraTrackpadOrbitAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration);
     setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
     setDraftThemePreference('system');
     setDraftThemePreset('dragonfruit-dark');
@@ -367,6 +387,12 @@ export function SettingsModal({
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
     saveCameraFeelSettings({ preset: draftCameraFeelPreset });
+    saveCameraTrackpadSettings({
+      primaryAction: draftCameraTrackpadPrimaryAction,
+      modifierKey: draftCameraTrackpadModifierKey,
+      panAcceleration: draftCameraTrackpadPanAcceleration,
+      orbitAcceleration: draftCameraTrackpadOrbitAcceleration,
+    });
     saveWorkspaceCameraSettings({
       scope: draftCameraScope,
       defaults: draftWorkspaceCameraDefaults,
@@ -409,6 +435,10 @@ export function SettingsModal({
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
     draftCameraFeelPreset,
+    draftCameraTrackpadPrimaryAction,
+    draftCameraTrackpadModifierKey,
+    draftCameraTrackpadPanAcceleration,
+    draftCameraTrackpadOrbitAcceleration,
     draftWorkspaceCameraDefaults,
     draftSlicingPerformanceSettings,
     draftView3dSettings,
@@ -776,6 +806,14 @@ export function SettingsModal({
                   onCameraProjectionModeChange={setDraftCameraProjectionMode}
                   cameraFeelPreset={draftCameraFeelPreset}
                   onCameraFeelPresetChange={setDraftCameraFeelPreset}
+                  cameraTrackpadPrimaryAction={draftCameraTrackpadPrimaryAction}
+                  onCameraTrackpadPrimaryActionChange={setDraftCameraTrackpadPrimaryAction}
+                  cameraTrackpadModifierKey={draftCameraTrackpadModifierKey}
+                  onCameraTrackpadModifierKeyChange={setDraftCameraTrackpadModifierKey}
+                  cameraTrackpadPanAcceleration={draftCameraTrackpadPanAcceleration}
+                  onCameraTrackpadPanAccelerationChange={setDraftCameraTrackpadPanAcceleration}
+                  cameraTrackpadOrbitAcceleration={draftCameraTrackpadOrbitAcceleration}
+                  onCameraTrackpadOrbitAccelerationChange={setDraftCameraTrackpadOrbitAcceleration}
                   workspaceCameraDefaults={draftWorkspaceCameraDefaults}
                   onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
                 />
