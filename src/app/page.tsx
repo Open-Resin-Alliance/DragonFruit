@@ -2211,6 +2211,7 @@ export default function Home() {
     return () => observer.disconnect();
   }, [scene.models.length]);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const suppressEditorContextMenuUntilRef = React.useRef(0);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
@@ -8275,13 +8276,8 @@ export default function Home() {
   const handleEditorContextMenu = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-
-    const gesture = rightClickGestureRef.current;
-    if (gesture && gesture.moved) {
-      return;
-    }
-
-    setEditorContextMenuPos({ x: e.clientX, y: e.clientY });
+    // Intentionally do not open here: some macOS/WebView paths emit contextmenu
+    // on right-button press. We open on right-button release instead.
   }, []);
 
   const handleModelListContextMenu = React.useCallback((modelId: string, position: { x: number; y: number }) => {
@@ -8749,10 +8745,35 @@ export default function Home() {
 
   const handleEditorPointerUpCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
+
+    const gesture = rightClickGestureRef.current;
+    const moved = Boolean(gesture?.moved);
+    const shouldSuppress = performance.now() < suppressEditorContextMenuUntilRef.current;
+    if (!moved && !shouldSuppress) {
+      setEditorContextMenuPos({ x: e.clientX, y: e.clientY });
+    }
+
     // keep gesture state until contextmenu fires, clear shortly after
     window.setTimeout(() => {
       rightClickGestureRef.current = null;
     }, 0);
+  }, []);
+
+  React.useEffect(() => {
+    const markSuppressed = (durationMs: number) => {
+      suppressEditorContextMenuUntilRef.current = Math.max(
+        suppressEditorContextMenuUntilRef.current,
+        performance.now() + durationMs,
+      );
+    };
+
+    const onOrbitChange = () => markSuppressed(300);
+
+    window.addEventListener('picking-orbit-change', onOrbitChange as EventListener);
+
+    return () => {
+      window.removeEventListener('picking-orbit-change', onOrbitChange as EventListener);
+    };
   }, []);
 
   const handleEditorMenuAction = React.useCallback((action: EditorMenuAction) => {

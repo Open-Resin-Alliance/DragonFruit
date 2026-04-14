@@ -4288,6 +4288,21 @@ export function SceneCanvas({
     scheduleTrackpadGestureEnd,
   ]);
 
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const suppressViewportContextMenu = (event: MouseEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+      event.preventDefault();
+    };
+
+    container.addEventListener('contextmenu', suppressViewportContextMenu, true);
+    return () => {
+      container.removeEventListener('contextmenu', suppressViewportContextMenu, true);
+    };
+  }, []);
+
   const handleWebGlContextLost = React.useCallback(() => {
     if (typeof window === 'undefined') return;
 
@@ -4422,10 +4437,17 @@ export function SceneCanvas({
       handleOrbitEnd();
     };
 
+    const suppressContextMenuDuringOrbit = (event: Event) => {
+      if (orbitInteractionActiveRef.current) {
+        event.preventDefault();
+      }
+      forceOrbitEndIfActive();
+    };
+
     window.addEventListener('pointerup', forceOrbitEndIfActive, true);
     window.addEventListener('pointercancel', forceOrbitEndIfActive, true);
     window.addEventListener('mouseup', forceOrbitEndIfActive, true);
-    window.addEventListener('contextmenu', forceOrbitEndIfActive, true);
+    window.addEventListener('contextmenu', suppressContextMenuDuringOrbit, true);
     window.addEventListener('blur', forceOrbitEndIfActive);
     document.addEventListener('visibilitychange', forceOrbitEndIfActive);
 
@@ -4433,7 +4455,7 @@ export function SceneCanvas({
       window.removeEventListener('pointerup', forceOrbitEndIfActive, true);
       window.removeEventListener('pointercancel', forceOrbitEndIfActive, true);
       window.removeEventListener('mouseup', forceOrbitEndIfActive, true);
-      window.removeEventListener('contextmenu', forceOrbitEndIfActive, true);
+      window.removeEventListener('contextmenu', suppressContextMenuDuringOrbit, true);
       window.removeEventListener('blur', forceOrbitEndIfActive);
       document.removeEventListener('visibilitychange', forceOrbitEndIfActive);
     };
