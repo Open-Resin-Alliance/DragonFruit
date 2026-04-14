@@ -14,7 +14,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,10 +72,10 @@ if (process.platform === "darwin" && result.status === 0) {
   const appexSrc = path.join(qlExtDir, "build", "VoxlThumbnailExtension.appex");
 
   // Build the .appex (build.sh is idempotent)
-  console.log("[tauri-build] Building QuickLook extension (.appex)...");
-  const buildResult = spawnSync("bash", ["./build.sh"], { cwd: qlExtDir, stdio: "inherit" });
+  const buildResult = spawnSync("bash", ["./build.sh"], { cwd: qlExtDir, stdio: "pipe" });
   if (buildResult.status !== 0) {
     console.error("[tauri-build] .appex build failed — skipping PlugIns embed.");
+    console.error(buildResult.stderr?.toString());
   } else if (!existsSync(appexSrc)) {
     console.error(`[tauri-build] .appex not found at ${appexSrc} — skipping PlugIns embed.`);
   } else {
@@ -99,8 +99,6 @@ if (process.platform === "darwin" && result.status === 0) {
       const appexDst = path.join(pluginsDir, "VoxlThumbnailExtension.appex");
       mkdirSync(pluginsDir, { recursive: true });
       cpSync(appexSrc, appexDst, { recursive: true, force: true });
-      console.log(`[tauri-build] Embedded .appex → ${appexDst}`);
-
       // Re-sign: appex first (with sandbox entitlement), then outer bundle.
       // Use Apple Development cert if available; fall back to ad-hoc for CI.
       const identityResult = spawnSync(
@@ -112,11 +110,60 @@ if (process.platform === "darwin" && result.status === 0) {
         qlExtDir, "Sources", "VoxlThumbnailExtension", "VoxlThumbnailExtension.entitlements"
       );
 
-      console.log(`[tauri-build] Re-signing .appex (identity=${signIdentity})...`);
-      spawnSync("codesign", ["--force", "--sign", signIdentity, "--entitlements", entitlements, appexDst], { stdio: "inherit" });
-      console.log("[tauri-build] Re-signing app bundle...");
-      spawnSync("codesign", ["--force", "--sign", signIdentity, "--deep", appBundle], { stdio: "inherit" });
-      console.log("[tauri-build] PlugIns embed complete.");
+      spawnSync("xattr", ["-rc", appexDst], { stdio: "pipe" });
+      spawnSync("codesign", ["--force", "--sign", signIdentity, "--entitlements", entitlements, appexDst], { stdio: "pipe" });
+      spawnSync("xattr", ["-rc", appBundle], { stdio: "pipe" });
+      spawnSync("codesign", ["--force", "--sign", signIdentity, "--deep", appBundle], { stdio: "pipe" });
+
+      // Rebuild the DMG from the updated .app — tauri created it before we
+      // embedded the .appex, so the old DMG doesn't include PlugIns/.
+      // Re-run bundle_dmg.sh (tauri's create-dmg wrapper) with the same args
+      // tauri used, so the result is identical in layout and appearance.
+      const dmgSearchDirs = [
+        path.join(bundleBase, targetTriple ?? "", "release", "bundle", "dmg"),
+        path.join(bundleBase, "release", "bundle", "dmg"),
+      ];
+      for (const dmgDir of dmgSearchDirs) {
+        if (!existsSync(dmgDir)) continue;
+        const dmgEntry = readdirSync(dmgDir).find((f) => f.endsWith(".dmg"));
+        if (!dmgEntry) continue;
+        const dmgPath = path.join(dmgDir, dmgEntry);
+        const bundleDmgSh = path.join(dmgDir, "bundle_dmg.sh");
+        if (!existsSync(bundleDmgSh)) break;
+
+        const appBundleName = path.basename(appBundle); // "DragonFruit.app"
+        const appName = path.basename(appBundle, ".app"); // "DragonFruit"
+        const volIcon = path.join(dmgDir, "icon.icns");
+
+        rmSync(dmgPath, { force: true });
+
+        // Mirror the exact args tauri uses (from dmg/mod.rs). Defaults:
+        //   window-size 660x400, app at (180,170), Applications link at (480,170)
+        const args = [
+          "--volname", appName,
+          "--icon", appBundleName, "180", "170",
+          "--app-drop-link", "480", "170",
+          "--window-size", "660", "400",
+          "--hide-extension", appBundleName,
+        ];
+        if (existsSync(volIcon)) {
+          args.push("--volicon", volIcon);
+        }
+        args.push(dmgEntry, appBundleName);
+
+        spawnSync("bash", [bundleDmgSh, ...args], {
+          cwd: path.dirname(appBundle),
+          stdio: "pipe",
+        });
+        // bundle_dmg.sh writes the DMG next to DragonFruit.app; move it to dmg/
+        const producedDmg = path.join(path.dirname(appBundle), dmgEntry);
+        if (existsSync(producedDmg) && producedDmg !== dmgPath) {
+          cpSync(producedDmg, dmgPath);
+          rmSync(producedDmg, { force: true });
+        }
+        console.log(`[tauri-build] Bundled DragonFruit.app + ${dmgEntry} with QuickLook extension.`);
+        break;
+      }
     }
   }
 }
