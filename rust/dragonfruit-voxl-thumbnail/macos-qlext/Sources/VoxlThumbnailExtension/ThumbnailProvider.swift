@@ -40,10 +40,16 @@ class ThumbnailProvider: QLThumbnailProvider {
             let reply = QLThumbnailReply(contextSize: request.maximumSize) { ctx -> Bool in
                 let ctxW = CGFloat(ctx.width)
                 let ctxH = CGFloat(ctx.height)
-                // Clear to transparent in case the system pre-fills with white
-                ctx.clear(CGRect(x: 0, y: 0, width: ctxW, height: ctxH))
-                // Aspect-fit, centered, in CG coordinates (origin = bottom-left)
-                let scale = min(ctxW / imgW, ctxH / imgH)
+                let fullRect = CGRect(x: 0, y: 0, width: ctxW, height: ctxH)
+                // Fill with a dark charcoal background so Finder's white card
+                // frame becomes just a thin border rather than a large white slab.
+                ctx.setFillColor(CGColor(red: 0.13, green: 0.13, blue: 0.16, alpha: 1.0))
+                ctx.fill(fullRect)
+                // Aspect-fit, centered, with padding, in CG coordinates (origin = bottom-left)
+                let padding = min(ctxW, ctxH) * 0.035
+                let availW = ctxW - padding * 2
+                let availH = ctxH - padding * 2
+                let scale = min(availW / imgW, availH / imgH)
                 let drawW = imgW * scale
                 let drawH = imgH * scale
                 let rect  = CGRect(
