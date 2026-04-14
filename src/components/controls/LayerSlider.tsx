@@ -26,9 +26,10 @@ type LayerSliderProps = {
   showModeIndicator?: boolean;
   crossSectionEnabled?: boolean;
   onToggleCrossSection?: () => void;
+  layerHeightMm?: number;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -43,6 +44,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const windowDragStartClientYRef = React.useRef(0);
   const windowDragStartUpperRef = React.useRef(0);
   const windowDragStartLowerRef = React.useRef(0);
+
+  // Thumb click-to-edit state
+  const [editingThumb, setEditingThumb] = React.useState<'upper' | 'lower' | null>(null);
+  const [editMode, setEditMode] = React.useState<'layer' | 'mm'>('layer');
+  const [editRawValue, setEditRawValue] = React.useState('');
+  const editInputRef = React.useRef<HTMLInputElement>(null);
+  const editPopoverRef = React.useRef<HTMLDivElement>(null);
+  const openThumbEditRef = React.useRef<((thumb: 'upper' | 'lower') => void) | null>(null);
 
   const formatMm = React.useCallback((mm: number) => {
     if (!Number.isFinite(mm)) return '0';
@@ -72,10 +81,12 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   }, [step]);
 
   const emitChange = React.useCallback((rawNext: number) => {
-    const next = clamp(snap(rawNext));
+    // Upper thumb must never go below the lower thumb
+    const floor = lowerValueRef.current ?? min;
+    const next = Math.max(clamp(snap(rawNext)), floor);
     if (next === valueRef.current) return;
     onChange(next);
-  }, [clamp, onChange, snap]);
+  }, [clamp, min, onChange, snap]);
 
   // Keep lowerValueRef in sync
   React.useEffect(() => {
@@ -135,6 +146,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, [clamp, max, min, onChange, onLowerChange, snap]);
 
+
   const setByClientY = React.useCallback((clientY: number, shiftKey: boolean = false) => {
     const el = containerRef.current;
     if (!el) return;
@@ -174,7 +186,92 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, [emitLowerChange, max, min]);
 
+  const openThumbEdit = React.useCallback((thumb: 'upper' | 'lower') => {
+    const currentLayer = thumb === 'upper' ? valueRef.current : lowerValueRef.current;
+    setEditMode('layer');
+    setEditRawValue(String(Math.round(currentLayer)));
+    setEditingThumb(thumb);
+  }, []);
+  // Keep ref in sync so drag closures can call it without stale captures
+  openThumbEditRef.current = openThumbEdit;
+
+  const commitThumbEdit = React.useCallback(() => {
+    if (!editingThumb) return;
+    const parsed = parseFloat(editRawValue);
+    if (!isNaN(parsed) && parsed >= 0) {
+      const lhMm = layerHeightMm ?? 0;
+      const targetLayer = (editMode === 'mm' && lhMm > 0)
+        ? Math.round(parsed / lhMm)
+        : Math.round(parsed);
+      if (editingThumb === 'upper') emitChange(targetLayer);
+      else emitLowerChange(targetLayer);
+    }
+    setEditingThumb(null);
+  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange]);
+
+  const switchEditMode = React.useCallback((newMode: 'layer' | 'mm') => {
+    if (newMode === editMode || !layerHeightMm || layerHeightMm <= 0) return;
+    const current = parseFloat(editRawValue);
+    if (!isNaN(current) && current >= 0) {
+      if (newMode === 'mm') {
+        setEditRawValue((current * layerHeightMm).toFixed(3).replace(/\.?0+$/, ''));
+      } else {
+        setEditRawValue(String(Math.round(current / layerHeightMm)));
+      }
+    }
+    setEditMode(newMode);
+    requestAnimationFrame(() => { editInputRef.current?.select(); });
+  }, [editMode, editRawValue, layerHeightMm]);
+
+  // Auto-focus the input when a thumb edit popover opens
+  React.useEffect(() => {
+    if (editingThumb) {
+      requestAnimationFrame(() => {
+        editInputRef.current?.focus();
+        editInputRef.current?.select();
+      });
+    }
+  }, [editingThumb]);
+
+  // Dismiss + commit when clicking outside the popover
+  React.useEffect(() => {
+    if (!editingThumb) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (editPopoverRef.current && !editPopoverRef.current.contains(e.target as Node)) {
+        commitThumbEdit();
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [editingThumb, commitThumbEdit]);
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
+    // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
+    if (e.button === 2) {
+      const el = containerRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const clickInv = 1 - (e.clientY - rect.top) / rect.height;
+        const span = Math.max(1e-6, max - min);
+        const upperPos = (valueRef.current - min) / span;
+        const thumbGrabThreshold = 0.035;
+        if (lowerValue != null) {
+          const lowerPos = (lowerValueRef.current - min) / span;
+          const lowerDistance = Math.abs(clickInv - lowerPos);
+          const upperDistance = Math.abs(clickInv - upperPos);
+          if (lowerDistance <= thumbGrabThreshold || upperDistance <= thumbGrabThreshold) {
+            openThumbEditRef.current?.(lowerDistance < upperDistance ? 'lower' : 'upper');
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        } else if (Math.abs(clickInv - upperPos) <= thumbGrabThreshold) {
+          openThumbEditRef.current?.('upper');
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }
+      return;
+    }
+    if (e.button !== 0) return; // only left-click drags
     e.preventDefault();
     e.stopPropagation();
     onScrubStart?.();
@@ -182,7 +279,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     setIsDraggingThumb(true);
     dragShiftModeRef.current = e.shiftKey;
     setIsShiftHeld(e.shiftKey);
-    // Determine which thumb to drag based on proximity
+    // Determine which thumb to drag based on proximity — bail if not near any thumb
     if (lowerValue != null && onLowerChange != null) {
       const el = containerRef.current;
       if (el) {
@@ -194,29 +291,50 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         const lowerDistance = Math.abs(clickInv - lowerPos);
         const upperDistance = Math.abs(clickInv - upperPos);
         const thumbGrabThreshold = 0.035;
-        const inWindowRegion = clickInv >= Math.min(lowerPos, upperPos) && clickInv <= Math.max(lowerPos, upperPos);
 
-        // If user grabs the pink region between thumbs (not near either handle),
-        // move the entire window while preserving its thickness.
-        if (inWindowRegion && lowerDistance > thumbGrabThreshold && upperDistance > thumbGrabThreshold) {
-          activeDraggingThumbRef.current = 'window';
-          windowDragStartClientYRef.current = e.clientY;
-          windowDragStartLowerRef.current = lowerValueRef.current;
-          windowDragStartUpperRef.current = valueRef.current;
+        if (lowerDistance > thumbGrabThreshold && upperDistance > thumbGrabThreshold) {
+          // Not near either thumb — only accept if inside the window region for window-drag
+          const inWindowRegion = clickInv >= Math.min(lowerPos, upperPos) && clickInv <= Math.max(lowerPos, upperPos);
+          if (inWindowRegion) {
+            activeDraggingThumbRef.current = 'window';
+            windowDragStartClientYRef.current = e.clientY;
+            windowDragStartLowerRef.current = lowerValueRef.current;
+            windowDragStartUpperRef.current = valueRef.current;
+          } else {
+            // Bare track click — ignore completely
+            setIsDraggingThumb(false);
+            dragShiftModeRef.current = false;
+            setIsShiftHeld(false);
+            onScrubEnd?.();
+            return;
+          }
         } else if (lowerDistance < upperDistance) {
           activeDraggingThumbRef.current = 'lower';
-          setLowerByClientY(e.clientY, e.shiftKey);
         } else {
           activeDraggingThumbRef.current = 'upper';
-          setByClientY(e.clientY, e.shiftKey);
         }
       } else {
         activeDraggingThumbRef.current = 'upper';
-        setByClientY(e.clientY, e.shiftKey);
       }
     } else {
+      const el = containerRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const clickInv = 1 - (e.clientY - rect.top) / rect.height;
+        const span = Math.max(1e-6, max - min);
+        const upperPos = (valueRef.current - min) / span;
+        const thumbGrabThreshold = 0.035;
+
+        if (Math.abs(clickInv - upperPos) > thumbGrabThreshold) {
+          // Not near thumb — ignore completely
+          setIsDraggingThumb(false);
+          dragShiftModeRef.current = false;
+          setIsShiftHeld(false);
+          onScrubEnd?.();
+          return;
+        }
+      }
       activeDraggingThumbRef.current = 'upper';
-      setByClientY(e.clientY, e.shiftKey);
     }
 
     let rafId: number | null = null;
@@ -610,6 +728,63 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                       }}
                     />
                   )}
+                  {/* Lower thumb edit popover */}
+                  {editingThumb === 'lower' && (
+                    <div
+                      ref={editPopoverRef}
+                      className="absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2"
+                      style={{
+                        marginRight: '10px',
+                        minWidth: '136px',
+                        background: 'var(--surface-0)',
+                        borderColor: 'var(--border-subtle)',
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                      }}
+                      onMouseDown={e => e.stopPropagation()}
+                      onPointerDown={e => e.stopPropagation()}
+                    >
+                      {layerHeightMm && layerHeightMm > 0 && (
+                        <div className="flex gap-1">
+                          <button
+                            className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                            style={editMode === 'layer'
+                              ? { background: 'var(--secondary-button-surface)', color: 'var(--accent-secondary-contrast)' }
+                              : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => switchEditMode('layer')}
+                          >Layer #</button>
+                          <button
+                            className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                            style={editMode === 'mm'
+                              ? { background: 'var(--secondary-button-surface)', color: 'var(--accent-secondary-contrast)' }
+                              : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => switchEditMode('mm')}
+                          >mm</button>
+                        </div>
+                      )}
+                      <input
+                        ref={editInputRef}
+                        type="text"
+                        inputMode="decimal"
+                        value={editRawValue}
+                        onChange={e => setEditRawValue(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); commitThumbEdit(); }
+                          if (e.key === 'Escape') { e.preventDefault(); setEditingThumb(null); }
+                          e.stopPropagation();
+                        }}
+                        onBlur={commitThumbEdit}
+                        className="w-full rounded border px-1.5 py-1 text-center text-[11px] tabular-nums focus:outline-none selection:bg-transparent selection:text-[var(--accent)]"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        placeholder={editMode === 'layer' ? 'Layer #' : 'Height mm'}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -665,6 +840,64 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               />
             )}
             
+            {/* Upper thumb edit popover */}
+            {editingThumb === 'upper' && (
+              <div
+                ref={editPopoverRef}
+                className="absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2"
+                style={{
+                  marginRight: '10px',
+                  minWidth: '136px',
+                  background: 'var(--surface-0)',
+                  borderColor: 'var(--border-subtle)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                }}
+                onMouseDown={e => e.stopPropagation()}
+                onPointerDown={e => e.stopPropagation()}
+              >
+                {layerHeightMm && layerHeightMm > 0 && (
+                  <div className="flex gap-1">
+                    <button
+                      className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                      style={editMode === 'layer'
+                        ? { background: 'var(--secondary-button-surface)', color: 'var(--accent-secondary-contrast)' }
+                        : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => switchEditMode('layer')}
+                    >Layer #</button>
+                    <button
+                      className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                      style={editMode === 'mm'
+                        ? { background: 'var(--secondary-button-surface)', color: 'var(--accent-secondary-contrast)' }
+                        : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => switchEditMode('mm')}
+                    >mm</button>
+                  </div>
+                )}
+                <input
+                  ref={editInputRef}
+                  type="text"
+                  inputMode="decimal"
+                  value={editRawValue}
+                  onChange={e => setEditRawValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); commitThumbEdit(); }
+                    if (e.key === 'Escape') { e.preventDefault(); setEditingThumb(null); }
+                    e.stopPropagation();
+                  }}
+                  onBlur={commitThumbEdit}
+                  className="w-full rounded border px-1.5 py-1 text-center text-[11px] tabular-nums focus:outline-none selection:bg-transparent selection:text-[var(--accent)]"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
+                    color: 'var(--text-strong)',
+                  }}
+                  placeholder={editMode === 'layer' ? 'Layer #' : 'Height mm'}
+                />
+              </div>
+            )}
+
             {/* Shift indicator - wifi-style precision arcs centered on thumb */}
             {isShiftHeld && (
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">

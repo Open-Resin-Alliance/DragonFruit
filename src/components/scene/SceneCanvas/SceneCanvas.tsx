@@ -9,7 +9,6 @@ import {
   type CrossSectionCapDebugOverrides,
   type CrossSectionStencilCapEntry,
 } from '@/components/scene/CrossSectionStencilCap';
-import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
@@ -4336,14 +4335,6 @@ export function SceneCanvas({
   const bottomCapDebugOverrides = crossSectionCapDebugState.enabled
     ? crossSectionCapDebugState.bottom
     : undefined;
-  const bottomCpuCapSide = React.useMemo<THREE.Side>(() => {
-    const side = bottomCapDebugOverrides?.side ?? 'back';
-    if (side === 'back') return THREE.BackSide;
-    if (side === 'double') return THREE.DoubleSide;
-    return THREE.FrontSide;
-  }, [bottomCapDebugOverrides?.side]);
-  const bottomCpuCapOffsetMm = bottomCapDebugOverrides?.offsetMm ?? -1e-4;
-  const bottomCpuCapDepthTest = bottomCapDebugOverrides?.depthTest ?? false;
 
   return (
     <div
@@ -4903,24 +4894,23 @@ export function SceneCanvas({
               )}
 
               {clipLower != null && !hideCrossSectionCap && (
-                <CrossSectionCap
-                  key="cross-section-cap-bottom-cpu"
-                  projectedModels={models}
-                  projectedContextVersion={crossSectionStencilSourceVersion}
+                <CrossSectionStencilCap
+                  key="cross-section-cap-bottom"
+                  entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
+                  sourceObjectVersion={crossSectionStencilSourceVersion}
+                  skipSourceZBounds={isLayerScrubbing}
                   y={clipLower}
+                  otherClipY={clipUpper}
                   color="#FFFFFF"
-                  side={bottomCpuCapSide}
-                  offsetMm={bottomCpuCapOffsetMm}
-                  depthTest={bottomCpuCapDepthTest}
-                  mode="smooth"
-                  // Keep CPU bottom-cap winding/offset semantics untouched; only
-                  // enable quantized interactive updates while scrubbing so the
-                  // expensive loop/shape rebuild path doesn't run every tick.
-                  interactive={isLayerScrubbing}
-                  interactiveZStepMm={Math.max(0.1, layerHeightMm ?? 0.05)}
-                  preferProjectedOnlyDuringInteractive
+                  planeWidthMm={crossSectionPlaneWidthMm}
+                  planeHeightMm={crossSectionPlaneHeightMm}
+                  capOpacity={1}
+                  capDepthTest={false}
+                  direction="bottom"
+                  renderOrderOffset={1}
                   visible={!hideCrossSectionCap}
+                  debugOverrides={bottomCapDebugOverrides}
                 />
               )}
 
