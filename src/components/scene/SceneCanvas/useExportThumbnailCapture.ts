@@ -77,8 +77,18 @@ export function useExportThumbnailCapture({
 
     if (!renderer || !sceneGraph || !camera) return null;
 
-    const visibleBounds = models
-      .filter((model) => model.visible)
+    // Only include models that are visible AND have bounds intersecting the build volume.
+    // Models dragged out of bounds should not appear in the export thumbnail.
+    const inBoundsModels = models.filter((model) => {
+      if (!model.visible) return false;
+      if (!buildVolumeBounds) return true;
+      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
+      if (!bounds || bounds.isEmpty()) return false;
+      return bounds.intersectsBox(buildVolumeBounds);
+    });
+    const inBoundsModelIdSet = new Set(inBoundsModels.map((model) => model.id));
+
+    const visibleBounds = inBoundsModels
       .map((model) => modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds))
       .filter((box): box is THREE.Box3 => !!box && !box.isEmpty());
 
@@ -96,11 +106,10 @@ export function useExportThumbnailCapture({
     const sampleMatrix = new THREE.Matrix4();
     const sampleQuaternion = new THREE.Quaternion();
 
-    for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
+    for (let modelIndex = 0; modelIndex < inBoundsModels.length; modelIndex += 1) {
       if (sampledModelPoints.length >= MAX_SAMPLED_POINTS_TOTAL) break;
 
-      const model = models[modelIndex];
-      if (!model.visible) continue;
+      const model = inBoundsModels[modelIndex];
 
       const effectiveTransform =
         (model.id === activeTransformOverrideModelId && transform)
@@ -136,8 +145,7 @@ export function useExportThumbnailCapture({
     const focusBounds = boundsUnion.clone();
     const centerOnModel = exportThumbnailRenderOptions?.centerOnModel ?? true;
     if (centerOnModel) {
-      const visibleModelGeometryBounds = models
-        .filter((model) => model.visible)
+      const visibleModelGeometryBounds = inBoundsModels
         .map((model) => {
           const effectiveTransform =
             (model.id === activeTransformOverrideModelId && transform)
@@ -511,6 +519,12 @@ export function useExportThumbnailCapture({
 
         if (isGizmoNode) {
           hideHelperForFit(node);
+        }
+
+        if (modelId && !inBoundsModelIdSet.has(modelId)) {
+          // Hide the parent group so the mesh and all its support/raft children disappear.
+          hideHelperForFit(node.parent ?? node);
+          return;
         }
 
         if (isModelTintTarget && node instanceof THREE.Mesh) {
