@@ -143,8 +143,14 @@ function isLikelyTrackpadWheelEvent(event: WheelEvent): boolean {
   const absX = Math.abs(event.deltaX);
   const absY = Math.abs(event.deltaY);
   const dominantDelta = Math.max(absX, absY);
+  const recessiveDelta = Math.min(absX, absY);
 
   if (dominantDelta <= 0) return false;
+
+  // Exclude typical mouse wheel events: one axis nearly zero, other large.
+  // This prevents regular mouse scroll from triggering trackpad gestures.
+  if (recessiveDelta < 2 && dominantDelta > 16) return false;
+
   if (absX > 0) return true;
   if (!Number.isInteger(event.deltaX) || !Number.isInteger(event.deltaY)) return true;
   return dominantDelta <= 16;
