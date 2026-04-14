@@ -12973,6 +12973,7 @@ export default function Home() {
             lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
             crossSectionEnabled={isCrossSectionEnabled}
             onToggleCrossSection={handleToggleCrossSection}
+            layerHeightMm={slicing.layerHeightMm}
           />
         )}
 
