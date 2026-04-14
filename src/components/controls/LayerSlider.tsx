@@ -146,6 +146,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, [clamp, max, min, onChange, onLowerChange, snap]);
 
+
   const setByClientY = React.useCallback((clientY: number, shiftKey: boolean = false) => {
     const el = containerRef.current;
     if (!el) return;
@@ -243,7 +244,6 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     document.addEventListener('mousedown', handleOutsideClick);
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [editingThumb, commitThumbEdit]);
-
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
     if (e.button === 2) {
