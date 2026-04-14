@@ -364,7 +364,6 @@ function CrossSectionStencilCapInner({
   const GLOW_BACK_ORDER = STENCIL_GLOW_BACK_ORDER + renderOrderOffset;
   const GLOW_FRONT_ORDER = STENCIL_GLOW_FRONT_ORDER + renderOrderOffset;
   const CAP_ORDER = STENCIL_CAP_ORDER + renderOrderOffset;
-  const GROUP_ORDER = STENCIL_RENDER_ORDER_BASE + renderOrderOffset;
 
   // Primary clip plane for this cap's stencil pass.
   //   • Top cap:    Plane(0,0,-1, y)  → keeps z ≤ y (same as model's clipUpper)
@@ -860,7 +859,7 @@ function CrossSectionStencilCapInner({
   if (!visible || (visibleModelStencilEntries.length === 0 && !hasVisibleStaticSource)) return null;
 
   return (
-    <group renderOrder={GROUP_ORDER}>
+    <group>
       {modelStencilPassNodes}
 
       {staticSingleStencilPassNodes}
