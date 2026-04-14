@@ -3615,6 +3615,7 @@ export function SceneCanvas({
     const viewportHeight = Math.max(1, rect.height);
 
     if (action === 'pan') {
+      const RAW_TRACKPAD_PAN_SPEED = 1.0;
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
       const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
 
@@ -3630,8 +3631,8 @@ export function SceneCanvas({
       }
 
       const panOffset = new THREE.Vector3()
-        .addScaledVector(right, event.deltaX * worldUnitsPerPixel * controls.panSpeed * cameraTrackpadPanAcceleration)
-        .addScaledVector(up, -event.deltaY * worldUnitsPerPixel * controls.panSpeed * cameraTrackpadPanAcceleration);
+        .addScaledVector(right, event.deltaX * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration)
+        .addScaledVector(up, -event.deltaY * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration);
 
       camera.position.add(panOffset);
       controls.target.add(panOffset);
@@ -3643,7 +3644,8 @@ export function SceneCanvas({
     const worldUp = camera.up.clone().normalize();
     const offset = camera.position.clone().sub(controls.target);
     const offsetLength = Math.max(0.001, offset.length());
-    const rotateScale = 0.0022 * controls.rotateSpeed * cameraTrackpadOrbitAcceleration;
+    const RAW_TRACKPAD_ROTATE_SPEED = 1.0;
+    const rotateScale = 0.0022 * RAW_TRACKPAD_ROTATE_SPEED * cameraTrackpadOrbitAcceleration;
     const yawAngle = event.deltaX * rotateScale;
 
     offset.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(worldUp, yawAngle));
@@ -4185,6 +4187,7 @@ export function SceneCanvas({
   }, [isOrbitInRotateState]);
 
   const handleOrbitEnd = React.useCallback(() => {
+    const wasTrackpadGesture = trackpadGestureActionRef.current !== null;
     clearPendingTrackpadGestureEnd();
     trackpadGestureActionRef.current = null;
     if (mode === 'prepare' && orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
@@ -4198,10 +4201,10 @@ export function SceneCanvas({
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
     window.dispatchEvent(new CustomEvent('picking-orbit-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
+      detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
     window.dispatchEvent(new CustomEvent('picking-pan-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
+      detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
   }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
 
