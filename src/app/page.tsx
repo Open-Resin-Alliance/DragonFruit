@@ -8167,8 +8167,30 @@ export default function Home() {
 
     if (!isLikelyDesktopRuntime) return;
 
-    const unlisten: Array<() => void> = [];
+    const unlisten: Array<() => void | Promise<void>> = [];
     let disposed = false;
+
+    const invokeUnlistenSafely = (remove: (() => void | Promise<void>) | undefined) => {
+      if (!remove) return;
+      try {
+        const result = remove();
+        if (result && typeof result.then === 'function') {
+          void result.catch(() => {
+            // noop
+          });
+        }
+      } catch {
+        // noop
+      }
+    };
+
+    const registerUnlisten = (remove: () => void | Promise<void>) => {
+      if (disposed) {
+        invokeUnlistenSafely(remove);
+        return;
+      }
+      unlisten.push(remove);
+    };
 
     void (async () => {
       try {
@@ -8178,7 +8200,7 @@ export default function Home() {
           if (disposed || scene.mode !== 'prepare') return;
           setIsPrepareDragActive(true);
         });
-        unlisten.push(unlistenDragOver);
+        registerUnlisten(unlistenDragOver);
 
         const hideOverlay = () => {
           dragDepthRef.current = 0;
@@ -8189,13 +8211,13 @@ export default function Home() {
           if (disposed) return;
           hideOverlay();
         });
-        unlisten.push(unlistenDragLeave);
+        registerUnlisten(unlistenDragLeave);
 
         const unlistenDragCancelled = await listen('tauri://drag-drop-cancelled', () => {
           if (disposed) return;
           hideOverlay();
         });
-        unlisten.push(unlistenDragCancelled);
+        registerUnlisten(unlistenDragCancelled);
 
         const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
           if (disposed || scene.mode !== 'prepare') return;
@@ -8211,7 +8233,7 @@ export default function Home() {
             await handleDroppedPrepareFiles(files);
           })();
         });
-        unlisten.push(unlistenDragDrop);
+        registerUnlisten(unlistenDragDrop);
       } catch {
         // Ignore in non-Tauri environments or when listeners are unavailable.
       }
@@ -8221,11 +8243,7 @@ export default function Home() {
       disposed = true;
       while (unlisten.length > 0) {
         const remove = unlisten.pop();
-        try {
-          remove?.();
-        } catch {
-          // noop
-        }
+        invokeUnlistenSafely(remove);
       }
     };
   }, [createFilesFromTauriDroppedPaths, handleDroppedPrepareFiles, scene.mode]);
