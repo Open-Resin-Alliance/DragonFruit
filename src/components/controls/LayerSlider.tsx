@@ -81,10 +81,12 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   }, [step]);
 
   const emitChange = React.useCallback((rawNext: number) => {
-    const next = clamp(snap(rawNext));
+    // Upper thumb must never go below the lower thumb
+    const floor = lowerValueRef.current ?? min;
+    const next = Math.max(clamp(snap(rawNext)), floor);
     if (next === valueRef.current) return;
     onChange(next);
-  }, [clamp, onChange, snap]);
+  }, [clamp, min, onChange, snap]);
 
   // Keep lowerValueRef in sync
   React.useEffect(() => {
