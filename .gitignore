@@ -62,3 +62,5 @@ conversion/
 
 # compiled native binaries / COM DLLs (built locally, not committed)
 src-tauri/windows-resources/*.dll
+src-tauri/binaries/dragonfruit-voxl-thumbnailer*
+**/build

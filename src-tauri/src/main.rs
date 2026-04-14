@@ -794,7 +794,10 @@ async fn export_mesh_file(
 }
 
 #[tauri::command]
-async fn slice_solid_native(window: DragonFruitWindow, job_json: String) -> Result<Response, String> {
+async fn slice_solid_native(
+    window: DragonFruitWindow,
+    job_json: String,
+) -> Result<Response, String> {
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
 
@@ -2842,29 +2845,37 @@ fn main() {
     let builder = tauri::Builder::default();
     #[cfg(not(feature = "tauri-cef"))]
     let builder = builder.plugin(log_plugin);
-    let builder = builder
-        .setup(|app| {
-            use tauri::WebviewWindowBuilder;
+    let builder = builder.setup(|app| {
+        use tauri::WebviewWindowBuilder;
 
-            let window_config = app
-                .config()
-                .app
-                .windows
-                .iter()
-                .find(|window| window.label == "main")
-                .expect("Missing 'main' window config in tauri.conf.json");
+        let window_config = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|window| window.label == "main")
+            .expect("Missing 'main' window config in tauri.conf.json");
 
-            let builder = WebviewWindowBuilder::from_config(app, window_config)?;
+        let builder = WebviewWindowBuilder::from_config(app, window_config)?;
 
-            // Keep custom titlebar behavior on non-macOS.
-            #[cfg(not(target_os = "macos"))]
-            let builder = builder.decorations(false);
+        // Keep custom titlebar behavior on non-macOS.
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.decorations(false);
 
-            let _window = builder.build()?;
+        let window = builder.build()?;
 
-            log::info!("Main window created successfully");
-            Ok(())
-        });
+        // On macOS, reveal immediately so a frontend startup hiccup can't leave
+        // the app invisible when the window was created as hidden.
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(error) = window.show() {
+                log::warn!("Failed to show main window during setup: {error}");
+            }
+        }
+
+        log::info!("Main window created successfully");
+        Ok(())
+    });
 
     // Single-instance plugin also disabled on CEF (same wry collision).
     #[cfg(not(feature = "tauri-cef"))]

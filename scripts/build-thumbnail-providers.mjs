@@ -13,12 +13,24 @@ import { execSync, spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-const platform = process.env.TAURI_ENV_PLATFORM;
+const platform = process.env.TAURI_ENV_PLATFORM
+      ?? (process.platform === 'darwin'
+            ? 'darwin'
+            : process.platform === 'win32'
+                  ? 'windows'
+                  : process.platform === 'linux'
+                        ? 'linux'
+                        : undefined);
 const projectRoot = process.cwd();
 const cliCrateDir = path.join(projectRoot, 'rust', 'dragonfruit-voxl-thumbnail');
 const comCrateDir = path.join(cliCrateDir, 'windows-com');
 const binariesDir = path.join(projectRoot, 'src-tauri', 'binaries');
 const winResourcesDir = path.join(projectRoot, 'src-tauri', 'windows-resources');
+
+if (!platform) {
+      console.error('[build-thumbnail-providers] Could not determine platform');
+      process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Determine the Rust target triple
@@ -76,8 +88,10 @@ if (platform === 'linux' || platform === 'darwin') {
       );
 
       const binSrc = path.join(cliCrateDir, releaseSuffix, `dragonfruit-voxl-thumbnailer${binExt}`);
-      mkdirSync(binariesDir, { recursive: true });
-      const binDst = path.join(binariesDir, `dragonfruit-voxl-thumbnailer-${triple}${binExt}`);
+      const macExternalBinDir = path.join(cliCrateDir, releaseSuffix);
+      const destinationDir = platform === 'darwin' ? macExternalBinDir : binariesDir;
+      mkdirSync(destinationDir, { recursive: true });
+      const binDst = path.join(destinationDir, `dragonfruit-voxl-thumbnailer-${triple}${binExt}`);
       copyFileSync(binSrc, binDst);
       console.log(`[build-thumbnail-providers] Binary → ${path.relative(projectRoot, binDst)}`);
 }

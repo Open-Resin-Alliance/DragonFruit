@@ -12,7 +12,7 @@ export const DEFAULT_CAMERA_FEEL_SETTINGS: CameraFeelSettings = {
 };
 
 function normalizePreset(input: unknown): CameraFeelPreset {
-  if (input === 'raw' || input === 'precise' || input === 'fast') return input;
+  if (input === 'raw' || input === 'precise' || input === 'balanced' || input === 'fast') return input;
   return 'precise';
 }
 

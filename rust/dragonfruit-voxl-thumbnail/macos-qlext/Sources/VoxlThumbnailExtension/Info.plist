@@ -27,7 +27,14 @@
         <key>NSExtensionPointIdentifier</key>
         <string>com.apple.quicklook.thumbnail</string>
         <key>NSExtensionPrincipalClass</key>
-        <string>$(PRODUCT_MODULE_NAME).ThumbnailProvider</string>
+        <string>ThumbnailProvider</string>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>QLSupportedContentTypes</key>
+            <array>
+                <string>org.openresinalliance.voxl</string>
+            </array>
+        </dict>
     </dict>
 
     <!-- UTI declaration for .voxl files -->
@@ -56,12 +63,5 @@
         </dict>
     </array>
 
-    <key>QLSupportedContentTypes</key>
-    <array>
-        <string>org.openresinalliance.voxl</string>
-    </array>
-
-    <key>QLThumbnailMinimumDimension</key>
-    <integer>32</integer>
 </dict>
 </plist>

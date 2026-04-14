@@ -96,6 +96,13 @@ import {
   type CameraFeelPreset,
 } from '@/components/settings/cameraFeelPreferences';
 import {
+  DEFAULT_CAMERA_TRACKPAD_SETTINGS,
+  getSavedCameraTrackpadSettings,
+  subscribeToCameraTrackpadSettings,
+  type CameraTrackpadModifierKey,
+  type CameraTrackpadPrimaryAction,
+} from '@/components/settings/cameraTrackpadPreferences';
+import {
   DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT,
   DIAGNOSTICS_BENCHMARK_REQUEST_EVENT,
   type DiagnosticsBenchmarkPhaseName,
@@ -124,6 +131,47 @@ type GhostPreviewTransform = {
   rotation: THREE.Euler;
   scale: THREE.Vector3;
 };
+
+type TrackpadGestureAction = 'pan' | 'orbit';
+
+function isLikelyTrackpadWheelEvent(event: WheelEvent): boolean {
+  // Use numeric DOM_DELTA_PIXEL (=0) to avoid relying on global WheelEvent in all runtimes.
+  if (event.deltaMode !== 0) return false;
+  if (event.ctrlKey) return true;
+
+  const absX = Math.abs(event.deltaX);
+  const absY = Math.abs(event.deltaY);
+  const dominantDelta = Math.max(absX, absY);
+  const recessiveDelta = Math.min(absX, absY);
+
+  if (dominantDelta <= 0) return false;
+
+  // Exclude typical mouse wheel events: one axis nearly zero, other large.
+  // This prevents regular mouse scroll from triggering trackpad gestures.
+  if (recessiveDelta < 2 && dominantDelta > 16) return false;
+
+  if (absX > 0) return true;
+  if (!Number.isInteger(event.deltaX) || !Number.isInteger(event.deltaY)) return true;
+  return dominantDelta <= 16;
+}
+
+function isTrackpadModifierPressed(event: WheelEvent, modifierKey: CameraTrackpadModifierKey): boolean {
+  return modifierKey === 'shift' ? event.shiftKey : event.altKey;
+}
+
+function resolveTrackpadGestureAction(
+  event: WheelEvent,
+  primaryAction: CameraTrackpadPrimaryAction,
+  modifierKey: CameraTrackpadModifierKey,
+): TrackpadGestureAction | null {
+  if (primaryAction === 'off') return null;
+  if (event.ctrlKey || event.metaKey) return null;
+  if (!isLikelyTrackpadWheelEvent(event)) return null;
+
+  const modifierPressed = isTrackpadModifierPressed(event, modifierKey);
+  if (!modifierPressed) return primaryAction;
+  return primaryAction === 'pan' ? 'orbit' : 'pan';
+}
 
 function GhostPreviewInstances({
   geometry,
@@ -484,6 +532,26 @@ export function SceneCanvas({
     subscribeToCameraFeelSettings,
     () => getSavedCameraFeelSettings().preset,
     () => DEFAULT_CAMERA_FEEL_SETTINGS.preset,
+  );
+  const cameraTrackpadSettings = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().primaryAction,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction,
+  );
+  const cameraTrackpadModifierKey = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().modifierKey,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.modifierKey,
+  );
+  const cameraTrackpadPanAcceleration = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().panAcceleration,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.panAcceleration,
+  );
+  const cameraTrackpadOrbitAcceleration = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().orbitAcceleration,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration,
   );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -884,6 +952,8 @@ export function SceneCanvas({
   const orbitInteractionMovedRef = React.useRef(false);
   const wheelZoomEndTimeoutRef = React.useRef<number | null>(null);
   const wheelZoomInteractionActiveRef = React.useRef(false);
+  const trackpadGestureEndTimeoutRef = React.useRef<number | null>(null);
+  const trackpadGestureActionRef = React.useRef<TrackpadGestureAction | null>(null);
   const navigationResumeDelayRef = React.useRef(0);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
@@ -898,6 +968,9 @@ export function SceneCanvas({
   const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const webGlRecoveryTimeoutRef = React.useRef<number | null>(null);
     const isOrbitInRotateState = React.useCallback(() => {
+      if (trackpadGestureActionRef.current != null) {
+        return trackpadGestureActionRef.current === 'orbit';
+      }
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
       // OrbitControls internal states:
@@ -3524,6 +3597,82 @@ export function SceneCanvas({
     }));
   }, [navigationResumeDelayMs]);
 
+  const clearPendingTrackpadGestureEnd = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (trackpadGestureEndTimeoutRef.current === null) return;
+    window.clearTimeout(trackpadGestureEndTimeoutRef.current);
+    trackpadGestureEndTimeoutRef.current = null;
+  }, []);
+
+  const applyTrackpadGesture = React.useCallback((action: TrackpadGestureAction, event: WheelEvent) => {
+    const camera = cameraRef.current;
+    const controls = orbitControlsRef.current;
+    const container = containerRef.current;
+    if (!camera || !controls || controls.enabled === false || !container) return false;
+
+    const rect = container.getBoundingClientRect();
+    const viewportHeight = Math.max(1, rect.height);
+
+    if (action === 'pan') {
+      const RAW_TRACKPAD_PAN_SPEED = 1.0;
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+
+      let worldUnitsPerPixel = 0;
+      if (camera instanceof THREE.OrthographicCamera) {
+        worldUnitsPerPixel = ((camera.top - camera.bottom) / Math.max(1e-6, camera.zoom)) / viewportHeight;
+      } else if (camera instanceof THREE.PerspectiveCamera) {
+        const distanceToTarget = Math.max(0.001, camera.position.distanceTo(controls.target));
+        const worldHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * distanceToTarget;
+        worldUnitsPerPixel = worldHeight / viewportHeight;
+      } else {
+        return false;
+      }
+
+      const panOffset = new THREE.Vector3()
+        .addScaledVector(right, event.deltaX * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration)
+        .addScaledVector(up, -event.deltaY * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration);
+
+      camera.position.add(panOffset);
+      controls.target.add(panOffset);
+      camera.updateMatrixWorld();
+      controls.update();
+      return true;
+    }
+
+    const worldUp = camera.up.clone().normalize();
+    const offset = camera.position.clone().sub(controls.target);
+    const offsetLength = Math.max(0.001, offset.length());
+    const RAW_TRACKPAD_ROTATE_SPEED = 1.0;
+    const rotateScale = 0.0022 * RAW_TRACKPAD_ROTATE_SPEED * cameraTrackpadOrbitAcceleration;
+    const yawAngle = event.deltaX * rotateScale;
+
+    offset.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(worldUp, yawAngle));
+
+    const normalizedOffset = offset.clone().normalize();
+    const currentPolar = Math.acos(THREE.MathUtils.clamp(normalizedOffset.dot(worldUp), -1, 1));
+    const nextPolar = THREE.MathUtils.clamp(currentPolar + (event.deltaY * rotateScale), 0.08, Math.PI - 0.08);
+    const pitchAngle = nextPolar - currentPolar;
+
+    const forward = normalizedOffset.clone().negate();
+    const rightAxis = new THREE.Vector3().crossVectors(forward, worldUp).normalize();
+    if (rightAxis.lengthSq() < 1e-8) {
+      rightAxis.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+    }
+
+    offset
+      .normalize()
+      .multiplyScalar(offsetLength)
+      .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(rightAxis, pitchAngle));
+
+    camera.position.copy(controls.target).add(offset);
+    camera.up.copy(worldUp);
+    camera.lookAt(controls.target);
+    camera.updateMatrixWorld();
+    controls.update();
+    return true;
+  }, [cameraTrackpadOrbitAcceleration, cameraTrackpadPanAcceleration]);
+
   React.useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof window === 'undefined') return;
@@ -3562,6 +3711,18 @@ export function SceneCanvas({
 
     const onWheel = (event: WheelEvent) => {
       if (!container.contains(event.target as Node | null)) return;
+      // Trackpad: allow zoom only for pinch gestures (ctrlKey).
+      // Regular two-finger scroll should never trigger zoom.
+      if (isLikelyTrackpadWheelEvent(event) && !event.ctrlKey) {
+        return;
+      }
+      try {
+        if (resolveTrackpadGestureAction(event, cameraTrackpadSettings, cameraTrackpadModifierKey) !== null) {
+          return;
+        }
+      } catch (error) {
+        console.error('[SceneCanvas] Trackpad gesture resolution failed; falling back to wheel zoom.', error);
+      }
 
       beginZoomInteraction();
 
@@ -3591,7 +3752,7 @@ export function SceneCanvas({
       document.removeEventListener('visibilitychange', forceZoomInteractionEnd);
       endZoomInteraction();
     };
-  }, []);
+  }, [cameraTrackpadModifierKey, cameraTrackpadSettings]);
 
   React.useEffect(() => {
     return () => {
@@ -3601,6 +3762,11 @@ export function SceneCanvas({
       }
       wheelZoomEndTimeoutRef.current = null;
       wheelZoomInteractionActiveRef.current = false;
+      if (trackpadGestureEndTimeoutRef.current !== null) {
+        window.clearTimeout(trackpadGestureEndTimeoutRef.current);
+      }
+      trackpadGestureEndTimeoutRef.current = null;
+      trackpadGestureActionRef.current = null;
     };
   }, []);
 
@@ -4020,6 +4186,9 @@ export function SceneCanvas({
   }, [isOrbitInRotateState]);
 
   const handleOrbitEnd = React.useCallback(() => {
+    const wasTrackpadGesture = trackpadGestureActionRef.current !== null;
+    clearPendingTrackpadGestureEnd();
+    trackpadGestureActionRef.current = null;
     if (mode === 'prepare' && orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
       suppressNextCanvasClickRef.current = true;
     }
@@ -4031,12 +4200,110 @@ export function SceneCanvas({
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
     window.dispatchEvent(new CustomEvent('picking-orbit-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
+      detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
     window.dispatchEvent(new CustomEvent('picking-pan-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
+      detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
-  }, [mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+  }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+
+  const scheduleTrackpadGestureEnd = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    clearPendingTrackpadGestureEnd();
+    trackpadGestureEndTimeoutRef.current = window.setTimeout(() => {
+      trackpadGestureEndTimeoutRef.current = null;
+      if (trackpadGestureActionRef.current === null) return;
+      trackpadGestureActionRef.current = null;
+      handleOrbitEnd();
+    }, 140);
+  }, [clearPendingTrackpadGestureEnd, handleOrbitEnd]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof window === 'undefined') return;
+
+    const onTrackpadWheel = (event: WheelEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+
+      try {
+        const action = resolveTrackpadGestureAction(
+          event,
+          cameraTrackpadSettings,
+          cameraTrackpadModifierKey,
+        );
+        if (action === null) return;
+
+        const controls = orbitControlsRef.current;
+        if (!controls || controls.enabled === false) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!orbitInteractionActiveRef.current) {
+          trackpadGestureActionRef.current = action;
+          handleOrbitStart();
+        } else {
+          trackpadGestureActionRef.current = action;
+        }
+
+        if (!applyTrackpadGesture(action, event)) {
+          trackpadGestureActionRef.current = null;
+          handleOrbitEnd();
+          return;
+        }
+
+        handleOrbitChange();
+        scheduleTrackpadGestureEnd();
+      } catch (error) {
+        console.error('[SceneCanvas] Trackpad wheel handler failed; disabling current trackpad gesture frame.', error);
+        trackpadGestureActionRef.current = null;
+        clearPendingTrackpadGestureEnd();
+      }
+    };
+
+    const forceTrackpadGestureEnd = () => {
+      clearPendingTrackpadGestureEnd();
+      if (trackpadGestureActionRef.current === null) return;
+      trackpadGestureActionRef.current = null;
+      handleOrbitEnd();
+    };
+
+    container.addEventListener('wheel', onTrackpadWheel, { capture: true, passive: false });
+    window.addEventListener('blur', forceTrackpadGestureEnd);
+    document.addEventListener('visibilitychange', forceTrackpadGestureEnd);
+
+    return () => {
+      container.removeEventListener('wheel', onTrackpadWheel, true);
+      window.removeEventListener('blur', forceTrackpadGestureEnd);
+      document.removeEventListener('visibilitychange', forceTrackpadGestureEnd);
+      forceTrackpadGestureEnd();
+    };
+  }, [
+    applyTrackpadGesture,
+    cameraTrackpadModifierKey,
+    cameraTrackpadSettings,
+    clearPendingTrackpadGestureEnd,
+    handleOrbitChange,
+    handleOrbitEnd,
+    handleOrbitStart,
+    scheduleTrackpadGestureEnd,
+  ]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const suppressViewportContextMenu = (event: MouseEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+      event.preventDefault();
+    };
+
+    container.addEventListener('contextmenu', suppressViewportContextMenu, true);
+    return () => {
+      container.removeEventListener('contextmenu', suppressViewportContextMenu, true);
+    };
+  }, []);
 
   const handleWebGlContextLost = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -4172,10 +4439,17 @@ export function SceneCanvas({
       handleOrbitEnd();
     };
 
+    const suppressContextMenuDuringOrbit = (event: Event) => {
+      if (orbitInteractionActiveRef.current) {
+        event.preventDefault();
+      }
+      forceOrbitEndIfActive();
+    };
+
     window.addEventListener('pointerup', forceOrbitEndIfActive, true);
     window.addEventListener('pointercancel', forceOrbitEndIfActive, true);
     window.addEventListener('mouseup', forceOrbitEndIfActive, true);
-    window.addEventListener('contextmenu', forceOrbitEndIfActive, true);
+    window.addEventListener('contextmenu', suppressContextMenuDuringOrbit, true);
     window.addEventListener('blur', forceOrbitEndIfActive);
     document.addEventListener('visibilitychange', forceOrbitEndIfActive);
 
@@ -4183,7 +4457,7 @@ export function SceneCanvas({
       window.removeEventListener('pointerup', forceOrbitEndIfActive, true);
       window.removeEventListener('pointercancel', forceOrbitEndIfActive, true);
       window.removeEventListener('mouseup', forceOrbitEndIfActive, true);
-      window.removeEventListener('contextmenu', forceOrbitEndIfActive, true);
+      window.removeEventListener('contextmenu', suppressContextMenuDuringOrbit, true);
       window.removeEventListener('blur', forceOrbitEndIfActive);
       document.removeEventListener('visibilitychange', forceOrbitEndIfActive);
     };
