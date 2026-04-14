@@ -4,7 +4,7 @@
   "version": "0.1.2",
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "node scripts/build-thumbnail-providers.mjs && npm run dev",
     "beforeBuildCommand": "npm run build:tauri && node scripts/build-thumbnail-providers.mjs",
     "devUrl": "http://localhost:3005",
     "frontendDist": "frontend-dist"

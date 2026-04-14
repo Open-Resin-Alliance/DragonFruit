@@ -88,8 +88,10 @@ if (platform === 'linux' || platform === 'darwin') {
       );
 
       const binSrc = path.join(cliCrateDir, releaseSuffix, `dragonfruit-voxl-thumbnailer${binExt}`);
-      mkdirSync(binariesDir, { recursive: true });
-      const binDst = path.join(binariesDir, `dragonfruit-voxl-thumbnailer-${triple}${binExt}`);
+      const macExternalBinDir = path.join(cliCrateDir, releaseSuffix);
+      const destinationDir = platform === 'darwin' ? macExternalBinDir : binariesDir;
+      mkdirSync(destinationDir, { recursive: true });
+      const binDst = path.join(destinationDir, `dragonfruit-voxl-thumbnailer-${triple}${binExt}`);
       copyFileSync(binSrc, binDst);
       console.log(`[build-thumbnail-providers] Binary → ${path.relative(projectRoot, binDst)}`);
 }
