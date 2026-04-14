@@ -11,6 +11,7 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   const [layerIndex, setLayerIndexState] = useState<number>(0);
   const [lowerLayerIndex, setLowerLayerIndexState] = useState<number>(0);
   const topSliderInitializedRef = useRef(false);
+  const prevNumLayersRef = useRef<number>(0);
 
   const layerHeightMm = useMemo(() => layerHeightMicron / 1000, [layerHeightMicron]);
 
@@ -62,6 +63,16 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
       return previous === clamped ? previous : clamped;
     });
   }, [clampLayerIndex]);
+
+  // If numLayers grows (e.g. model moved upward) and the top slider was pinned
+  // at the old maximum, follow it to the new maximum so cross-section stays off.
+  useEffect(() => {
+    const prevMax = prevNumLayersRef.current;
+    prevNumLayersRef.current = numLayers;
+    if (numLayers > prevMax && prevMax > 0) {
+      setLayerIndexState((previous) => (previous === prevMax ? numLayers : previous));
+    }
+  }, [numLayers]);
 
   useEffect(() => {
     setLowerLayerIndexState((previous) => {
