@@ -4,6 +4,10 @@ import React from 'react';
 import { FolderInput, Loader2, Upload, Printer, Wrench } from 'lucide-react';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 
+const BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? '').toLowerCase();
+const APP_VERSION = (process.env.NEXT_PUBLIC_APP_VERSION ?? '').toLowerCase();
+const IS_BETA_BUILD = BUILD_CHANNEL.includes('beta') || APP_VERSION.includes('beta');
+
 type EmptySceneStateProps = {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onLoadMeshClick?: () => void;
@@ -154,9 +158,24 @@ export function EmptySceneState({
   return (
     <div className="absolute inset-0 top-14 z-30 flex items-center justify-center pointer-events-none">
       <div className="ui-empty-state pointer-events-auto">
-        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
-          Empty workspace
-        </div>
+        {IS_BETA_BUILD ? (
+          <div
+            className="mb-2 inline-flex rounded-full border-2 px-3.5 py-1 text-[13px] font-black uppercase tracking-[0.2em]"
+            style={{
+              color: '#fdba74',
+              borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 16%)',
+              background: 'color-mix(in srgb, #f97316, transparent 96%)',
+              textShadow: '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
+              boxShadow: '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
+            }}
+          >
+            BETA VERSION
+          </div>
+        ) : (
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
+            Empty workspace
+          </div>
+        )}
         <h1 className="ui-empty-title">Ready for your next adventure?</h1>
         <p className="ui-empty-text" style={{ maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
           Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print.

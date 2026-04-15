@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "externalBin": [
+      "../rust/dragonfruit-voxl-thumbnail/target/release/dragonfruit-voxl-thumbnailer"
+    ]
+  }
+}

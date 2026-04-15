@@ -76,7 +76,6 @@ export function ToonMaterial({
       emissive="#000000"
       emissiveIntensity={0}
       clippingPlanes={clippingPlanes}
-      clipIntersection
       side={THREE.FrontSide}
     />
   );

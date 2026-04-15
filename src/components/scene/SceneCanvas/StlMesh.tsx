@@ -22,6 +22,107 @@ import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
+// Scratch raycaster reused for clip-zone fallback raycasts.
+const _clipFallbackRaycaster = new THREE.Raycaster();
+
+// Mini-cache for clip-aware fallback raycasts.  Near the clip boundary the
+// primary hit oscillates between visible/clipped zones, causing a BVH
+// raycast on ~50% of pointer-move frames.  Caching the previous fallback
+// result by quantised ray origin + direction eliminates redundant raycasts
+// when the pointer hasn't moved meaningfully.
+const _clipCacheQuant = 0.15; // mm position quantisation
+let _clipCacheKey = '';
+let _clipCacheResult: THREE.Intersection | null = null;
+
+function clipRayCacheKey(ray: THREE.Ray): string {
+    const Q = _clipCacheQuant;
+    const o = ray.origin;
+    const d = ray.direction;
+    // Quantise origin (position) and direction (unit vector × 1000 for precision).
+    return `${Math.round(o.x / Q)},${Math.round(o.y / Q)},${Math.round(o.z / Q)},${Math.round(d.x * 1000)},${Math.round(d.y * 1000)},${Math.round(d.z * 1000)}`;
+}
+
+/**
+ * When the primary ray hit falls in the clipped (hidden) portion of a mesh,
+ * find the nearest hit within the visible Z range by raycasting with `near`
+ * set just past the clipped surface. This skips the outer wall entirely and
+ * uses firstHitOnly=true so the BVH stops at the very first triangle hit —
+ * O(log n) instead of scanning all faces.
+ *
+ * Results are cached by quantised ray so near-duplicate pointer moves
+ * (common at clip boundaries) skip the BVH entirely.
+ */
+function findClipAwareHit(
+  ray: THREE.Ray,
+  mesh: THREE.Object3D,
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+  primaryDistance: number,
+): THREE.Intersection | null {
+  // Check ray cache — skip BVH if the ray hasn't changed meaningfully.
+  const cacheKey = clipRayCacheKey(ray) + `,${clipLower ?? ''},${clipUpper ?? ''}`;
+  if (cacheKey === _clipCacheKey) {
+    return _clipCacheResult;
+  }
+
+  const rc = _clipFallbackRaycaster;
+  rc.ray.copy(ray);
+  // Skip past the already-found clipped surface.
+  rc.near = primaryDistance + 0.05;
+  // Bound the search — models fit within the build volume.
+  rc.far = primaryDistance + 500;
+  (rc as any).firstHitOnly = true;
+  const hits: THREE.Intersection[] = [];
+  (mesh as THREE.Mesh).raycast(rc, hits);
+  // Reset to safe defaults.
+  rc.near = 0;
+  rc.far = Infinity;
+  (rc as any).firstHitOnly = false;
+  if (hits.length === 0) {
+    _clipCacheKey = cacheKey;
+    _clipCacheResult = null;
+    return null;
+  }
+  const hit = hits[0];
+  if (
+    (clipUpper != null && hit.point.z > clipUpper) ||
+    (clipLower != null && hit.point.z < clipLower)
+  ) {
+    _clipCacheKey = cacheKey;
+    _clipCacheResult = null;
+    return null;
+  }
+  _clipCacheKey = cacheKey;
+  _clipCacheResult = hit;
+  return hit;
+}
+
+/**
+ * Check whether any non-model intersection exists in the visible clip zone.
+ * Used to decide if a clipped model-mesh hit should let events propagate
+ * through to support objects behind the clipped surface.
+ */
+function hasVisibleNonModelIntersection(
+  intersections: THREE.Intersection[],
+  modelObject: THREE.Object3D,
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+): boolean {
+  for (const int of intersections) {
+    // Skip the model mesh itself (can appear multiple times for inner wall)
+    if (int.object === modelObject) continue;
+    // Gizmo handles have their own interaction system (GPU pick +
+    // isGizmoHoverCategory); skip them here so a behind-the-model gizmo
+    // doesn't incorrectly trigger cross-section event propagation.
+    if (int.object.userData?.isGizmoHandle) continue;
+    // Check the hit is within visible clip bounds
+    if (clipUpper != null && int.point.z > clipUpper) continue;
+    if (clipLower != null && int.point.z < clipLower) continue;
+    return true;
+  }
+  return false;
+}
+
 function StlMeshComponent({
   geometry,
   clipLower,
@@ -68,6 +169,10 @@ function StlMeshComponent({
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
+  supportPlacementGuidePlaneZ,
+  supportPlacementGuideColor,
+  supportPlacementGuideLineWidthMm,
+  supportPlacementGuideOpacity,
   suppressModelInteraction,
   isExternallyHovered,
   deferExternalTransformUpdates,
@@ -125,6 +230,10 @@ function StlMeshComponent({
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
+  supportPlacementGuidePlaneZ?: number | null;
+  supportPlacementGuideColor?: string;
+  supportPlacementGuideLineWidthMm?: number;
+  supportPlacementGuideOpacity?: number;
   suppressModelInteraction?: boolean;
   isExternallyHovered?: boolean;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
@@ -142,6 +251,24 @@ function StlMeshComponent({
   const supportDimCameraLocalPointRef = React.useRef(new THREE.Vector3());
   const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
+  const supportDimShaderUniformsRef = React.useRef<{ uDitherAmount: THREE.IUniform<number> } | null>(null);
+  const supportDimRaycastBlockedRef = React.useRef(false);
+  const shiftHeldRef = React.useRef(false);
+  // Updated each render — readable inside stable callbacks without causing re-renders.
+  const isSupportDimmedRef = React.useRef(false);
+  // Stable shim that delegates to THREE.Mesh.prototype.raycast unless the ghost is
+  // currently dissolved close to the camera. Assigned to mesh.raycast on mount so
+  // there is one consistent owner — no two code paths fight over the value.
+  const supportDimRaycastRef = React.useRef<THREE.Mesh['raycast']>(
+    function supportDimRaycast(
+      this: THREE.Mesh,
+      raycaster: THREE.Raycaster,
+      intersects: THREE.Intersection[],
+    ) {
+      if (isSupportDimmedRef.current && supportDimRaycastBlockedRef.current) return;
+      THREE.Mesh.prototype.raycast.call(this, raycaster, intersects);
+    } as THREE.Mesh['raycast'],
+  );
 
   // Build clipping planes directly from current props so clipping never lags
   // by one frame when layer slider updates.
@@ -313,9 +440,9 @@ function StlMeshComponent({
         console.log('[Raycast] DISABLED - performance mode active');
         mesh.raycast = () => { };
       } else {
-        // Restore normal raycasting behavior
+        // Restore to our stable shim (which checks proximity-block ref internally).
         console.log('[Raycast] ENABLED - normal interaction mode');
-        mesh.raycast = THREE.Mesh.prototype.raycast;
+        mesh.raycast = supportDimRaycastRef.current;
       }
     }
   }, [effectiveDisableRaycast]);
@@ -365,19 +492,87 @@ function StlMeshComponent({
     : (isExternallyHoveredModel || isHoveredModelFromPicking);
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
+  isSupportDimmedRef.current = isSupportDimmed; // keep ref current every render
   const dimmedBaseOpacity = isSupportDimmed
     ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
     : null;
-  const dimmedInsideOpacity = isSupportDimmed
-    ? 0.0
-    : null;
+
+  // Imperative material with Bayer 4×4 dither injected via onBeforeCompile.
+  // Created once (stable across re-renders) so the shader is compiled exactly once.
+  const supportDimMaterialObj = React.useMemo(() => {
+    if (!isSupportDimmed) return null;
+    const mat = new THREE.MeshStandardMaterial({
+      color: meshColor ?? '#c8c8ce',
+      transparent: true,
+      opacity: dimmedBaseOpacity ?? 0.5,
+      roughness: 0.55,
+      metalness: 0.02,
+      side: THREE.FrontSide,
+      depthWrite: true,
+    });
+    // Custom cache key ensures this program is never shared with other MeshStandardMaterials.
+    mat.customProgramCacheKey = () => 'df-support-dim-dither';
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms['uDitherAmount'] = { value: 0.0 };
+      supportDimShaderUniformsRef.current = shader.uniforms as unknown as { uDitherAmount: THREE.IUniform<number> };
+      shader.fragmentShader = 'uniform float uDitherAmount;\n' + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+if (uDitherAmount > 0.0) {
+  int _bx = int(mod(gl_FragCoord.x, 4.0));
+  int _by = int(mod(gl_FragCoord.y, 4.0));
+  vec4 _brow;
+  if      (_by == 0) _brow = vec4( 0.0,  8.0,  2.0, 10.0);
+  else if (_by == 1) _brow = vec4(12.0,  4.0, 14.0,  6.0);
+  else if (_by == 2) _brow = vec4( 3.0, 11.0,  1.0,  9.0);
+  else               _brow = vec4(15.0,  7.0, 13.0,  5.0);
+  float _bv;
+  if      (_bx == 0) _bv = _brow.x;
+  else if (_bx == 1) _bv = _brow.y;
+  else if (_bx == 2) _bv = _brow.z;
+  else               _bv = _brow.w;
+  if (uDitherAmount > _bv / 16.0) discard;
+}`,
+      );
+    };
+    return mat;
+  // dimmedBaseOpacity is always 0.5 at runtime but included for correctness.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSupportDimmed, meshColor, dimmedBaseOpacity]);
+
+  // Keep supportDimMaterialRef in sync (used by useFrame) and update clipping planes.
+  React.useLayoutEffect(() => {
+    supportDimMaterialRef.current = supportDimMaterialObj;
+    if (!supportDimMaterialObj) { supportDimShaderUniformsRef.current = null; return; }
+    supportDimMaterialObj.clippingPlanes = planes;
+    return () => { supportDimMaterialRef.current = null; };
+  }, [supportDimMaterialObj, planes]);
+
+  // Dispose GPU resources when material is recreated or component unmounts.
+  React.useEffect(() => {
+    return () => { supportDimMaterialObj?.dispose(); };
+  }, [supportDimMaterialObj]);
+
+  // Track Shift key so dissolved ghost models can still be selected with Shift+click.
+  React.useEffect(() => {
+    if (!isSupportDimmed) return;
+    const onKey = (e: KeyboardEvent) => { shiftHeldRef.current = e.shiftKey; };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+      shiftHeldRef.current = false;
+    };
+  }, [isSupportDimmed]);
 
   useFrame(() => {
     if (!isSupportDimmed) return;
 
     const mesh = internalMeshRef.current;
     const material = supportDimMaterialRef.current;
-    if (!mesh || !material || dimmedBaseOpacity == null || dimmedInsideOpacity == null) return;
+    if (!mesh || !material || dimmedBaseOpacity == null) return;
 
     const localPoint = supportDimCameraLocalPointRef.current;
     localPoint.copy(camera.position);
@@ -392,11 +587,13 @@ function StlMeshComponent({
     );
     const distanceToBoundsMm = localDistanceToBounds * distanceScaleFactor;
 
-    const proximityFadeRangeMm = 24;
+    // Wider range so ghosting starts dissolving well before the camera reaches the model.
+    const proximityFadeRangeMm = 80;
     const proximityT = THREE.MathUtils.clamp(1 - (distanceToBoundsMm / proximityFadeRangeMm), 0, 1);
-    const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, dimmedInsideOpacity, proximityT);
-    const nextOpacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 0.18);
 
+    // Opacity: 0.5 (far) → 0.08 (close). Dithering handles the remaining visibility.
+    const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, 0.08, proximityT);
+    const nextOpacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 0.18);
     if (Math.abs(nextOpacity - material.opacity) > 0.0005) {
       material.opacity = nextOpacity;
     }
@@ -405,6 +602,23 @@ function StlMeshComponent({
     if (material.depthWrite !== shouldDepthWrite) {
       material.depthWrite = shouldDepthWrite;
       material.needsUpdate = true;
+    }
+
+    // Bayer dither dissolve — ramps 0 (far, no dither) → 1 (close, fully discarded).
+    const ditherUniforms = supportDimShaderUniformsRef.current;
+    if (ditherUniforms) {
+      const currentDither = ditherUniforms.uDitherAmount.value;
+      const nextDither = THREE.MathUtils.lerp(currentDither, proximityT, 0.18);
+      if (Math.abs(nextDither - currentDither) > 0.0005) {
+        ditherUniforms.uDitherAmount.value = nextDither;
+      }
+    }
+
+    // Update proximity block — supportDimRaycastRef reads this ref at call time,
+    // so no direct mesh.raycast mutation is needed here.
+    const shouldBlockRaycast = proximityT >= 0.25 && !shiftHeldRef.current;
+    if (supportDimRaycastBlockedRef.current !== shouldBlockRaycast) {
+      supportDimRaycastBlockedRef.current = shouldBlockRaycast;
     }
   });
 
@@ -482,11 +696,101 @@ function StlMeshComponent({
     return material;
   }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
 
+  const supportPlacementGuideEnabled = supportPlacementGuidePlaneZ != null && Number.isFinite(supportPlacementGuidePlaneZ);
+
+  const supportPlacementGuideMaterial = React.useMemo(() => {
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+      clippingPlanes: planes,
+      side: THREE.FrontSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      toneMapped: false,
+      uniforms: {
+        uPlaneZ: { value: 0 },
+        uLineWidthMm: { value: Math.max(0.02, supportPlacementGuideLineWidthMm ?? 0.24) },
+        uLineColor: { value: new THREE.Color(supportPlacementGuideColor ?? '#baf72e') },
+        uOpacity: { value: THREE.MathUtils.clamp(supportPlacementGuideOpacity ?? 0.62, 0, 1) },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNormal;
+
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          vWorldNormal = normalize(mat3(modelMatrix) * normal);
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNormal;
+        uniform float uPlaneZ;
+        uniform float uLineWidthMm;
+        uniform vec3 uLineColor;
+        uniform float uOpacity;
+
+        void main() {
+          float distanceToPlane = abs(vWorldPos.z - uPlaneZ);
+          float baseHalfWidth = max(0.0005, uLineWidthMm * 0.5);
+          vec3 worldNormal = normalize(vWorldNormal);
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          float ndotv = abs(dot(worldNormal, viewDir));
+          float grazing = 1.0 - ndotv;
+          float grazingComp = mix(1.0, 0.58, smoothstep(0.45, 0.96, grazing));
+
+          float compensatedHalfWidth = baseHalfWidth * grazingComp;
+          float aa = max(fwidth(vWorldPos.z) * 1.15, 0.0012);
+          float feather = min(
+            max(aa * 1.15, compensatedHalfWidth * 0.16),
+            max(aa * 1.1, compensatedHalfWidth * 0.55)
+          );
+
+          float lineMask = 1.0 - smoothstep(compensatedHalfWidth - feather, compensatedHalfWidth + feather, distanceToPlane);
+          if (lineMask <= 0.001) discard;
+
+          float alpha = uOpacity * lineMask;
+          gl_FragColor = vec4(uLineColor, alpha);
+        }
+      `,
+    });
+
+    return material;
+  }, [planes]);
+
+  React.useEffect(() => {
+    if (!supportPlacementGuideMaterial) return;
+
+    supportPlacementGuideMaterial.uniforms.uPlaneZ.value = supportPlacementGuideEnabled
+      ? Number(supportPlacementGuidePlaneZ)
+      : 0;
+    supportPlacementGuideMaterial.uniforms.uLineWidthMm.value = Math.max(0.02, supportPlacementGuideLineWidthMm ?? 0.24);
+    supportPlacementGuideMaterial.uniforms.uOpacity.value = THREE.MathUtils.clamp(supportPlacementGuideOpacity ?? 0.62, 0, 1);
+    (supportPlacementGuideMaterial.uniforms.uLineColor.value as THREE.Color).set(supportPlacementGuideColor ?? '#baf72e');
+  }, [
+    supportPlacementGuideColor,
+    supportPlacementGuideEnabled,
+    supportPlacementGuideLineWidthMm,
+    supportPlacementGuideMaterial,
+    supportPlacementGuideOpacity,
+    supportPlacementGuidePlaneZ,
+  ]);
+
   React.useEffect(() => {
     return () => {
       outOfBoundsMaterial?.dispose();
     };
   }, [outOfBoundsMaterial]);
+
+  React.useEffect(() => {
+    return () => {
+      supportPlacementGuideMaterial?.dispose();
+    };
+  }, [supportPlacementGuideMaterial]);
 
   return (
     <group
@@ -503,12 +807,22 @@ function StlMeshComponent({
           if (typeof actualMeshRef === 'function') actualMeshRef(node);
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
         }}
-        userData={{ modelId }}
+        userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
         geometry={geometry}
         position={meshLocalOffset}
         renderOrder={baseShaderType === 'xray' || isSupportDimmed ? 2 : 0}
         onClick={(e) => {
           if (isSupportShiftGesture(e)) {
+            // In support mode, Shift+click on an inactive ghost should explicitly
+            // switch active model, even when close-range pass-through is enabled.
+            if (mode === 'support' && onActiveModelChange && !isActiveModel) {
+              e.stopPropagation();
+              onActiveModelChange(modelId);
+              return;
+            }
+
+            // Keep existing behavior for active model interactions: Shift should
+            // not place supports via mesh click.
             e.stopPropagation();
             return;
           }
@@ -529,8 +843,11 @@ function StlMeshComponent({
             }
 
             // Let gizmo handles (especially center XY disc) receive clicks without
-            // model-level event swallowing.
-            if (isGizmoHoverCategory) {
+            // model-level event swallowing. GPU pick (isGizmoHoverCategory) handles
+            // the visual-overlap case (depthTest=false). Also check if the nearest
+            // raycast hit is a gizmo handle (covers the 1-frame GPU pick lag).
+            const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+            if (isGizmoHoverCategory || firstIsGizmo) {
               return;
             }
             e.stopPropagation();
@@ -549,8 +866,28 @@ function StlMeshComponent({
           // Support placement in support mode
           if (mode === 'support' && onSupportClick) {
             if (blockSupportPlacement) return;
+
+            // When cross-section is active and a visible support is behind
+            // the model surface, let the click propagate to the support
+            // instead of consuming it for placement.
+            const crossSectionActiveClick = clipUpper != null || clipLower != null;
+            if (crossSectionActiveClick && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper)) {
+              return; // Don't stop propagation — support will handle the click.
+            }
+
+            let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
+            if (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            ) {
+              // Primary hit is in the clipped (hidden) zone. Cast directly
+              // against this mesh to find the nearest visible-zone hit.
+              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              if (!fallback) return;
+              clickHit = fallback;
+            }
             e.stopPropagation();
-            onSupportClick(e as unknown as THREE.Intersection);
+            onSupportClick(clickHit);
           }
         }}
         onPointerMove={(e) => {
@@ -565,7 +902,12 @@ function StlMeshComponent({
             return;
           }
 
-          if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
+          // GPU pick (isGizmoHoverCategory) handles visual gizmo overlap.
+          // Also check if the nearest raycast hit is a gizmo handle (1-frame
+          // GPU pick lag guard). Only the nearest hit matters — a gizmo behind
+          // the model in the ray should not suppress model hover.
+          const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+          if (shouldSuppressModelInteraction || isGizmoHoverCategory || firstIsGizmo) {
             if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
@@ -579,12 +921,57 @@ function StlMeshComponent({
             return;
           }
 
-          e.stopPropagation();
+          // When cross-section is active and a visible support (or other
+          // non-model object) exists behind the model surface, let the event
+          // propagate so the support can receive hover — even if the model
+          // hit itself is in the visible zone (the ray may graze the outer
+          // wall on the way to a support visible through the opening).
+          //
+          // Also propagate when the primary model hit is in the clipped
+          // (invisible) zone — supports & instanced meshes inside the cavity
+          // must receive hover events even if they don't appear in the R3F
+          // intersection list at this stage.  In that case we still fall
+          // through to the placement-preview logic below so the clip-aware
+          // inner-wall hover preview can show.
+          const crossSectionActive = clipUpper != null || clipLower != null;
+          const primaryInClippedZone = crossSectionActive && (
+            (clipUpper != null && e.point.z > clipUpper) ||
+            (clipLower != null && e.point.z < clipLower)
+          );
+          // Let events propagate when non-model geometry is behind the model.
+          const propagateForNonModel = crossSectionActive && hasVisibleNonModelIntersection(e.intersections, e.object, clipLower, clipUpper);
+          if (propagateForNonModel && !primaryInClippedZone) {
+            // Non-model is visible but model hit is in visible zone — suppress
+            // model hover and don't consume the event.
+            if (!hasExternalHoverSource) schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
+            if (mode === 'support' && onSupportHover) {
+              onSupportHover(null);
+            }
+            return;
+          }
 
-          if (!hasExternalHoverSource) schedulePointerHover(true);
-          onModelHoverPointChange?.(e.point.clone());
-          onModelHoverModelChange?.(modelId);
-          emitImmediateModelHover(modelId);
+          // For clipped-zone hits, don't stop propagation but fall through
+          // to the placement-preview section so inner-wall hover still works.
+          if (!primaryInClippedZone) {
+            e.stopPropagation();
+          }
+
+          if (primaryInClippedZone) {
+            // Primary hit is invisible — suppress model hover highlight but
+            // continue to the placement-preview section below.
+            if (!hasExternalHoverSource) schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            emitImmediateModelHover(null);
+          } else {
+            if (!hasExternalHoverSource) schedulePointerHover(true);
+            onModelHoverPointChange?.(e.point.clone());
+            onModelHoverModelChange?.(modelId);
+            emitImmediateModelHover(modelId);
+          }
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
@@ -625,7 +1012,24 @@ function StlMeshComponent({
               return;
             }
 
-            onSupportHover(e);
+            let hoverHit: THREE.Intersection = e as unknown as THREE.Intersection;
+            if (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            ) {
+              // Primary hit is in the clipped (hidden) zone. Cast directly
+              // against this mesh to find the nearest visible-zone hit.
+              // (R3F + BVH may only provide one intersection per mesh via
+              // firstHitOnly, so we cannot rely on e.intersections here.)
+              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              if (!fallback) {
+                onSupportHover(null);
+                return;
+              }
+              hoverHit = fallback;
+            }
+
+            onSupportHover(hoverHit);
           }
         }}
         onPointerOut={(e) => {
@@ -663,7 +1067,11 @@ function StlMeshComponent({
 
             // If the pointer is over a gizmo handle, do not consume the event at
             // the model layer; let gizmo drag interactions win.
-            if (isGizmoHoverCategory) {
+            // GPU pick (isGizmoHoverCategory) handles the visual-overlap case.
+            // Also check if the nearest raycast hit is a gizmo handle to guard
+            // against the 1-frame GPU pick lag at click time.
+            const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+            if (isGizmoHoverCategory || firstIsGizmo) {
               return;
             }
 
@@ -716,17 +1124,7 @@ function StlMeshComponent({
             depthWrite={false}
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
-          <meshStandardMaterial
-            ref={supportDimMaterialRef}
-            color={meshColor ?? '#c8c8ce'}
-            transparent
-            opacity={dimmedBaseOpacity ?? 0.5}
-            roughness={0.55}
-            metalness={0.02}
-            clippingPlanes={planes}
-            side={THREE.FrontSide}
-            depthWrite
-          />
+          supportDimMaterialObj ? <primitive object={supportDimMaterialObj} attach="material" /> : null
         ) : interactionLodActive ? (
           <meshStandardMaterial
             vertexColors={hasVertexColorAttribute}
@@ -734,7 +1132,6 @@ function StlMeshComponent({
             roughness={materialRoughness ?? 0.9}
             metalness={0.0}
             clippingPlanes={planes}
-            clipIntersection
             side={THREE.FrontSide}
           />
         ) : (
@@ -769,6 +1166,12 @@ function StlMeshComponent({
       {outOfBoundsMaterial && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={3} raycast={() => null}>
           <primitive object={outOfBoundsMaterial} attach="material" />
+        </mesh>
+      )}
+
+      {supportPlacementGuideEnabled && supportPlacementGuideMaterial && (
+        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={4} raycast={() => null}>
+          <primitive object={supportPlacementGuideMaterial} attach="material" />
         </mesh>
       )}
 

@@ -2,7 +2,7 @@
  * Native (Rust) island scan bridge via Tauri IPC.
  *
  * Uses the same two-phase IPC pattern as slicing:
- *   1. stage_mesh_binary() — send geometry bytes (raw binary)
+ *   1. stage_mesh_binary_set() — send geometry bytes (raw binary, single-shot)
  *   2. run_island_scan_native() — run scan, receive results
  *
  * Returns a `ScanResults`-compatible object so all existing overlay/voxel
@@ -123,11 +123,12 @@ export async function runIslandScanNative(
   params: ScanParams,
   onProgress?: (done: number, total: number) => void,
 ): Promise<ScanResults> {
-  // Step 1: Stage mesh binary via raw binary IPC (same pattern as nativeSlicerBridge)
+  // Step 1: Stage mesh binary via raw binary IPC.
+  // Uses `stage_mesh_binary_set` (single-shot), which replaced the old `stage_mesh_binary` command in v3.1.
   const positions = geom.geometry.getAttribute('position').array as Float32Array;
   const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
 
-  await core.invoke<number>('stage_mesh_binary', meshBytes, {
+  await core.invoke('stage_mesh_binary_set', meshBytes, {
     headers: { 'Content-Type': 'application/octet-stream' },
   });
 

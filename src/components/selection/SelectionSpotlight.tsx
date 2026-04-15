@@ -148,6 +148,7 @@ export function SelectionSpotlight({
     <>
       <spotLight
         ref={lightRef}
+        userData={{ thumbnailCaptureExclude: true, thumbnailCaptureExcludeReason: 'selection-spotlight' }}
         color={color}
         intensity={0}
         angle={angle}
@@ -158,7 +159,7 @@ export function SelectionSpotlight({
         visible={false}
         castShadow={false}
       />
-      <object3D ref={targetRef} />
+      <object3D ref={targetRef} userData={{ thumbnailCaptureExclude: true, thumbnailCaptureExcludeReason: 'selection-spotlight-target' }} />
       {debug && helperRef.current && <primitive object={helperRef.current} />}
     </>
   );

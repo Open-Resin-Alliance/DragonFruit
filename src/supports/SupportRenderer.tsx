@@ -10,6 +10,7 @@ import { BraceRenderer } from './SupportTypes/Brace/BraceRenderer';
 import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
 import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
 import { KickstandRenderer } from './SupportTypes/Kickstand/KickstandRenderer';
+import { AnchorRenderer } from './SupportTypes/Anchor/AnchorRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
@@ -663,6 +664,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const twigList = useMemo(() => Object.values(state.twigs), [state.twigs]);
     const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
+    const anchorList = useMemo(() => Object.values(state.anchors), [state.anchors]);
     const kickstandList = useMemo(() => Object.values(kickstandState.kickstands), [kickstandState.kickstands]);
     const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
     const kickstandKnotList = useMemo(() => Object.values(kickstandState.knots), [kickstandState.knots]);
@@ -945,8 +947,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const supportIdByContactDiskId = useMemo(() => {
         const map = new Map<string, string>();
         for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByContactDiskId)) map.set(id, supportId);
+        // Add anchor contact cones (not indexed by render lookup worker)
+        for (const anchor of anchorList) {
+            if (anchor.contactCone?.id) map.set(anchor.contactCone.id, anchor.id);
+        }
         return map;
-    }, [supportRenderLookup.supportIdByContactDiskId]);
+    }, [supportRenderLookup.supportIdByContactDiskId, anchorList]);
 
     const hoveredSupportIdFromPicking = useMemo(() => {
         return resolveHoveredSupportOwnerId(
@@ -1191,10 +1197,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    // Initialize clipping planes once (update in-place to avoid recreation)
-    const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-    React.useEffect(() => {
+    // Derive clipping planes synchronously so a freshly mounted renderer
+    // (e.g. after support refresh key changes) is clipped correctly on its
+    // very first render, without waiting for a post-commit effect.
+    const clippingPlanes = useMemo(() => {
         const planes: THREE.Plane[] = [];
 
         if (clipLower != null) {
@@ -1205,10 +1211,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
         }
 
-        clippingPlanesRef.current = planes;
+        return planes;
     }, [clipLower, clipUpper]);
-
-    const clippingPlanes = clippingPlanesRef.current;
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#9a9a9a';
@@ -1355,6 +1359,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             || selectedCategory === 'twig'
             || selectedCategory === 'stick'
             || selectedCategory === 'brace'
+            || selectedCategory === 'anchor'
         ) {
             return selectedId;
         }
@@ -1474,6 +1479,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return selected;
     }, [singleSelectedSupportId, selectedSupportIdSet, state.sticks, useMultiSelectionDetail]);
+
+    const selectedAnchorIds = useMemo(() => {
+        const selected = new Set<string>();
+        if (useMultiSelectionDetail) {
+            for (const supportId of selectedSupportIdSet) {
+                if (state.anchors[supportId]) selected.add(supportId);
+            }
+        }
+
+        if (singleSelectedSupportId && state.anchors[singleSelectedSupportId]) {
+            selected.add(singleSelectedSupportId);
+        }
+
+        return selected;
+    }, [singleSelectedSupportId, selectedSupportIdSet, state.anchors, useMultiSelectionDetail]);
 
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
@@ -3570,22 +3590,74 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             }
         };
 
+        const clearMaterialClipping = (material: THREE.Material) => {
+            const m = material as THREE.Material & { clippingPlanes?: THREE.Plane[] | null };
+            if (m.clippingPlanes !== null) {
+                m.clippingPlanes = null;
+                material.needsUpdate = true;
+            }
+        };
+
+        // Returns true if this object should be exempt from cross-section clipping.
+        // Gizmo handles tag themselves with isGizmoHandle. Selected-support groups
+        // are tagged with noClipping so their entire subtree is preserved.
+        const isClipExempt = (obj: THREE.Object3D): boolean => {
+            if (obj.userData.isGizmoHandle === true) return true;
+            let cur: THREE.Object3D | null = obj;
+            while (cur && cur !== root) {
+                if (cur.userData.noClipping === true) return true;
+                cur = cur.parent;
+            }
+            return false;
+        };
+
         root.traverse((obj) => {
             const mesh = obj as THREE.Mesh;
             if (!mesh.material) return;
             applyMeshRenderOrder(mesh);
 
+            const exempt = isClipExempt(obj);
+
             if (Array.isArray(mesh.material)) {
                 mesh.material.forEach((material) => {
-                    applyMaterialClipping(material);
+                    if (exempt) {
+                        clearMaterialClipping(material);
+                    } else {
+                        applyMaterialClipping(material);
+                    }
                     applyMaterialGhostOpacity(material);
                 });
             } else {
-                applyMaterialClipping(mesh.material);
+                if (exempt) {
+                    clearMaterialClipping(mesh.material);
+                } else {
+                    applyMaterialClipping(mesh.material);
+                }
                 applyMaterialGhostOpacity(mesh.material);
             }
         });
-    }, [clippingPlanes, ghostOpacityClamped, ghostTransparent, ghostRenderOrder]);
+    }, [
+        clippingPlanes,
+        ghostOpacityClamped,
+        ghostTransparent,
+        ghostRenderOrder,
+        selectedId,
+        // Re-apply clipping when committed support geometry collections change.
+        // Without this, newly added meshes can miss clipping until some other
+        // dependency (like slider movement) forces a re-run.
+        state.roots,
+        state.trunks,
+        state.branches,
+        state.leaves,
+        state.twigs,
+        state.sticks,
+        state.braces,
+        state.anchors,
+        state.knots,
+        kickstandState.roots,
+        kickstandState.kickstands,
+        kickstandState.knots,
+    ]);
 
     return (
         <group ref={groupRef}>
@@ -3856,7 +3928,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const deferTrunkInteractionToSceneBatch = !effectiveSelected;
 
                 return (
-                    <group key={trunk.id}>
+                    // noClipping: this trunk is actively selected/edited — exempt it
+                    // from cross-section clipping so it always renders fully visible.
+                    <group key={trunk.id} userData={{ noClipping: true }}>
                     <TrunkRenderer
                         key={trunk.id}
                         trunk={trunk}
@@ -3909,7 +3983,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
-                    <group key={branch.id}>
+                    <group key={branch.id} userData={{ noClipping: true }}>
                     <BranchRenderer
                         key={branch.id}
                         branch={branch}
@@ -3941,7 +4015,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
-                    <group key={leaf.id}>
+                    <group key={leaf.id} userData={{ noClipping: true }}>
                     <LeafRenderer
                         key={leaf.id}
                         leaf={leaf}
@@ -3972,7 +4046,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const deferTwigInteractionToSceneBatch = !effectiveSelected && isTwigBatchable;
 
                 return (
-                    <group key={twig.id}>
+                    <group key={twig.id} userData={{ noClipping: effectiveSelected }}>
                     <TwigRenderer
                         key={twig.id}
                         twig={twig}
@@ -4018,7 +4092,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const deferStickInteractionToSceneBatch = !effectiveSelected && isStickBatchable;
 
                 return (
-                    <group key={stick.id}>
+                    <group key={stick.id} userData={{ noClipping: effectiveSelected }}>
                     <StickRenderer
                         key={stick.id}
                         stick={stick}
@@ -4085,7 +4159,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!braceStartKnot || !braceEndKnot) return null;
 
                 return (
-                    <group key={brace.id}>
+                    <group key={brace.id} userData={{ noClipping: effectiveSelected }}>
                         <BraceRenderer
                             key={brace.id}
                             brace={brace}
@@ -4126,7 +4200,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnot = !hideUnselectedKnots || effectiveSelected;
 
                 return (
-                    <group key={kickstand.id}>
+                    <group key={kickstand.id} userData={{ noClipping: effectiveSelected }}>
                     <KickstandRenderer
                         key={kickstand.id}
                         kickstand={kickstand}
@@ -4162,6 +4236,30 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
+
+            {/* Render Anchors */}
+            {anchorList.map(anchor => {
+                if (!isModelVisible(anchor.modelId, anchor.id)) return null;
+                const effectiveSelected = selectedAnchorIds.has(anchor.id);
+                const isAnchorHovered = hoveredSupportIdForVisual === anchor.id
+                    || marqueeHoveredSupportIdSet.has(anchor.id);
+
+                return (
+                    <group key={anchor.id}>
+                    <AnchorRenderer
+                        key={anchor.id}
+                        anchor={anchor}
+                        isSelected={effectiveSelected}
+                        selectedId={effectiveSelected ? selectedId : null}
+                        dimNonSelected={dimNonSelected}
+                        isHovered={isAnchorHovered}
+                        baseColor={resolveBaseColor(anchor.modelId)}
+                        suppressHover={suppressHover}
+                        isInteractable={isInteractable}
+                    />
+                    </group>
+                );
+            })}
 
             {/*
               Auto-bracing debug overlay mount point.

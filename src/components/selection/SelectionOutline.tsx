@@ -189,6 +189,7 @@ function FresnelGlowMesh({
   return (
     <mesh
       ref={glowRef}
+      userData={{ thumbnailCaptureExclude: true, thumbnailCaptureExcludeReason: 'selection-outline' }}
       geometry={sourceMesh.geometry}
       material={glowMaterial}
     />

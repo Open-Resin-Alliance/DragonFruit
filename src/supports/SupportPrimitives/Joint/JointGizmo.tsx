@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'react';
+import React, { useSyncExternalStore, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
 import * as THREE from 'three';
@@ -119,6 +119,85 @@ export function JointGizmo() {
              },
          };
      }, []);
+
+    const getTwigDiskTipCenter = useCallback((disk: any) => {
+        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+        return {
+            x: disk.pos.x + disk.surfaceNormal.x * thickness,
+            y: disk.pos.y + disk.surfaceNormal.y * thickness,
+            z: disk.pos.z + disk.surfaceNormal.z * thickness,
+        };
+    }, []);
+
+    const recomputeTwigDiskForSocket = useCallback((
+        disk: any,
+        desiredSocketPos: { x: number; y: number; z: number },
+        axisHint?: THREE.Vector3,
+    ) => {
+        const contactPos = new THREE.Vector3(disk.pos.x, disk.pos.y, disk.pos.z);
+
+        const desiredSocket = new THREE.Vector3(desiredSocketPos.x, desiredSocketPos.y, desiredSocketPos.z);
+        const contactToDesiredSocket = desiredSocket.clone().sub(contactPos);
+
+        // Keep contact point anchored, but allow contact angle to tilt toward the moved joint.
+        let surfaceNormal = contactToDesiredSocket.clone();
+        if (surfaceNormal.lengthSq() < 0.000001) {
+            surfaceNormal = new THREE.Vector3(disk.surfaceNormal.x, disk.surfaceNormal.y, disk.surfaceNormal.z);
+        }
+        if (surfaceNormal.lengthSq() < 0.000001) {
+            surfaceNormal.set(0, 0, 1);
+        }
+        surfaceNormal.normalize();
+
+        let axis = axisHint?.clone() ?? contactToDesiredSocket.clone();
+        if (axis.lengthSq() < 0.000001) {
+            axis.set(disk.coneAxis.x, disk.coneAxis.y, disk.coneAxis.z);
+        }
+        if (axis.lengthSq() < 0.000001) {
+            axis.copy(surfaceNormal);
+        }
+        axis.normalize();
+
+        const desiredDistance = contactToDesiredSocket.length();
+        const fallbackThickness = disk.diskLengthOverride ?? calculateDiskThickness(
+            { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
+            { x: axis.x, y: axis.y, z: axis.z },
+            disk.profile,
+        );
+        const thickness = Number.isFinite(desiredDistance) && desiredDistance > 0.000001
+            ? Math.max(0.001, desiredDistance)
+            : Math.max(0.001, fallbackThickness);
+
+        const snappedSocket = contactPos.clone().add(surfaceNormal.clone().multiplyScalar(thickness));
+
+        return {
+            disk: {
+                ...disk,
+                // Keep contact point anchored on the model surface.
+                pos: {
+                    x: contactPos.x,
+                    y: contactPos.y,
+                    z: contactPos.z,
+                },
+                surfaceNormal: {
+                    x: surfaceNormal.x,
+                    y: surfaceNormal.y,
+                    z: surfaceNormal.z,
+                },
+                coneAxis: {
+                    x: axis.x,
+                    y: axis.y,
+                    z: axis.z,
+                },
+                diskLengthOverride: thickness,
+            },
+            socket: {
+                x: snappedSocket.x,
+                y: snappedSocket.y,
+                z: snappedSocket.z,
+            },
+        };
+    }, []);
 
     // Helper to find joint and parent
     const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick, kickstand?: Kickstand } | null => {
@@ -332,9 +411,74 @@ export function JointGizmo() {
             const clamped = getJointPosInSegments(newBranch.segments as any[], joint.id);
             if (clamped) gizmoPos = clamped;
         } else if (twig) {
+            const nextSegments = updateSegmentsJointPos(twig.segments as any[], joint.id, newPos) as any;
+            const firstSegment = nextSegments[0];
+            const lastSegment = nextSegments[nextSegments.length - 1];
+            const movingBottomEndpoint = firstSegment?.bottomJoint?.id === joint.id;
+            const movingTopEndpoint = lastSegment?.topJoint?.id === joint.id;
+
+            let nextDiskA = twig.contactDiskA;
+            let nextDiskB = twig.contactDiskB;
+            let adjustedSegments = nextSegments;
+
+            if (movingBottomEndpoint && firstSegment?.bottomJoint) {
+                const otherSocket = lastSegment?.topJoint?.pos ?? getTwigDiskTipCenter(twig.contactDiskB);
+                const desiredSocketA = firstSegment.bottomJoint.pos;
+                const axisHint = new THREE.Vector3(
+                    otherSocket.x - desiredSocketA.x,
+                    otherSocket.y - desiredSocketA.y,
+                    otherSocket.z - desiredSocketA.z,
+                );
+
+                const recomputedA = recomputeTwigDiskForSocket(twig.contactDiskA as any, desiredSocketA, axisHint);
+                nextDiskA = recomputedA.disk;
+
+                adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
+                    if (index !== 0 || !segment.bottomJoint) return segment;
+                    return {
+                        ...segment,
+                        bottomJoint: {
+                            ...segment.bottomJoint,
+                            pos: recomputedA.socket,
+                        },
+                    };
+                });
+
+                gizmoPos = recomputedA.socket;
+            }
+
+            if (movingTopEndpoint && lastSegment?.topJoint) {
+                const firstAfterAdjust = adjustedSegments[0];
+                const otherSocket = firstAfterAdjust?.bottomJoint?.pos ?? getTwigDiskTipCenter(nextDiskA as any);
+                const desiredSocketB = lastSegment.topJoint.pos;
+                const axisHint = new THREE.Vector3(
+                    otherSocket.x - desiredSocketB.x,
+                    otherSocket.y - desiredSocketB.y,
+                    otherSocket.z - desiredSocketB.z,
+                );
+
+                const recomputedB = recomputeTwigDiskForSocket(twig.contactDiskB as any, desiredSocketB, axisHint);
+                nextDiskB = recomputedB.disk;
+
+                adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
+                    if (index !== adjustedSegments.length - 1 || !segment.topJoint) return segment;
+                    return {
+                        ...segment,
+                        topJoint: {
+                            ...segment.topJoint,
+                            pos: recomputedB.socket,
+                        },
+                    };
+                });
+
+                gizmoPos = recomputedB.socket;
+            }
+
             const newTwig: Twig = {
                 ...twig,
-                segments: updateSegmentsJointPos(twig.segments as any[], joint.id, newPos) as any,
+                segments: adjustedSegments,
+                contactDiskA: nextDiskA,
+                contactDiskB: nextDiskB,
             };
             liveTwigPreviewRef.current = newTwig;
             emitSupportDragPreview('twig', newTwig.id, newTwig);
@@ -397,6 +541,8 @@ export function JointGizmo() {
         trunk,
         twig,
         updateSegmentsJointPos,
+        getTwigDiskTipCenter,
+        recomputeTwigDiskForSocket,
         recomputeConeForSocket,
     ]);
 
@@ -407,24 +553,13 @@ export function JointGizmo() {
         applyMoveDelta(delta);
     }, [applyMoveDelta]);
 
-    const scheduleMoveFlush = useCallback(() => {
-        if (typeof window === 'undefined') return;
-        if (moveRafRef.current !== null) return;
-
-        moveRafRef.current = window.requestAnimationFrame(() => {
-            moveRafRef.current = null;
-            flushPendingMove();
-
-            if (pendingDeltaRef.current.lengthSq() > MOVE_DELTA_EPS_SQ) {
-                scheduleMoveFlush();
-            }
-        });
-    }, [flushPendingMove]);
-
     const handleMove = (delta: THREE.Vector3) => {
         if (!joint) return;
+        // Apply immediately so support geometry stays in lockstep with gizmo.
+        // rAF-batching introduces a persistent one-frame lag where the cone
+        // appears pseudo-detached from the dragged socket joint.
         pendingDeltaRef.current.add(delta);
-        scheduleMoveFlush();
+        flushPendingMove();
     };
 
     const handleMoveEnd = () => {
@@ -496,11 +631,22 @@ export function JointGizmo() {
         liveKickstandPreviewRef.current = null;
     };
 
+    // Sync gizmo group position to joint.pos, but only when not dragging.
+    // Do NOT use a declarative R3F `position` prop on the group — on every React re-render
+    // (caused by the deferred useActiveJointDragPreview state update), R3F would re-apply
+    // the committed (old) joint position to the Three.js group, overwriting the imperative
+    // position.set() from applyMoveDelta and creating a persistent 1-frame cone/ball desync.
+    useLayoutEffect(() => {
+        if (!gizmoTargetRef.current || !joint) return;
+        if (dragPosRef.current !== null) return; // skip during active drag
+        gizmoTargetRef.current.position.set(joint.pos.x, joint.pos.y, joint.pos.z);
+    }, [joint?.pos.x, joint?.pos.y, joint?.pos.z]);
+
     if (!joint) return null;
 
     return (
         <>
-            <group ref={gizmoTargetRef as React.MutableRefObject<THREE.Group>} position={[joint.pos.x, joint.pos.y, joint.pos.z]} />
+            <group ref={gizmoTargetRef as React.MutableRefObject<THREE.Group>} />
             <ScreenSpaceGizmo
                 meshRef={gizmoTargetRef as React.RefObject<THREE.Group>}
                 position={[joint.pos.x, joint.pos.y, joint.pos.z]}

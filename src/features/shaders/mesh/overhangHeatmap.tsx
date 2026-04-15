@@ -69,7 +69,6 @@ export function OverhangHeatmapMaterial({
             roughness={materialRoughness ?? 0.9}
             envMapIntensity={0.34}
             clippingPlanes={clippingPlanes}
-            clipIntersection
             side={THREE.FrontSide}
             flatShading={false}
             onBeforeCompile={(shader) => {

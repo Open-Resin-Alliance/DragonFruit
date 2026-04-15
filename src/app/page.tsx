@@ -16,6 +16,8 @@ import { ModelManagerPanel } from '../components/controls/ModelManagerPanel';
 import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
+import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
+import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
 import { TransformControls } from '@/components/controls/TransformControls';
 import {
   ArrangePanel,
@@ -30,14 +32,15 @@ import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuP
 import { SupportSidebar } from '@/supports/Settings';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
-import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
+import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
+import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton } from '@/components/ui/primitives';
+import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
@@ -93,12 +96,17 @@ import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import {
+  getSceneAutosaveSettingsServerSnapshot,
+  getSceneAutosaveSettingsSnapshot,
+  subscribeToSceneAutosaveSettings,
+} from '@/components/settings/sceneAutosavePreferences';
+import {
   getSavedWorkspaceCameraSettings,
   getWorkspaceCameraSettingsServerSnapshot,
   getWorkspaceCameraSettingsSnapshot,
   subscribeToWorkspaceCameraSettings,
 } from '@/components/settings/workspaceCameraPreferences';
-import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import { openProfileSettingsModal, PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT } from '@/components/settings/profileModalEvents';
 import {
   getProfileMonitoringUiAdapter,
   getProfileNetworkUiAdapter,
@@ -125,11 +133,13 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
+  pickSavePathWithNativeDialog,
   pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
   savePrintArtifactWithNativeDialog,
+  writeBytesToNativePath,
 } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
@@ -150,6 +160,8 @@ import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayer
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
+import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -371,6 +383,9 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 };
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
+const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
+const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
 const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
@@ -438,6 +453,13 @@ function getDroppedFileMimeType(name: string): string {
 function isSceneFileName(name: string): boolean {
   const ext = getFileExtension(name);
   return ext === '.voxl' || ext === '.lys';
+}
+
+function normalizeActiveVoxlScenePath(path: string | null | undefined): string | null {
+  if (typeof path !== 'string') return null;
+  const trimmed = path.trim();
+  if (!trimmed) return null;
+  return getFileExtension(trimmed) === '.voxl' ? trimmed : null;
 }
 
 type LaunchSceneFileEntry = {
@@ -616,7 +638,16 @@ function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+  const importSceneFile = scene.importSceneFile;
+  const importSceneFiles = scene.importSceneFiles;
+  const recentOpenedFiles = scene.recentOpenedFiles;
+  const reopenRecentOpenedFile = scene.reopenRecentOpenedFile;
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const sceneAutosaveSettings = React.useSyncExternalStore(
+    subscribeToSceneAutosaveSettings,
+    getSceneAutosaveSettingsSnapshot,
+    getSceneAutosaveSettingsServerSnapshot,
+  );
   const workspaceCameraSettings = React.useSyncExternalStore(
     subscribeToWorkspaceCameraSettings,
     getWorkspaceCameraSettingsSnapshot,
@@ -740,6 +771,37 @@ export default function Home() {
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
+  const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
+  const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
+  const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
+  const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
+  const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
+  const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
+  const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
+  const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
+  const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
+  const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
+  const [loadedSceneSaveSource, setLoadedSceneSaveSource] = React.useState<{ name: string; path: string | null } | null>(null);
+  const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
+  const [sceneSaveChoiceFileName, setSceneSaveChoiceFileName] = React.useState<string | null>(null);
+  const [sceneSaveChoicePath, setSceneSaveChoicePath] = React.useState<string | null>(null);
+  const [autosaveRecovery, setAutosaveRecovery] = React.useState<{ savedAt: string } | null>(null);
+  const [showCloseUnsavedChangesModal, setShowCloseUnsavedChangesModal] = React.useState(false);
+  const [closeUnsavedChangesBusy, setCloseUnsavedChangesBusy] = React.useState<'none' | 'save_and_close' | 'discard_and_close'>('none');
+  const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
+  const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
+  const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
+  const hasUnsavedSceneChangesRef = React.useRef(false);
+  const allowProgrammaticWindowCloseRef = React.useRef(false);
+  const sceneSaveBaselineRef = React.useRef<{
+    undo: number;
+    redo: number;
+    modelCount: number;
+  }>({
+    undo: getUndoCount(),
+    redo: getRedoCount(),
+    modelCount: scene.models.length,
+  });
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
@@ -750,6 +812,104 @@ export default function Home() {
   const printingMonitorErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const saveToastHideTimeoutRef = React.useRef<number | null>(null);
+  const saveToastClearTimeoutRef = React.useRef<number | null>(null);
+  const saveToastEnterRafRef = React.useRef<number | null>(null);
+  const saveToastShownAtRef = React.useRef<number | null>(null);
+  const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
+  const sceneSaveInFlightRef = React.useRef(false);
+  const sceneSaveQueuedRef = React.useRef(false);
+  const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
+  const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
+
+  const { isAutosaving, clearAutosave } = useSceneAutosave({
+    models: scene.models,
+    activeModelId: scene.activeModelId,
+    selectedModelIds: scene.selectedModelIds,
+    enabled: sceneAutosaveSettings.enabled,
+    debounceMs: sceneAutosaveSettings.debounceMs,
+    capMs: sceneAutosaveSettings.capMs,
+    preferredSavePath: preferredOverwriteScenePathRef.current,
+  });
+
+  React.useEffect(() => {
+    const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
+    const TOAST_ANIMATION_MS = 220;
+    const hasActiveSaveWork = isSceneSaveInProgress || isAutosaving;
+
+    if (hasActiveSaveWork) {
+      if (saveToastHideTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastHideTimeoutRef.current);
+        saveToastHideTimeoutRef.current = null;
+      }
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+        saveToastClearTimeoutRef.current = null;
+      }
+      if (saveToastEnterRafRef.current !== null) {
+        window.cancelAnimationFrame(saveToastEnterRafRef.current);
+        saveToastEnterRafRef.current = null;
+      }
+
+      setSaveToastLabel(isSceneSaveInProgress ? 'Saving…' : 'Autosaving…');
+
+      if (!isSaveToastVisible) {
+        saveToastShownAtRef.current = Date.now();
+        setIsSaveToastVisible(true);
+        setIsSaveToastAnimatedVisible(false);
+        saveToastEnterRafRef.current = window.requestAnimationFrame(() => {
+          saveToastEnterRafRef.current = null;
+          setIsSaveToastAnimatedVisible(true);
+        });
+      } else if (!isSaveToastAnimatedVisible) {
+        setIsSaveToastAnimatedVisible(true);
+      }
+      return;
+    }
+
+    if (!isSaveToastVisible) {
+      saveToastShownAtRef.current = null;
+      return;
+    }
+
+    const shownAt = saveToastShownAtRef.current ?? Date.now();
+    const elapsed = Date.now() - shownAt;
+    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
+
+    if (saveToastHideTimeoutRef.current !== null) {
+      window.clearTimeout(saveToastHideTimeoutRef.current);
+    }
+    saveToastHideTimeoutRef.current = window.setTimeout(() => {
+      saveToastHideTimeoutRef.current = null;
+      setIsSaveToastAnimatedVisible(false);
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+      }
+      saveToastClearTimeoutRef.current = window.setTimeout(() => {
+        saveToastClearTimeoutRef.current = null;
+        saveToastShownAtRef.current = null;
+        setIsSaveToastVisible(false);
+      }, TOAST_ANIMATION_MS);
+    }, remaining);
+  }, [isAutosaving, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+
+  React.useEffect(() => {
+    return () => {
+      if (saveToastHideTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastHideTimeoutRef.current);
+        saveToastHideTimeoutRef.current = null;
+      }
+      if (saveToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(saveToastClearTimeoutRef.current);
+        saveToastClearTimeoutRef.current = null;
+      }
+      if (saveToastEnterRafRef.current !== null) {
+        window.cancelAnimationFrame(saveToastEnterRafRef.current);
+        saveToastEnterRafRef.current = null;
+      }
+    };
+  }, []);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -814,6 +974,13 @@ export default function Home() {
   const triggerSliceExportRef = React.useRef<(() => void) | null>(null);
   const modeBeforePrintingRef = React.useRef<typeof scene.mode>('prepare');
   const shouldReturnToPrintingAfterSliceRef = React.useRef(false);
+  const sliceIntentRef = React.useRef<SliceIntent>('file');
+  const pendingPostSliceActionRef = React.useRef<'upload' | 'print' | null>(null);
+  const pendingAutoStartPrintRef = React.useRef(false);
+  const preSliceFileDestinationPathRef = React.useRef<string | null>(null);
+  const preSliceUploadSelectionRef = React.useRef<{ deviceId: string; materialId?: string } | null>(null);
+  const preSliceTargetPickerResolverRef = React.useRef<((selection: { deviceId: string; materialId?: string } | null) => void) | null>(null);
+  const preSlicePrintConfirmResolverRef = React.useRef<((confirmed: boolean) => void) | null>(null);
   const printingPreviewDragRef = React.useRef<{
     pointerId: number;
     startClientX: number;
@@ -840,10 +1007,13 @@ export default function Home() {
     remaining: string;
     transferred: string;
   } | null>(null);
+  const [completedSliceIntent, setCompletedSliceIntent] = React.useState<SliceIntent | null>(null);
+  const [completedSaveDestinationPath, setCompletedSaveDestinationPath] = React.useState<string | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
   const [printingTargetPickerOpen, setPrintingTargetPickerOpen] = React.useState(false);
+  const [printingTargetPickerMode, setPrintingTargetPickerMode] = React.useState<'post-slice' | 'pre-slice-upload' | 'pre-slice-print'>('post-slice');
   const [printingTargetDeviceId, setPrintingTargetDeviceId] = React.useState<string | null>(null);
   const [printingTargetMaterialId, setPrintingTargetMaterialId] = React.useState<string>('');
   const [printingTargetMaterialOptions, setPrintingTargetMaterialOptions] = React.useState<FleetUploadMaterialOption[]>([]);
@@ -877,6 +1047,7 @@ export default function Home() {
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
   const [isPrintingMonitorWebcamSnapshotSaving, setIsPrintingMonitorWebcamSnapshotSaving] = React.useState(false);
   const [printingMonitorWebcamExpanded, setPrintingMonitorWebcamExpanded] = React.useState(false);
+  const [preSlicePrintConfirmOpen, setPreSlicePrintConfirmOpen] = React.useState(false);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
   const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
@@ -1061,6 +1232,9 @@ export default function Home() {
   const [isHistoryPreviewActive, setIsHistoryPreviewActive] = React.useState(false);
   const historyPreviewBaselineRef = React.useRef<{ undo: number; redo: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
+  const [isTemporarilyDisablingCrossSectionForThumbnail, setIsTemporarilyDisablingCrossSectionForThumbnail] = React.useState(false);
+  const [isCrossSectionEnabled, setIsCrossSectionEnabled] = React.useState(true);
+  const handleToggleCrossSection = React.useCallback(() => setIsCrossSectionEnabled((prev) => !prev), []);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
@@ -1081,6 +1255,276 @@ export default function Home() {
       JSON.stringify(exportThumbnailRenderOptions),
     );
   }, [exportThumbnailRenderOptions]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = window.localStorage.getItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY);
+      setSuppressLysImportWarning(stored === '1');
+    } catch {
+      setSuppressLysImportWarning(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (lysImportWarningPendingResolveRef.current) {
+        const resolve = lysImportWarningPendingResolveRef.current;
+        lysImportWarningPendingResolveRef.current = null;
+        resolve(false);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!scene.sceneImportPlacementPrompt) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        scene.resolveSceneImportPlacementPrompt('load_as_is');
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
+
+  const hasLysSceneFile = React.useCallback((filesInput: FileList | File[]) => {
+    const files = Array.from(filesInput);
+    return files.some((file) => file.name.trim().toLowerCase().endsWith('.lys'));
+  }, []);
+
+  const maybeConfirmLysImportWarning = React.useCallback(async (filesInput: FileList | File[]) => {
+    if (suppressLysImportWarning) return true;
+    if (!hasLysSceneFile(filesInput)) return true;
+
+    if (lysImportWarningPendingResolveRef.current) {
+      const pendingResolve = lysImportWarningPendingResolveRef.current;
+      lysImportWarningPendingResolveRef.current = null;
+      pendingResolve(false);
+    }
+
+    setLysImportWarningSkipFuture(false);
+    setShowLysImportWarningModal(true);
+    return await new Promise<boolean>((resolve) => {
+      lysImportWarningPendingResolveRef.current = resolve;
+    });
+  }, [hasLysSceneFile, suppressLysImportWarning]);
+
+  const resolveLysImportWarning = React.useCallback((proceed: boolean) => {
+    const resolve = lysImportWarningPendingResolveRef.current;
+    lysImportWarningPendingResolveRef.current = null;
+    setLysImportWarningSkipFuture(false);
+    setShowLysImportWarningModal(false);
+    resolve?.(proceed);
+  }, []);
+
+  const handleCancelLysImportWarning = React.useCallback(() => {
+    resolveLysImportWarning(false);
+  }, [resolveLysImportWarning]);
+
+  const handleContinueLysImportWarning = React.useCallback(() => {
+    if (lysImportWarningSkipFuture) {
+      setSuppressLysImportWarning(true);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY, '1');
+        } catch {
+          // Ignore persistence failure and still proceed.
+        }
+      }
+    }
+    resolveLysImportWarning(true);
+  }, [lysImportWarningSkipFuture, resolveLysImportWarning]);
+
+  const resolveSceneSaveChoice = React.useCallback((choice: 'overwrite' | 'save_as' | 'cancel') => {
+    const resolve = sceneSaveChoiceResolveRef.current;
+    sceneSaveChoiceResolveRef.current = null;
+    setShowSceneSaveChoiceModal(false);
+    setSceneSaveChoiceFileName(null);
+    setSceneSaveChoicePath(null);
+    resolve?.(choice);
+  }, []);
+
+  const promptSceneSaveChoice = React.useCallback(async (
+    options: { fileName: string; scenePath: string | null },
+  ): Promise<'overwrite' | 'save_as' | 'cancel'> => {
+    if (sceneSaveChoiceResolveRef.current) {
+      sceneSaveChoiceResolveRef.current('cancel');
+      sceneSaveChoiceResolveRef.current = null;
+    }
+
+    setSceneSaveChoiceFileName(options.fileName);
+    setSceneSaveChoicePath(options.scenePath);
+    setShowSceneSaveChoiceModal(true);
+
+    return await new Promise<'overwrite' | 'save_as' | 'cancel'>((resolve) => {
+      sceneSaveChoiceResolveRef.current = resolve;
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (!showSceneSaveChoiceModal) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        resolveSceneSaveChoice('cancel');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [resolveSceneSaveChoice, showSceneSaveChoiceModal]);
+
+  React.useEffect(() => {
+    return () => {
+      if (sceneSaveChoiceResolveRef.current) {
+        sceneSaveChoiceResolveRef.current('cancel');
+        sceneSaveChoiceResolveRef.current = null;
+      }
+    };
+  }, []);
+
+  const markSceneSaveBaseline = React.useCallback(() => {
+    sceneSaveBaselineRef.current = {
+      undo: getUndoCount(),
+      redo: getRedoCount(),
+      modelCount: scene.models.length,
+    };
+    setHasUnsavedSceneChanges(false);
+    hasUnsavedSceneChangesRef.current = false;
+  }, [scene.models.length]);
+
+  const recomputeUnsavedSceneChanges = React.useCallback(() => {
+    const baseline = sceneSaveBaselineRef.current;
+    const undoCount = getUndoCount();
+    const redoCount = getRedoCount();
+    const modelCount = scene.models.length;
+
+    const dirty = modelCount > 0 && (
+      undoCount !== baseline.undo
+      || redoCount !== baseline.redo
+      || modelCount !== baseline.modelCount
+    );
+
+    setHasUnsavedSceneChanges(dirty);
+    hasUnsavedSceneChangesRef.current = dirty;
+  }, [scene.models.length]);
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeHistory(recomputeUnsavedSceneChanges);
+    return () => {
+      unsubscribe();
+    };
+  }, [recomputeUnsavedSceneChanges]);
+
+  React.useEffect(() => {
+    recomputeUnsavedSceneChanges();
+  }, [recomputeUnsavedSceneChanges, scene.models.length]);
+
+  const importSceneFilesWithLysWarning = React.useCallback(async (
+    filesInput: FileList | File[],
+    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
+  ): Promise<boolean> => {
+    const sceneFiles = Array.from(filesInput);
+    if (sceneFiles.length === 0) return false;
+
+    const proceed = await maybeConfirmLysImportWarning(sceneFiles);
+    if (!proceed) return false;
+
+    const imported = sceneFiles.length === 1
+      ? await importSceneFile(sceneFiles[0], {
+          sourcePath: options?.sourcePaths?.[0] ?? options?.resultingScenePath ?? null,
+        })
+      : await importSceneFiles(sceneFiles, {
+          sourcePaths: options?.sourcePaths,
+        });
+
+    if (imported) {
+      const importedSingleFile = sceneFiles.length === 1 ? sceneFiles[0] : null;
+      const importedSingleIsVoxl = Boolean(importedSingleFile && getFileExtension(importedSingleFile.name) === '.voxl');
+      const normalizedScenePath = normalizeActiveVoxlScenePath(options?.resultingScenePath);
+      setActiveSceneFilePath(normalizedScenePath);
+      if (importedSingleFile && importedSingleIsVoxl) {
+        setLoadedSceneSaveSource({
+          name: importedSingleFile.name,
+          path: normalizedScenePath,
+        });
+        markSceneSaveBaseline();
+      } else {
+        setLoadedSceneSaveSource(null);
+      }
+    }
+
+    return imported;
+  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
+
+  const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    void importSceneFilesWithLysWarning(files);
+    e.target.value = '';
+  }, [importSceneFilesWithLysWarning]);
+
+  const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
+    const entry = recentOpenedFiles.find((item) => item.id === entryId);
+    if (!entry) return false;
+
+    if (entry.kind === 'scene' && entry.name.trim().toLowerCase().endsWith('.lys')) {
+      const proceed = await maybeConfirmLysImportWarning([
+        new File([], entry.name, { type: 'application/octet-stream' }),
+      ]);
+      if (!proceed) return false;
+    }
+
+    const sourcePath = typeof entry.sourcePath === 'string' && entry.sourcePath.trim().length > 0
+      ? entry.sourcePath.trim()
+      : null;
+
+    // Preferred path for desktop: reload from the original source file so the
+    // editing session can resume with an overwrite-capable scene path.
+    if (entry.kind === 'scene' && sourcePath) {
+      try {
+        const sourceBytes = await readPrintArtifactBytesFromPath(sourcePath);
+        if (sourceBytes && sourceBytes.length > 0) {
+          const restoredFile = new File([Uint8Array.from(sourceBytes)], entry.name, {
+            type: getDroppedFileMimeType(entry.name),
+            lastModified: Date.now(),
+          });
+
+          const importedFromSource = await importSceneFilesWithLysWarning([restoredFile], {
+            resultingScenePath: sourcePath,
+            sourcePaths: [sourcePath],
+          });
+
+          if (importedFromSource) {
+            return true;
+          }
+        }
+      } catch (error) {
+        console.warn('[RecentFiles] Failed reopening scene from original source path; falling back to cached copy.', error);
+      }
+    }
+
+    const reopened = await reopenRecentOpenedFile(entryId);
+    if (reopened && entry.kind === 'scene') {
+      setActiveSceneFilePath(normalizeActiveVoxlScenePath(sourcePath));
+      if (entry.name.trim().toLowerCase().endsWith('.voxl')) {
+        setLoadedSceneSaveSource({
+          name: entry.name,
+          path: normalizeActiveVoxlScenePath(sourcePath),
+        });
+        markSceneSaveBaseline();
+      } else {
+        setLoadedSceneSaveSource(null);
+      }
+    }
+    return reopened;
+  }, [importSceneFilesWithLysWarning, markSceneSaveBaseline, maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -1198,6 +1642,16 @@ export default function Home() {
   const pendingDestructiveTransformContinueRef = React.useRef<(() => void) | null>(null);
   const dragDepthRef = React.useRef(0);
   const launchSceneFilesHandledRef = React.useRef(false);
+  const startupSceneHandoffReadyRef = React.useRef(false);
+  const queuedLaunchSceneEntriesRef = React.useRef<LaunchSceneFileEntry[]>([]);
+  const coldStartSceneHandoffTimerRef = React.useRef<number | null>(null);
+  const launchSceneImportInFlightRef = React.useRef(false);
+  const desktopWindowRevealRequestedRef = React.useRef(false);
+  // Stable ref so the launch effect can always call the latest version of
+  // this callback without listing it as a dep (which causes effect re-runs
+  // and cancelled-flag races during scene initialization).
+  const importSceneFromLaunchEntriesRef = React.useRef<((entries: LaunchSceneFileEntry[]) => Promise<boolean>) | null>(null);
+  const [pendingStartupSceneHandoff, setPendingStartupSceneHandoff] = React.useState(false);
   const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
     signature: '',
     atMs: 0,
@@ -1757,6 +2211,7 @@ export default function Home() {
     return () => observer.disconnect();
   }, [scene.models.length]);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const suppressEditorContextMenuUntilRef = React.useRef(0);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
@@ -1950,7 +2405,7 @@ export default function Home() {
     inFlight.add(layerNumber);
 
     let cancelled = false;
-    void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber)
+    void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber, printingArtifact.outputFormat)
       .then((pngBytes: Uint8Array) => {
         if (cancelled) return;
         const previewBytes = new Uint8Array(pngBytes.length);
@@ -2332,8 +2787,86 @@ export default function Home() {
       shouldReturnToPrintingAfterSliceRef.current = false;
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
+      return;
     }
-  }, []);
+
+    // Dispatch slice intent action with the fresh artifact
+    const intent = sliceIntentRef.current;
+    setCompletedSliceIntent(intent);
+    setCompletedSaveDestinationPath(null);
+    if (intent === 'upload' || intent === 'print') {
+      pendingPostSliceActionRef.current = intent;
+      setShouldAutoSliceOnExportEntry(false);
+      scene.setMode('printing');
+    } else if (intent === 'preview') {
+      // 'preview': navigate to printing workspace without saving or uploading.
+      setShouldAutoSliceOnExportEntry(false);
+      scene.setMode('printing');
+    } else {
+      // 'file': write to pre-selected destination, then navigate to printing workspace.
+      const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
+      preSliceFileDestinationPathRef.current = null;
+      const saveAndNavigate = async (a: SliceExportArtifact) => {
+        let savedPath: string | null = null;
+
+        if (destinationPath) {
+          try {
+            const nativePathForWrite = a.nativeTempPath?.trim() || '';
+            const bytes = a.blob
+              ? new Uint8Array(await a.blob.arrayBuffer())
+              : (nativePathForWrite ? await readPrintArtifactBytesFromPath(nativePathForWrite) : null);
+            if (!bytes) throw new Error('No artifact bytes available for write.');
+            await writeBytesToNativePath(destinationPath, bytes);
+            savedPath = destinationPath;
+          } catch (error) {
+            console.warn('[Slicing] Failed writing pre-selected save path, falling back to save dialog.', error);
+          }
+        }
+
+        if (!savedPath) {
+          const nativePath = a.nativeTempPath?.trim() || '';
+          if (nativePath) {
+            try {
+              await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
+              savedPath = a.outputName;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err ?? '');
+              if (msg.toLowerCase().includes('cancel')) return;
+            }
+          }
+          if (!savedPath) {
+            try {
+              const nativePath2 = a.nativeTempPath?.trim() || '';
+              const bytes = a.blob
+                ? new Uint8Array(await a.blob.arrayBuffer())
+                : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
+              if (!bytes) throw new Error('No artifact bytes');
+              await savePrintArtifactWithNativeDialog(bytes, a.outputName);
+              savedPath = a.outputName;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err ?? '');
+              if (msg.toLowerCase().includes('cancel')) return;
+            }
+          }
+          if (!savedPath && a.blob) {
+            const url = URL.createObjectURL(a.blob);
+            const anchor = document.createElement('a');
+            anchor.href = url; anchor.download = a.outputName; anchor.rel = 'noopener'; anchor.style.display = 'none';
+            document.body?.appendChild(anchor);
+            anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            anchor.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+            savedPath = a.outputName;
+          }
+        }
+
+        if (savedPath) setCompletedSaveDestinationPath(savedPath);
+        setShouldAutoSliceOnExportEntry(false);
+        scene.setMode('printing');
+      };
+      void saveAndNavigate(artifact);
+    }
+  }, [scene]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -2938,16 +3471,53 @@ export default function Home() {
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
   );
+  const selectedSliceDeviceId = React.useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedSliceDeviceReachability = selectedSliceDeviceId
+    ? (printerReachabilityByDeviceId[selectedSliceDeviceId] ?? null)
+    : null;
+  const shouldUseRemoteOfflineLayerHeight = Boolean(activeNetworkUiAdapter) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedSliceDeviceReachability === false
+  );
+  const remoteOfflineSlicedLayerHeightMm = (() => {
+    if (!activeNetworkUiAdapter) return null;
+    if (!shouldUseRemoteOfflineLayerHeight) return null;
+    if (typeof window === 'undefined') return null;
+
+    const raw = window.localStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
+    if (raw == null || raw.trim().length === 0) return null;
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return Math.max(0.001, Math.min(1, parsed));
+  })();
   const printingMonitoringAdapter = React.useMemo(
     () => getProfileMonitoringUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
   );
   const slicedLayerHeightMm = React.useMemo(() => {
+    if (remoteOfflineSlicedLayerHeightMm != null) {
+      return remoteOfflineSlicedLayerHeightMm;
+    }
     if (networkSelectedMaterialLayerHeightMm != null) {
       return Math.max(0.001, Number(networkSelectedMaterialLayerHeightMm));
     }
     return Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
-  }, [activeMaterialProfile?.layerHeightMm, networkSelectedMaterialLayerHeightMm]);
+  }, [activeMaterialProfile?.layerHeightMm, networkSelectedMaterialLayerHeightMm, remoteOfflineSlicedLayerHeightMm]);
   const isLayerHeightMatch = React.useCallback((candidateLayerHeightMm: number | null | undefined) => {
     if (candidateLayerHeightMm == null) return false;
     return Math.abs(candidateLayerHeightMm - slicedLayerHeightMm) <= 0.0005;
@@ -3222,14 +3792,115 @@ export default function Home() {
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
   );
+  // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
+  const canSliceAndUpload = Boolean(activeNetworkUiAdapter && printableConnectedPrinterFleet.length > 0);
+  const canSliceAndPrint = canSliceAndUpload && Boolean(printingMonitoringAdapter.operations?.start);
   const requiresRemoteMaterialSelectionForUpload = Boolean(
     activeNetworkUiAdapter
     && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false,
   );
+  const suggestedSliceOutputFilename = React.useMemo(() => {
+    const modelName = (scene.activeModel?.name ?? scene.models[0]?.name ?? '').trim();
+    const base = (modelName || activePrinterProfile?.name || 'slice_export')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[<>:"/\\|?*]+/g, '_')
+      .replace(/\s+/g, '_');
+    const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
+    const ext = outputFormat.length > 0
+      ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
+      : '.print';
+    return `${base || 'slice_export'}${ext}`;
+  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
+  const isPreSliceTargetPicker = printingTargetPickerMode !== 'post-slice';
   const canPrintNow = Boolean(
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
   );
+
+  const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
+    if (shouldReturnToPrintingAfterSliceRef.current) {
+      return true;
+    }
+
+    preSliceFileDestinationPathRef.current = null;
+    preSliceUploadSelectionRef.current = null;
+
+    if (intent === 'preview') {
+      // Just slice — no preflight needed.
+      return true;
+    }
+
+    if (intent === 'file') {
+      try {
+        const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
+        if (!destinationPath || destinationPath.trim().length === 0) {
+          return false;
+        }
+        preSliceFileDestinationPathRef.current = destinationPath.trim();
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) {
+          return false;
+        }
+        // If native picker isn't available (web runtime), keep current post-slice fallback behavior.
+        console.warn('[Slicing] Pre-slice save picker unavailable; falling back to post-slice save flow.', error);
+        return true;
+      }
+    }
+
+    if (!activeNetworkUiAdapter || printableConnectedPrinterFleet.length === 0) {
+      setPrintingSendStatusText('No connected printer is available for upload.');
+      return false;
+    }
+
+    const shouldOpenTargetPicker = printableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
+    if (shouldOpenTargetPicker) {
+      setPrintingTargetPickerMode(intent === 'print' ? 'pre-slice-print' : 'pre-slice-upload');
+      setPrintingTargetPickerOpen(true);
+      const selection = await new Promise<{ deviceId: string; materialId?: string } | null>((resolve) => {
+        preSliceTargetPickerResolverRef.current = resolve;
+      });
+      preSliceTargetPickerResolverRef.current = null;
+      if (!selection) {
+        preSliceUploadSelectionRef.current = null;
+        return false;
+      }
+      preSliceUploadSelectionRef.current = selection;
+    } else {
+      const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
+      if (!selectedTarget) {
+        setPrintingSendStatusText('No connected printer is available for upload.');
+        return false;
+      }
+      preSliceUploadSelectionRef.current = {
+        deviceId: selectedTarget.id,
+        materialId: requiresRemoteMaterialSelectionForUpload
+          ? ((selectedTarget.selectedMaterialId ?? '').trim() || undefined)
+          : undefined,
+      };
+    }
+
+    if (intent === 'print') {
+      setPreSlicePrintConfirmOpen(true);
+      const confirmed = await new Promise<boolean>((resolve) => {
+        preSlicePrintConfirmResolverRef.current = resolve;
+      });
+      preSlicePrintConfirmResolverRef.current = null;
+      if (!confirmed) {
+        preSliceUploadSelectionRef.current = null;
+        return false;
+      }
+    }
+
+    return true;
+  }, [
+    activeNetworkUiAdapter,
+    printableConnectedPrinterFleet,
+    printingTargetDevice,
+    requiresRemoteMaterialSelectionForUpload,
+    suggestedSliceOutputFilename,
+  ]);
 
   const printingDialogStageLabel = React.useMemo(() => {
     if (printingSendStageText && printingSendStageText.trim().length > 0) {
@@ -4088,6 +4759,15 @@ export default function Home() {
         window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
         printingUploadProcessingHandoffTimeoutRef.current = null;
       }
+
+      if (preSliceTargetPickerResolverRef.current) {
+        preSliceTargetPickerResolverRef.current(null);
+        preSliceTargetPickerResolverRef.current = null;
+      }
+      if (preSlicePrintConfirmResolverRef.current) {
+        preSlicePrintConfirmResolverRef.current(false);
+        preSlicePrintConfirmResolverRef.current = null;
+      }
     };
   }, []);
 
@@ -4169,28 +4849,39 @@ export default function Home() {
 
     const cacheKey = `${activeNetworkUiAdapter.pluginId}:${host.toLowerCase()}`;
     const applyResolvedMaterials = (parsed: FleetUploadMaterialOption[]) => {
-      let matching = parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
+      const materialChoices = isPreSliceTargetPicker
+        ? parsed
+        : parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
 
-      if (matching.length === 0 && (printingTargetDevice.selectedMaterialId?.trim() ?? '').length > 0 && isLayerHeightMatch(printingTargetDevice.selectedMaterialLayerHeightMm ?? null)) {
-        matching = [{
-          id: printingTargetDevice.selectedMaterialId!.trim(),
-          name: printingTargetDevice.selectedMaterialName?.trim() || printingTargetDevice.selectedMaterialId!.trim(),
+      const selectedDeviceMaterialId = (printingTargetDevice.selectedMaterialId ?? '').trim();
+      if (
+        materialChoices.length === 0
+        && selectedDeviceMaterialId.length > 0
+        && (isPreSliceTargetPicker || isLayerHeightMatch(printingTargetDevice.selectedMaterialLayerHeightMm ?? null))
+      ) {
+        materialChoices.push({
+          id: selectedDeviceMaterialId,
+          name: printingTargetDevice.selectedMaterialName?.trim() || selectedDeviceMaterialId,
           layerHeightMm: printingTargetDevice.selectedMaterialLayerHeightMm ?? null,
-        }];
+        });
       }
 
-      setPrintingTargetMaterialOptions(matching);
+      setPrintingTargetMaterialOptions(materialChoices);
 
       setPrintingTargetMaterialId((previousId) => {
         const preferredId = previousId.trim();
-        const fallbackId = matching.find((material) => material.id === (printingTargetDevice.selectedMaterialId ?? '').trim())?.id
-          ?? matching[0]?.id
+        const fallbackId = materialChoices.find((material) => material.id === selectedDeviceMaterialId)?.id
+          ?? materialChoices[0]?.id
           ?? '';
-        return matching.some((material) => material.id === preferredId) ? preferredId : fallbackId;
+        return materialChoices.some((material) => material.id === preferredId) ? preferredId : fallbackId;
       });
 
-      if (matching.length === 0) {
-        setPrintingTargetMaterialError(`No material on this printer matches sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`);
+      if (materialChoices.length === 0) {
+        setPrintingTargetMaterialError(
+          isPreSliceTargetPicker
+            ? 'No material profiles found on this printer.'
+            : `No material on this printer matches sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`,
+        );
       } else {
         setPrintingTargetMaterialError(null);
       }
@@ -4253,6 +4944,7 @@ export default function Home() {
     };
   }, [
     activeNetworkUiAdapter,
+    isPreSliceTargetPicker,
     isLayerHeightMatch,
     printingTargetDevice,
     printingTargetPickerOpen,
@@ -5694,35 +6386,37 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }, [printingArtifact]);
 
-  const handleTopBarSaveScene = React.useCallback(async () => {
+  const performTopBarSaveScene = React.useCallback(async (options?: { nativePathOverride?: string | null }) => {
     const visibleModels = scene.models.filter((model) => model.visible);
     const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
+    const resolvedNativePath = options?.nativePathOverride !== undefined
+      ? options.nativePathOverride
+      : activeSceneFilePath;
+    const resolvedSceneFilename = resolvedNativePath
+      ? (getFileNameFromPath(resolvedNativePath).replace(/\.voxl$/i, '').trim() || 'Scene')
+      : resolveEntirePlateExportBaseName(scene.models);
 
-    const buildModelGroup = (model: typeof scene.models[number]): THREE.Group => {
-      const group = new THREE.Group();
-      const t = model.transform;
-      group.position.copy(t.position);
-      group.rotation.copy(t.rotation);
-      group.scale.copy(t.scale);
+    // Capture a thumbnail from the live scene canvas — same path as the export panel.
+    let exportThumbnailPng: Uint8Array | null = null;
+    try {
+      // Temporarily disable cross-section clipping while taking the scene thumbnail.
+      setIsTemporarilyDisablingCrossSectionForThumbnail(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-      const centerOffset = model.geometry.center;
-      const mesh = new THREE.Mesh(model.geometry.geometry);
-      mesh.position.set(-centerOffset.x, -centerOffset.y, -centerOffset.z);
+      const runCapture = exportThumbnailCaptureRunnerRef.current;
+      if (runCapture) exportThumbnailPng = await runCapture();
+    } catch {
+      // Non-fatal: save proceeds without thumbnail.
+    } finally {
+      setIsTemporarilyDisablingCrossSectionForThumbnail(false);
+    }
 
-      group.add(mesh);
-      group.updateMatrixWorld(true);
-      return group;
-    };
-
-    const exportRoot = new THREE.Group();
-    scopeModels.forEach((model) => exportRoot.add(buildModelGroup(model)));
-    exportRoot.updateMatrixWorld(true);
-
-    await ExportManager.exportScene(
-      scopeModels.length > 0 ? exportRoot : null,
+    const savedPath = await ExportManager.exportScene(
+      null,
       supportsRef.current || null,
       {
-        filename: 'Scene',
+        filename: resolvedSceneFilename,
         format: 'voxl',
         binary: true,
         separateFiles: false,
@@ -5734,9 +6428,252 @@ export default function Home() {
         models: scopeModels,
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
+        exportThumbnailPng: exportThumbnailPng ?? undefined,
+      },
+      {
+        nativePath: resolvedNativePath,
       },
     );
-  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+    const nextActiveScenePath = normalizeActiveVoxlScenePath(savedPath);
+    if (nextActiveScenePath) {
+      setActiveSceneFilePath(nextActiveScenePath);
+      setLoadedSceneSaveSource({
+        name: getFileNameFromPath(nextActiveScenePath),
+        path: nextActiveScenePath,
+      });
+      // Once a scene has been successfully saved to a concrete VOXL path,
+      // future Ctrl+S should keep saving in-place without prompting again.
+      preferredOverwriteScenePathRef.current = nextActiveScenePath;
+    }
+    if (savedPath) {
+      setExportSuccessToast({ id: Date.now(), path: savedPath });
+      setIsExportSuccessToastVisible(true);
+      if (exportSuccessToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(exportSuccessToastFadeTimeoutRef.current);
+      }
+      exportSuccessToastFadeTimeoutRef.current = window.setTimeout(() => {
+        setIsExportSuccessToastVisible(false);
+        exportSuccessToastFadeTimeoutRef.current = null;
+      }, 3800);
+
+      markSceneSaveBaseline();
+      void clearAutosave();
+    }
+
+    return savedPath;
+  }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const handleAutosaveRestore = React.useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const bytes = await invoke<number[]>('scene_autosave_read_voxl_bytes');
+      const uint8 = new Uint8Array(bytes);
+      const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
+      suppressSceneAutosave(60_000);
+      await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
+      await clearAutosave();
+    } finally {
+      setAutosaveRecovery(null);
+    }
+  }, [clearAutosave, importSceneFile]);
+
+  const handleAutosaveDiscard = React.useCallback(async () => {
+    setAutosaveRecovery(null);
+    await clearAutosave();
+  }, [clearAutosave]);
+
+  const queueTopBarSaveScene = React.useCallback((nativePathOverride?: string | null) => {
+    queuedSceneSavePathOverrideRef.current = nativePathOverride;
+
+    if (typeof window === 'undefined') {
+      if (sceneSaveInFlightRef.current) {
+        sceneSaveQueuedRef.current = true;
+        setIsSceneSaveInProgress(true);
+        return;
+      }
+      sceneSaveInFlightRef.current = true;
+      setIsSceneSaveInProgress(true);
+      const queuedNativePathOverride = queuedSceneSavePathOverrideRef.current;
+      queuedSceneSavePathOverrideRef.current = undefined;
+      void performTopBarSaveScene({ nativePathOverride: queuedNativePathOverride }).finally(() => {
+        sceneSaveInFlightRef.current = false;
+        setIsSceneSaveInProgress(sceneSaveQueuedRef.current);
+      });
+      return;
+    }
+
+    if (sceneSaveInFlightRef.current) {
+      sceneSaveQueuedRef.current = true;
+      setIsSceneSaveInProgress(true);
+      return;
+    }
+
+    const runSaveTask = () => {
+      if (sceneSaveInFlightRef.current) {
+        sceneSaveQueuedRef.current = true;
+        return;
+      }
+
+      sceneSaveInFlightRef.current = true;
+      setIsSceneSaveInProgress(true);
+      const queuedNativePathOverride = queuedSceneSavePathOverrideRef.current;
+      queuedSceneSavePathOverrideRef.current = undefined;
+      void performTopBarSaveScene({ nativePathOverride: queuedNativePathOverride })
+        .catch((error) => {
+          console.error('[SceneSave] Save operation failed.', error);
+        })
+        .finally(() => {
+          sceneSaveInFlightRef.current = false;
+          if (sceneSaveQueuedRef.current) {
+            sceneSaveQueuedRef.current = false;
+            queueKickoff();
+            setIsSceneSaveInProgress(true);
+            return;
+          }
+          setIsSceneSaveInProgress(false);
+        });
+    };
+
+    const queueKickoff = () => {
+      if (sceneSaveKickoffTimerRef.current !== null) return;
+      setIsSceneSaveInProgress(true);
+      sceneSaveKickoffTimerRef.current = window.setTimeout(() => {
+        sceneSaveKickoffTimerRef.current = null;
+        runSaveTask();
+      }, 0);
+    };
+
+    if (sceneSaveKickoffTimerRef.current !== null) {
+      sceneSaveQueuedRef.current = true;
+      return;
+    }
+
+    queueKickoff();
+  }, [performTopBarSaveScene]);
+
+  const resolveSceneSaveNativePath = React.useCallback(async (): Promise<{
+    cancelled: boolean;
+    nativePathOverride?: string | null;
+  }> => {
+    const loadedScenePath = normalizeActiveVoxlScenePath(
+      activeSceneFilePath ?? loadedSceneSaveSource?.path ?? null,
+    );
+    const loadedSceneFileName = (() => {
+      if (loadedSceneSaveSource && getFileExtension(loadedSceneSaveSource.name) === '.voxl') {
+        return loadedSceneSaveSource.name;
+      }
+      if (loadedScenePath) {
+        return getFileNameFromPath(loadedScenePath);
+      }
+      return null;
+    })();
+
+    if (!loadedSceneFileName) {
+      return { cancelled: false, nativePathOverride: undefined };
+    }
+
+    // We know this came from a VOXL scene, but we cannot overwrite if the
+    // originating native path is unavailable (e.g. recent-reopen blob cache).
+    // In that case, skip the modal and go straight to Save As.
+    if (!loadedScenePath) {
+      preferredOverwriteScenePathRef.current = null;
+      return { cancelled: false, nativePathOverride: null };
+    }
+
+    if (preferredOverwriteScenePathRef.current === loadedScenePath) {
+      return { cancelled: false, nativePathOverride: loadedScenePath };
+    }
+
+    const choice = await promptSceneSaveChoice({
+      fileName: loadedSceneFileName,
+      scenePath: loadedScenePath,
+    });
+    if (choice === 'cancel') {
+      return { cancelled: true };
+    }
+
+    if (choice === 'save_as') {
+      preferredOverwriteScenePathRef.current = null;
+      return { cancelled: false, nativePathOverride: null };
+    }
+
+    preferredOverwriteScenePathRef.current = loadedScenePath;
+    return { cancelled: false, nativePathOverride: loadedScenePath };
+  }, [activeSceneFilePath, loadedSceneSaveSource, promptSceneSaveChoice]);
+
+  const saveCurrentSceneNow = React.useCallback(async (): Promise<boolean> => {
+    const resolution = await resolveSceneSaveNativePath();
+    if (resolution.cancelled) return false;
+
+    const savedPath = await performTopBarSaveScene({
+      nativePathOverride: resolution.nativePathOverride,
+    });
+    return Boolean(savedPath);
+  }, [performTopBarSaveScene, resolveSceneSaveNativePath]);
+
+  const handleTopBarSaveScene = React.useCallback(() => {
+    void (async () => {
+      const resolution = await resolveSceneSaveNativePath();
+      if (resolution.cancelled) return;
+      queueTopBarSaveScene(resolution.nativePathOverride);
+    })();
+  }, [queueTopBarSaveScene, resolveSceneSaveNativePath]);
+
+  React.useEffect(() => {
+    if (scene.models.length !== 0) return;
+
+    preferredOverwriteScenePathRef.current = null;
+    setActiveSceneFilePath(null);
+    setLoadedSceneSaveSource(null);
+    setShowCloseUnsavedChangesModal(false);
+    setCloseUnsavedChangesBusy('none');
+    if (sceneSaveChoiceResolveRef.current) {
+      sceneSaveChoiceResolveRef.current('cancel');
+      sceneSaveChoiceResolveRef.current = null;
+    }
+    setShowSceneSaveChoiceModal(false);
+    setSceneSaveChoiceFileName(null);
+    setSceneSaveChoicePath(null);
+    markSceneSaveBaseline();
+  }, [markSceneSaveBaseline, scene.models.length]);
+
+  React.useEffect(() => {
+    return () => {
+      if (sceneSaveKickoffTimerRef.current !== null) {
+        window.clearTimeout(sceneSaveKickoffTimerRef.current);
+        sceneSaveKickoffTimerRef.current = null;
+      }
+      sceneSaveQueuedRef.current = false;
+      queuedSceneSavePathOverrideRef.current = undefined;
+      preferredOverwriteScenePathRef.current = null;
+      setIsSceneSaveInProgress(false);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!sceneAutosaveSettings.recoveryPromptEnabled) {
+      setAutosaveRecovery(null);
+      return;
+    }
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const manifest = await invoke<{ savedAt: string; clean: boolean } | null>('scene_autosave_read_manifest');
+        if (!cancelled && manifest && !manifest.clean) {
+          setAutosaveRecovery({ savedAt: manifest.savedAt });
+        }
+      } catch {
+        // Non-fatal: no autosave recovery available.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sceneAutosaveSettings.recoveryPromptEnabled]);
 
   const isDesktopRuntime = React.useCallback(() => {
     if (typeof window === 'undefined') return false;
@@ -5745,6 +6682,148 @@ export default function Home() {
       || window.location.hostname === 'tauri.localhost'
       || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
   }, []);
+
+  const closeDesktopWindowNow = React.useCallback(async () => {
+    if (!isDesktopRuntime()) return;
+
+    allowProgrammaticWindowCloseRef.current = true;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().close();
+    } catch {
+      allowProgrammaticWindowCloseRef.current = false;
+    }
+  }, [isDesktopRuntime]);
+
+  const handleRequestProgramClose = React.useCallback(() => {
+    if (hasUnsavedSceneChangesRef.current) {
+      setShowCloseUnsavedChangesModal(true);
+      return;
+    }
+    void closeDesktopWindowNow();
+  }, [closeDesktopWindowNow]);
+
+  const handleDiscardAndCloseProgram = React.useCallback(() => {
+    void (async () => {
+      setCloseUnsavedChangesBusy('discard_and_close');
+      try {
+        setShowCloseUnsavedChangesModal(false);
+        await closeDesktopWindowNow();
+      } finally {
+        setCloseUnsavedChangesBusy('none');
+      }
+    })();
+  }, [closeDesktopWindowNow]);
+
+  const handleSaveAndCloseProgram = React.useCallback(() => {
+    void (async () => {
+      setCloseUnsavedChangesBusy('save_and_close');
+      try {
+        const saved = await saveCurrentSceneNow();
+        if (!saved) return;
+        setShowCloseUnsavedChangesModal(false);
+        await closeDesktopWindowNow();
+      } catch (error) {
+        console.error('[SceneSave] Save-and-close failed.', error);
+      } finally {
+        setCloseUnsavedChangesBusy('none');
+      }
+    })();
+  }, [closeDesktopWindowNow, saveCurrentSceneNow]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedSceneChangesRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) return;
+
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const currentWindow = getCurrentWindow();
+        unlisten = await currentWindow.onCloseRequested((event) => {
+          if (allowProgrammaticWindowCloseRef.current) {
+            allowProgrammaticWindowCloseRef.current = false;
+            return;
+          }
+
+          if (!hasUnsavedSceneChangesRef.current) {
+            return;
+          }
+
+          event.preventDefault();
+          setShowCloseUnsavedChangesModal(true);
+        });
+
+        if (disposed && unlisten) {
+          unlisten();
+          unlisten = null;
+        }
+      } catch {
+        // Non-fatal in web runtime or restricted capability mode.
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isDesktopRuntime]);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    if (desktopWindowRevealRequestedRef.current) return;
+    desktopWindowRevealRequestedRef.current = true;
+
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+
+    const revealWindow = async () => {
+      try {
+        const core = await import('@tauri-apps/api/core');
+        // Use reveal_main_window_command (show only, no set_focus) to avoid
+        // triggering Windows' focus-stealing prevention error sound.
+        await core.invoke('reveal_main_window_command');
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[StartupWindow] Failed to reveal main window after startup.', error);
+        }
+      }
+    };
+
+    // Wait for the React tree to finish its initial paint before revealing.
+    // Two RAF frames (~33ms) is not enough for this app's heavy component tree;
+    // a short setTimeout gives the browser time to commit the first full frame.
+    timerId = setTimeout(() => {
+      if (!cancelled) {
+        void revealWindow();
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        clearTimeout(timerId);
+      }
+    };
+  }, [isDesktopRuntime]);
 
   const buildSyntheticFileChangeEvent = React.useCallback((nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
     const dt = new DataTransfer();
@@ -5810,6 +6889,46 @@ export default function Home() {
     });
   }, []);
 
+  const pickSceneFilesWithNativeDialog = React.useCallback(async (): Promise<Array<{ file: File; sourcePath: string }> | null> => {
+    if (!isDesktopRuntime()) return null;
+
+    try {
+      const picked = await pickOpenFilesWithNativeDialog('scene', true);
+      if (!picked || picked.length === 0) return [];
+
+      const core = await import('@tauri-apps/api/core');
+      const files: Array<{ file: File; sourcePath: string }> = [];
+
+      for (const entry of picked) {
+        try {
+          const sourcePath = entry.path.trim();
+          if (!sourcePath) continue;
+
+          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+          const name = entry.name || getFileNameFromPath(sourcePath);
+
+          files.push({
+            file: new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }),
+            sourcePath,
+          });
+        } catch (error) {
+          console.warn(`[Picker] Failed reading picked scene file path: ${entry.path}`, error);
+        }
+      }
+
+      return files;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      const cancelled = message.toLowerCase().includes('cancel');
+      if (cancelled) return [];
+      console.warn('[Picker] Native scene picker failed, falling back to web input.', error);
+      return null;
+    }
+  }, [isDesktopRuntime]);
+
   const handleOpenMeshDialog = React.useCallback(async () => {
     const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
     if (nativeFiles) {
@@ -5824,17 +6943,23 @@ export default function Home() {
   }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
-    const nativeFiles = await pickFilesWithNativeDialog('scene', true);
+    const nativeFiles = await pickSceneFilesWithNativeDialog();
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      await scene.importSceneFiles(nativeFiles);
+      await importSceneFilesWithLysWarning(
+        nativeFiles.map((entry) => entry.file),
+        {
+          resultingScenePath: nativeFiles.length === 1 ? nativeFiles[0]?.sourcePath ?? null : null,
+          sourcePaths: nativeFiles.map((entry) => entry.sourcePath),
+        },
+      );
       return;
     }
 
     const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
     if (webFiles.length === 0) return;
-    await scene.importSceneFiles(webFiles);
-  }, [pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    await importSceneFilesWithLysWarning(webFiles, { resultingScenePath: null });
+  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -5862,56 +6987,123 @@ export default function Home() {
     }
 
     if (files.length === 0) return false;
-    await scene.importSceneFiles(files);
-    return true;
-  }, [scene]);
+    return await importSceneFilesWithLysWarning(files, {
+      resultingScenePath: files.length === 1 ? sceneEntries[0]?.path ?? null : null,
+      sourcePaths: sceneEntries.map((entry) => entry.path),
+    });
+  }, [importSceneFilesWithLysWarning]);
 
-  const importSceneFromPaths = React.useCallback(async (paths: string[]): Promise<boolean> => {
-    if (!paths || paths.length === 0) return false;
-
-    const entries: LaunchSceneFileEntry[] = paths
-      .map((path) => {
-        const trimmed = path.trim();
-        if (!trimmed) return null;
-        return {
-          path: trimmed,
-          name: getFileNameFromPath(trimmed),
-        } satisfies LaunchSceneFileEntry;
-      })
-      .filter((entry): entry is LaunchSceneFileEntry => Boolean(entry));
-
-    return importSceneFromLaunchEntries(entries);
+  // Keep the ref in sync with the latest callback.
+  React.useEffect(() => {
+    importSceneFromLaunchEntriesRef.current = importSceneFromLaunchEntries;
   }, [importSceneFromLaunchEntries]);
 
+  const flushQueuedLaunchSceneImports = React.useCallback(async (): Promise<void> => {
+    if (!startupSceneHandoffReadyRef.current) return;
+    if (launchSceneImportInFlightRef.current) return;
+
+    const queuedEntries = queuedLaunchSceneEntriesRef.current;
+    if (!queuedEntries || queuedEntries.length === 0) {
+      setPendingStartupSceneHandoff(false);
+      return;
+    }
+
+    queuedLaunchSceneEntriesRef.current = [];
+    launchSceneImportInFlightRef.current = true;
+
+    try {
+      const handler = importSceneFromLaunchEntriesRef.current;
+      if (!handler) return;
+
+      const imported = await handler(queuedEntries);
+      if (!imported) {
+        console.warn('[LaunchOpen] App launched with file arguments, but no supported scene file (.voxl/.lys) was found.');
+      }
+    } catch (error) {
+      console.warn('[LaunchOpen] Failed handling queued launch scene file arguments.', error);
+    } finally {
+      launchSceneImportInFlightRef.current = false;
+      const stillQueued = queuedLaunchSceneEntriesRef.current.length > 0;
+      setPendingStartupSceneHandoff(stillQueued && !startupSceneHandoffReadyRef.current);
+      if (stillQueued) {
+        void flushQueuedLaunchSceneImports();
+      }
+    }
+  }, []);
+
+  const queueLaunchSceneEntries = React.useCallback((entries: LaunchSceneFileEntry[]) => {
+    if (!entries || entries.length === 0) return;
+
+    const merged = new Map<string, LaunchSceneFileEntry>();
+    for (const entry of queuedLaunchSceneEntriesRef.current) {
+      const key = entry.path.trim().toLowerCase();
+      if (!key) continue;
+      merged.set(key, entry);
+    }
+    for (const entry of entries) {
+      const key = entry.path.trim().toLowerCase();
+      if (!key) continue;
+      merged.set(key, entry);
+    }
+
+    queuedLaunchSceneEntriesRef.current = Array.from(merged.values());
+
+    if (!startupSceneHandoffReadyRef.current) {
+      setPendingStartupSceneHandoff(true);
+      return;
+    }
+
+    void flushQueuedLaunchSceneImports();
+  }, [flushQueuedLaunchSceneImports]);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) {
+      startupSceneHandoffReadyRef.current = true;
+      return;
+    }
+
+    if (coldStartSceneHandoffTimerRef.current !== null) {
+      window.clearTimeout(coldStartSceneHandoffTimerRef.current);
+    }
+
+    coldStartSceneHandoffTimerRef.current = window.setTimeout(() => {
+      coldStartSceneHandoffTimerRef.current = null;
+      startupSceneHandoffReadyRef.current = true;
+      void flushQueuedLaunchSceneImports();
+    }, COLD_START_SCENE_HANDOFF_DELAY_MS);
+
+    return () => {
+      if (coldStartSceneHandoffTimerRef.current !== null) {
+        window.clearTimeout(coldStartSceneHandoffTimerRef.current);
+        coldStartSceneHandoffTimerRef.current = null;
+      }
+      startupSceneHandoffReadyRef.current = true;
+    };
+  }, [flushQueuedLaunchSceneImports, isDesktopRuntime]);
+
+  // Primary-launch file loading. Uses importSceneFromLaunchEntriesRef (a
+  // stable ref) so this effect only runs once on mount and is never
+  // cancelled mid-flight by scene re-renders during initialization.
   React.useEffect(() => {
     if (launchSceneFilesHandledRef.current) return;
     launchSceneFilesHandledRef.current = true;
 
     if (!isDesktopRuntime()) return;
 
-    let cancelled = false;
-
     void (async () => {
       try {
         const core = await import('@tauri-apps/api/core');
         const launchEntries = await core.invoke<LaunchSceneFileEntry[]>('get_launch_scene_files');
-        if (cancelled || !launchEntries || launchEntries.length === 0) return;
+        if (!launchEntries || launchEntries.length === 0) return;
 
-        const imported = await importSceneFromLaunchEntries(launchEntries);
-        if (!imported) {
-          console.warn('[LaunchOpen] App launched with file arguments, but no supported scene file (.voxl/.lys) was found.');
-        }
+        queueLaunchSceneEntries(launchEntries);
       } catch (error) {
-        if (!cancelled) {
-          console.warn('[LaunchOpen] Failed handling launch scene file arguments.', error);
-        }
+        console.warn('[LaunchOpen] Failed handling launch scene file arguments.', error);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [importSceneFromLaunchEntries, isDesktopRuntime]);
+    // isDesktopRuntime is a stable useCallback([]) — this effect runs once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktopRuntime, queueLaunchSceneEntries]);
 
   React.useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -5928,9 +7120,18 @@ export default function Home() {
           const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : [];
           if (paths.length === 0) return;
 
-          void importSceneFromPaths(paths).catch((error) => {
-            console.warn('[LaunchOpen] Failed importing handed-off scene file(s).', error);
-          });
+          const entries: LaunchSceneFileEntry[] = paths
+            .map((path) => {
+              const trimmed = path.trim();
+              if (!trimmed) return null;
+              return {
+                path: trimmed,
+                name: getFileNameFromPath(trimmed),
+              } satisfies LaunchSceneFileEntry;
+            })
+            .filter((entry): entry is LaunchSceneFileEntry => Boolean(entry));
+
+          queueLaunchSceneEntries(entries);
         });
       } catch (error) {
         if (!disposed) {
@@ -5949,7 +7150,7 @@ export default function Home() {
         }
       }
     };
-  }, [importSceneFromPaths, isDesktopRuntime]);
+  }, [isDesktopRuntime, queueLaunchSceneEntries]);
 
   const handleTopBarOpenScene = React.useCallback(() => {
     void handleOpenSceneDialog();
@@ -6221,6 +7422,7 @@ export default function Home() {
     }
 
     if (requiresRemoteMaterialSelectionForUpload && !isLayerHeightMatch(selectedTarget.selectedMaterialLayerHeightMm ?? null)) {
+      setPrintingTargetPickerMode('post-slice');
       setPrintingTargetPickerOpen(true);
       return;
     }
@@ -6276,6 +7478,7 @@ export default function Home() {
         setPrintingSendStageText('Print started');
         setPrintingUploadDialogStage('started');
         setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
+        setPrintingUploadDialogOpen(false);
         openPrintingMonitorForTargetDevice(printingTargetDevice.id);
       } else {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
@@ -6795,37 +7998,6 @@ export default function Home() {
     setIsSceneLayerScrubbing(false);
   }, []);
 
-  React.useEffect(() => {
-    if (scene.mode !== 'printing') return;
-
-    const isTypingTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
-
-    const handlePrintingLayerHotkeys = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
-      if (printingPreviewTotalLayers <= 0) return;
-
-      const key = event.key;
-      const isUp = key === 'ArrowUp' || key === 'w' || key === 'W';
-      const isDown = key === 'ArrowDown' || key === 's' || key === 'S';
-      if (!isUp && !isDown) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const delta = isUp ? 1 : -1;
-      const nextLayer = printingSelectedLayerRef.current + delta;
-      handlePrintingLayerChange(nextLayer);
-    };
-
-    window.addEventListener('keydown', handlePrintingLayerHotkeys, true);
-    return () => {
-      window.removeEventListener('keydown', handlePrintingLayerHotkeys, true);
-    };
-  }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode]);
-
   const usePrintingSettledHiResCanvas = React.useMemo(() => {
     return Boolean(
       selectedPrintingLayerPreviewUrl
@@ -6941,7 +8113,7 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      await scene.importSceneFiles(sceneFiles);
+      await importSceneFilesWithLysWarning(sceneFiles);
       return;
     }
 
@@ -6950,7 +8122,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [scene]);
+  }, [importSceneFilesWithLysWarning, scene]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -6995,8 +8167,30 @@ export default function Home() {
 
     if (!isLikelyDesktopRuntime) return;
 
-    const unlisten: Array<() => void> = [];
+    const unlisten: Array<() => void | Promise<void>> = [];
     let disposed = false;
+
+    const invokeUnlistenSafely = (remove: (() => void | Promise<void>) | undefined) => {
+      if (!remove) return;
+      try {
+        const result = remove();
+        if (result && typeof result.then === 'function') {
+          void result.catch(() => {
+            // noop
+          });
+        }
+      } catch {
+        // noop
+      }
+    };
+
+    const registerUnlisten = (remove: () => void | Promise<void>) => {
+      if (disposed) {
+        invokeUnlistenSafely(remove);
+        return;
+      }
+      unlisten.push(remove);
+    };
 
     void (async () => {
       try {
@@ -7006,7 +8200,7 @@ export default function Home() {
           if (disposed || scene.mode !== 'prepare') return;
           setIsPrepareDragActive(true);
         });
-        unlisten.push(unlistenDragOver);
+        registerUnlisten(unlistenDragOver);
 
         const hideOverlay = () => {
           dragDepthRef.current = 0;
@@ -7017,13 +8211,13 @@ export default function Home() {
           if (disposed) return;
           hideOverlay();
         });
-        unlisten.push(unlistenDragLeave);
+        registerUnlisten(unlistenDragLeave);
 
         const unlistenDragCancelled = await listen('tauri://drag-drop-cancelled', () => {
           if (disposed) return;
           hideOverlay();
         });
-        unlisten.push(unlistenDragCancelled);
+        registerUnlisten(unlistenDragCancelled);
 
         const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
           if (disposed || scene.mode !== 'prepare') return;
@@ -7039,7 +8233,7 @@ export default function Home() {
             await handleDroppedPrepareFiles(files);
           })();
         });
-        unlisten.push(unlistenDragDrop);
+        registerUnlisten(unlistenDragDrop);
       } catch {
         // Ignore in non-Tauri environments or when listeners are unavailable.
       }
@@ -7049,11 +8243,7 @@ export default function Home() {
       disposed = true;
       while (unlisten.length > 0) {
         const remove = unlisten.pop();
-        try {
-          remove?.();
-        } catch {
-          // noop
-        }
+        invokeUnlistenSafely(remove);
       }
     };
   }, [createFilesFromTauriDroppedPaths, handleDroppedPrepareFiles, scene.mode]);
@@ -7104,13 +8294,8 @@ export default function Home() {
   const handleEditorContextMenu = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-
-    const gesture = rightClickGestureRef.current;
-    if (gesture && gesture.moved) {
-      return;
-    }
-
-    setEditorContextMenuPos({ x: e.clientX, y: e.clientY });
+    // Intentionally do not open here: some macOS/WebView paths emit contextmenu
+    // on right-button press. We open on right-button release instead.
   }, []);
 
   const handleModelListContextMenu = React.useCallback((modelId: string, position: { x: number; y: number }) => {
@@ -7470,6 +8655,18 @@ export default function Home() {
     };
   }, [scene.sceneImportReport]);
 
+  const handleExportSuccess = React.useCallback((savedPath: string) => {
+    setExportSuccessToast({ id: Date.now(), path: savedPath });
+    setIsExportSuccessToastVisible(true);
+    if (exportSuccessToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(exportSuccessToastFadeTimeoutRef.current);
+    }
+    exportSuccessToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsExportSuccessToastVisible(false);
+      exportSuccessToastFadeTimeoutRef.current = null;
+    }, 3800);
+  }, []);
+
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
       window.cancelAnimationFrame(historyTransformResyncRafRef.current);
@@ -7566,10 +8763,35 @@ export default function Home() {
 
   const handleEditorPointerUpCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
+
+    const gesture = rightClickGestureRef.current;
+    const moved = Boolean(gesture?.moved);
+    const shouldSuppress = performance.now() < suppressEditorContextMenuUntilRef.current;
+    if (!moved && !shouldSuppress) {
+      setEditorContextMenuPos({ x: e.clientX, y: e.clientY });
+    }
+
     // keep gesture state until contextmenu fires, clear shortly after
     window.setTimeout(() => {
       rightClickGestureRef.current = null;
     }, 0);
+  }, []);
+
+  React.useEffect(() => {
+    const markSuppressed = (durationMs: number) => {
+      suppressEditorContextMenuUntilRef.current = Math.max(
+        suppressEditorContextMenuUntilRef.current,
+        performance.now() + durationMs,
+      );
+    };
+
+    const onOrbitChange = () => markSuppressed(300);
+
+    window.addEventListener('picking-orbit-change', onOrbitChange as EventListener);
+
+    return () => {
+      window.removeEventListener('picking-orbit-change', onOrbitChange as EventListener);
+    };
   }, []);
 
   const handleEditorMenuAction = React.useCallback((action: EditorMenuAction) => {
@@ -8333,6 +9555,45 @@ export default function Home() {
     zRange: sceneZRange
   });
 
+  React.useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleLayerHotkeys = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (isTypingTarget(event.target)) return;
+
+      const key = event.key;
+      const isPrinting = scene.mode === 'printing';
+      const isUp = key === 'ArrowUp' || (isPrinting && (key === 'w' || key === 'W'));
+      const isDown = key === 'ArrowDown' || (isPrinting && (key === 's' || key === 'S'));
+      if (!isUp && !isDown) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const delta = isUp ? 1 : -1;
+
+      if (isPrinting) {
+        if (printingPreviewTotalLayers <= 0) return;
+        const nextLayer = printingSelectedLayerRef.current + delta;
+        handlePrintingLayerChange(nextLayer);
+        return;
+      }
+
+      if (slicing.numLayers <= 0) return;
+      slicing.setLayerIndex((previous) => previous + delta);
+    };
+
+    window.addEventListener('keydown', handleLayerHotkeys, true);
+    return () => {
+      window.removeEventListener('keydown', handleLayerHotkeys, true);
+    };
+  }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
+
   const runExportThumbnailCapture = React.useCallback(async () => {
     const capture = exportThumbnailCaptureRef.current;
     if (!capture) return null;
@@ -8409,16 +9670,12 @@ export default function Home() {
   }, [runExportThumbnailCapture]);
 
   React.useEffect(() => {
-    const profileLayerHeightMm = networkSelectedMaterialLayerHeightMm != null
-      ? Math.max(0.001, Number(networkSelectedMaterialLayerHeightMm))
-      : Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
-    const targetMicron = Math.max(1, Math.round(profileLayerHeightMm * 1000));
+    const targetMicron = Math.max(1, Math.round(slicedLayerHeightMm * 1000));
     if (slicing.layerHeightMicron !== targetMicron) {
       slicing.setLayerHeightMicron(targetMicron);
     }
   }, [
-    activeMaterialProfile?.layerHeightMm,
-    networkSelectedMaterialLayerHeightMm,
+    slicedLayerHeightMm,
     slicing.layerHeightMicron,
     slicing.setLayerHeightMicron,
   ]);
@@ -8551,12 +9808,66 @@ export default function Home() {
     }
   }, [scene.models.length, scene.mode, scene, printingArtifact]);
 
-  // Show re-slice modal when entering printing with invalid artifact
+  // Track whether the profile settings modal is currently open so we can
+  // defer the printing-workspace kick until after the user closes it.
+  const isProfileModalOpenRef = React.useRef(false);
+  const pendingPrintingKickRef = React.useRef(false);
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const isOpen = (e as CustomEvent<{ isOpen: boolean }>).detail.isOpen;
+      isProfileModalOpenRef.current = isOpen;
+      if (!isOpen && pendingPrintingKickRef.current) {
+        pendingPrintingKickRef.current = false;
+        scene.setMode('prepare');
+        setShowPrintingResliceModal(true);
+      }
+    };
+    window.addEventListener(PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT, handler);
+    return () => window.removeEventListener(PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT, handler);
+  }, [scene]);
+
+  // If artifact becomes invalid while already in printing workspace, kick back and show modal.
+  // If the profile settings modal is currently open, defer until it closes.
   React.useEffect(() => {
     if (scene.mode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
-      setShowPrintingResliceModal(true);
+      if (isProfileModalOpenRef.current) {
+        pendingPrintingKickRef.current = true;
+      } else {
+        scene.setMode('prepare');
+        setShowPrintingResliceModal(true);
+      }
     }
-  }, [scene.mode, printingArtifactIsInvalid, printingArtifact]);
+  }, [printingArtifactIsInvalid, printingArtifact, scene.mode, scene]);
+
+  // Auto-trigger upload/print when entering printing workspace via a Slice & Upload / Slice & Print intent
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    if (!printingArtifact) return;
+    const action = pendingPostSliceActionRef.current;
+    if (!action) return;
+    pendingPostSliceActionRef.current = null;
+    if (action === 'print') pendingAutoStartPrintRef.current = true;
+
+    const preselected = preSliceUploadSelectionRef.current;
+    preSliceUploadSelectionRef.current = null;
+    if (preselected) {
+      const preselectedTarget = printableConnectedPrinterFleet.find((device) => device.id === preselected.deviceId) ?? null;
+      if (preselectedTarget) {
+        void performSendToPrinter(preselectedTarget, preselected.materialId);
+        return;
+      }
+    }
+
+    void handleSendToPrinter();
+  }, [scene.mode, printingArtifact, handleSendToPrinter, performSendToPrinter, printableConnectedPrinterFleet]);
+
+  // After a Slice & Print upload, auto-start print when plate is ready
+  React.useEffect(() => {
+    if (!pendingAutoStartPrintRef.current) return;
+    if (!printingReadyPlateId || !printingTargetDevice?.connected) return;
+    pendingAutoStartPrintRef.current = false;
+    void handlePrintNow();
+  }, [printingReadyPlateId, printingTargetDevice?.connected, handlePrintNow]);
 
   React.useLayoutEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -8595,8 +9906,12 @@ export default function Home() {
     if (nextMode === 'printing' && !hasPrintingWorkspaceData) {
       return;
     }
+    if (nextMode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
+      setShowPrintingResliceModal(true);
+      return;
+    }
     scene.setMode(nextMode);
-  }, [hasPrintingWorkspaceData, scene]);
+  }, [hasPrintingWorkspaceData, printingArtifact, printingArtifactIsInvalid, scene]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -9059,10 +10374,15 @@ export default function Home() {
         };
       });
 
-      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const maxX = minX + scene.view3dSettings.widthMm;
-      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const maxY = minY + scene.view3dSettings.depthMm;
+      const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+      const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+      const arrangeSm = scene.view3dSettings.safetyMarginMm;
+      const minX = rawMinX + Math.max(0, arrangeSm?.left ?? 0);
+      const maxX = rawMaxX - Math.max(0, arrangeSm?.right ?? 0);
+      const minY = rawMinY + Math.max(0, arrangeSm?.front ?? 0);
+      const maxY = rawMaxY - Math.max(0, arrangeSm?.back ?? 0);
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
 
@@ -9550,6 +10870,7 @@ export default function Home() {
         arrangeAnchorMode,
         getArrangeTransform: (model) => model.transform,
         hullCache: arrangeHullFootprintCacheRef.current,
+        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
       });
 
       if (updates.length > 1) {
@@ -9616,10 +10937,15 @@ export default function Home() {
     const stepY = maxDepth + gapY;
     const stepZ = maxHeight + gapZ;
 
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const maxX = minX + scene.view3dSettings.widthMm;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const maxY = minY + scene.view3dSettings.depthMm;
+    const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+    const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+    const arraySm = scene.view3dSettings.safetyMarginMm;
+    const minX = rawMinX + Math.max(0, arraySm?.left ?? 0);
+    const maxX = rawMaxX - Math.max(0, arraySm?.right ?? 0);
+    const minY = rawMinY + Math.max(0, arraySm?.front ?? 0);
+    const maxY = rawMaxY - Math.max(0, arraySm?.back ?? 0);
 
     const slotsPerLayer = countX * countY;
     const requiredLayers = Math.max(1, Math.ceil(visibleModels.length / slotsPerLayer));
@@ -9628,8 +10954,8 @@ export default function Home() {
     const totalWidth = (countX - 1) * stepX;
     const totalDepth = (countY - 1) * stepY;
 
-    let startX = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0) - (totalWidth * 0.5);
-    let startY = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0) - (totalDepth * 0.5);
+    let startX = (minX + maxX) * 0.5 - totalWidth * 0.5;
+    let startY = (minY + maxY) * 0.5 - totalDepth * 0.5;
 
     if (arrangeAnchorMode === 'front_left') {
       startX = minX + (maxWidth * 0.5);
@@ -9680,6 +11006,7 @@ export default function Home() {
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
+    scene.view3dSettings.safetyMarginMm,
     scene.view3dSettings.widthMm,
     getArrangeTransform,
     getModelSupportAwareDimensionsMm,
@@ -9831,6 +11158,17 @@ export default function Home() {
     scene.setSelectedModelIds(visibleIds);
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
 
+  // When entering arrange mode with exactly one visible model, auto-select it.
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') return;
+    if (transformMgr.transformMode !== 'arrange') return;
+    const visibleModels = scene.models.filter((m) => m.visible);
+    if (visibleModels.length !== 1) return;
+    const sole = visibleModels[0];
+    if (scene.activeModelId === sole.id && scene.selectedModelIds.includes(sole.id)) return;
+    scene.selectModel(sole.id, 'single');
+  }, [scene.mode, transformMgr.transformMode, scene.models, scene.activeModelId, scene.selectedModelIds, scene.selectModel]);
+
   React.useEffect(() => {
     if (!hasActivePrinterProfile) return;
     if (!allowPrepareWithoutPrinter) return;
@@ -9905,14 +11243,18 @@ export default function Home() {
   const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
 
   const sceneClipLower = React.useMemo(() => {
+    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
+    if (!isCrossSectionEnabled) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipLower;
-  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
 
   const sceneClipUpper = React.useMemo(() => {
+    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
+    if (!isCrossSectionEnabled) return null;
     if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
     return slicing.clipUpper;
-  }, [isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
@@ -10049,7 +11391,7 @@ export default function Home() {
     };
   }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
 
-  const showInlineEmptyLoading = scene.models.length === 0 && importOverlayState.active;
+  const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
 
   React.useEffect(() => {
@@ -10072,6 +11414,12 @@ export default function Home() {
   const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
   const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active && !holdEmptyStateSceneImportUi;
   const showEmptySceneDialog = scene.models.length === 0;
+  const emptyStateLoadingLabel = pendingStartupSceneHandoff
+    ? 'Opening scene…'
+    : importOverlayState.label;
+  const emptyStateLoadingDetail = pendingStartupSceneHandoff
+    ? 'Letting DragonFruit finish its startup animation before loading your scene.'
+    : importOverlayState.detail;
 
   const renderId = useRef(0);
   const postRotateLiftScheduledRef = useRef(false);
@@ -10776,6 +12124,32 @@ export default function Home() {
   }, [arrangeSpacingMm, scene]);
 
   React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.repeat || event.isComposing) return;
+      if (event.altKey || event.shiftKey) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() !== 's') return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.models.length === 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void handleTopBarSaveScene();
+    };
+
+    window.addEventListener('keydown', handleSceneSaveHotkey, true);
+    return () => {
+      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
+    };
+  }, [handleTopBarSaveScene, scene.models.length]);
+
+  React.useEffect(() => {
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
@@ -10823,10 +12197,15 @@ export default function Home() {
       const totalCount = Math.max(1, duplicateTotalCopies);
       const spacing = Math.max(0, duplicateSpacingMm);
 
-      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const maxX = minX + scene.view3dSettings.widthMm;
-      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const maxY = minY + scene.view3dSettings.depthMm;
+      const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
+      const rawDupMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const rawDupMaxY = rawDupMinY + scene.view3dSettings.depthMm;
+      const dupSm = scene.view3dSettings.safetyMarginMm;
+      const minX = rawDupMinX + Math.max(0, dupSm?.left ?? 0);
+      const maxX = rawDupMaxX - Math.max(0, dupSm?.right ?? 0);
+      const minY = rawDupMinY + Math.max(0, dupSm?.front ?? 0);
+      const maxY = rawDupMaxY - Math.max(0, dupSm?.back ?? 0);
 
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
@@ -10984,6 +12363,7 @@ export default function Home() {
     scene.activeModel,
     scene.models,
     scene.mode,
+    scene.view3dSettings.safetyMarginMm,
     transformMgr.transformMode,
   ]);
 
@@ -11070,10 +12450,15 @@ export default function Home() {
     const depth = sourceDims.depth;
     const spacing = Math.max(0, duplicateSpacingMm);
 
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const maxX = minX + scene.view3dSettings.widthMm;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const maxY = minY + scene.view3dSettings.depthMm;
+    const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
+    const rawFillMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const rawFillMaxY = rawFillMinY + scene.view3dSettings.depthMm;
+    const fillSm = scene.view3dSettings.safetyMarginMm;
+    const minX = rawFillMinX + Math.max(0, fillSm?.left ?? 0);
+    const maxX = rawFillMaxX - Math.max(0, fillSm?.right ?? 0);
+    const minY = rawFillMinY + Math.max(0, fillSm?.front ?? 0);
+    const maxY = rawFillMaxY - Math.max(0, fillSm?.back ?? 0);
 
     const plateWidth = Math.max(1, maxX - minX);
     const plateDepth = Math.max(1, maxY - minY);
@@ -11220,6 +12605,7 @@ export default function Home() {
         isSlicingBusy={isSlicingBusy}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
         onOpenScene={handleTopBarOpenScene}
+        onCloseProgram={handleRequestProgramClose}
         showMonitorButton={showTopbarMonitorButton}
         monitorButtonActive={selectedPrinterHasActivePrint}
         monitorButtonPaused={selectedPrinterHasPausedAlert}
@@ -11252,7 +12638,7 @@ export default function Home() {
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onLoadMeshChange={scene.onFileChange}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={scene.onImportLysChange}
+              onImportSceneChange={handleImportSceneInputChange}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -11539,6 +12925,8 @@ export default function Home() {
               selectedModelIds={scene.selectedModelIds}
               onActiveModelChange={scene.setActiveModelId}
               supportsRef={supportsRef}
+              captureSceneThumbnailPng={captureExportThumbnailPng}
+              onExportSuccess={handleExportSuccess}
             />
 
             <SlicingPanel
@@ -11565,6 +12953,10 @@ export default function Home() {
               shouldAutoSlice={shouldAutoSliceOnExportEntry}
               skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
               onSlicingBusyChange={setIsSlicingBusy}
+              canUpload={canSliceAndUpload}
+              canPrint={canSliceAndPrint}
+              onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
+              onBeforeSliceStart={handleBeforeSliceStart}
             />
           </>
 
@@ -11588,9 +12980,14 @@ export default function Home() {
               sendStatusText={printingSendStatusText}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
-              onOpenSendTargetPicker={() => setPrintingTargetPickerOpen(true)}
+              onOpenSendTargetPicker={() => {
+                setPrintingTargetPickerMode('post-slice');
+                setPrintingTargetPickerOpen(true);
+              }}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
+              sliceIntent={completedSliceIntent}
+              savedFilePath={completedSaveDestinationPath}
             />
           </>
         ) : (
@@ -11610,6 +13007,12 @@ export default function Home() {
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
             crossSectionMode={slicing.crossSectionMode}
+            lowerLayerIndex={slicing.lowerLayerIndex}
+            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
+            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
+            crossSectionEnabled={isCrossSectionEnabled}
+            onToggleCrossSection={handleToggleCrossSection}
+            layerHeightMm={slicing.layerHeightMm}
           />
         )}
 
@@ -11865,13 +13268,13 @@ export default function Home() {
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onFileChange={scene.onFileChange}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={scene.onImportLysChange}
+              onImportSceneChange={handleImportSceneInputChange}
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
-              onReopenRecentFile={scene.reopenRecentOpenedFile}
+              onReopenRecentFile={handleReopenRecentFile}
               isLoading={showEmptyStateLoading}
-              loadingLabel={importOverlayState.label}
-              loadingDetail={importOverlayState.detail}
+              loadingLabel={emptyStateLoadingLabel}
+              loadingDetail={emptyStateLoadingDetail}
               showFirstTimeOnboarding={!hasActivePrinterProfile && !allowPrepareWithoutPrinter}
               onAddPrinter={handleAddPrinterFromOnboarding}
               onUseWithoutPrinter={handleUseWithoutPrinter}
@@ -12028,6 +13431,8 @@ export default function Home() {
                 mode={transformMgr.transformMode}
                 onModeChange={transformMgr.setTransformMode}
               />
+              <SnapAngleReadout />
+              <RotationHintTooltip />
             </>
           )}
 
@@ -12319,6 +13724,405 @@ export default function Home() {
         onConfirm={handleConfirmDestructiveTransform}
       />
 
+      {scene.sceneImportPlacementPrompt && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              scene.resolveSceneImportPlacementPrompt('load_as_is');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Scene import placement decision"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                    color: 'var(--accent)',
+                  }}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Scene may be off-plate
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    Choose how to place imported models.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close scene import placement prompt"
+                onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Imported scene</div>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={scene.sceneImportPlacementPrompt.fileName}>
+                  {scene.sceneImportPlacementPrompt.fileName}
+                </div>
+                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {scene.sceneImportPlacementPrompt.offPlateModelCount.toLocaleString()} of {scene.sceneImportPlacementPrompt.modelCount.toLocaleString()} model{scene.sceneImportPlacementPrompt.modelCount === 1 ? '' : 's'} appear outside the build plate.
+                </div>
+              </div>
+
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                <strong style={{ color: 'var(--text-strong)' }}>Auto-Arrange</strong> will reposition imported models onto free space on the plate.
+                <span className="mt-1 block">
+                  <strong style={{ color: 'var(--text-strong)' }}>Load As-Is</strong> keeps scene coordinates exactly as stored in the file.
+                </span>
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
+                >
+                  Load As-Is
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
+                >
+                  Auto-Arrange
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {autosaveRecovery && (
+        <SceneAutosaveRecoveryModal
+          savedAt={autosaveRecovery.savedAt}
+          onRestore={handleAutosaveRestore}
+          onDiscard={handleAutosaveDiscard}
+        />
+      )}
+
+      {showLysImportWarningModal && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              handleCancelLysImportWarning();
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="LYS import experimental warning"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    LYS Import is Experimental
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    This feature is still under development.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close LYS import warning"
+                onClick={handleCancelLysImportWarning}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Geometry, support placement, and transforms can import differently across `.lys` scene variants, so unforeseen results are still possible.
+              </p>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <label className="inline-flex items-center gap-2 text-xs select-none" style={{ color: 'var(--text-muted)' }}>
+                  <input
+                    type="checkbox"
+                    checked={lysImportWarningSkipFuture}
+                    onChange={(event) => setLysImportWarningSkipFuture(event.target.checked)}
+                    className="h-3.5 w-3.5 rounded border"
+                    style={{ accentColor: '#f59e0b' }}
+                  />
+                  <span>Do not remind again</span>
+                </label>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    onClick={handleCancelLysImportWarning}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button !h-9 px-3 text-xs"
+                    style={{
+                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                      color: '#fde68a',
+                    }}
+                    onClick={handleContinueLysImportWarning}
+                  >
+                    Continue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCloseUnsavedChangesModal && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && closeUnsavedChangesBusy === 'none') {
+              setShowCloseUnsavedChangesModal(false);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Unsaved changes"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Unsaved Scene Changes
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    {hasUnsavedSceneChanges
+                      ? 'There are unsaved changes to this scene.'
+                      : 'This scene is already saved.'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close unsaved changes modal"
+                disabled={closeUnsavedChangesBusy !== 'none'}
+                onClick={() => setShowCloseUnsavedChangesModal(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 p-5">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Are you sure you want to close?
+                <br />
+                Choose <strong>Save &amp; Close</strong> to keep your latest edits.
+                <br />
+                Choose <strong>Close Without Saving</strong> to discard them.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                  disabled={closeUnsavedChangesBusy !== 'none'}
+                  onClick={handleDiscardAndCloseProgram}
+                >
+                  Close Without Saving
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
+                  disabled={closeUnsavedChangesBusy !== 'none'}
+                  onClick={handleSaveAndCloseProgram}
+                >
+                  Save &amp; Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSceneSaveChoiceModal && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              resolveSceneSaveChoice('cancel');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Save scene options"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
+                    color: '#86efac',
+                  }}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Save Loaded Scene
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    Choose where Ctrl+S should save this imported `.voxl` scene.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close save scene options"
+                onClick={() => resolveSceneSaveChoice('cancel')}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 p-5">
+              <div
+                className="rounded-lg border px-3 py-2.5"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+                }}
+              >
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Loaded file
+                </div>
+                <div className="mt-1 text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }} title={sceneSaveChoiceFileName ?? ''}>
+                  {sceneSaveChoiceFileName ?? 'Loaded scene'}
+                </div>
+                <div className="mt-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }} title={sceneSaveChoicePath ?? ''}>
+                  {sceneSaveChoicePath ?? 'Original file path unavailable (overwrite disabled)'}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                  onClick={() => resolveSceneSaveChoice('save_as')}
+                >
+                  Save as New Scene
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
+                  disabled={!sceneSaveChoicePath}
+                  onClick={() => resolveSceneSaveChoice('overwrite')}
+                >
+                  Overwrite Loaded Scene
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {printingMonitorPendingConfirmation && (
         <div
           className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
@@ -12502,6 +14306,126 @@ export default function Home() {
         }}
       />
 
+      {preSlicePrintConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPreSlicePrintConfirmOpen(false);
+              if (preSlicePrintConfirmResolverRef.current) {
+                preSlicePrintConfirmResolverRef.current(false);
+                preSlicePrintConfirmResolverRef.current = null;
+              }
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Print readiness confirmation"
+          >
+            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+
+                <div className="min-w-0 pr-2">
+                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Safety Check
+                  </div>
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Confirm printer is ready to print
+                  </h2>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close print readiness confirmation"
+                onClick={() => {
+                  setPreSlicePrintConfirmOpen(false);
+                  if (preSlicePrintConfirmResolverRef.current) {
+                    preSlicePrintConfirmResolverRef.current(false);
+                    preSlicePrintConfirmResolverRef.current = null;
+                  }
+                }}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Please verify before continuing:
+              </div>
+              <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <span>Build plate and resin vat are properly seated and secured.</span>
+                </div>
+                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <span>Resin is mixed, sufficient for the print, and at operating temperature.</span>
+                </div>
+                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <span>Build plate is clean and clear, and the printer cover is fully closed.</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => {
+                    setPreSlicePrintConfirmOpen(false);
+                    if (preSlicePrintConfirmResolverRef.current) {
+                      preSlicePrintConfirmResolverRef.current(false);
+                      preSlicePrintConfirmResolverRef.current = null;
+                    }
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  onClick={() => {
+                    setPreSlicePrintConfirmOpen(false);
+                    if (preSlicePrintConfirmResolverRef.current) {
+                      preSlicePrintConfirmResolverRef.current(true);
+                      preSlicePrintConfirmResolverRef.current = null;
+                    }
+                  }}
+                >
+                  Continue to Slicing
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {printingTargetPickerOpen && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
           <div
@@ -12518,10 +14442,10 @@ export default function Home() {
             <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <div>
                 <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Fleet Upload
+                  {isPreSliceTargetPicker ? 'Pre-Slice Targeting' : 'Fleet Upload'}
                 </div>
                 <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Choose target printer
+                  {isPreSliceTargetPicker ? 'Choose target before slicing' : 'Choose target printer'}
                 </div>
               </div>
             </div>
@@ -12529,10 +14453,14 @@ export default function Home() {
             <div className="p-4 space-y-3.5">
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 {requiresRemoteMaterialSelectionForUpload
-                  ? 'Pick the target machine and material profile for this upload.'
-                  : 'Pick the target machine for this upload.'}
+                  ? (isPreSliceTargetPicker
+                    ? 'Pick the target machine and material profile now, then slicing will begin.'
+                    : 'Pick the target machine and material profile for this upload.')
+                  : (isPreSliceTargetPicker
+                    ? 'Pick the target machine now, then slicing will begin.'
+                    : 'Pick the target machine for this upload.')}
               </div>
-              {requiresRemoteMaterialSelectionForUpload && (
+              {requiresRemoteMaterialSelectionForUpload && !isPreSliceTargetPicker && (
                 <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                   Target layer height: <span style={{ color: 'var(--text-strong)' }}>{slicedLayerHeightMm.toFixed(3)} mm</span>
                 </div>
@@ -12617,7 +14545,7 @@ export default function Home() {
                 {requiresRemoteMaterialSelectionForUpload && (
                   <div className="rounded-md border px-3 py-2.5 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      Target material (matching sliced layer height)
+                      {isPreSliceTargetPicker ? 'Target material' : 'Target material (matching sliced layer height)'}
                     </div>
                     {isPrintingTargetMaterialsLoading ? (
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading materials from selected printer…</div>
@@ -12719,7 +14647,14 @@ export default function Home() {
                 <button
                   type="button"
                   className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => setPrintingTargetPickerOpen(false)}
+                  onClick={() => {
+                    setPrintingTargetPickerOpen(false);
+                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
+                      preSliceTargetPickerResolverRef.current(null);
+                      preSliceTargetPickerResolverRef.current = null;
+                    }
+                    setPrintingTargetPickerMode('post-slice');
+                  }}
                   disabled={printingSendBusy}
                 >
                   Cancel
@@ -12738,13 +14673,24 @@ export default function Home() {
                     if (!printingTargetDevice) return;
                     if (requiresRemoteMaterialSelectionForUpload && !printingTargetMaterialId) return;
                     setPrintingTargetPickerOpen(false);
+                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
+                      preSliceTargetPickerResolverRef.current({
+                        deviceId: printingTargetDevice.id,
+                        materialId: requiresRemoteMaterialSelectionForUpload ? printingTargetMaterialId : undefined,
+                      });
+                      preSliceTargetPickerResolverRef.current = null;
+                      setPrintingTargetPickerMode('post-slice');
+                      return;
+                    }
+
+                    setPrintingTargetPickerMode('post-slice');
                     void performSendToPrinter(
                       printingTargetDevice,
                       requiresRemoteMaterialSelectionForUpload ? printingTargetMaterialId : undefined,
                     );
                   }}
                 >
-                  Upload to Selected Printer
+                  {isPreSliceTargetPicker ? 'Continue to Slicing' : 'Upload to Selected Printer'}
                 </button>
               </div>
             </div>
@@ -14532,22 +16478,22 @@ export default function Home() {
         </div>
       )}
 
+      {isSaveToastVisible && (
+        <ToastViewport zIndex={126} offset="1.25rem">
+          <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            {saveToastLabel}
+          </Toast>
+        </ToastViewport>
+      )}
+
       {historyActionToast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: historyActionToast.direction === 'undo'
-                ? 'color-mix(in srgb, #fbbf24, var(--border-subtle) 50%)'
-                : 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
-              background: historyActionToast.direction === 'undo'
-                ? 'color-mix(in srgb, #fbbf24, var(--surface-0) 90%)'
-                : 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isHistoryActionToastVisible ? 1 : 0,
-              transform: `translateY(${isHistoryActionToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={historyActionToast.direction === 'undo' ? 'warning' : 'info'}
+            animated
+            visible={isHistoryActionToastVisible}
+            className="flex items-center gap-2"
           >
             {historyActionToast.direction === 'undo' ? (
               <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
@@ -14555,56 +16501,60 @@ export default function Home() {
               <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
             )}
             {historyActionToast.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {printingMonitorErrorToast && (
-        <div
-          className="pointer-events-none fixed inset-x-0 z-[126] flex justify-center px-3"
-          style={{ bottom: (historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem' }}
+        <ToastViewport
+          zIndex={126}
+          offset={(historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem'}
         >
-          <div
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)',
-              background: 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isPrintingMonitorErrorToastVisible ? 1 : 0,
-              transform: `translateY(${isPrintingMonitorErrorToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+          <Toast
+            tone="error"
+            animated
+            visible={isPrintingMonitorErrorToastVisible}
+            className="flex items-center gap-2"
           >
             <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
             {printingMonitorErrorToast.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
       )}
 
       {scene.sceneImportReport && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
-          <div
-            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
-            style={{
-              borderColor: scene.sceneImportReport.tone === 'error'
-                ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast
+            tone={
+              scene.sceneImportReport.tone === 'error'
+                ? 'error'
                 : scene.sceneImportReport.tone === 'warning'
-                  ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)'
-                  : 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-              background: scene.sceneImportReport.tone === 'error'
-                ? 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)'
-                : scene.sceneImportReport.tone === 'warning'
-                  ? 'color-mix(in srgb, #f59e0b, var(--surface-0) 90%)'
-                  : 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
-              color: 'var(--text-strong)',
-              opacity: isSceneImportToastVisible ? 1 : 0,
-              transform: `translateY(${isSceneImportToastVisible ? '0px' : '8px'})`,
-              transition: 'opacity 220ms ease, transform 220ms ease',
-            }}
+                  ? 'warning'
+                  : 'success'
+            }
+            animated
+            visible={isSceneImportToastVisible}
+            className="flex items-center gap-2"
           >
+            {scene.sceneImportReport.tone === 'error' ? (
+              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : scene.sceneImportReport.tone === 'warning' ? (
+              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
             {scene.sceneImportReport.text}
-          </div>
-        </div>
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {exportSuccessToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" />
+            Saved to: {exportSuccessToast.path}
+          </Toast>
+        </ToastViewport>
       )}
 
     </div>

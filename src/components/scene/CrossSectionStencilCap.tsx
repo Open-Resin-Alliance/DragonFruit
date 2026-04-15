@@ -20,6 +20,11 @@ type CrossSectionStencilCapProps = {
   sourceObjectVersion?: unknown;
   skipSourceZBounds?: boolean;
   y: number;
+  /** The y position of the OTHER clip boundary (if dual-cut is active).
+   *  When provided, the stencil geometry is clipped by both planes so
+   *  the stencil count matches the actual clipped model — eliminating
+   *  stencil bleed at the opposing cut. */
+  otherClipY?: number | null;
   color?: string;
   planeWidthMm: number;
   planeHeightMm: number;
@@ -29,6 +34,22 @@ type CrossSectionStencilCapProps = {
   glowThicknessMm?: number;
   glowOpacity?: number;
   glowColor?: string;
+  direction?: 'top' | 'bottom';
+  renderOrderOffset?: number;
+  debugOverrides?: CrossSectionCapDebugOverrides;
+};
+
+export type CrossSectionCapDebugSide = 'front' | 'back' | 'double';
+export type CrossSectionCapDebugClipMode = 'upper' | 'lower';
+export type CrossSectionCapDebugStencilMode = 'standard' | 'mirrored';
+
+export type CrossSectionCapDebugOverrides = {
+  side?: CrossSectionCapDebugSide;
+  offsetMm?: number;
+  rotationXDeg?: number;
+  clipMode?: CrossSectionCapDebugClipMode;
+  stencilMode?: CrossSectionCapDebugStencilMode;
+  depthTest?: boolean;
 };
 
 type StaticStencilMeshEntry = {
@@ -152,10 +173,14 @@ function ModelStencilPass({
   entry,
   backMaterial,
   frontMaterial,
+  backRenderOrder,
+  frontRenderOrder,
 }: {
   entry: ModelStencilPassEntry;
   backMaterial: THREE.Material;
   frontMaterial: THREE.Material;
+  backRenderOrder: number;
+  frontRenderOrder: number;
 }) {
   return (
     <group key={`stencil-cap-${entry.id}`}>
@@ -164,7 +189,7 @@ function ModelStencilPass({
           geometry={entry.geometry}
           position={entry.offset}
           material={backMaterial}
-          renderOrder={STENCIL_MODEL_BACK_ORDER}
+          renderOrder={backRenderOrder}
           frustumCulled
           raycast={() => null}
         />
@@ -172,7 +197,7 @@ function ModelStencilPass({
           geometry={entry.geometry}
           position={entry.offset}
           material={frontMaterial}
-          renderOrder={STENCIL_MODEL_FRONT_ORDER}
+          renderOrder={frontRenderOrder}
           frustumCulled
           raycast={() => null}
         />
@@ -187,6 +212,8 @@ const ModelStencilPassMemo = React.memo(
     prev.entry === next.entry
     && prev.backMaterial === next.backMaterial
     && prev.frontMaterial === next.frontMaterial
+    && prev.backRenderOrder === next.backRenderOrder
+    && prev.frontRenderOrder === next.frontRenderOrder
   ),
 );
 ModelStencilPassMemo.displayName = 'ModelStencilPassMemo';
@@ -195,10 +222,14 @@ function StaticSingleStencilPass({
   entry,
   backMaterial,
   frontMaterial,
+  backRenderOrder,
+  frontRenderOrder,
 }: {
   entry: StaticStencilMeshEntry;
   backMaterial: THREE.Material;
   frontMaterial: THREE.Material;
+  backRenderOrder: number;
+  frontRenderOrder: number;
 }) {
   return (
     <group key={`stencil-source-pass-${entry.key}`}>
@@ -206,14 +237,14 @@ function StaticSingleStencilPass({
         <mesh
           geometry={entry.geometry}
           material={backMaterial}
-          renderOrder={STENCIL_SOURCE_BACK_ORDER}
+          renderOrder={backRenderOrder}
           frustumCulled
           raycast={() => null}
         />
         <mesh
           geometry={entry.geometry}
           material={frontMaterial}
-          renderOrder={STENCIL_SOURCE_FRONT_ORDER}
+          renderOrder={frontRenderOrder}
           frustumCulled
           raycast={() => null}
         />
@@ -228,6 +259,8 @@ const StaticSingleStencilPassMemo = React.memo(
     prev.entry === next.entry
     && prev.backMaterial === next.backMaterial
     && prev.frontMaterial === next.frontMaterial
+    && prev.backRenderOrder === next.backRenderOrder
+    && prev.frontRenderOrder === next.frontRenderOrder
   ),
 );
 StaticSingleStencilPassMemo.displayName = 'StaticSingleStencilPassMemo';
@@ -285,10 +318,6 @@ function composeCenteredGeometryMatrix(matrix: THREE.Matrix4, center: THREE.Vect
   return new THREE.Matrix4().multiplyMatrices(matrix, centerOffset);
 }
 
-function intersectsMinMaxZ(minZ: number, maxZ: number, clipZ: number): boolean {
-  return clipZ >= minZ - 1e-4 && clipZ <= maxZ + 1e-4;
-}
-
 const INSTANCED_STENCIL_Z_BUCKET_MM = 6;
 const STENCIL_RENDER_ORDER_BASE = 9800;
 const STENCIL_MODEL_BACK_ORDER = STENCIL_RENDER_ORDER_BASE + 0.1;
@@ -305,6 +334,7 @@ function CrossSectionStencilCapInner({
   sourceObjectVersion,
   skipSourceZBounds = false,
   y,
+  otherClipY,
   color = '#ffffff',
   planeWidthMm,
   planeHeightMm,
@@ -314,12 +344,69 @@ function CrossSectionStencilCapInner({
   glowThicknessMm = 0,
   glowOpacity = 0,
   glowColor,
+  direction = 'top',
+  renderOrderOffset = 0,
+  debugOverrides,
 }: CrossSectionStencilCapProps) {
-  const clipPlaneRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 0, -1), y));
-  
+  const isBottom = direction === 'bottom';
+
+  const effectiveClipMode: CrossSectionCapDebugClipMode = debugOverrides?.clipMode ?? (isBottom ? 'lower' : 'upper');
+  const effectiveStencilMode: CrossSectionCapDebugStencilMode = debugOverrides?.stencilMode ?? 'standard';
+  const effectiveSide: CrossSectionCapDebugSide = debugOverrides?.side ?? (isBottom ? 'back' : 'front');
+  // Top cap sits slightly above the cut plane; bottom cap sits slightly below.
+  const effectiveOffsetMm = debugOverrides?.offsetMm ?? (isBottom ? -1e-4 : 1e-4);
+  const effectiveRotationXDeg = debugOverrides?.rotationXDeg ?? 0;
+
+  const MODEL_BACK_ORDER = STENCIL_MODEL_BACK_ORDER + renderOrderOffset;
+  const MODEL_FRONT_ORDER = STENCIL_MODEL_FRONT_ORDER + renderOrderOffset;
+  const SOURCE_BACK_ORDER = STENCIL_SOURCE_BACK_ORDER + renderOrderOffset;
+  const SOURCE_FRONT_ORDER = STENCIL_SOURCE_FRONT_ORDER + renderOrderOffset;
+  const GLOW_BACK_ORDER = STENCIL_GLOW_BACK_ORDER + renderOrderOffset;
+  const GLOW_FRONT_ORDER = STENCIL_GLOW_FRONT_ORDER + renderOrderOffset;
+  const CAP_ORDER = STENCIL_CAP_ORDER + renderOrderOffset;
+
+  // Primary clip plane for this cap's stencil pass.
+  //   • Top cap:    Plane(0,0,-1, y)  → keeps z ≤ y (same as model's clipUpper)
+  //   • Bottom cap: Plane(0,0,1, -y)  → keeps z ≥ y (same as model's clipLower)
+  // As in Three.js clipping-stencil example, stencil geometry uses only this
+  // primary plane. The cap plane itself is clipped by the other boundary.
+  const clipPlaneRef = React.useRef(
+    effectiveClipMode === 'lower'
+      ? new THREE.Plane(new THREE.Vector3(0, 0, 1), -y)
+      : new THREE.Plane(new THREE.Vector3(0, 0, -1), y)
+  );
+
+  // The "other" clip plane constrains the stencil geometry to the same
+  // region the real model is clipped to.  For the top cap (upper clip mode),
+  // the other plane is the lower boundary and vice-versa.
+  // Uses the same mutate-in-place ref pattern as the primary clip plane
+  // so slider dragging doesn't recreate materials every frame.
+  const otherClipPlaneRef = React.useRef(new THREE.Plane());
+  const hasOtherClip = otherClipY != null;
+
   React.useLayoutEffect(() => {
-    clipPlaneRef.current.constant = y;
-  }, [y]);
+    if (effectiveClipMode === 'lower') {
+      clipPlaneRef.current.normal.set(0, 0, 1);
+      clipPlaneRef.current.constant = -y;
+    } else {
+      clipPlaneRef.current.normal.set(0, 0, -1);
+      clipPlaneRef.current.constant = y;
+    }
+  }, [effectiveClipMode, y]);
+
+  React.useLayoutEffect(() => {
+    if (otherClipY == null) return;
+    // The other boundary is the opposite direction from this cap's clip.
+    // Top cap (upper) → other boundary is lower: Plane(0,0,1, -otherClipY)
+    // Bottom cap (lower) → other boundary is upper: Plane(0,0,-1, otherClipY)
+    if (effectiveClipMode === 'upper') {
+      otherClipPlaneRef.current.normal.set(0, 0, 1);
+      otherClipPlaneRef.current.constant = -otherClipY;
+    } else {
+      otherClipPlaneRef.current.normal.set(0, 0, -1);
+      otherClipPlaneRef.current.constant = otherClipY;
+    }
+  }, [effectiveClipMode, otherClipY]);
 
   const stencilBase = React.useMemo(() => {
     const material = new THREE.MeshBasicMaterial();
@@ -331,25 +418,37 @@ function CrossSectionStencilCapInner({
     return material;
   }, []);
 
+  // Secondary clip plane for the cap plane itself when dual-cutting.
+  const capClipPlanes = React.useMemo(() => {
+    if (!hasOtherClip) return null;
+    return [otherClipPlaneRef.current];
+  }, [hasOtherClip]);
+
   const stencilBack = React.useMemo(() => {
     const material = stencilBase.clone();
     material.side = THREE.BackSide;
+    // IMPORTANT: Keep stencil source clipped by the PRIMARY plane only.
+    // Clipping stencil source by both boundaries makes the source geometry
+    // open at both ends, which can corrupt winding parity (e.g. bottom cap
+    // appearing both up into the model and down out of it).
     material.clippingPlanes = [clipPlaneRef.current];
-    material.stencilFail = THREE.IncrementWrapStencilOp;
-    material.stencilZFail = THREE.IncrementWrapStencilOp;
-    material.stencilZPass = THREE.IncrementWrapStencilOp;
+    const op = effectiveStencilMode === 'mirrored' ? THREE.DecrementWrapStencilOp : THREE.IncrementWrapStencilOp;
+    material.stencilFail = op;
+    material.stencilZFail = op;
+    material.stencilZPass = op;
     return material;
-  }, [stencilBase]);
+  }, [clipPlaneRef, effectiveStencilMode, stencilBase]);
 
   const stencilFront = React.useMemo(() => {
     const material = stencilBase.clone();
     material.side = THREE.FrontSide;
     material.clippingPlanes = [clipPlaneRef.current];
-    material.stencilFail = THREE.DecrementWrapStencilOp;
-    material.stencilZFail = THREE.DecrementWrapStencilOp;
-    material.stencilZPass = THREE.DecrementWrapStencilOp;
+    const op = effectiveStencilMode === 'mirrored' ? THREE.IncrementWrapStencilOp : THREE.DecrementWrapStencilOp;
+    material.stencilFail = op;
+    material.stencilZFail = op;
+    material.stencilZPass = op;
     return material;
-  }, [stencilBase]);
+  }, [clipPlaneRef, effectiveStencilMode, stencilBase]);
 
   const capPlaneGeometry = React.useMemo(() => {
     return new THREE.PlaneGeometry(
@@ -361,28 +460,34 @@ function CrossSectionStencilCapInner({
   const capPlaneMaterial = React.useMemo(() => {
     const resolvedOpacity = Math.max(0, Math.min(1, capOpacity));
     const isOpaqueCap = resolvedOpacity >= 0.999;
+    const resolvedSide = effectiveSide === 'back'
+      ? THREE.BackSide
+      : effectiveSide === 'double'
+        ? THREE.DoubleSide
+        : THREE.FrontSide;
     const material = new THREE.MeshBasicMaterial({
       color,
-      side: THREE.DoubleSide,
+      side: resolvedSide,
+      clippingPlanes: capClipPlanes,
       transparent: !isOpaqueCap,
       opacity: resolvedOpacity,
       // Opaque caps must contribute depth so later transparent passes
       // (e.g. build plate helpers) don't overdraw and make the cap look
       // like it's rendering behind the plate.
       depthWrite: isOpaqueCap,
-      depthTest: capDepthTest,
+      depthTest: debugOverrides?.depthTest ?? capDepthTest,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
       stencilWrite: true,
       stencilRef: 0,
       stencilFunc: THREE.NotEqualStencilFunc,
-      stencilFail: THREE.KeepStencilOp,
-      stencilZFail: THREE.KeepStencilOp,
-      stencilZPass: THREE.KeepStencilOp,
+      stencilFail: THREE.ReplaceStencilOp,
+      stencilZFail: THREE.ReplaceStencilOp,
+      stencilZPass: THREE.ReplaceStencilOp,
     });
     return material;
-  }, [capDepthTest, capOpacity, color]);
+  }, [capClipPlanes, capDepthTest, capOpacity, color, debugOverrides?.depthTest, effectiveSide]);
 
   const glowPlaneMaterial = React.useMemo(() => {
     if (glowThicknessMm <= 0 || glowOpacity <= 0) return null;
@@ -390,6 +495,7 @@ function CrossSectionStencilCapInner({
     const material = new THREE.MeshBasicMaterial({
       color: glowColor ?? color,
       side: THREE.DoubleSide,
+      clippingPlanes: capClipPlanes,
       transparent: true,
       opacity: Math.max(0, Math.min(1, glowOpacity)),
       depthWrite: false,
@@ -402,13 +508,24 @@ function CrossSectionStencilCapInner({
       stencilWrite: true,
       stencilRef: 0,
       stencilFunc: THREE.NotEqualStencilFunc,
-      stencilFail: THREE.KeepStencilOp,
-      stencilZFail: THREE.KeepStencilOp,
-      stencilZPass: THREE.KeepStencilOp,
+      stencilFail: THREE.ReplaceStencilOp,
+      stencilZFail: THREE.ReplaceStencilOp,
+      stencilZPass: THREE.ReplaceStencilOp,
     });
 
     return material;
-  }, [color, glowColor, glowOpacity, glowThicknessMm]);
+  }, [capClipPlanes, color, glowColor, glowOpacity, glowThicknessMm]);
+
+  // R3F adds/removes meshes from the support group during the commit phase,
+  // AFTER React's render phase (where useMemo runs). To avoid traversing a
+  // stale group, we gate the traversal on a post-commit counter that is
+  // incremented by a useLayoutEffect after each version change. This ensures
+  // staticSourceEntries is recomputed on the render that follows the commit
+  // in which the scene graph was actually updated.
+  const [postCommitTraversalKey, setPostCommitTraversalKey] = React.useState(0);
+  React.useLayoutEffect(() => {
+    setPostCommitTraversalKey((k) => k + 1);
+  }, [sourceObjectVersion]);
 
   const staticSourceEntries = React.useMemo<StaticStencilEntry[]>(() => {
     if (!sourceObject) return [];
@@ -573,7 +690,7 @@ function CrossSectionStencilCapInner({
     });
 
     return results;
-  }, [skipSourceZBounds, sourceObject, sourceObjectVersion]);
+  }, [skipSourceZBounds, sourceObject, postCommitTraversalKey]);
 
   const modelStencilEntryCacheRef = React.useRef<Map<string, {
     signature: string;
@@ -652,25 +769,27 @@ function CrossSectionStencilCapInner({
   }, [entries]);
 
   const visibleModelStencilEntries = React.useMemo(() => {
-    return modelStencilEntries.filter((entry) => intersectsMinMaxZ(entry.minZ, entry.maxZ, y));
-  }, [modelStencilEntries, y]);
+    // IMPORTANT: Do not z-filter here. Cached world bounds can be stale or
+    // conservative while transforms/support primitives update, which can
+    // incorrectly suppress an entire cap pass (especially the lower cap).
+    // Stencil clipping planes already constrain actual fragments precisely.
+    return modelStencilEntries;
+  }, [modelStencilEntries]);
 
   const visibleStaticSingleEntries = React.useMemo(() => {
     const visibleSingles: StaticStencilMeshEntry[] = [];
     for (const entry of staticSourceEntries) {
       if (entry.kind !== 'single') continue;
-      if (!intersectsMinMaxZ(entry.minZ, entry.maxZ, y)) continue;
       visibleSingles.push(entry);
     }
     return visibleSingles;
-  }, [staticSourceEntries, y]);
+  }, [staticSourceEntries]);
 
   const visibleStaticInstancedEntries = React.useMemo<VisibleStaticStencilInstancedEntry[]>(() => {
     const visibleInstanced: VisibleStaticStencilInstancedEntry[] = [];
 
     for (const entry of staticSourceEntries) {
       if (entry.kind !== 'instanced') continue;
-      if (!intersectsMinMaxZ(entry.minZ, entry.maxZ, y)) continue;
 
       visibleInstanced.push({
         key: entry.key,
@@ -681,7 +800,7 @@ function CrossSectionStencilCapInner({
     }
 
     return visibleInstanced;
-  }, [staticSourceEntries, y]);
+  }, [staticSourceEntries]);
 
   const hasVisibleStaticSource = visibleStaticSingleEntries.length > 0 || visibleStaticInstancedEntries.length > 0;
 
@@ -703,9 +822,11 @@ function CrossSectionStencilCapInner({
         entry={entry}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
+        backRenderOrder={MODEL_BACK_ORDER}
+        frontRenderOrder={MODEL_FRONT_ORDER}
       />
     ));
-  }, [stencilBack, stencilFront, visibleModelStencilEntries]);
+  }, [stencilBack, stencilFront, visibleModelStencilEntries, MODEL_BACK_ORDER, MODEL_FRONT_ORDER]);
 
   const staticSingleStencilPassNodes = React.useMemo(() => {
     return visibleStaticSingleEntries.map((entry) => (
@@ -714,9 +835,11 @@ function CrossSectionStencilCapInner({
         entry={entry}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
+        backRenderOrder={SOURCE_BACK_ORDER}
+        frontRenderOrder={SOURCE_FRONT_ORDER}
       />
     ));
-  }, [stencilBack, stencilFront, visibleStaticSingleEntries]);
+  }, [stencilBack, stencilFront, visibleStaticSingleEntries, SOURCE_BACK_ORDER, SOURCE_FRONT_ORDER]);
 
   const staticInstancedStencilPassNodes = React.useMemo(() => {
     return visibleStaticInstancedEntries.map((entry) => (
@@ -727,8 +850,8 @@ function CrossSectionStencilCapInner({
         matrixElements={entry.matrixElements}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
-        backRenderOrder={STENCIL_SOURCE_BACK_ORDER}
-        frontRenderOrder={STENCIL_SOURCE_FRONT_ORDER}
+        backRenderOrder={SOURCE_BACK_ORDER}
+        frontRenderOrder={SOURCE_FRONT_ORDER}
       />
     ));
   }, [stencilBack, stencilFront, visibleStaticInstancedEntries]);
@@ -736,7 +859,7 @@ function CrossSectionStencilCapInner({
   if (!visible || (visibleModelStencilEntries.length === 0 && !hasVisibleStaticSource)) return null;
 
   return (
-    <group renderOrder={STENCIL_RENDER_ORDER_BASE}>
+    <group>
       {modelStencilPassNodes}
 
       {staticSingleStencilPassNodes}
@@ -749,7 +872,7 @@ function CrossSectionStencilCapInner({
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
             position={[0, 0, y + Math.max(1e-4, glowThicknessMm)]}
-            renderOrder={STENCIL_GLOW_BACK_ORDER}
+            renderOrder={GLOW_BACK_ORDER}
             frustumCulled
             raycast={() => null}
           />
@@ -757,7 +880,7 @@ function CrossSectionStencilCapInner({
             geometry={capPlaneGeometry}
             material={glowPlaneMaterial}
             position={[0, 0, y - Math.max(1e-4, glowThicknessMm)]}
-            renderOrder={STENCIL_GLOW_FRONT_ORDER}
+            renderOrder={GLOW_FRONT_ORDER}
             frustumCulled
             raycast={() => null}
           />
@@ -767,8 +890,9 @@ function CrossSectionStencilCapInner({
       <mesh
         geometry={capPlaneGeometry}
         material={capPlaneMaterial}
-        position={[0, 0, y + 1e-4]}
-        renderOrder={STENCIL_CAP_ORDER}
+        position={[0, 0, y + effectiveOffsetMm]}
+        rotation={effectiveRotationXDeg !== 0 ? [THREE.MathUtils.degToRad(effectiveRotationXDeg), 0, 0] : undefined}
+        renderOrder={CAP_ORDER}
         frustumCulled
         raycast={() => null}
         onAfterRender={(renderer) => {
@@ -789,6 +913,7 @@ const areCrossSectionStencilCapPropsEqual = (
     && prev.sourceObjectVersion === next.sourceObjectVersion
     && prev.skipSourceZBounds === next.skipSourceZBounds
     && prev.y === next.y
+    && prev.otherClipY === next.otherClipY
     && prev.color === next.color
     && prev.planeWidthMm === next.planeWidthMm
     && prev.planeHeightMm === next.planeHeightMm
@@ -798,6 +923,14 @@ const areCrossSectionStencilCapPropsEqual = (
     && prev.glowThicknessMm === next.glowThicknessMm
     && prev.glowOpacity === next.glowOpacity
     && prev.glowColor === next.glowColor
+    && prev.direction === next.direction
+    && prev.renderOrderOffset === next.renderOrderOffset
+    && prev.debugOverrides?.side === next.debugOverrides?.side
+    && prev.debugOverrides?.offsetMm === next.debugOverrides?.offsetMm
+    && prev.debugOverrides?.rotationXDeg === next.debugOverrides?.rotationXDeg
+    && prev.debugOverrides?.clipMode === next.debugOverrides?.clipMode
+    && prev.debugOverrides?.stencilMode === next.debugOverrides?.stencilMode
+    && prev.debugOverrides?.depthTest === next.debugOverrides?.depthTest
   );
 };
 

@@ -14,6 +14,7 @@ const SUPPORT_SELECTION_CATEGORIES = new Set([
     'twig',
     'stick',
     'brace',
+    'anchor',
     'root',
 ]);
 

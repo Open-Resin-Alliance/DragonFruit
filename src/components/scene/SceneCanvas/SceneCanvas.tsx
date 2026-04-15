@@ -1,10 +1,15 @@
-"use client";
+﻿"use client";
 
 import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
+import { AlertTriangle } from 'lucide-react';
 import { OrbitControls } from '@react-three/drei';
-import { CrossSectionStencilCap, type CrossSectionStencilCapEntry } from '@/components/scene/CrossSectionStencilCap';
+import {
+  CrossSectionStencilCap,
+  type CrossSectionCapDebugOverrides,
+  type CrossSectionStencilCapEntry,
+} from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
@@ -42,6 +47,7 @@ import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hove
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
+import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
 
 import { GhostOverlay } from '@/components/lys-import/GhostOverlay';
@@ -76,6 +82,8 @@ import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanv
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, LoggingHelper, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
+import { setClipBounds } from './clipBoundsStore';
+import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
   getSavedCameraProjectionSettings,
@@ -88,6 +96,13 @@ import {
   subscribeToCameraFeelSettings,
   type CameraFeelPreset,
 } from '@/components/settings/cameraFeelPreferences';
+import {
+  DEFAULT_CAMERA_TRACKPAD_SETTINGS,
+  getSavedCameraTrackpadSettings,
+  subscribeToCameraTrackpadSettings,
+  type CameraTrackpadModifierKey,
+  type CameraTrackpadPrimaryAction,
+} from '@/components/settings/cameraTrackpadPreferences';
 import {
   DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT,
   DIAGNOSTICS_BENCHMARK_REQUEST_EVENT,
@@ -117,6 +132,47 @@ type GhostPreviewTransform = {
   rotation: THREE.Euler;
   scale: THREE.Vector3;
 };
+
+type TrackpadGestureAction = 'pan' | 'orbit';
+
+function isLikelyTrackpadWheelEvent(event: WheelEvent): boolean {
+  // Use numeric DOM_DELTA_PIXEL (=0) to avoid relying on global WheelEvent in all runtimes.
+  if (event.deltaMode !== 0) return false;
+  if (event.ctrlKey) return true;
+
+  const absX = Math.abs(event.deltaX);
+  const absY = Math.abs(event.deltaY);
+  const dominantDelta = Math.max(absX, absY);
+  const recessiveDelta = Math.min(absX, absY);
+
+  if (dominantDelta <= 0) return false;
+
+  // Exclude typical mouse wheel events: one axis nearly zero, other large.
+  // This prevents regular mouse scroll from triggering trackpad gestures.
+  if (recessiveDelta < 2 && dominantDelta > 16) return false;
+
+  if (absX > 0) return true;
+  if (!Number.isInteger(event.deltaX) || !Number.isInteger(event.deltaY)) return true;
+  return dominantDelta <= 16;
+}
+
+function isTrackpadModifierPressed(event: WheelEvent, modifierKey: CameraTrackpadModifierKey): boolean {
+  return modifierKey === 'shift' ? event.shiftKey : event.altKey;
+}
+
+function resolveTrackpadGestureAction(
+  event: WheelEvent,
+  primaryAction: CameraTrackpadPrimaryAction,
+  modifierKey: CameraTrackpadModifierKey,
+): TrackpadGestureAction | null {
+  if (primaryAction === 'off') return null;
+  if (event.ctrlKey || event.metaKey) return null;
+  if (!isLikelyTrackpadWheelEvent(event)) return null;
+
+  const modifierPressed = isTrackpadModifierPressed(event, modifierKey);
+  if (!modifierPressed) return primaryAction;
+  return primaryAction === 'pan' ? 'orbit' : 'pan';
+}
 
 function GhostPreviewInstances({
   geometry,
@@ -179,6 +235,35 @@ function GhostPreviewInstances({
     </instancedMesh>
   );
 }
+
+type CrossSectionCapDebugPanelState = {
+  enabled: boolean;
+  top: CrossSectionCapDebugOverrides;
+  bottom: CrossSectionCapDebugOverrides;
+};
+
+const CROSS_SECTION_CAP_DEBUG_STORAGE_KEY = 'df:cross-section-cap-debug:v4';
+const CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED = false;
+
+const DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE: CrossSectionCapDebugPanelState = {
+  enabled: false,
+  top: {
+    side: 'front',
+    offsetMm: 1e-4,
+    rotationXDeg: 0,
+    clipMode: 'upper',
+    stencilMode: 'standard',
+    depthTest: true,
+  },
+  bottom: {
+    side: 'back',
+    offsetMm: -1e-4,
+    rotationXDeg: 0,
+    clipMode: 'lower',
+    stencilMode: 'standard',
+    depthTest: false,
+  },
+};
 
 export function SceneCanvas({
   models: modelsProp = [],
@@ -449,6 +534,26 @@ export function SceneCanvas({
     () => getSavedCameraFeelSettings().preset,
     () => DEFAULT_CAMERA_FEEL_SETTINGS.preset,
   );
+  const cameraTrackpadSettings = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().primaryAction,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction,
+  );
+  const cameraTrackpadModifierKey = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().modifierKey,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.modifierKey,
+  );
+  const cameraTrackpadPanAcceleration = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().panAcceleration,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.panAcceleration,
+  );
+  const cameraTrackpadOrbitAcceleration = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().orbitAcceleration,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration,
+  );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -469,8 +574,18 @@ export function SceneCanvas({
     getSupportSnapshot,
     getSupportSnapshot,
   );
+  const supportSettings = React.useSyncExternalStore(
+    subscribeToSettings,
+    getSettings,
+    getSettings,
+  );
+  const isLinux = useIsLinux();
   const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
+
+  // Sync clip bounds to the module-level store so BranchPlacementController
+  // (and other independent raycasters) can skip hits on clipped geometry.
+  setClipBounds(clipLower, clipUpper);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -615,6 +730,9 @@ export function SceneCanvas({
 
   const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
   const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
+  const supportPlacementGuideRafRef = React.useRef<number | null>(null);
+  const supportPlacementGuidePendingZRef = React.useRef<number | null>(null);
+  const [supportPlacementGuideZ, setSupportPlacementGuideZ] = React.useState<number | null>(null);
 
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
 
@@ -835,6 +953,8 @@ export function SceneCanvas({
   const orbitInteractionMovedRef = React.useRef(false);
   const wheelZoomEndTimeoutRef = React.useRef<number | null>(null);
   const wheelZoomInteractionActiveRef = React.useRef(false);
+  const trackpadGestureEndTimeoutRef = React.useRef<number | null>(null);
+  const trackpadGestureActionRef = React.useRef<TrackpadGestureAction | null>(null);
   const navigationResumeDelayRef = React.useRef(0);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
@@ -849,6 +969,9 @@ export function SceneCanvas({
   const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const webGlRecoveryTimeoutRef = React.useRef<number | null>(null);
     const isOrbitInRotateState = React.useCallback(() => {
+      if (trackpadGestureActionRef.current != null) {
+        return trackpadGestureActionRef.current === 'orbit';
+      }
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
       // OrbitControls internal states:
@@ -1351,6 +1474,105 @@ export function SceneCanvas({
 
   const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
   const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive || supportHoverTargetActive || sceneHoveredSupportId !== null;
+
+  const queueSupportPlacementGuideZ = React.useCallback((nextZ: number | null) => {
+    supportPlacementGuidePendingZRef.current = nextZ;
+    if (supportPlacementGuideRafRef.current !== null) return;
+
+    supportPlacementGuideRafRef.current = requestAnimationFrame(() => {
+      supportPlacementGuideRafRef.current = null;
+      const pendingZ = supportPlacementGuidePendingZRef.current;
+      supportPlacementGuidePendingZRef.current = null;
+      setSupportPlacementGuideZ((previous) => {
+        if (previous === null && pendingZ === null) return previous;
+        if (previous !== null && pendingZ !== null && Math.abs(previous - pendingZ) <= 0.02) return previous;
+        return pendingZ;
+      });
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (supportPlacementGuideRafRef.current !== null) {
+        cancelAnimationFrame(supportPlacementGuideRafRef.current);
+        supportPlacementGuideRafRef.current = null;
+      }
+      supportPlacementGuidePendingZRef.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (mode === 'support' && !blockSupportPlacement) return;
+    queueSupportPlacementGuideZ(null);
+  }, [blockSupportPlacement, mode, queueSupportPlacementGuideZ]);
+
+  const handleSupportHover = React.useCallback((hit: THREE.Intersection | null) => {
+    if (mode === 'support' && !blockSupportPlacement) {
+      const nextZ = hit && Number.isFinite(hit.point.z) ? hit.point.z : null;
+      queueSupportPlacementGuideZ(nextZ);
+    } else {
+      queueSupportPlacementGuideZ(null);
+    }
+
+    onSupportHover?.(hit);
+  }, [blockSupportPlacement, mode, onSupportHover, queueSupportPlacementGuideZ]);
+
+  const supportPlacementIndicatorPlaneZ = React.useMemo(() => {
+    if (mode !== 'support' || blockSupportPlacement) return null;
+    if (supportPlacementGuideZ == null || !Number.isFinite(supportPlacementGuideZ)) return null;
+    return supportPlacementGuideZ;
+  }, [blockSupportPlacement, mode, supportPlacementGuideZ]);
+
+  const supportPlacementGuideLineWidthMm = React.useMemo(() => {
+    const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm * 0.3);
+
+    const pickPreviewContactDiameterMm = (preview: SupportData | null | undefined): number | null => {
+      if (!preview) return null;
+
+      const diameters: number[] = [];
+
+      const pushDiameter = (value: number | null | undefined) => {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return;
+        diameters.push(value);
+      };
+
+      pushDiameter(preview.contactCone?.profile?.contactDiameterMm);
+      preview.contactCones?.forEach((cone) => pushDiameter(cone.profile?.contactDiameterMm));
+      preview.contactDisks?.forEach((disk) => pushDiameter(disk.contactDiameterMm));
+
+      if (diameters.length === 0) return null;
+      return Math.max(...diameters);
+    };
+
+    const orderedPreviews: Array<SupportData | null | undefined> = [];
+
+    if (isBranchPlacementActive) orderedPreviews.push(branchPlacementPreview);
+    if (isLeafPlacementActive) orderedPreviews.push(leafPlacementPreview);
+    if (isKickstandPlacementActive) orderedPreviews.push(kickstandPlacementPreview);
+
+    orderedPreviews.push(
+      trunkPlacementPreview,
+      branchPlacementPreview,
+      leafPlacementPreview,
+      kickstandPlacementPreview,
+    );
+
+    for (const preview of orderedPreviews) {
+      const diameter = pickPreviewContactDiameterMm(preview);
+      if (diameter != null) return toGuideWidthMm(diameter);
+    }
+
+    return toGuideWidthMm(supportSettings.tip.contactDiameterMm || DEFAULT_TIP_CONTACT_DIAMETER_MM);
+  }, [
+    branchPlacementPreview,
+    isBranchPlacementActive,
+    isKickstandPlacementActive,
+    isLeafPlacementActive,
+    kickstandPlacementPreview,
+    leafPlacementPreview,
+    supportSettings.tip.contactDiameterMm,
+    trunkPlacementPreview,
+  ]);
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition
@@ -2108,6 +2330,14 @@ export function SceneCanvas({
       pushIfProjectedInside(brace.id, points);
     }
 
+    for (const anchor of Object.values(supportStateForBounds.anchors)) {
+      const points: Array<{ x: number; y: number; z: number }> = [anchor.rootPos];
+      if (anchor.contactCone) {
+        points.push(anchor.contactCone.pos);
+      }
+      pushIfProjectedInside(anchor.id, points);
+    }
+
     for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
       const points = segmentPoints(kickstand.segments);
       pushIfProjectedInside(kickstand.id, points);
@@ -2344,6 +2574,11 @@ export function SceneCanvas({
   const arrangeSupportPreviewModelIds = React.useMemo(() => {
     if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) return [] as string[];
     return Array.from(new Set(arrangeArrayPreviewItems.map((item) => item.model.id)));
+  }, [arrangeArrayPreviewItems]);
+
+  const arrangeArraySourceModelIdSet = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) return new Set<string>();
+    return new Set(arrangeArrayPreviewItems.map((item) => item.model.id));
   }, [arrangeArrayPreviewItems]);
 
   const supportBaseExcludeModelIds = React.useMemo(() => {
@@ -2794,12 +3029,18 @@ export function SceneCanvas({
     raftWallEnabled: raftSettingsForBounds.wallEnabled,
     raftWallHeight: raftSettingsForBounds.wallHeight,
     raftChamferAngle: raftSettingsForBounds.chamferAngle,
+    // Model-level signals: ensure the cross-section rebuilds when models are
+    // added, removed, copied, or transformed (supports may be attached to a
+    // model whose transform drives their rendered world positions).
+    models,
+    transform,
   }), [
     effectiveHoldSupportDragDelta,
     isGizmoDragging,
     kickstandStateForBounds.kickstands,
     kickstandStateForBounds.knots,
     kickstandStateForBounds.roots,
+    models,
     raftSettingsForBounds.bottomMode,
     raftSettingsForBounds.chamferAngle,
     raftSettingsForBounds.lineHeightMm,
@@ -2816,6 +3057,7 @@ export function SceneCanvas({
     supportStateForBounds.twigs,
     supportDragTransactionId,
     supportRenderRefreshNonce,
+    transform,
   ]);
 
   const crossSectionPlaneWidthMm = Math.max(
@@ -2842,35 +3084,6 @@ export function SceneCanvas({
 
   const supportAutoTargetModelIdRef = React.useRef<string | null | undefined>(undefined);
 
-  React.useEffect(() => {
-    if (mode !== 'support') {
-      supportAutoTargetModelIdRef.current = undefined;
-      return;
-    }
-    if (spaceMouseNavigationActive) return;
-
-    const currentModelId = activeModelId ?? null;
-    const hasModelContextChanged = supportAutoTargetModelIdRef.current !== currentModelId;
-    if (!hasModelContextChanged) {
-      return;
-    }
-
-    supportAutoTargetModelIdRef.current = currentModelId;
-
-    if (selectedSpaceMousePivotPoint) {
-      setOrbitTargetFromPoint(selectedSpaceMousePivotPoint);
-      return;
-    }
-
-    // Only fall back to build-volume center when the scene is truly empty.
-    // When models exist, auto-select will fire shortly and provide the
-    // proper pivot; animating to the build-volume center first causes
-    // a jarring double-animation on first open.
-    if (activeModelId == null && models.length === 0) {
-      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone(), { animate: false });
-    }
-  }, [activeModelId, buildVolumeCenterTarget, mode, models.length, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
-
   const spaceMousePivotCandidates = React.useMemo(() => {
     const centers: THREE.Vector3[] = [];
 
@@ -2893,9 +3106,11 @@ export function SceneCanvas({
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
-  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging || isGizmoRetargeting)
-    ? ([1, 1.5] as [number, number])
-    : ([1, 10] as [number, number]);
+  const dynamicDpr: [number, number] = isLinux
+    ? [1, 1]
+    : (isIntroAnimating || isDropAnimating || isGizmoDragging || isGizmoRetargeting)
+      ? [1, 1.5]
+      : [1, 10];
 
   React.useEffect(() => {
     modelDropOffsetsRef.current = entryDropOffsets;
@@ -3383,6 +3598,82 @@ export function SceneCanvas({
     }));
   }, [navigationResumeDelayMs]);
 
+  const clearPendingTrackpadGestureEnd = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (trackpadGestureEndTimeoutRef.current === null) return;
+    window.clearTimeout(trackpadGestureEndTimeoutRef.current);
+    trackpadGestureEndTimeoutRef.current = null;
+  }, []);
+
+  const applyTrackpadGesture = React.useCallback((action: TrackpadGestureAction, event: WheelEvent) => {
+    const camera = cameraRef.current;
+    const controls = orbitControlsRef.current;
+    const container = containerRef.current;
+    if (!camera || !controls || controls.enabled === false || !container) return false;
+
+    const rect = container.getBoundingClientRect();
+    const viewportHeight = Math.max(1, rect.height);
+
+    if (action === 'pan') {
+      const RAW_TRACKPAD_PAN_SPEED = 1.0;
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+
+      let worldUnitsPerPixel = 0;
+      if (camera instanceof THREE.OrthographicCamera) {
+        worldUnitsPerPixel = ((camera.top - camera.bottom) / Math.max(1e-6, camera.zoom)) / viewportHeight;
+      } else if (camera instanceof THREE.PerspectiveCamera) {
+        const distanceToTarget = Math.max(0.001, camera.position.distanceTo(controls.target));
+        const worldHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * distanceToTarget;
+        worldUnitsPerPixel = worldHeight / viewportHeight;
+      } else {
+        return false;
+      }
+
+      const panOffset = new THREE.Vector3()
+        .addScaledVector(right, event.deltaX * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration)
+        .addScaledVector(up, -event.deltaY * worldUnitsPerPixel * RAW_TRACKPAD_PAN_SPEED * cameraTrackpadPanAcceleration);
+
+      camera.position.add(panOffset);
+      controls.target.add(panOffset);
+      camera.updateMatrixWorld();
+      controls.update();
+      return true;
+    }
+
+    const worldUp = camera.up.clone().normalize();
+    const offset = camera.position.clone().sub(controls.target);
+    const offsetLength = Math.max(0.001, offset.length());
+    const RAW_TRACKPAD_ROTATE_SPEED = 1.0;
+    const rotateScale = 0.0022 * RAW_TRACKPAD_ROTATE_SPEED * cameraTrackpadOrbitAcceleration;
+    const yawAngle = event.deltaX * rotateScale;
+
+    offset.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(worldUp, yawAngle));
+
+    const normalizedOffset = offset.clone().normalize();
+    const currentPolar = Math.acos(THREE.MathUtils.clamp(normalizedOffset.dot(worldUp), -1, 1));
+    const nextPolar = THREE.MathUtils.clamp(currentPolar + (event.deltaY * rotateScale), 0.08, Math.PI - 0.08);
+    const pitchAngle = nextPolar - currentPolar;
+
+    const forward = normalizedOffset.clone().negate();
+    const rightAxis = new THREE.Vector3().crossVectors(forward, worldUp).normalize();
+    if (rightAxis.lengthSq() < 1e-8) {
+      rightAxis.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+    }
+
+    offset
+      .normalize()
+      .multiplyScalar(offsetLength)
+      .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(rightAxis, pitchAngle));
+
+    camera.position.copy(controls.target).add(offset);
+    camera.up.copy(worldUp);
+    camera.lookAt(controls.target);
+    camera.updateMatrixWorld();
+    controls.update();
+    return true;
+  }, [cameraTrackpadOrbitAcceleration, cameraTrackpadPanAcceleration]);
+
   React.useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof window === 'undefined') return;
@@ -3421,6 +3712,18 @@ export function SceneCanvas({
 
     const onWheel = (event: WheelEvent) => {
       if (!container.contains(event.target as Node | null)) return;
+      // Trackpad: allow zoom only for pinch gestures (ctrlKey).
+      // Regular two-finger scroll should never trigger zoom.
+      if (isLikelyTrackpadWheelEvent(event) && !event.ctrlKey) {
+        return;
+      }
+      try {
+        if (resolveTrackpadGestureAction(event, cameraTrackpadSettings, cameraTrackpadModifierKey) !== null) {
+          return;
+        }
+      } catch (error) {
+        console.error('[SceneCanvas] Trackpad gesture resolution failed; falling back to wheel zoom.', error);
+      }
 
       beginZoomInteraction();
 
@@ -3450,7 +3753,7 @@ export function SceneCanvas({
       document.removeEventListener('visibilitychange', forceZoomInteractionEnd);
       endZoomInteraction();
     };
-  }, []);
+  }, [cameraTrackpadModifierKey, cameraTrackpadSettings]);
 
   React.useEffect(() => {
     return () => {
@@ -3460,6 +3763,11 @@ export function SceneCanvas({
       }
       wheelZoomEndTimeoutRef.current = null;
       wheelZoomInteractionActiveRef.current = false;
+      if (trackpadGestureEndTimeoutRef.current !== null) {
+        window.clearTimeout(trackpadGestureEndTimeoutRef.current);
+      }
+      trackpadGestureEndTimeoutRef.current = null;
+      trackpadGestureActionRef.current = null;
     };
   }, []);
 
@@ -3538,7 +3846,7 @@ export function SceneCanvas({
       }
 
       benchmarkRunIdRef.current = requestId;
-      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweeps…` });
+      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweepsΓÇª` });
 
       const startedAt = performance.now();
       const startedAtIso = new Date().toISOString();
@@ -3879,6 +4187,9 @@ export function SceneCanvas({
   }, [isOrbitInRotateState]);
 
   const handleOrbitEnd = React.useCallback(() => {
+    const wasTrackpadGesture = trackpadGestureActionRef.current !== null;
+    clearPendingTrackpadGestureEnd();
+    trackpadGestureActionRef.current = null;
     if (mode === 'prepare' && orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
       suppressNextCanvasClickRef.current = true;
     }
@@ -3890,12 +4201,110 @@ export function SceneCanvas({
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
     window.dispatchEvent(new CustomEvent('picking-orbit-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
+      detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
     window.dispatchEvent(new CustomEvent('picking-pan-end', {
-      detail: { resumeAfterMs: navigationResumeDelayMs },
+      detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
-  }, [mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+  }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+
+  const scheduleTrackpadGestureEnd = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    clearPendingTrackpadGestureEnd();
+    trackpadGestureEndTimeoutRef.current = window.setTimeout(() => {
+      trackpadGestureEndTimeoutRef.current = null;
+      if (trackpadGestureActionRef.current === null) return;
+      trackpadGestureActionRef.current = null;
+      handleOrbitEnd();
+    }, 140);
+  }, [clearPendingTrackpadGestureEnd, handleOrbitEnd]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof window === 'undefined') return;
+
+    const onTrackpadWheel = (event: WheelEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+
+      try {
+        const action = resolveTrackpadGestureAction(
+          event,
+          cameraTrackpadSettings,
+          cameraTrackpadModifierKey,
+        );
+        if (action === null) return;
+
+        const controls = orbitControlsRef.current;
+        if (!controls || controls.enabled === false) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!orbitInteractionActiveRef.current) {
+          trackpadGestureActionRef.current = action;
+          handleOrbitStart();
+        } else {
+          trackpadGestureActionRef.current = action;
+        }
+
+        if (!applyTrackpadGesture(action, event)) {
+          trackpadGestureActionRef.current = null;
+          handleOrbitEnd();
+          return;
+        }
+
+        handleOrbitChange();
+        scheduleTrackpadGestureEnd();
+      } catch (error) {
+        console.error('[SceneCanvas] Trackpad wheel handler failed; disabling current trackpad gesture frame.', error);
+        trackpadGestureActionRef.current = null;
+        clearPendingTrackpadGestureEnd();
+      }
+    };
+
+    const forceTrackpadGestureEnd = () => {
+      clearPendingTrackpadGestureEnd();
+      if (trackpadGestureActionRef.current === null) return;
+      trackpadGestureActionRef.current = null;
+      handleOrbitEnd();
+    };
+
+    container.addEventListener('wheel', onTrackpadWheel, { capture: true, passive: false });
+    window.addEventListener('blur', forceTrackpadGestureEnd);
+    document.addEventListener('visibilitychange', forceTrackpadGestureEnd);
+
+    return () => {
+      container.removeEventListener('wheel', onTrackpadWheel, true);
+      window.removeEventListener('blur', forceTrackpadGestureEnd);
+      document.removeEventListener('visibilitychange', forceTrackpadGestureEnd);
+      forceTrackpadGestureEnd();
+    };
+  }, [
+    applyTrackpadGesture,
+    cameraTrackpadModifierKey,
+    cameraTrackpadSettings,
+    clearPendingTrackpadGestureEnd,
+    handleOrbitChange,
+    handleOrbitEnd,
+    handleOrbitStart,
+    scheduleTrackpadGestureEnd,
+  ]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const suppressViewportContextMenu = (event: MouseEvent) => {
+      if (!container.contains(event.target as Node | null)) return;
+      event.preventDefault();
+    };
+
+    container.addEventListener('contextmenu', suppressViewportContextMenu, true);
+    return () => {
+      container.removeEventListener('contextmenu', suppressViewportContextMenu, true);
+    };
+  }, []);
 
   const handleWebGlContextLost = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -4008,17 +4417,19 @@ export function SceneCanvas({
     includeBuildPlateDuringCapture,
   } = useExportThumbnailCapture({
     models,
+    meshColor,
     modelWorldBounds,
     computeModelWorldBounds,
     buildVolumeBounds,
     activeTransformOverrideModelId,
     transform,
     defaultCamera,
-    orbitControlsRef,
     rendererRef,
     sceneRef,
     cameraRef,
     buildVolumeBoundsOverlayRef,
+    selectedTintColor,
+    selectedTintStrength,
     exportThumbnailRenderOptions,
     onRegisterExportThumbnailCapture,
   });
@@ -4029,10 +4440,17 @@ export function SceneCanvas({
       handleOrbitEnd();
     };
 
+    const suppressContextMenuDuringOrbit = (event: Event) => {
+      if (orbitInteractionActiveRef.current) {
+        event.preventDefault();
+      }
+      forceOrbitEndIfActive();
+    };
+
     window.addEventListener('pointerup', forceOrbitEndIfActive, true);
     window.addEventListener('pointercancel', forceOrbitEndIfActive, true);
     window.addEventListener('mouseup', forceOrbitEndIfActive, true);
-    window.addEventListener('contextmenu', forceOrbitEndIfActive, true);
+    window.addEventListener('contextmenu', suppressContextMenuDuringOrbit, true);
     window.addEventListener('blur', forceOrbitEndIfActive);
     document.addEventListener('visibilitychange', forceOrbitEndIfActive);
 
@@ -4040,7 +4458,7 @@ export function SceneCanvas({
       window.removeEventListener('pointerup', forceOrbitEndIfActive, true);
       window.removeEventListener('pointercancel', forceOrbitEndIfActive, true);
       window.removeEventListener('mouseup', forceOrbitEndIfActive, true);
-      window.removeEventListener('contextmenu', forceOrbitEndIfActive, true);
+      window.removeEventListener('contextmenu', suppressContextMenuDuringOrbit, true);
       window.removeEventListener('blur', forceOrbitEndIfActive);
       document.removeEventListener('visibilitychange', forceOrbitEndIfActive);
     };
@@ -4137,6 +4555,62 @@ export function SceneCanvas({
     };
   }, []);
 
+  const [showCrossSectionCapDebugPanel, setShowCrossSectionCapDebugPanel] = React.useState(false);
+  const [crossSectionCapDebugState, setCrossSectionCapDebugState] = React.useState<CrossSectionCapDebugPanelState>(
+    DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE,
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(CROSS_SECTION_CAP_DEBUG_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<CrossSectionCapDebugPanelState>;
+      setCrossSectionCapDebugState((prev) => ({
+        enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : prev.enabled,
+        top: { ...prev.top, ...(parsed.top ?? {}) },
+        bottom: { ...prev.bottom, ...(parsed.bottom ?? {}) },
+      }));
+    } catch {
+      // Ignore malformed debug state.
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(CROSS_SECTION_CAP_DEBUG_STORAGE_KEY, JSON.stringify(crossSectionCapDebugState));
+    } catch {
+      // Ignore storage write failures in temporary debug tooling.
+    }
+  }, [crossSectionCapDebugState]);
+
+  React.useEffect(() => {
+    if (!CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isToggle = event.ctrlKey
+        && event.shiftKey
+        && (event.code === 'KeyK' || event.key.toLowerCase() === 'k');
+      if (!isToggle) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowCrossSectionCapDebugPanel((prev) => !prev);
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, []);
+
+  const topCapDebugOverrides = crossSectionCapDebugState.enabled
+    ? crossSectionCapDebugState.top
+    : undefined;
+  const bottomCapDebugOverrides = crossSectionCapDebugState.enabled
+    ? crossSectionCapDebugState.bottom
+    : undefined;
+
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -4151,7 +4625,7 @@ export function SceneCanvas({
         key={`scene-canvas-${canvasRecoveryNonce}`}
         style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
         camera={defaultCamera}
-        shadows
+        shadows={!isLinux}
         dpr={dynamicDpr}
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}
@@ -4265,6 +4739,7 @@ export function SceneCanvas({
                 // Use per-model visibility
                 if (!model.visible) return null;
                 if (shouldHideDuplicateSourceModel) return null;
+                if (arrangeArraySourceModelIdSet.has(model.id)) return null;
 
                 return (
                   <React.Fragment key={model.id}>
@@ -4291,14 +4766,15 @@ export function SceneCanvas({
                       isActiveModel={isActive}
                       onSmoothingGeometryActivate={onSmoothingGeometryActivate}
                       onSupportClick={onSupportClick}
-                      onSupportHover={onSupportHover}
+                      onSupportHover={handleSupportHover}
                       onActiveModelChange={onActiveModelChange}
                       disableRaycast={disableRaycast}
                       blockSupportPlacement={isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
                       isSelected={
-                        isSelectedModel &&
+                        isCaptureTintModel ||
                         (
+                          isSelectedModel &&
                           effectiveModelSelected && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
                         )
                       }
@@ -4318,6 +4794,10 @@ export function SceneCanvas({
                       outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
+                      supportPlacementGuidePlaneZ={!thumbnailCaptureActive && isActive ? supportPlacementIndicatorPlaneZ : null}
+                      supportPlacementGuideColor="#baf72e"
+                      supportPlacementGuideLineWidthMm={supportPlacementGuideLineWidthMm}
+                      supportPlacementGuideOpacity={0.62}
                       suppressModelInteraction={suppressModelInteraction}
                       isExternallyHovered={hoveredModelId === model.id}
                       deferExternalTransformUpdates={
@@ -4631,6 +5111,7 @@ export function SceneCanvas({
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
+                  hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
                   clipUpper={clipUpper}
@@ -4664,11 +5145,16 @@ export function SceneCanvas({
 
               {(clipUpper != null || indicatorPlaneZ != null) && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
+                  key="cross-section-cap-top"
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
-                  skipSourceZBounds={clipUpper == null}
+                  // During slider scrubbing, avoid expensive source z-bound
+                  // traversal/bucketing work. Stencil clipping still constrains
+                  // fragments correctly, so this is a safe CPU optimization.
+                  skipSourceZBounds={clipUpper == null || isLayerScrubbing}
                   y={(clipUpper ?? indicatorPlaneZ)!}
+                  otherClipY={clipLower}
                   color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
                   planeWidthMm={crossSectionPlaneWidthMm}
                   planeHeightMm={crossSectionPlaneHeightMm}
@@ -4678,6 +5164,28 @@ export function SceneCanvas({
                   glowOpacity={clipUpper != null ? 0 : 0.44}
                   glowColor={clipUpper != null ? undefined : (indicatorPlaneColor ?? '#ec2a77')}
                   visible={!hideCrossSectionCap && (clipUpper != null || indicatorPlaneZ != null)}
+                  debugOverrides={topCapDebugOverrides}
+                />
+              )}
+
+              {clipLower != null && !hideCrossSectionCap && (
+                <CrossSectionStencilCap
+                  key="cross-section-cap-bottom"
+                  entries={crossSectionCapEntries}
+                  sourceObject={supportDragGroupRef?.current ?? null}
+                  sourceObjectVersion={crossSectionStencilSourceVersion}
+                  skipSourceZBounds={isLayerScrubbing}
+                  y={clipLower}
+                  otherClipY={clipUpper}
+                  color="#FFFFFF"
+                  planeWidthMm={crossSectionPlaneWidthMm}
+                  planeHeightMm={crossSectionPlaneHeightMm}
+                  capOpacity={1}
+                  capDepthTest={false}
+                  direction="bottom"
+                  renderOrderOffset={1}
+                  visible={!hideCrossSectionCap}
+                  debugOverrides={bottomCapDebugOverrides}
                 />
               )}
 
@@ -5315,7 +5823,7 @@ export function SceneCanvas({
               {/* Uses tip contact diameter to match actual tip size */}
               {branchHoverDotVisible && branchHoverPosition && (
                 <mesh position={[branchHoverPosition.x, branchHoverPosition.y, branchHoverPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial
                     color="#00ff00"
                     transparent
@@ -5330,7 +5838,7 @@ export function SceneCanvas({
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
               {isBranchPlacementActive && branchTipPosition && !branchPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[branchTipPosition.x, branchTipPosition.y, branchTipPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
                 </mesh>
               )}
@@ -5339,7 +5847,7 @@ export function SceneCanvas({
               {/* Uses tip contact diameter to match actual tip size */}
               {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafHoverPosition.x, leafHoverPosition.y, leafHoverPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial
                     color="#00ff00"
                     transparent
@@ -5354,7 +5862,7 @@ export function SceneCanvas({
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
               {isLeafPlacementActive && leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafTipPosition.x, leafTipPosition.y, leafTipPosition.z]} raycast={() => null}>
-                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2 * 0.5, 12, 12]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
                 </mesh>
               )}
@@ -5512,7 +6020,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Loading brush…
+            Loading brushΓÇª
           </div>
         </div>
       )}
@@ -5529,7 +6037,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Smoothing… {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
+            SmoothingΓÇª {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
           </div>
         </div>
       )}
@@ -5553,6 +6061,162 @@ export function SceneCanvas({
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
 
+      {showCrossSectionCapDebugPanel && (
+        <div
+          className="absolute right-3 top-3 z-[70] w-[360px] rounded-lg border p-3 shadow-xl"
+          style={{
+            pointerEvents: 'auto',
+            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+            background: 'color-mix(in srgb, var(--surface-0), black 6%)',
+            color: 'var(--text-strong)',
+          }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-semibold">Cross-Section Cap Debug (temporary)</div>
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-[10px]"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+              onClick={() => setShowCrossSectionCapDebugPanel(false)}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between gap-2 rounded border p-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <label className="flex items-center gap-2 text-[11px]">
+              <input
+                type="checkbox"
+                checked={crossSectionCapDebugState.enabled}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setCrossSectionCapDebugState((prev) => ({ ...prev, enabled }));
+                }}
+              />
+              Enable overrides
+            </label>
+            <button
+              type="button"
+              className="rounded border px-2 py-1 text-[10px]"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+              onClick={() => setCrossSectionCapDebugState(DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE)}
+            >
+              Reset defaults
+            </button>
+          </div>
+
+          {(['top', 'bottom'] as const).map((which) => {
+            const settings = crossSectionCapDebugState[which];
+            const setSettings = (partial: Partial<CrossSectionCapDebugOverrides>) => {
+              setCrossSectionCapDebugState((prev) => ({
+                ...prev,
+                [which]: { ...prev[which], ...partial },
+              }));
+            };
+
+            return (
+              <div key={which} className="mt-2 rounded border p-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[11px] font-semibold uppercase" style={{ color: 'var(--text-muted)' }}>
+                  {which} cap
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <label className="flex flex-col gap-1">
+                    <span>Side</span>
+                    <select
+                      value={settings.side ?? 'front'}
+                      onChange={(e) => setSettings({ side: e.target.value as 'front' | 'back' | 'double' })}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="front">front</option>
+                      <option value="back">back</option>
+                      <option value="double">double</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Depth test</span>
+                    <select
+                      value={settings.depthTest ? 'on' : 'off'}
+                      onChange={(e) => setSettings({ depthTest: e.target.value === 'on' })}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="on">on</option>
+                      <option value="off">off</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Clip mode</span>
+                    <select
+                      value={settings.clipMode ?? (which === 'bottom' ? 'lower' : 'upper')}
+                      onChange={(e) => setSettings({ clipMode: e.target.value as 'upper' | 'lower' })}
+                      disabled={which === 'bottom'}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="upper">upper (z ≤ y)</option>
+                      <option value="lower">lower (z ≥ y)</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Stencil mode</span>
+                    <select
+                      value={settings.stencilMode ?? 'standard'}
+                      onChange={(e) => setSettings({ stencilMode: e.target.value as 'standard' | 'mirrored' })}
+                      disabled={which === 'bottom'}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    >
+                      <option value="standard">standard</option>
+                      <option value="mirrored">mirrored</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Offset (mm)</span>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      value={settings.offsetMm ?? (which === 'bottom' ? -0.0001 : 0.0001)}
+                      onChange={(e) => setSettings({ offsetMm: Number(e.target.value) })}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Rotation X (deg)</span>
+                    <input
+                      type="number"
+                      step="1"
+                      value={settings.rotationXDeg ?? 0}
+                      onChange={(e) => setSettings({ rotationXDeg: Number(e.target.value) })}
+                      disabled={which === 'bottom'}
+                      className="rounded border px-1.5 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                    />
+                  </label>
+                </div>
+
+                {which === 'bottom' && (
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Bottom cap uses CPU slice loops right now (side/offset/depth-test apply; clip/stencil/rotation ignored).
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            Toggle panel: Ctrl+Shift+K · Settings persist locally.
+          </div>
+        </div>
+      )}
+
       {marqueeSelection && (
         <div
           style={{
@@ -5573,7 +6237,7 @@ export function SceneCanvas({
 
       {activeBuildVolumeSettings?.enabled && activeBuildVolumeSettings.showViolationWarning && outOfBoundsModels.length > 0 && (
         <div
-          className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 animate-pulse rounded-full border px-5 py-2 text-sm font-semibold shadow-lg"
+          className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 animate-pulse rounded-full border px-5 py-2 text-sm font-semibold shadow-lg flex items-center gap-2"
           style={{
             pointerEvents: 'none',
             borderColor: 'color-mix(in srgb, #ff5b6f, var(--border-subtle) 42%)',
@@ -5582,8 +6246,8 @@ export function SceneCanvas({
           }}
           title={outOfBoundsModels.map((m) => m.name).join(', ')}
         >
-          <span style={{ marginRight: 6 }}>⚠</span>
-          {outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span>{outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume</span>
         </div>
       )}
     </div>

@@ -809,6 +809,9 @@ function buildSupportAndRaftWorldTriangles(
   const supportState = getSupportSnapshot();
   const kickstandState = getKickstandSnapshot();
   const sink: TriangleSink = collector ?? out;
+  const raftSettings = getRaftSettings();
+  const hasSolidBottom = raftSettings.bottomMode === 'solid';
+  const raftThickness = raftSettings.thickness;
   const tessellation = resolveSupportSliceTessellation(supportState, kickstandState);
   const segmentTessellation = {
     shaftRadialSegments: tessellation.shaftRadialSegments,
@@ -853,10 +856,18 @@ function buildSupportAndRaftWorldTriangles(
     const rootVisibleByLink = visibleRootIds.has(root.id);
     if (!rootVisibleByModel && !rootVisibleByLink) continue;
 
-    const base = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
+    // Mirror proxy hasSolidBottom logic: collapse disk height and shift root up so it
+    // sits flush on top of the solid raft rather than extending through it.
+    const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.01, root.diskHeight);
+    const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+    const base = new THREE.Vector3(
+      root.transform.pos.x,
+      root.transform.pos.y,
+      root.transform.pos.z + verticalOffset,
+    );
     const rootRadius = Math.max(0.05, root.diameter * 0.5);
     const topRadius = rootTopRadiusByRootId.get(root.id) ?? Math.max(0.05, rootRadius * 0.45);
-    const diskTop = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, root.diskHeight)));
+    const diskTop = base.clone().add(new THREE.Vector3(0, 0, effectiveDiskHeight));
     const coneTop = diskTop.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, root.coneHeight)));
 
     const diskGeom = createFrustumGeometryBetween(base, diskTop, rootRadius, rootRadius, tessellation.rootRadialSegments);
@@ -956,11 +967,16 @@ function buildSupportAndRaftWorldTriangles(
     const startKnot = supportState.knots[brace.startKnotId];
     const endKnot = supportState.knots[brace.endKnotId];
     if (!startKnot || !endKnot) continue;
+    // Mirror renderer: derive visual diameter from host knot diameters, not raw profile.diameter.
+    const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
+    const startHostDia = Math.max(0.05, (startKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+    const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+    const braceDiameter = (startHostDia + endHostDia) * 0.5;
     appendSegmentPrimitive(
       sink,
       new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
       new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
-      Math.max(0.05, brace.profile?.diameter ?? 1),
+      braceDiameter,
       brace.curve as any,
       segmentTessellation,
     );
@@ -994,7 +1010,8 @@ function buildSupportAndRaftWorldTriangles(
     }
   }
 
-  const raft = getRaftSettings();
+  // raftSettings already resolved at top of function; reuse it.
+  const raft = raftSettings;
   if (raft.bottomMode !== 'off') {
     const rootsByModel = new Map<string, Array<{ x: number; y: number; r: number }>>();
     for (const root of Object.values(supportState.roots)) {
@@ -2281,11 +2298,8 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     widthPx: settings.widthPx,
     heightPx: settings.heightPx,
     xPackingMode: settings.xPackingMode,
-    computeBackend: perfSettings.computeBackend === 'gpu'
-      ? 'gpu'
-      : perfSettings.computeBackend === 'cpu'
-        ? 'cpu'
-        : 'auto',
+    // Backend selection is managed internally by the slicing engine.
+    computeBackend: 'auto',
     pngCompressionStrategy: perfSettings.pngCompressionStrategy,
     bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
     mirrorX: settings.mirrorX,

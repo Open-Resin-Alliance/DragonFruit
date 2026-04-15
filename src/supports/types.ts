@@ -171,6 +171,21 @@ export type BraceCurve = {
 };
 
 /**
+ * Anchor: A minimal near-plate support for contact points below 5mm.
+ * Bypasses grid system entirely. Not a target for branches, leaves, or braces.
+ * Geometry: frustum root → joint → single segment → contact cone.
+ */
+export interface Anchor extends SupportEntity {
+    rootPos: Vec3;
+    rootBaseDiameter: number;
+    rootTopDiameter: number;
+    rootHeight: number;
+    joint: Joint;
+    segments: Segment[];
+    contactCone: ContactCone;
+}
+
+/**
  * Brace: A stabilizer bar connecting two supports.
  */
 export interface Brace extends SupportEntity {
@@ -192,10 +207,11 @@ export interface SupportState {
     twigs: Record<string, Twig>;
     sticks: Record<string, Stick>;
     braces: Record<string, Brace>;
+    anchors: Record<string, Anchor>;
     knots: Record<string, Knot>;
     // Interaction State
     selectedId: string | null;
-    selectedCategory?: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
+    selectedCategory?: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'anchor' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
     hoveredId: string | null;
     hoveredCategory?: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none';
     interactionWarning?: WarningCode | null;
@@ -216,6 +232,7 @@ export interface DragonfruitImportFormat {
     twigs?: Twig[];
     sticks?: Stick[];
     braces: Brace[];
+    anchors?: Anchor[];
     knots: Knot[];
     kickstands?: KickstandBuildResult[];
 }

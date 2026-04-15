@@ -295,11 +295,15 @@ export function SelectDropdown<T extends string | number = string>({
             style={{
               top: menuPosition?.top ?? 0,
               left: menuPosition?.left ?? 0,
+              width: menuPosition?.minWidth,
               minWidth: menuPosition?.minWidth,
               maxHeight: menuPosition?.maxHeight,
               visibility: menuPosition?.visibility ?? 'hidden',
               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 82%)',
               background: 'color-mix(in srgb, var(--surface-0), black 6%)',
+              backdropFilter: 'blur(6px) saturate(112%)',
+              WebkitBackdropFilter: 'blur(6px) saturate(112%)',
+              boxShadow: '0 14px 34px rgba(0, 0, 0, 0.46), 0 4px 12px rgba(0, 0, 0, 0.32)',
             }}
           >
             {options.map((option, index) => {

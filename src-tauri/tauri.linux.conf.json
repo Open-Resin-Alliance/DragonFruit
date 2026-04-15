@@ -1,0 +1,18 @@
+{
+  "build": {
+    "beforeBundleCommand": "bash scripts/bundle-cef-libs.sh"
+  },
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "../rust/dragonfruit-voxl-thumbnail/target/release/dragonfruit-voxl-thumbnailer": "usr/bin/dragonfruit-voxl-thumbnailer",
+          "../rust/dragonfruit-voxl-thumbnail/platform/linux/dragonfruit-voxl.thumbnailer": "usr/share/thumbnailers/dragonfruit-voxl.thumbnailer",
+          "../rust/dragonfruit-voxl-thumbnail/platform/linux/dragonfruit-voxl.xml": "usr/share/mime/packages/dragonfruit-voxl.xml"
+        },
+        "postInstallScript": "../rust/dragonfruit-voxl-thumbnail/platform/linux/deb-postinst.sh",
+        "postRemoveScript": "../rust/dragonfruit-voxl-thumbnail/platform/linux/deb-postrm.sh"
+      }
+    }
+  }
+}

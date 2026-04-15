@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-voxl">
+    <comment>DragonFruit VOXL Scene</comment>
+    <glob pattern="*.voxl"/>
+    <magic priority="50">
+      <match type="string" offset="0" value="VOXL"/>
+    </magic>
+  </mime-type>
+</mime-info>

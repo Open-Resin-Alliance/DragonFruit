@@ -60,11 +60,21 @@ if (dryRun) {
 const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const failures = [];
 
+function rustflagsForTarget(targetTriple) {
+      return targetTriple.startsWith("x86_64") ? "-C target-feature=+avx2,+fma" : undefined;
+}
+
 for (const target of targets) {
       const bundleArg = bundlesByTarget[target];
-      const cmdArgs = bundleArg
+      let cmdArgs = bundleArg
             ? ["tauri", "build", "--target", target, "--bundles", bundleArg]
             : ["tauri", "build", "--target", target];
+
+      // Linux builds use CEF instead of WebKitGTK (issue #83). Pass cargo
+      // feature flags after "--" so the binary links against tauri-cef.
+      if (target.includes("linux")) {
+            cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
+      }
       console.log(`\n=== Building target: ${target} ===`);
       console.log(`${npxCmd} ${cmdArgs.join(" ")}`);
 
@@ -72,9 +82,16 @@ for (const target of targets) {
             continue;
       }
 
+      const rustflags = rustflagsForTarget(target);
+
       const result = spawnSync(npxCmd, cmdArgs, {
             stdio: "inherit",
-            env: process.env,
+            // Use +avx2 (supported on all CPUs since ~2013) for good vectorization
+            // without the illegal-instruction crashes that "target-cpu=native" causes
+            // on older hardware (STATUS_ILLEGAL_INSTRUCTION / 0xC000001D).
+            env: rustflags
+                  ? { ...process.env, RUSTFLAGS: rustflags }
+                  : { ...process.env },
       });
 
       if (result.status !== 0) {

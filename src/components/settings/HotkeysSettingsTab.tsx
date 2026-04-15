@@ -170,6 +170,25 @@ export function HotkeysSettingsTab() {
         })}
       </section>
 
+      {/* Rotation Section */}
+      {config.ROTATION && (
+        <section className="space-y-3">
+          <h3 className="uppercase text-xs font-bold tracking-wider text-neutral-500 border-b border-neutral-800 pb-1">
+            Rotation
+          </h3>
+          {Object.entries(config.ROTATION).map(([action, binding]) => (
+            <HotkeyRow
+              key={action}
+              label={binding.description}
+              binding={binding}
+              isRecording={recordingKey?.category === 'ROTATION' && recordingKey?.action === action}
+              onRecord={() => setRecordingKey({ category: 'ROTATION', action })}
+              onCancel={() => setRecordingKey(null)}
+            />
+          ))}
+        </section>
+      )}
+
       {/* Recording Overlay/Hint */}
       {recordingKey && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center cursor-wait backdrop-blur-sm"

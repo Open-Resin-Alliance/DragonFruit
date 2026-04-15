@@ -5,6 +5,7 @@ import {
   VOXL_MAGIC,
   VOXL_VERSION,
   type BuildVoxlDocumentInput,
+  type ParsedVoxlResult,
   type SerializeVoxlOptions,
   type VoxlCompressedDocumentEnvelopeV1,
   type VoxlDocumentV1,
@@ -12,6 +13,7 @@ import {
   type VoxlModelRuntimeLike,
   type VoxlVec3,
 } from './types';
+import { isVoxlBinaryV2, parseVoxlBinaryV2 } from './codec-v2';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -242,6 +244,7 @@ export function buildSupportExportFromStores(
     twigs: Object.values(supportState.twigs),
     sticks: Object.values(supportState.sticks),
     braces: Object.values(supportState.braces),
+    anchors: Object.values(supportState.anchors),
     knots: Object.values(supportState.knots),
     kickstands,
   };
@@ -381,4 +384,37 @@ export function parseVoxlDocument(json: string): VoxlDocumentV1 {
   }
 
   return parsed as VoxlDocumentV1;
+}
+
+// ─── Unified Auto-Detecting Parser ────────────────────────────────────────────
+
+/**
+ * Parse any VOXL file (V1 JSON or V2 binary) from raw bytes.
+ *
+ * Detection: first byte 0x7B ('{') → JSON V1; first 4 bytes "VOXL" → binary V2.
+ *
+ * Returns a `ParsedVoxlResult` with the normalised document and, for V2 files,
+ * pre-decoded mesh bytes in `meshBytes`.
+ */
+export function parseVoxlAuto(data: Uint8Array | ArrayBuffer): ParsedVoxlResult {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+
+  if (bytes.length === 0) {
+    throw new Error('Cannot parse empty VOXL file.');
+  }
+
+  // V2 binary: starts with "VOXL" magic (0x56 0x4F 0x58 0x4C)
+  if (isVoxlBinaryV2(bytes)) {
+    return parseVoxlBinaryV2(bytes);
+  }
+
+  // V1 JSON: starts with '{' (possibly with leading whitespace)
+  const json = textDecoder.decode(bytes);
+  const document = parseVoxlDocument(json);
+
+  return {
+    document,
+    meshBytes: new Map(),
+    sourceVersion: 1,
+  };
 }

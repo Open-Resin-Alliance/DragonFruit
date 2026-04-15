@@ -4,33 +4,13 @@
 //! masks, or both) plus metadata; concrete file/container formats are encoded
 //! through this trait.
 
-pub mod generated_plugin_encoders;
+#[path = "../../../../plugins/athena/slicing/rust/encoder_impl.rs"]
+pub mod athena_plugin;
 pub mod registry;
 
 use crate::engine::SlicerV3Error;
 use crate::types::{LayerAreaStatsV3, RenderedLayersV3, SliceJobV3};
 use std::path::Path;
-
-/// Stateful encoder sink that can consume raw masks layer-by-layer during
-/// rasterization and produce final container bytes once all layers are seen.
-pub trait RawMaskStreamEncoder: Send {
-    /// Consume one rasterized raw mask layer in display order.
-    fn consume_raw_mask_layer(
-        &mut self,
-        layer_index: u32,
-        raw_mask: Vec<u8>,
-    ) -> Result<(), SlicerV3Error>;
-
-    /// Finalize and return encoded container bytes.
-    fn finalize_to_bytes(self: Box<Self>) -> Result<Vec<u8>, SlicerV3Error>;
-
-    /// Finalize and write encoded container directly to disk.
-    fn finalize_to_path(self: Box<Self>, output_path: &Path) -> Result<(), SlicerV3Error> {
-        let bytes = self.finalize_to_bytes()?;
-        std::fs::write(output_path, bytes)?;
-        Ok(())
-    }
-}
 
 /// Trait implemented by concrete output format encoders.
 pub trait FormatEncoder: Send + Sync {
@@ -55,28 +35,6 @@ pub trait FormatEncoder: Send + Sync {
         false
     }
 
-    /// Optionally create a streaming raw-mask sink for interleaved
-    /// rasterize+encode pipelines.
-    ///
-    /// When provided, the engine can feed raw masks layer-by-layer as they are
-    /// produced, reducing peak memory and making progress correlate linearly
-    /// with layer processing.
-    fn create_raw_mask_stream_encoder(
-        &self,
-        _job: &SliceJobV3,
-    ) -> Result<Option<Box<dyn RawMaskStreamEncoder>>, SlicerV3Error> {
-        Ok(None)
-    }
-
-    /// Estimated units of encode-stage work used for progress tracking.
-    ///
-    /// The default reports a single unit to preserve coarse compatibility for
-    /// encoders that do not yet provide incremental encode progress.
-    fn estimate_encode_progress_units(&self, rendered_layers: &RenderedLayersV3) -> u32 {
-        let _ = rendered_layers;
-        1
-    }
-
     /// Capability-aware encode entrypoint.
     ///
     /// Default implementation preserves backwards compatibility by routing to
@@ -95,22 +53,6 @@ pub trait FormatEncoder: Send + Sync {
         self.encode_container(job, layer_pngs, layer_area_stats)
     }
 
-    /// Capability-aware encode entrypoint with optional incremental progress callback.
-    fn encode_container_from_rendered_layers_with_progress(
-        &self,
-        job: &SliceJobV3,
-        rendered_layers: &RenderedLayersV3,
-        layer_area_stats: &[LayerAreaStatsV3],
-        on_progress: Option<&dyn Fn(u32, u32)>,
-    ) -> Result<Vec<u8>, SlicerV3Error> {
-        let bytes =
-            self.encode_container_from_rendered_layers(job, rendered_layers, layer_area_stats)?;
-        if let Some(progress) = on_progress {
-            progress(1, 1);
-        }
-        Ok(bytes)
-    }
-
     /// Capability-aware encode entrypoint that streams output directly to disk.
     ///
     /// Default implementation preserves backwards compatibility by encoding to
@@ -124,26 +66,6 @@ pub trait FormatEncoder: Send + Sync {
     ) -> Result<(), SlicerV3Error> {
         let bytes =
             self.encode_container_from_rendered_layers(job, rendered_layers, layer_area_stats)?;
-        std::fs::write(output_path, &bytes)?;
-        Ok(())
-    }
-
-    /// Capability-aware disk-streaming encode entrypoint with optional
-    /// incremental progress callback.
-    fn encode_container_to_path_with_progress(
-        &self,
-        job: &SliceJobV3,
-        rendered_layers: &RenderedLayersV3,
-        layer_area_stats: &[LayerAreaStatsV3],
-        output_path: &Path,
-        on_progress: Option<&dyn Fn(u32, u32)>,
-    ) -> Result<(), SlicerV3Error> {
-        let bytes = self.encode_container_from_rendered_layers_with_progress(
-            job,
-            rendered_layers,
-            layer_area_stats,
-            on_progress,
-        )?;
         std::fs::write(output_path, &bytes)?;
         Ok(())
     }

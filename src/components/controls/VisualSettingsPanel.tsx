@@ -14,6 +14,12 @@ type VisualSettingsPanelProps = {
   currentHeightMm?: number;
   maxHeightMm?: number;
   crossSectionMode: 'smooth' | 'rasterized';
+  lowerLayerIndex?: number;
+  onLowerLayerIndexChange?: (value: number) => void;
+  lowerCurrentHeightMm?: number;
+  crossSectionEnabled?: boolean;
+  onToggleCrossSection?: () => void;
+  layerHeightMm?: number;
 };
 
 export function VisualSettingsPanel({
@@ -26,6 +32,12 @@ export function VisualSettingsPanel({
   currentHeightMm,
   maxHeightMm,
   crossSectionMode,
+  lowerLayerIndex,
+  onLowerLayerIndexChange,
+  lowerCurrentHeightMm,
+  crossSectionEnabled,
+  onToggleCrossSection,
+  layerHeightMm,
 }: VisualSettingsPanelProps) {
   const handleLayerChange = React.useCallback((nextValue: number) => {
     onLayerIndexChange(Math.round(nextValue));
@@ -48,6 +60,13 @@ export function VisualSettingsPanel({
             maxHeightMm={maxHeightMm}
             showValue={true}
             crossSectionMode={crossSectionMode}
+            lowerValue={lowerLayerIndex}
+            onLowerChange={onLowerLayerIndexChange}
+            lowerCurrentHeightMm={lowerCurrentHeightMm}
+            showModeIndicator={false}
+            crossSectionEnabled={crossSectionEnabled}
+            onToggleCrossSection={onToggleCrossSection}
+            layerHeightMm={layerHeightMm}
             docked
             embedded
             expandToContainer

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Download, FileType2, Layers3, Settings2 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
+import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
 import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/ui/primitives';
 
 interface ExportPanelProps {
@@ -12,25 +13,11 @@ interface ExportPanelProps {
   selectedModelIds?: string[];
   onActiveModelChange: (modelId: string | null) => void;
   supportsRef?: React.RefObject<THREE.Group | null>;
+  captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
+  onExportSuccess?: (savedPath: string) => void;
 }
 
 type ExportScope = 'entire_plate' | 'active_model';
-
-function normalizeExportBaseName(rawName: string | null | undefined): string {
-  const trimmed = (rawName ?? '').trim();
-  if (!trimmed) return 'MyPrint';
-
-  // Strip common source suffixes if present (including chained suffixes).
-  const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json|voxl))+$/i, '');
-  const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
-  return cleaned || 'MyPrint';
-}
-
-function resolveEntirePlateExportBaseName(models: LoadedModel[]): string {
-  const firstVisible = models.find((model) => model.visible) ?? models[0] ?? null;
-  const firstBase = normalizeExportBaseName(firstVisible?.name);
-  return `${firstBase}_DF_Scene`;
-}
 
 export function ExportPanel({
   models,
@@ -39,6 +26,8 @@ export function ExportPanel({
   selectedModelIds,
   onActiveModelChange,
   supportsRef,
+  captureSceneThumbnailPng,
+  onExportSuccess,
 }: ExportPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
@@ -135,6 +124,15 @@ export function ExportPanel({
 
     setTimeout(async () => {
       try {
+        let exportThumbnailPng: Uint8Array | null = null;
+        if (effectiveOptions.format === 'voxl' && captureSceneThumbnailPng) {
+          try {
+            exportThumbnailPng = await captureSceneThumbnailPng();
+          } catch (thumbnailError) {
+            console.warn('[ExportPanel] Scene thumbnail capture failed for VOXL export; continuing without thumbnail.', thumbnailError);
+          }
+        }
+
         const exportRoot = new THREE.Group();
         if (effectiveOptions.includeModel) {
           scopeModels.forEach((model) => {
@@ -151,7 +149,7 @@ export function ExportPanel({
         const scopedSelectedModelIds = (selectedModelIds ?? [])
           .filter((id) => scopedModelIds.includes(id));
 
-        await ExportManager.exportScene(
+        const savedPath = await ExportManager.exportScene(
           effectiveOptions.includeModel ? exportRoot : null,
           supportsRef?.current || null,
           {
@@ -164,8 +162,10 @@ export function ExportPanel({
             selectedModelIds: scopedSelectedModelIds.length > 0
               ? scopedSelectedModelIds
               : (scopedActiveModelId ? [scopedActiveModelId] : []),
+            exportThumbnailPng,
           },
         );
+        if (savedPath) onExportSuccess?.(savedPath);
       } catch (err) {
         console.error('Export failed:', err);
         alert('Export failed. Check console for details.');

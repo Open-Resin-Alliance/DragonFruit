@@ -56,12 +56,17 @@ export function decodePickIdFromBuffer(buffer: Uint8Array, pixelIndex: number): 
  * Returns the most common pick ID, with tie-breakers:
  * 1. Center pixel wins ties
  * 2. Previous winner wins ties (stability)
+ *
+ * If `isPriority` is provided, any pixel that satisfies it wins outright before
+ * the majority vote is considered. This ensures gizmo handles always beat model
+ * geometry even when the gizmo occupies only 1-2 pixels of the 3×3 patch.
  * 
  * @param buffer - RGBA pixel buffer (9 pixels = 36 bytes for 3x3)
  * @param previousWinner - Previous pick ID for tie-breaking
+ * @param isPriority - Optional predicate; matching IDs beat all others
  * @returns Winning pick ID
  */
-export function majorityVote(buffer: Uint8Array, previousWinner: number = PICK_ID.NONE): number {
+export function majorityVote(buffer: Uint8Array, previousWinner: number = PICK_ID.NONE, isPriority?: (id: number) => boolean): number {
   const size = RENDER_TARGET.SIZE; // 3
   const totalPixels = size * size; // 9
   
@@ -73,6 +78,26 @@ export function majorityVote(buffer: Uint8Array, previousWinner: number = PICK_I
     const id = decodePickIdFromBuffer(buffer, i);
     ids.push(id);
     counts.set(id, (counts.get(id) || 0) + 1);
+  }
+
+  // Priority pass: if any pixel satisfies the priority predicate, those IDs win
+  // outright before the majority vote. Gizmos should always beat model geometry
+  // even when only clipping 1-2 pixels of the 3×3 window.
+  if (isPriority) {
+    const priorityIds: number[] = [];
+    for (const id of ids) {
+      if (id !== PICK_ID.NONE && isPriority(id) && !priorityIds.includes(id)) {
+        priorityIds.push(id);
+      }
+    }
+    if (priorityIds.length > 0) {
+      if (priorityIds.length === 1) return priorityIds[0];
+      // Multiple priority IDs: prefer center pixel, then previous winner
+      const centerPriority = ids[4];
+      if (isPriority(centerPriority)) return centerPriority;
+      if (previousWinner !== PICK_ID.NONE && priorityIds.includes(previousWinner)) return previousWinner;
+      return priorityIds[0];
+    }
   }
   
   // Find the maximum count

@@ -19,6 +19,8 @@ type PrintingPanelProps = {
   onOpenSendTargetPicker?: () => void;
   onDownload: () => void;
   onSendToPrinter: () => void;
+  sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | null;
+  savedFilePath?: string | null;
 };
 
 export function PrintingPanel({
@@ -38,6 +40,8 @@ export function PrintingPanel({
   onOpenSendTargetPicker,
   onDownload,
   onSendToPrinter,
+  sliceIntent = null,
+  savedFilePath = null,
 }: PrintingPanelProps) {
   const [isExpanded, setIsExpanded] = React.useState(true);
 
@@ -96,60 +100,82 @@ export function PrintingPanel({
         </div>
 
         <div className="grid grid-cols-1 gap-2">
-          <Button
-            variant="accent"
-            className="!h-9 inline-flex items-center justify-center gap-1.5"
-            onClick={onDownload}
-            disabled={!canDownload}
-            title={canDownload ? 'Download generated print file' : 'Slice first to generate a print file'}
-          >
-            <Download className="h-4 w-4" />
-            Export as {outputFormat ? `${outputFormat}` : 'file'}
-          </Button>
+          {/* Export to file — hidden when this slice was already saved to file */}
+          {sliceIntent !== 'file' && (
+            <Button
+              variant="accent"
+              className="!h-9 inline-flex items-center justify-center gap-1.5"
+              onClick={onDownload}
+              disabled={!canDownload}
+              title={canDownload ? 'Download generated print file' : 'Slice first to generate a print file'}
+            >
+              <Download className="h-4 w-4" />
+              Export as {outputFormat ? `${outputFormat}` : 'file'}
+            </Button>
+          )}
 
-          {showSendTargetPicker && onOpenSendTargetPicker ? (
-            <div className="flex items-center gap-1.5">
+          {/* Saved path — shown when slice intent was 'file' */}
+          {sliceIntent === 'file' && (
+            <div
+              className="rounded-md border p-2.5 space-y-0.5"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+            >
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Saved to</div>
+              <div
+                className="text-xs truncate"
+                title={savedFilePath ?? outputName ?? ''}
+                style={{ color: 'var(--text-strong)', fontFamily: 'monospace' }}
+              >
+                {savedFilePath ?? outputName ?? '—'}
+              </div>
+            </div>
+          )}
+
+          {/* Upload to printer — hidden when slice was already uploaded/printed */}
+          {sliceIntent !== 'upload' && sliceIntent !== 'print' && (
+            showSendTargetPicker && onOpenSendTargetPicker ? (
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="secondary"
+                  className="!h-9 flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 text-[12px]"
+                  onClick={onSendToPrinter}
+                  disabled={!canSendToPrinter || sendBusy}
+                  title={canSendToPrinter
+                    ? 'Send generated print file to selected printer'
+                    : 'Requires connected printer with supported upload capability and a generated print file'}
+                >
+                  <Printer className="h-4 w-4 shrink-0" />
+                  <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
+                    {sendBusy ? 'Sending…' : sendButtonLabel}
+                  </span>
+                </Button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md"
+                  onClick={onOpenSendTargetPicker}
+                  disabled={!canSendToPrinter || sendBusy}
+                  title="Choose upload target printer"
+                  aria-label="Choose upload target printer"
+                >
+                  <ChevronDown className="h-4.5 w-4.5" />
+                </button>
+              </div>
+            ) : (
               <Button
                 variant="secondary"
-                className="!h-9 flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 text-[12px]"
+                className="!h-9 inline-flex items-center justify-center gap-1.5 text-[12px]"
                 onClick={onSendToPrinter}
                 disabled={!canSendToPrinter || sendBusy}
                 title={canSendToPrinter
-                  ? 'Send generated print file to selected printer'
+                  ? 'Send generated print file to connected printer'
                   : 'Requires connected printer with supported upload capability and a generated print file'}
               >
-                <Printer className="h-4 w-4 shrink-0" />
+                <Printer className="h-4 w-4" />
                 <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
                   {sendBusy ? 'Sending…' : sendButtonLabel}
                 </span>
               </Button>
-
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md"
-                onClick={onOpenSendTargetPicker}
-                disabled={!canSendToPrinter || sendBusy}
-                title="Choose upload target printer"
-                aria-label="Choose upload target printer"
-              >
-                <ChevronDown className="h-4.5 w-4.5" />
-              </button>
-            </div>
-          ) : (
-            <Button
-              variant="secondary"
-              className="!h-9 inline-flex items-center justify-center gap-1.5 text-[12px]"
-              onClick={onSendToPrinter}
-              disabled={!canSendToPrinter || sendBusy}
-              title={canSendToPrinter
-                ? 'Send generated print file to connected printer'
-                : 'Requires connected printer with supported upload capability and a generated print file'}
-            >
-              <Printer className="h-4 w-4" />
-              <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
-                {sendBusy ? 'Sending…' : sendButtonLabel}
-              </span>
-            </Button>
+            )
           )}
         </div>
 

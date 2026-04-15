@@ -36,6 +36,8 @@ yarn-error.log*
 next-env.d.ts
 
 # local/project-specific
+/fixtures/
+/spec/
 /supports_legacy
 conversion/
 Scratch/
@@ -57,3 +59,8 @@ conversion/
 # misc
 *.pem
 .DS_Store
+
+# compiled native binaries / COM DLLs (built locally, not committed)
+src-tauri/windows-resources/*.dll
+src-tauri/binaries/dragonfruit-voxl-thumbnailer*
+**/build

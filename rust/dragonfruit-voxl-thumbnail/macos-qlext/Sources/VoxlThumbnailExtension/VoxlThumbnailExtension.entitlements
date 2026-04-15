@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App Sandbox is required for pluginkit to register the extension
+         under the com.apple.quicklook.thumbnail protocol.  The QL system
+         creates a per-request sandbox token to grant read access to the
+         file being thumbnailed; without this key the token cannot be
+         created and the generator is silently rejected. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+</dict>
+</plist>

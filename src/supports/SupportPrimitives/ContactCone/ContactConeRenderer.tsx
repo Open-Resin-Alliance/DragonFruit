@@ -7,6 +7,7 @@ import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setHoveredState } from '../../state';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { useJointDragPosition } from '../../interaction/jointDragPosition';
 
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
@@ -78,9 +79,9 @@ export function ContactConeRenderer({
     const groupRef = React.useRef<any>(null);
     const pickIdRef = React.useRef<number | null>(null);
     const { register, unregister } = usePicking();
+    const liveSocketJointPos = useJointDragPosition(socketJointId ?? '');
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
-    const length = profile.lengthMm;
     const penetrationMm = profile.penetrationMm ?? 0;
     const [isHovered, setIsHovered] = useState(false);
     const hoverVisible = isHovered && isInteractable && isParentSelected;
@@ -92,40 +93,84 @@ export function ContactConeRenderer({
     // Fallback: If no surfaceNormal provided, assume it aligns with cone axis
     const effectiveSurfaceNormal = surfaceNormal || normal;
 
-    // --- 1. Determine Primitive Offset ---
-    // If we are using a Disk, the cone body must start *behind* the disk.
-    const primitiveThickness = useMemo(() => {
+    const renderGeometry = useMemo(() => {
+        let renderNormal = { ...normal };
+        let renderThickness = 0;
+        let renderLength = profile.lengthMm;
+
         if (profile.type === 'disk') {
-            if (diskLengthOverride !== undefined) {
-                return diskLengthOverride;
-            }
-            return calculateDiskThickness(effectiveSurfaceNormal, normal, profile);
+            renderThickness = diskLengthOverride !== undefined
+                ? diskLengthOverride
+                : calculateDiskThickness(effectiveSurfaceNormal, renderNormal, profile);
         }
-        return 0; // No offset for legacy/undefined
-    }, [normal, effectiveSurfaceNormal, profile, diskLengthOverride]);
 
-    // --- 2. Calculate Geometry Positions ---
+        // While dragging the socket joint, solve against the *live* joint position so
+        // the cone socket stays visually pinned to the joint center in the same frame.
+        if (liveSocketJointPos) {
+            const contactPos = new THREE.Vector3(pos.x, pos.y, pos.z);
+            const socketPos = new THREE.Vector3(liveSocketJointPos.x, liveSocketJointPos.y, liveSocketJointPos.z);
+            const surfaceNormalVec = new THREE.Vector3(
+                effectiveSurfaceNormal.x,
+                effectiveSurfaceNormal.y,
+                effectiveSurfaceNormal.z,
+            );
+            if (surfaceNormalVec.lengthSq() < 0.000001) surfaceNormalVec.set(0, 0, 1);
+            surfaceNormalVec.normalize();
 
-    // Effective Start Position for the Cone Body
-    // It starts at: pos + (normal * primitiveThickness)
-    // Note: 'normal' here is the Cone Axis. We push along the Cone Axis.
-    // Wait, if the disk is extended, do we push along Surface Normal or Cone Axis?
-    // The disk extends along the SURFACE NORMAL.
-    // So the cone start position is: pos + (surfaceNormal * primitiveThickness)
-    // But the cone connects to the BACK of the disk.
-    // If the disk is a cylinder along surfaceNormal, its back face center is at pos + surfaceNormal * thickness.
+            let axis = new THREE.Vector3(renderNormal.x, renderNormal.y, renderNormal.z);
+            if (axis.lengthSq() < 0.000001) {
+                axis.copy(socketPos).sub(contactPos);
+            }
+            if (axis.lengthSq() < 0.000001) axis.set(0, 0, 1);
+            axis.normalize();
 
-    const coneStartPos = useMemo(() => {
-        return {
-            x: pos.x + effectiveSurfaceNormal.x * primitiveThickness,
-            y: pos.y + effectiveSurfaceNormal.y * primitiveThickness,
-            z: pos.z + effectiveSurfaceNormal.z * primitiveThickness,
+            for (let i = 0; i < 4; i += 1) {
+                const thickness = profile.type === 'disk'
+                    ? (diskLengthOverride !== undefined
+                        ? diskLengthOverride
+                        : calculateDiskThickness(
+                            { x: surfaceNormalVec.x, y: surfaceNormalVec.y, z: surfaceNormalVec.z },
+                            { x: axis.x, y: axis.y, z: axis.z },
+                            profile,
+                        ))
+                    : 0;
+
+                const startPos = contactPos.clone().add(surfaceNormalVec.clone().multiplyScalar(thickness));
+                const coneVec = socketPos.clone().sub(startPos);
+                const len = coneVec.length();
+                renderThickness = thickness;
+                if (len > 0.0001) {
+                    axis.copy(coneVec).normalize();
+                    renderLength = Math.max(0.1, len);
+                }
+            }
+
+            renderNormal = { x: axis.x, y: axis.y, z: axis.z };
+        }
+
+        const coneStartPos = {
+            x: pos.x + effectiveSurfaceNormal.x * renderThickness,
+            y: pos.y + effectiveSurfaceNormal.y * renderThickness,
+            z: pos.z + effectiveSurfaceNormal.z * renderThickness,
         };
-    }, [pos, effectiveSurfaceNormal, primitiveThickness]);
 
-    // Calculate cone center (based on shifted start position)
-    const center = getConeCenterPosition(coneStartPos, normal, profile);
-    const quaternion = getConeQuaternion(normal);
+        const center = {
+            x: coneStartPos.x + renderNormal.x * (renderLength / 2),
+            y: coneStartPos.y + renderNormal.y * (renderLength / 2),
+            z: coneStartPos.z + renderNormal.z * (renderLength / 2),
+        };
+
+        return {
+            primitiveThickness: renderThickness,
+            length: renderLength,
+            normal: renderNormal,
+            coneStartPos,
+            center,
+            quaternion: getConeQuaternion(renderNormal),
+        };
+    }, [diskLengthOverride, effectiveSurfaceNormal, liveSocketJointPos, normal, pos, profile]);
+
+    const { primitiveThickness, length, normal: renderNormal, coneStartPos, center, quaternion } = renderGeometry;
     const displayEmissive = hoverVisible ? '#efd8c2' : emissive;
     const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.16) : emissiveIntensity;
 
@@ -239,10 +284,10 @@ export function ContactConeRenderer({
                     id={contactDiskId}
                     pos={pos}
                     normal={effectiveSurfaceNormal} // Must use Surface Normal!
-                    coneAxis={normal}               // The direction of the cone
+                    coneAxis={renderNormal}         // The direction of the cone
                     profile={profile}
                     contactDiameterMm={profile.contactDiameterMm}
-                    overrideThickness={diskLengthOverride} // Pass the collision override!
+                    overrideThickness={primitiveThickness} // Live drag keeps disk/socket perfectly aligned
                     penetrationMm={penetrationMm}
                     color={finalDiskColor}
                     transparent={transparent}

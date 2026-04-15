@@ -10,9 +10,10 @@
 import { useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
-import { RENDER_TARGET, TIMING } from './constants';
+import { PICK_ID, RENDER_TARGET, TIMING } from './constants';
 import { majorityVote, encodePickId } from './pickingUtils';
 import { reportPickingRenderSample } from './pickingDiagnostics';
+import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import type { PickableRegistration, PickingConfig } from './types';
 
 interface PickingRendererProps {
@@ -33,6 +34,9 @@ interface PickingRendererProps {
 function shouldExcludeFromPickClone(object: THREE.Object3D): boolean {
   return object.userData?.excludeFromPickingClone === true;
 }
+
+/** No-op override for Object3D.updateMatrixWorld — keeps our manually synced matrixWorld intact. */
+function noop() {}
 
 /**
  * PickingRenderer - Handles the offscreen render pass for GPU picking.
@@ -78,6 +82,7 @@ export function PickingRenderer({
   const previousMouseNdcRef = useRef<{ x: number; y: number } | null>(null);
   const previousCameraWorldMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
   const previousProjectionMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
+  const previousCameraKindRef = useRef<'orthographic' | 'perspective' | null>(null);
   const smoothedFrameMsRef = useRef<number>(1000 / 60);
 
   const disposePickObject = useCallback((pickId: number) => {
@@ -147,6 +152,27 @@ export function PickingRenderer({
     const pickObject = sourceObject.clone(true);
     pickObject.traverse((child) => {
       child.matrixAutoUpdate = false;
+      // Prevent Three.js from recomputing matrixWorld during gl.render(pickScene).
+      // Pick clones live directly under the pick scene root (identity transform), so
+      // Three.js would compute:  matrixWorld = identity × child.matrix = child.matrix
+      // But child.matrix is the SOURCE object's LOCAL matrix, not its world matrix.
+      // For meshes nested deep inside a gizmo hierarchy (positioned far from origin),
+      // this produces the wrong pick position. We manually copy source.matrixWorld in
+      // syncPickObjectTransforms and must prevent Three.js from overwriting it.
+      child.updateMatrixWorld = noop;
+      // Disable frustum culling on all pick clones. When setViewOffset narrows the
+      // pick camera to a 3x3 pixel patch, the bounding sphere of a gizmo handle near
+      // the screen edge can fail the frustum test even though the handle IS inside
+      // those pixels. This is especially visible for gizmos outside the build volume.
+      child.frustumCulled = false;
+      // Gizmo handles must always render after model geometry in the pick scene
+      // so their depthTest=false color wins regardless of depth values.
+      // This is set here (not relied on from the source) because React child
+      // effects fire before parent effects — the gizmo traverse that sets
+      // renderOrder=2500 on source objects hasn't run yet at registration time.
+      if (isGizmo) {
+        child.renderOrder = 9999;
+      }
       if (shouldExcludeFromPickClone(child)) {
         child.visible = false;
         return;
@@ -155,6 +181,8 @@ export function PickingRenderer({
         child.material = pickMaterial;
       }
     });
+    // Flag so syncPickSceneCache can skip the one-time renderOrder repair below.
+    if (isGizmo) pickObject.userData.renderOrderPatched = true;
 
     return pickObject;
   }, [getPickingMaterial]);
@@ -170,6 +198,9 @@ export function PickingRenderer({
 
       pick.visible = source.visible && !shouldExcludeFromPickClone(source);
       pick.matrixAutoUpdate = false;
+      // Also ensure the no-op guard is in place on every node we sync
+      // (covers clones created before this patch via hot-reload).
+      if (pick.updateMatrixWorld !== noop) pick.updateMatrixWorld = noop;
       pick.matrix.copy(source.matrix);
       pick.matrixWorld.copy(source.matrixWorld);
 
@@ -199,6 +230,12 @@ export function PickingRenderer({
 
       const cached = pickObjectCacheRef.current.get(pickId);
       if (cached && cached.sourceObject === registration.object) {
+        // One-time repair: clones created before the renderOrder=9999 fix
+        // (stale hot-reload survivors) need their renderOrder backfilled once.
+        if (registration.category === 'gizmo' && !cached.pickObject.userData.renderOrderPatched) {
+          cached.pickObject.traverse((child) => { child.renderOrder = 9999; });
+          cached.pickObject.userData.renderOrderPatched = true;
+        }
         continue;
       }
 
@@ -264,6 +301,13 @@ export function PickingRenderer({
     
     pickCameraRef.current = pickCamera;
     
+    // When cross-section clip bounds are active, exclude the model from
+    // the pick scene entirely so it cannot occlude supports, joints, or
+    // gizmos inside the cavity.  Support placement uses R3F raycasting
+    // (not GPU picking), so it is unaffected.
+    const { clipLower, clipUpper } = getClipBounds();
+    const crossSectionActive = clipLower != null || clipUpper != null;
+
     // Sync cached transforms and dynamic visibility.
     let visiblePickObjects = 0;
     for (const [pickId, registration] of registrations.entries()) {
@@ -272,7 +316,9 @@ export function PickingRenderer({
 
       const hasAllowedCategories = Array.isArray(config.allowedCategories) && config.allowedCategories.length > 0;
       const categoryAllowed = !hasAllowedCategories || config.allowedCategories!.includes(registration.category);
-      const includeCategory = categoryAllowed && !(registration.category === 'gizmo' && !config.includeGizmo);
+      const includeCategory = categoryAllowed
+        && !(registration.category === 'gizmo' && !config.includeGizmo)
+        && !(crossSectionActive && registration.category === 'model');
       cached.pickObject.visible = includeCategory;
       if (!includeCategory) continue;
 
@@ -298,10 +344,18 @@ export function PickingRenderer({
     // Restore render target
     gl.setRenderTarget(currentRenderTarget);
     
-    // Perform majority vote
+    const isPriorityPickId = (pickId: number) => {
+      if (pickId === PICK_ID.NONE) return false;
+      const registration = registrations.get(pickId);
+      return registration?.category === 'gizmo';
+    };
+
+    // Perform majority vote (with gizmo-priority pass).
+    // This is especially important in orthographic mode where parallel rays make
+    // model surfaces frequently dominate the 3x3 patch unless gizmos are promoted.
     const winnerId = config.patchSize === 1
       ? (pixelBufferRef.current[0] << 16) | (pixelBufferRef.current[1] << 8) | pixelBufferRef.current[2]
-      : majorityVote(pixelBufferRef.current, previousWinnerRef.current);
+      : majorityVote(pixelBufferRef.current, previousWinnerRef.current, isPriorityPickId);
     
     previousWinnerRef.current = winnerId;
 
@@ -339,10 +393,14 @@ export function PickingRenderer({
 
     const cameraWorldChanged = !previousCameraWorldMatrixRef.current.equals(camera.matrixWorld);
     const projectionChanged = !previousProjectionMatrixRef.current.equals(camera.projectionMatrix);
-    const sceneMoved = cameraWorldChanged || projectionChanged;
+    const cameraKind: 'orthographic' | 'perspective' =
+      (camera as THREE.OrthographicCamera).isOrthographicCamera ? 'orthographic' : 'perspective';
+    const cameraKindChanged = previousCameraKindRef.current !== cameraKind;
+    const sceneMoved = cameraWorldChanged || projectionChanged || cameraKindChanged;
     if (sceneMoved) {
       previousCameraWorldMatrixRef.current.copy(camera.matrixWorld);
       previousProjectionMatrixRef.current.copy(camera.projectionMatrix);
+      previousCameraKindRef.current = cameraKind;
     }
 
     const idleMs = now - (lastPointerMoveTimeRef.current || now);

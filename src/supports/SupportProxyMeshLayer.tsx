@@ -41,7 +41,6 @@ interface SupportProxyMeshLayerProps {
 const DEFAULT_SUPPORT_COLOR = '#9a9a9a';
 const ACTIVE_SUPPORT_COLOR = '#c8752a';
 const PROXY_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
-const PROXY_KNOT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM;
 
 type ProxyModelGeometry = {
   modelId?: string;
@@ -74,6 +73,7 @@ type SharedProxyCacheEntry = {
   supportTwigsRef: ReturnType<typeof getSnapshot>['twigs'];
   supportSticksRef: ReturnType<typeof getSnapshot>['sticks'];
   supportBracesRef: ReturnType<typeof getSnapshot>['braces'];
+  supportAnchorsRef: ReturnType<typeof getSnapshot>['anchors'];
   kickstandKickstandsRef: ReturnType<typeof useKickstandStoreState>['kickstands'];
   kickstandRootsRef: ReturnType<typeof useKickstandStoreState>['roots'];
   kickstandKnotsRef: ReturnType<typeof useKickstandStoreState>['knots'];
@@ -101,6 +101,28 @@ function getDiskTipCenter(disk: ContactDisk): Vec3 {
     x: disk.pos.x + (disk.surfaceNormal.x * thickness),
     y: disk.pos.y + (disk.surfaceNormal.y * thickness),
     z: disk.pos.z + (disk.surfaceNormal.z * thickness),
+  };
+}
+
+function toProxyConeFromTwigDisk(disk: ContactDisk, supportId: string, modelId: string): InstancedContactCone {
+  return {
+    id: disk.id,
+    supportId,
+    modelId,
+    pos: disk.pos,
+    normal: disk.coneAxis,
+    surfaceNormal: disk.surfaceNormal,
+    diskLengthOverride: disk.diskLengthOverride,
+    profile: {
+      type: 'disk',
+      contactDiameterMm: disk.contactDiameterMm,
+      bodyDiameterMm: disk.contactDiameterMm,
+      lengthMm: 0.001,
+      penetrationMm: 0,
+      diskThicknessMm: disk.profile.diskThicknessMm,
+      maxStandoffMm: disk.profile.maxStandoffMm,
+      standoffAngleThreshold: disk.profile.standoffAngleThreshold,
+    },
   };
 }
 
@@ -234,6 +256,7 @@ export function SupportProxyMeshLayer({
       && sharedProxyCache.supportTwigsRef === supportTwigs
       && sharedProxyCache.supportSticksRef === supportSticks
       && sharedProxyCache.supportBracesRef === supportBraces
+      && sharedProxyCache.supportAnchorsRef === supportState.anchors
       && sharedProxyCache.kickstandKickstandsRef === kickstandKickstands
       && sharedProxyCache.kickstandRootsRef === kickstandRoots
       && sharedProxyCache.kickstandKnotsRef === kickstandKnots
@@ -459,6 +482,11 @@ export function SupportProxyMeshLayer({
     }
 
     for (const twig of Object.values(supportTwigs)) {
+      if (includeDetailedPrimitives) {
+        pushCone(toProxyConeFromTwigDisk(twig.contactDiskA, twig.id, twig.modelId));
+        pushCone(toProxyConeFromTwigDisk(twig.contactDiskB, twig.id, twig.modelId));
+      }
+
       for (const segment of twig.segments) {
         if (includeDetailedPrimitives && segment.bottomJoint) {
           pushJoint({
@@ -548,35 +576,53 @@ export function SupportProxyMeshLayer({
       const endKnot = supportKnots[brace.endKnotId];
       if (!startKnot || !endKnot) continue;
 
+      // Mirror SupportRenderer: derive visual diameter from host knot diameters (= trunk segment
+      // diameter + 0.1mm offset). Using profile.diameter alone produces the thin brace setting
+      // value and loses the dynamic sizing that matches the attached trunk thickness.
+      const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
+      const startHostDiameter = Math.max(
+        0.001,
+        (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      );
+      const endHostDiameter = Math.max(
+        0.001,
+        (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      );
+
       pushShaft({
         id: `braceSegment:${brace.id}`,
         supportId: brace.id,
         modelId: brace.modelId,
         start: startKnot.pos,
         end: endKnot.pos,
-        diameter: Math.max(0.1, brace.profile?.diameter ?? 1),
+        diameter: (startHostDiameter + endHostDiameter) * 0.5,
       });
     }
 
-    if (includeDetailedPrimitives) {
-      for (const knot of Object.values(supportKnots)) {
-        let modelId = segmentModelIdById.get(knot.parentShaftId);
-        let supportId = segmentSupportIdById.get(knot.parentShaftId);
-        const resolvedKnotDiameter = knot.diameter ?? 1.2;
+    // Knots are interaction affordances (branch/brace attachment point drag handles) rendered
+    // only for selected supports in the full SupportRenderer. Omitting them from the proxy
+    // avoids visible hemisphere bumps at every trunk segment split point.
 
-        if (!modelId && knot.parentShaftId.startsWith('leafCone:')) {
-          const leafId = knot.parentShaftId.slice('leafCone:'.length);
-          modelId = leafModelIdById.get(leafId);
-          supportId = leafSupportIdById.get(leafId);
-        }
+    // Anchors: root + contact cone, no shafts
+    const supportAnchors = supportState.anchors;
+    for (const anchor of Object.values(supportAnchors)) {
+      pushRoot({
+        id: `${anchor.id}:root`,
+        supportId: anchor.id,
+        modelId: anchor.modelId,
+        basePos: anchor.rootPos,
+        bottomRadius: Math.max(0.001, anchor.rootBaseDiameter / 2),
+        topRadius: Math.max(0.001, anchor.rootTopDiameter / 2),
+        effectiveDiskHeight: 0.1,
+        coneHeight: Math.max(0, anchor.rootHeight),
+      });
 
-        pushJoint({
-          id: `knot:${knot.id}`,
-          pos: knot.pos,
-          diameter: Math.max(0.001, resolvedKnotDiameter),
-          supportId,
-          modelId,
-        }, `knot:${knot.id}`, PROXY_KNOT_DIAMETER_BLEND_MM);
+      if (includeDetailedPrimitives && anchor.contactCone) {
+        pushCone({
+          ...anchor.contactCone,
+          supportId: anchor.id,
+          modelId: anchor.modelId,
+        });
       }
     }
 
@@ -637,21 +683,7 @@ export function SupportProxyMeshLayer({
       }
     }
 
-    if (includeDetailedPrimitives) {
-      for (const knot of Object.values(kickstandKnots)) {
-        const modelId = segmentModelIdById.get(knot.parentShaftId);
-        const supportId = segmentSupportIdById.get(knot.parentShaftId);
-        const resolvedKnotDiameter = knot.diameter ?? 1.2;
-
-        pushJoint({
-          id: `kickstand-knot:${knot.id}`,
-          pos: knot.pos,
-          diameter: Math.max(0.001, resolvedKnotDiameter),
-          supportId,
-          modelId,
-        }, `kickstand-knot:${knot.id}`, PROXY_KNOT_DIAMETER_BLEND_MM);
-      }
-    }
+    // Kickstand host knots are also interaction affordances — omitted from proxy for the same reason.
 
     sharedProxyCache = {
       supportTrunksRef: supportTrunks,
@@ -662,6 +694,7 @@ export function SupportProxyMeshLayer({
       supportTwigsRef: supportTwigs,
       supportSticksRef: supportSticks,
       supportBracesRef: supportBraces,
+      supportAnchorsRef: supportState.anchors,
       kickstandKickstandsRef: kickstandKickstands,
       kickstandRootsRef: kickstandRoots,
       kickstandKnotsRef: kickstandKnots,

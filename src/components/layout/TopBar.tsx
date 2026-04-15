@@ -16,6 +16,8 @@ import {
 } from '@/components/settings/themeCustomizations';
 import {
   OPEN_PROFILE_SETTINGS_MODAL_EVENT,
+  PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT,
+  dispatchProfileSettingsModalOpenChange,
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
 import {
@@ -26,6 +28,7 @@ import {
   selectPrinterNetworkDevice,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { getInstalledProfilePlugins } from '@/features/plugins/pluginRegistry';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface TopBarProps {
@@ -441,6 +444,7 @@ export function TopBar({
       }
 
       setIsProfileModalOpen(true);
+      dispatchProfileSettingsModalOpenChange(true);
     };
 
     window.addEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
@@ -451,6 +455,17 @@ export function TopBar({
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const athenaPresetIds = React.useMemo(() => {
+    const athenaPlugin = getInstalledProfilePlugins().find(
+      (plugin) => plugin.enabled && plugin.manifest.id === 'athena-builtin',
+    );
+    return new Set((athenaPlugin?.manifest.printerPresets ?? []).map((preset) => preset.presetId));
+  }, []);
+  const isAthenaPublicBetaProfile = React.useMemo(() => {
+    const officialPresetId = activePrinterProfile?.officialPresetId?.trim();
+    if (!officialPresetId) return false;
+    return athenaPresetIds.has(officialPresetId);
+  }, [activePrinterProfile?.officialPresetId, athenaPresetIds]);
 
   React.useEffect(() => {
     setPrinterThumbnailFailed(false);
@@ -511,6 +526,7 @@ export function TopBar({
   const openProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
     setProfileModalTab(tab);
     setIsProfileModalOpen(true);
+    dispatchProfileSettingsModalOpenChange(true);
   }, []);
 
   const requestOpenProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
@@ -896,7 +912,10 @@ export function TopBar({
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
-              const disabled = locked || topbarActionsDisabled;
+              const analysisComingSoon = item.mode === 'analysis' && isAthenaPublicBetaProfile;
+              const disabled = locked || topbarActionsDisabled || analysisComingSoon;
+              const nativeDisabled = disabled && !analysisComingSoon;
+              const visuallyDimmed = topbarActionsDisabled || (locked && !analysisComingSoon);
               const printingLocked = item.mode === 'printing' && locked;
 
               return (
@@ -907,12 +926,13 @@ export function TopBar({
                     if (disabled) return;
                     onModeChange(item.mode);
                   }}
-                  disabled={disabled}
+                  disabled={nativeDisabled}
+                  aria-disabled={disabled}
                   className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
-                  } ${disabled ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
+                  } ${visuallyDimmed ? 'opacity-45' : ''} ${disabled ? 'cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
                   style={active
                     ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
@@ -929,6 +949,8 @@ export function TopBar({
                   }
                   title={topbarActionsDisabled
                     ? 'Slicing in progress. Topbar actions are temporarily disabled.'
+                    : analysisComingSoon
+                    ? 'Coming Soon! Analysis workspace for Athena public beta is temporarily unavailable.'
                     : locked
                     ? (item.mode === 'printing'
                       ? 'Run slicing in Export to unlock Printing preview'
@@ -960,6 +982,27 @@ export function TopBar({
 
                   {printingLocked && (
                     <Lock className="h-3 w-3 ml-auto" style={{ color: 'var(--text-muted)' }} />
+                  )}
+
+                  {analysisComingSoon && (
+                    <div
+                      className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[190px] rounded-md border px-2.5 py-2 text-[12px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
+                      style={{
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
+                        background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+                        color: 'var(--text-muted)',
+                        boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                      }}
+                      role="tooltip"
+                      aria-hidden="true"
+                    >
+                      <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>
+                        Coming Soon!
+                      </div>
+                      <div>
+                        Analysis Workspace is still under development! We appreciate your patience as we work to bring this feature to life in a future update.
+                      </div>
+                    </div>
                   )}
                 </button>
               );
@@ -1215,7 +1258,7 @@ export function TopBar({
 
       <ProfileSettingsModal
         isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
+        onClose={() => { setIsProfileModalOpen(false); dispatchProfileSettingsModalOpenChange(false); }}
         initialTab={profileModalTab}
         openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
         openNetworkSettingsToken={profileModalOpenNetworkSettingsToken}

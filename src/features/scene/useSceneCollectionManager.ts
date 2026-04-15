@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, processGeometry, type GeometryWithBounds, type MeshDefects } from '@/hooks/useStlGeometry';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
+import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromLychee, mergeFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
@@ -206,6 +206,7 @@ export type RecentOpenedFileEntry = {
   id: string;
   name: string;
   kind: RecentOpenedFileKind;
+  sourcePath?: string;
   sizeBytes?: number;
   openedAt: number;
 };
@@ -214,6 +215,7 @@ type RecentOpenedFileBlobRecord = {
   id: string;
   name: string;
   kind: RecentOpenedFileKind;
+  sourcePath?: string;
   sizeBytes?: number;
   openedAt: number;
   type: string;
@@ -342,6 +344,7 @@ async function putRecentOpenedFileBlob(entry: RecentOpenedFileEntry, file: File)
       id: entry.id,
       name: entry.name,
       kind: entry.kind,
+      sourcePath: entry.sourcePath,
       sizeBytes: entry.sizeBytes,
       openedAt: entry.openedAt,
       type: file.type,
@@ -434,6 +437,9 @@ function readRecentOpenedFilesFromLocalStorage(): RecentOpenedFileEntry[] {
         const id = typeof item.id === 'string' ? item.id.trim() : '';
         const name = typeof item.name === 'string' ? item.name : '';
         const kind = item.kind === 'mesh' || item.kind === 'scene' ? item.kind : null;
+        const sourcePath = typeof item.sourcePath === 'string' && item.sourcePath.trim().length > 0
+          ? item.sourcePath.trim()
+          : undefined;
         const openedAt = Number(item.openedAt);
         const sizeBytes = typeof item.sizeBytes === 'number' && Number.isFinite(item.sizeBytes) && item.sizeBytes >= 0
           ? item.sizeBytes
@@ -445,6 +451,7 @@ function readRecentOpenedFilesFromLocalStorage(): RecentOpenedFileEntry[] {
           id,
           name,
           kind,
+          sourcePath,
           sizeBytes,
           openedAt,
         };
@@ -676,6 +683,15 @@ type SceneImportReport = {
   tone: SceneImportReportTone;
 };
 
+type SceneImportPlacementChoice = 'auto_arrange' | 'load_as_is';
+
+export type SceneImportPlacementPrompt = {
+  source: 'LYS' | 'VOXL';
+  fileName: string;
+  modelCount: number;
+  offPlateModelCount: number;
+};
+
 type ModelClipboardEntry = {
   sourceId: string;
   name: string;
@@ -728,7 +744,9 @@ export function useSceneCollectionManager() {
     progress: null,
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
+  const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
+  const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
@@ -770,6 +788,43 @@ export function useSceneCollectionManager() {
       window.clearTimeout(sceneImportReportTimeoutRef.current);
       sceneImportReportTimeoutRef.current = null;
     }
+  }, []);
+
+  const resolveSceneImportPlacementPrompt = useCallback((choice: SceneImportPlacementChoice) => {
+    const resolve = sceneImportPlacementResolveRef.current;
+    sceneImportPlacementResolveRef.current = null;
+    setSceneImportPlacementPrompt(null);
+    resolve?.(choice);
+  }, []);
+
+  const requestSceneImportPlacementChoice = useCallback(async (
+    prompt: SceneImportPlacementPrompt,
+  ): Promise<SceneImportPlacementChoice> => {
+    if (typeof window === 'undefined') {
+      return 'auto_arrange';
+    }
+
+    if (sceneImportPlacementResolveRef.current) {
+      // Fail-safe: resolve previous unresolved prompt so imports never deadlock.
+      sceneImportPlacementResolveRef.current('load_as_is');
+      sceneImportPlacementResolveRef.current = null;
+    }
+
+    setSceneImportPlacementPrompt(prompt);
+
+    return await new Promise<SceneImportPlacementChoice>((resolve) => {
+      sceneImportPlacementResolveRef.current = resolve;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (sceneImportPlacementResolveRef.current) {
+        const resolve = sceneImportPlacementResolveRef.current;
+        sceneImportPlacementResolveRef.current = null;
+        resolve('load_as_is');
+      }
+    };
   }, []);
 
   const getDebugPresetDims = useCallback((preset: DebugPrimitiveSizePreset) => {
@@ -1091,6 +1146,25 @@ export function useSceneCollectionManager() {
       depth: Math.max(2, meshRect.maxY - meshRect.minY),
     };
   }, [footprintForTransform]);
+
+  const isModelFootprintInsidePlate = useCallback((
+    model: Pick<LoadedModel, 'geometry' | 'transform'>,
+  ) => {
+    const placement = buildMeshPlacementOffsets(
+      { x: model.transform.position.x, y: model.transform.position.y },
+      model.geometry.size,
+      model.transform,
+    );
+
+    const modelRect: Rect2D = {
+      minX: model.transform.position.x + placement.minXOffset,
+      maxX: model.transform.position.x + placement.maxXOffset,
+      minY: model.transform.position.y + placement.minYOffset,
+      maxY: model.transform.position.y + placement.maxYOffset,
+    };
+
+    return isRectInsidePlate(modelRect);
+  }, [buildMeshPlacementOffsets, isRectInsidePlate]);
 
   const findFreeSpotCentersForModels = useCallback((
     incomingModels: Array<Pick<LoadedModel, 'geometry' | 'transform'>>,
@@ -1440,7 +1514,11 @@ export function useSceneCollectionManager() {
     processDeferredDisposalQueue();
   }, [processDeferredDisposalQueue]);
 
-  const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
+  const trackRecentOpenedFiles = useCallback((
+    files: File[],
+    kind: RecentOpenedFileKind,
+    options?: { sourcePaths?: Array<string | null | undefined> },
+  ) => {
     if (files.length === 0) return;
 
     setRecentOpenedFiles((prev) => {
@@ -1452,19 +1530,36 @@ export function useSceneCollectionManager() {
         const name = file.name?.trim();
         if (!name) return;
 
+        const sourcePath = kind === 'scene'
+          ? (typeof options?.sourcePaths?.[index] === 'string' && options.sourcePaths[index]!.trim().length > 0
+              ? options.sourcePaths[index]!.trim()
+              : undefined)
+          : undefined;
+
         const sizeBytes = Number.isFinite(file.size) ? file.size : undefined;
 
-        const matches = next.filter(
-          (entry) => entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes,
-        );
+        // When a concrete sourcePath is known, use it as the primary dedup key,
+        // ignoring sizeBytes. This prevents duplicates when Ctrl+S re-saves the
+        // file with an updated thumbnail (changing its size).
+        const matchBySourcePath = kind === 'scene' && sourcePath != null;
+
+        const isMatchingEntry = (entry: RecentOpenedFileEntry): boolean => {
+          if (entry.kind !== kind || entry.name !== name) return false;
+          if (matchBySourcePath) {
+            return (entry.sourcePath ?? null) === sourcePath;
+          }
+          return entry.sizeBytes === sizeBytes
+            && (kind !== 'scene' || (entry.sourcePath ?? null) === (sourcePath ?? null));
+        };
+
+        const matches = next.filter(isMatchingEntry);
 
         const existingId = matches.length > 0 ? matches[matches.length - 1].id : generateRecentEntryId();
         const duplicateIds = matches.slice(0, -1).map((entry) => entry.id);
 
         if (matches.length > 0) {
           for (let i = next.length - 1; i >= 0; i -= 1) {
-            const entry = next[i];
-            if (entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes) {
+            if (isMatchingEntry(next[i])) {
               next.splice(i, 1);
             }
           }
@@ -1478,6 +1573,7 @@ export function useSceneCollectionManager() {
           id: existingId,
           name,
           kind,
+          sourcePath,
           sizeBytes,
           openedAt: now + index,
         };
@@ -1568,6 +1664,7 @@ export function useSceneCollectionManager() {
     }
 
     const newModels: LoadedModel[] = [];
+    const defectiveModels: { name: string; defects: MeshDefects }[] = [];
 
     setImportProgress({
       active: true,
@@ -1667,6 +1764,9 @@ export function useSceneCollectionManager() {
           };
 
           newModels.push(model);
+          if (geom.meshDefects?.hasDefects) {
+            defectiveModels.push({ name: file.name, defects: geom.meshDefects });
+          }
         } catch (err) {
           console.error(`Failed to load ${file.name}`, err);
           URL.revokeObjectURL(url); // Cleanup if failed
@@ -1697,6 +1797,27 @@ export function useSceneCollectionManager() {
           setActiveModelId(newModels[0].id);
           setSelectedModelIds([newModels[0].id]);
         }
+
+        if (defectiveModels.length > 0) {
+          if (defectiveModels.length === 1) {
+            const { name, defects } = defectiveModels[0];
+            const status = defects.repairedByManifold ? 'Auto-Repaired' : 'Defective';
+            emitSceneImportReport(
+              `"${name}" — ${status} — ${defects.repairedFloats.toLocaleString()} errors`,
+              'warning',
+            );
+          } else {
+            const repairedCount = defectiveModels.filter(m => m.defects.repairedByManifold).length;
+            const defectiveCount = defectiveModels.length - repairedCount;
+            const parts: string[] = [];
+            if (repairedCount > 0) parts.push(`${repairedCount} auto-repaired`);
+            if (defectiveCount > 0) parts.push(`${defectiveCount} defective`);
+            emitSceneImportReport(
+              `${defectiveModels.length} files with defective geometry — ${parts.join(', ')}`,
+              'warning',
+            );
+          }
+        }
       }
     } finally {
       setImportProgress({
@@ -1707,7 +1828,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -2774,11 +2895,14 @@ export function useSceneCollectionManager() {
     suppressProgress?: boolean;
     suppressReport?: boolean;
     suppressRecentTracking?: boolean;
+    suppressPlacementPrompt?: boolean;
+    sourcePath?: string | null;
+    sourcePaths?: Array<string | null | undefined>;
   };
 
   const handleImportLysFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
-      trackRecentOpenedFiles([file], 'scene');
+      trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
     if (!options?.suppressProgress) {
@@ -2815,28 +2939,47 @@ export function useSceneCollectionManager() {
           importedTransform.position.z
         );
 
-        const assignedCenter = findFreeSpotCentersForModels([
-          {
-            geometry: processed,
-            transform: {
-              position: originalPosition.clone(),
-              rotation: importedTransform.rotation,
-              scale: importedTransform.scale,
-            },
-          },
-        ], 5)[0];
-
-        const finalPosition = new THREE.Vector3(
-          assignedCenter?.x ?? originalPosition.x,
-          assignedCenter?.y ?? originalPosition.y,
-          originalPosition.z,
-        );
-
         const sourceTransform: ModelTransform = {
           position: originalPosition.clone(),
           rotation: importedTransform.rotation.clone(),
           scale: importedTransform.scale.clone(),
         };
+
+        const sourceCandidate: Pick<LoadedModel, 'geometry' | 'transform'> = {
+          geometry: processed,
+          transform: sourceTransform,
+        };
+
+        let shouldAutoArrangeOnImport = true;
+        const isLikelyOffPlate = !isModelFootprintInsidePlate(sourceCandidate);
+        if (isLikelyOffPlate && !options?.suppressPlacementPrompt) {
+          const choice = await requestSceneImportPlacementChoice({
+            source: 'LYS',
+            fileName: file.name,
+            modelCount: 1,
+            offPlateModelCount: 1,
+          });
+          shouldAutoArrangeOnImport = choice === 'auto_arrange';
+        }
+
+        const assignedCenter = shouldAutoArrangeOnImport
+          ? findFreeSpotCentersForModels([
+              {
+                geometry: processed,
+                transform: {
+                  position: originalPosition.clone(),
+                  rotation: importedTransform.rotation,
+                  scale: importedTransform.scale,
+                },
+              },
+            ], 5)[0]
+          : null;
+
+        const finalPosition = new THREE.Vector3(
+          shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
+          shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
+          originalPosition.z,
+        );
 
         const model: LoadedModel = {
           id: importedModelId || generateId(),
@@ -2920,11 +3063,11 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, lysImport, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, lysImport, processGeometry, requestSceneImportPlacementChoice, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
-      trackRecentOpenedFiles([file], 'scene');
+      trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
     if (!options?.suppressProgress) {
@@ -2940,8 +3083,26 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
-      const text = await file.text();
-      const document = parseVoxlDocument(text);
+      // Peek at the first 6 bytes to detect format.
+      // V2 binary starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2.
+      // V1 JSON starts with '{' (0x7B).
+      // For V1, we use file.text() rather than TextDecoder.decode(arrayBuffer) because
+      // some WebView environments (e.g. Tauri/WebView2) truncate TextDecoder output at ~4 MB
+      // for large single-buffer decodes, while the native file.text() path is unaffected.
+      const headerBytes = new Uint8Array(await file.slice(0, 6).arrayBuffer());
+      const isV2 = isVoxlBinaryV2(headerBytes);
+
+      let document: VoxlDocumentV1;
+      let resolvedMeshBytes: Map<string, Uint8Array>;
+
+      if (isV2) {
+        const r = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
+        document = r.document;
+        resolvedMeshBytes = r.meshBytes;
+      } else {
+        document = parseVoxlDocument(await file.text());
+        resolvedMeshBytes = new Map();
+      }
 
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
       const idMap = new Map<string, string>();
@@ -2966,21 +3127,27 @@ export function useSceneCollectionManager() {
           progress: null,
         });
 
-        if (meshRef.mode !== 'embedded-file') {
+        if (meshRef.mode !== 'embedded-file' && meshRef.mode !== 'embedded-chunk') {
           console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
           skippedModels += 1;
           continue;
         }
 
-        if (!meshRef.dataBase64) {
-          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
-          skippedModels += 1;
-          continue;
+        // V2: mesh bytes pre-decoded; V1: fall back to base64 decode from meshRef.dataBase64
+        let meshDataBytes: Uint8Array | undefined = resolvedMeshBytes.get(model.id);
+
+        if (!meshDataBytes) {
+          if (!meshRef.dataBase64) {
+            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
+            skippedModels += 1;
+            continue;
+          }
+          meshDataBytes = decodeVoxlEmbeddedMeshBytes(meshRef);
         }
 
         let url = '';
         try {
-          const bytes = decodeVoxlEmbeddedMeshBytes(meshRef);
+          const bytes = meshDataBytes;
 
           if (typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0) {
             const expected = meshRef.sha256.trim().toLowerCase();
@@ -3041,13 +3208,29 @@ export function useSceneCollectionManager() {
         sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
       }
 
-      if (importedModels.length > 0) {
-        const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
-        importedModels.forEach((model, index) => {
-          const center = assignedCenters[index];
-          if (!center) return;
-          model.transform.position.set(center.x, center.y, model.transform.position.z);
+      const offPlateImportedModels = importedModels.filter((model) => !isModelFootprintInsidePlate(model));
+      const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
+
+      let shouldAutoArrangeOnImport = true;
+      if (shouldPromptForPlacement) {
+        const choice = await requestSceneImportPlacementChoice({
+          source: 'VOXL',
+          fileName: file.name,
+          modelCount: importedModels.length,
+          offPlateModelCount: offPlateImportedModels.length,
         });
+        shouldAutoArrangeOnImport = choice === 'auto_arrange';
+      }
+
+      if (importedModels.length > 0) {
+        if (shouldAutoArrangeOnImport) {
+          const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
+          importedModels.forEach((model, index) => {
+            const center = assignedCenters[index];
+            if (!center) return;
+            model.transform.position.set(center.x, center.y, model.transform.position.z);
+          });
+        }
 
         setModels((prev) => [...prev, ...importedModels]);
 
@@ -3124,7 +3307,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -3139,16 +3322,21 @@ export function useSceneCollectionManager() {
     return false;
   }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
 
-  const importSceneFiles = useCallback(async (filesInput: FileList | File[]) => {
+  const importSceneFiles = useCallback(async (
+    filesInput: FileList | File[],
+    options?: SceneImportRunOptions,
+  ): Promise<boolean> => {
     const files = Array.from(filesInput).filter((file) => getSceneExtension(file.name) !== null);
-    if (files.length === 0) return;
+    if (files.length === 0) return false;
 
     if (files.length === 1) {
-      await importSceneFile(files[0]);
-      return;
+      return await importSceneFile(files[0], {
+        ...options,
+        sourcePath: options?.sourcePaths?.[0] ?? options?.sourcePath,
+      });
     }
 
-    trackRecentOpenedFiles(files, 'scene');
+    trackRecentOpenedFiles(files, 'scene', { sourcePaths: options?.sourcePaths });
 
     setImportProgress({
       active: true,
@@ -3176,6 +3364,7 @@ export function useSceneCollectionManager() {
         suppressProgress: true,
         suppressReport: true,
         suppressRecentTracking: true,
+        sourcePath: options?.sourcePaths?.[i] ?? null,
       });
 
       if (ok) successCount += 1;
@@ -3197,6 +3386,7 @@ export function useSceneCollectionManager() {
     } else {
       emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
     }
+    return successCount > 0;
   }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3509,6 +3699,8 @@ export function useSceneCollectionManager() {
     importProgress,
     sceneImportReport,
     clearSceneImportReport,
+    sceneImportPlacementPrompt,
+    resolveSceneImportPlacementPrompt,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     view3dSettings,
@@ -3598,6 +3790,7 @@ export function useSceneCollectionManager() {
 
     // LYS Import (1-step)
     importLysFile: handleImportLysFile,
+    importSceneFile,
     importSceneFiles,
     onImportLysChange,
     isLysLoading: lysImport.isLoading,

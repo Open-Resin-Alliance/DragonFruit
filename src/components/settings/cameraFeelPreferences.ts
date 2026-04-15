@@ -8,12 +8,12 @@ export const CAMERA_FEEL_STORAGE_KEY = 'camera-feel-settings';
 const CAMERA_FEEL_EVENT = 'camera-feel-settings-changed';
 
 export const DEFAULT_CAMERA_FEEL_SETTINGS: CameraFeelSettings = {
-  preset: 'balanced',
+  preset: 'precise',
 };
 
 function normalizePreset(input: unknown): CameraFeelPreset {
-  if (input === 'raw' || input === 'precise' || input === 'fast') return input;
-  return 'balanced';
+  if (input === 'raw' || input === 'precise' || input === 'balanced' || input === 'fast') return input;
+  return 'precise';
 }
 
 export function normalizeCameraFeelSettings(input: unknown): CameraFeelSettings {

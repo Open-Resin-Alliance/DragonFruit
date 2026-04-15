@@ -86,6 +86,7 @@ type NativeSolidSliceMetadataPayload = {
   source_height_px: number;
   width_px: number;
   height_px: number;
+  x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
@@ -204,6 +205,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
     height_px: job.heightPx,
+    x_packing_mode: job.xPackingMode,
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
@@ -234,6 +236,12 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
 export async function isNativeSlicerAvailable(): Promise<boolean> {
   const core = await loadTauriCore();
   return Boolean(core);
+}
+
+export async function getSlicerEngineVersion(): Promise<string | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  return core.invoke<string>('get_slicer_engine_version');
 }
 
 export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
@@ -279,6 +287,14 @@ export type NativeSlicerRuntimeMetrics = {
   poolThreads: number;
   maxConcurrent: number;
   queueBuffer: number;
+  buildProfile?: 'debug' | 'release' | string;
+  artifactDir?: string;
+  meshStageDir?: string;
+  metadataParseNs?: number;
+  meshDecodeNs?: number;
+  artifactMetadataNs?: number;
+  wrapperTotalNs?: number;
+  wrapperOverheadNs?: number;
 };
 
 /**
@@ -603,20 +619,84 @@ export async function writeBytesToNativePath(
   });
 }
 
-export async function appendBytesToNativePath(
+/**
+ * Writes `bytes` to `destinationPath` using the raw-binary `append_mesh_stage_chunk` IPC command,
+ * sending the data in chunks to avoid JSON-encoding the entire buffer over IPC.
+ * Each call sequences through chunks of `chunkSize` bytes (default 4 MB).
+ * The first chunk truncates/creates the file; subsequent chunks append to it.
+ */
+export async function writeChunkedToNativePath(
   destinationPath: string,
   bytes: Uint8Array,
+  chunkSize = 4 * 1024 * 1024,
+): Promise<void> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Chunked file writing is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  try {
+    let offset = 0;
+    while (offset < bytes.length) {
+      const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+      await core.invoke<number>('append_mesh_stage_chunk', chunk, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'x-mesh-stage-path': destinationPath,
+          'x-mesh-stage-offset': String(offset),
+        },
+      });
+      offset += chunk.length;
+    }
+  } finally {
+    // Always close the backend writer for this path so the destination file
+    // handle is released immediately (important for Explorer thumbnail reads).
+    try {
+      await core.invoke<number>('finish_mesh_stage_write', {
+        path: destinationPath,
+      });
+    } catch (error) {
+      console.warn('[nativeSlicerBridge] Failed finishing chunked write appender.', error);
+    }
+  }
+}
+
+/**
+ * Asks the Rust backend to allocate a unique temporary staging file path.
+ * The returned path lives in the system temp directory.
+ */
+export async function allocateMeshStagePath(): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('allocateMeshStagePath is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+  return core.invoke<string>('allocate_mesh_stage_path');
+}
+
+/**
+ * Exports staged raw geometry to a properly formatted mesh file (STL / 3MF).
+ *
+ * The staging file must contain raw triangle vertex data: 9 × f32 (LE) per
+ * triangle (v0xyz, v1xyz, v2xyz), written via `writeChunkedToNativePath`.
+ *
+ * For 3MF, Rust uses the `zip` crate with DEFLATE compression — XML text
+ * compresses ~10–20× so the output is compact (often smaller than STL).
+ *
+ * @returns The destination path on success.
+ */
+export async function exportMeshFile(
+  stagingPath: string,
+  destPath: string,
+  format: 'stl' | '3mf',
 ): Promise<string> {
   const core = await loadTauriCore();
   if (!core) {
-    throw new Error('Native file writing is only available in DragonFruit Desktop (Tauri runtime).');
+    throw new Error('exportMeshFile is only available in DragonFruit Desktop (Tauri runtime).');
   }
-
-  return core.invoke<string>('append_bytes_to_path', {
-    args: {
-      destinationPath,
-      bytes: Uint8Array.from(bytes),
-    },
+  return core.invoke<string>('export_mesh_file', {
+    stagingPath,
+    destPath,
+    format,
   });
 }
 
@@ -636,6 +716,7 @@ export async function readPrintArtifactBytesFromPath(sourcePath: string): Promis
 export async function readPrintLayerPreviewPngFromPath(
   sourcePath: string,
   layerNumber: number,
+  formatHint: string,
 ): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
@@ -646,6 +727,7 @@ export async function readPrintLayerPreviewPngFromPath(
   const result = await core.invoke<ArrayBuffer>('read_print_layer_png', {
     sourcePath,
     layerNumber: safeLayerNumber,
+    formatHint,
   });
 
   return new Uint8Array(result);

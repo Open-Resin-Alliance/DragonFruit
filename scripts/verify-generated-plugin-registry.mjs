@@ -11,7 +11,7 @@ const generatedTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'gener
 const generatedNetworkTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginNetworkHandlers.ts');
 const generatedUploadTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
 const generatedRustPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
-const generatedEncoderRustPath = path.join(repoRoot, 'rust', 'dragonfruit-slicer-v3', 'src', 'encoders', 'generated_plugin_encoders.rs');
+const generatedEncoderRustPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'src', 'encoders', 'generated_plugin_encoders.rs');
 
 async function readText(filePath) {
       return fs.readFile(filePath, 'utf8');

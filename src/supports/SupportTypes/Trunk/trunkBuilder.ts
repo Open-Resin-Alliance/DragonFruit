@@ -15,6 +15,7 @@ import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
 import { calculateSmartPlacement } from '../../PlacementLogic/SmartPlacement';
+import { calculateSmartPlacementV2, getOrCreateSDFCache } from '../../PlacementLogic/Pathfinding';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
@@ -49,6 +50,9 @@ export interface TrunkBuildInput {
     tipNormal: Vec3;
     modelId: string;
     mesh?: THREE.Mesh;
+    /** When true, uses a reduced A* expansion budget and skips V1 fallback
+     *  for faster hover preview. Click placement should always use false/undefined. */
+    isPreview?: boolean;
     overrides?: {
         rootsDiameterMm?: number;
         rootsDiskHeightMm?: number;
@@ -69,6 +73,10 @@ export interface TrunkBuildResult {
     route: TrunkRouteResult | SnappedTrunkRouteResult;
     error?: LimitationCode;
     warning?: WarningCode;
+    /** True if the pathfinder stagnated (trapped in a cavity). */
+    stagnated?: boolean;
+    /** True if V2 exhausted its expansion budget without reaching the goal. */
+    exhaustedBudget?: boolean;
 }
 
 /**
@@ -79,8 +87,64 @@ export interface TrunkBuildResult {
  * - Route-driven shaft segments and joints
  * - ContactCone at the tip
  */
+// ---------------------------------------------------------------------------
+// Placement result cache — covers V2 A* + V1 fallback together.
+// Multi-entry LRU per model (24 slots) avoids cache thrashing when the cursor
+// sweeps through a transition zone at the 0.5mm quantisation boundary.
+// ---------------------------------------------------------------------------
+const PLACEMENT_CACHE_QUANT = 0.5; // mm — matches SDF cell size
+const NORMAL_CACHE_QUANT = 0.05;   // ~2.9° buckets
+const MAX_PLACEMENT_CACHE_ENTRIES = 24;
+
+// Map<modelId, Map<cacheKey, result>> — insertion-ordered for FIFO eviction
+type ModelPlacementCache = Map<string, TrunkPlacementResult>;
+const placementCacheByModel = new Map<string, ModelPlacementCache>();
+
+function placementCacheKey(tipPos: Vec3, tipNormal: Vec3): string {
+    const Q = PLACEMENT_CACHE_QUANT;
+    const NQ = NORMAL_CACHE_QUANT;
+    return `${Math.round(tipPos.x / Q)},${Math.round(tipPos.y / Q)},${Math.round(tipPos.z / Q)},${Math.round(tipNormal.x / NQ)},${Math.round(tipNormal.y / NQ)},${Math.round(tipNormal.z / NQ)}`;
+}
+
+function getPlacementCache(modelId: string, key: string): TrunkPlacementResult | undefined {
+    return placementCacheByModel.get(modelId)?.get(key);
+}
+
+function setPlacementCache(modelId: string, key: string, result: TrunkPlacementResult): void {
+    let cache = placementCacheByModel.get(modelId);
+    if (!cache) {
+        cache = new Map();
+        placementCacheByModel.set(modelId, cache);
+    }
+    if (cache.has(key)) {
+        // Re-insert to promote to newest (for FIFO correctness)
+        cache.delete(key);
+    } else if (cache.size >= MAX_PLACEMENT_CACHE_ENTRIES) {
+        // Evict oldest entry (first inserted)
+        cache.delete(cache.keys().next().value!);
+    }
+    cache.set(key, result);
+}
+
+/** Clear cached placement for a specific model (call when model moves). */
+export function clearPlacementCache(modelId?: string): void {
+    if (modelId) placementCacheByModel.delete(modelId);
+    else placementCacheByModel.clear();
+}
+
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
-    const { tipPos, tipNormal, modelId, mesh, overrides } = input;
+    const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
+
+    // Fast-path: check placement cache before any computation.
+    // The cache covers V2 A* + V1 fallback together, keyed by quantised
+    // (tipPos, tipNormal). Only used for mesh-backed placement (hover preview).
+    if (mesh && !overrides) {
+        const pck = placementCacheKey(tipPos, tipNormal);
+        const cached = getPlacementCache(modelId, pck);
+        if (cached) {
+            return buildTrunkDataFromPlacement(input, cached);
+        }
+    }
 
     // Read current settings
     const settings = getSettings();
@@ -105,9 +169,74 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         rootsTopZ
     };
 
-    const placement = mesh
-        ? calculateSmartPlacement({ ...placementInput, mesh, modelId })
-        : calculateStandardPlacement(placementInput);
+    let placement: TrunkPlacementResult;
+    if (mesh) {
+        // V2 grid A* pathfinder (SDF-backed, no raycast bundles).
+        // For hover preview, use a reduced A* budget (600 vs 2000) and skip the
+        // expensive V1 raycast fallback entirely — hover preview doesn't need
+        // perfect accuracy. `isPreview` also enables the preview-exhausted spatial
+        // cache so budget-exhausted positions near steep/internal surfaces are
+        // fast-failed on subsequent hover frames instead of re-running 600 expansions.
+        // Click placement always uses full budget + V1 fallback.
+        const v2Context = isPreview ? { maxExpansions: 600, isPreview: true } : undefined;
+        const v2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+        if (v2Result.error === 'COLLISION_WITH_MODEL') {
+            if (isPreview) {
+                // For hover preview: skip V1 entirely to keep the first-frame cost low.
+                // A stick preview will show instead (corrects to trunk on click).
+                placement = v2Result;
+            } else if (v2Result.stagnated || v2Result.exhaustedBudget) {
+                // V2 stagnated (closed cavity) or exhausted full 2000-expansion budget
+                // — V1's raycast-bundle search is equally futile. Skip it.
+                placement = v2Result;
+            } else {
+                // Fallback to V1 raycast-based search, then SDF post-validate.
+                // V1 uses 9-ray bundles which have gaps — verify every segment
+                // of V1's result against the SDF before accepting it.
+                const v1Result = calculateSmartPlacement({ ...placementInput, mesh, modelId });
+                if (v1Result.error) {
+                    placement = v1Result; // V1 also failed — pass error through
+                } else {
+                    const sdf = getOrCreateSDFCache(mesh);
+                    sdf.refreshMatrix();
+                    const shaftRadius = settings.shaft.diameterMm / 2;
+                    const sdfClearance = shaftRadius + 0.25;
+                    // Build the chain: rootTopTarget → joints → socketPos
+                    const v1RootTop: Vec3 = { x: v1Result.basePos.x, y: v1Result.basePos.y, z: rootsTopZ };
+                    const v1Chain: Vec3[] = [
+                        v1RootTop,
+                        ...(v1Result.joints ?? []),
+                        v1Result.socketPos,
+                    ];
+                    let v1Clips = false;
+                    for (let i = 0; i < v1Chain.length - 1; i++) {
+                        const a = v1Chain[i];
+                        const b = v1Chain[i + 1];
+                        if (sdf.segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, sdfClearance)) {
+                            v1Clips = true;
+                            break;
+                        }
+                    }
+                    if (v1Clips) {
+                        // V1's path clips the model — reject it
+                        placement = { ...v1Result, error: 'COLLISION_WITH_MODEL' };
+                    } else {
+                        placement = v1Result;
+                    }
+                }
+            }
+        } else {
+            placement = v2Result;
+        }
+    } else {
+        placement = calculateStandardPlacement(placementInput);
+    }
+
+    // Cache the placement result for frame-coherent hover reuse.
+    if (mesh && !overrides) {
+        const pck = placementCacheKey(tipPos, tipNormal);
+        setPlacementCache(modelId, pck, placement);
+    }
 
     return buildTrunkDataFromPlacement(input, placement);
 }
@@ -309,5 +438,5 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         angle: angle // Required for gradient color
     };
 
-    return { root, trunk, supportData, route, error, warning };
+    return { root, trunk, supportData, route, error, warning, stagnated: placement.stagnated, exhaustedBudget: placement.exhaustedBudget };
 }

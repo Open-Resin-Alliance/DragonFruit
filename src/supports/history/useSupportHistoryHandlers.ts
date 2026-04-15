@@ -7,6 +7,8 @@ import {
   SUPPORT_ADD_TWIG,
   SUPPORT_ADD_STICK,
   SUPPORT_ADD_BRACE,
+  SUPPORT_ADD_ANCHOR,
+  SUPPORT_REMOVE_ANCHOR,
   SUPPORT_REMOVE_TRUNK,
   SUPPORT_REMOVE_LEAF,
   SUPPORT_REMOVE_BRANCH,
@@ -31,10 +33,11 @@ import {
   SupportBranchUpdatePayload,
   SupportReplaceTrunkPayload,
   SupportReplaceStatePayload,
+  SupportAnchorPayload,
   SupportKickstandPayload,
   SupportKickstandRemovePayload,
 } from './actionTypes';
-import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKickstandCascade, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
+import { addAnchor, addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeAnchor, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKickstandCascade, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
 import { addKickstand, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 import { clearSupportSelection } from '../interaction/shared/selection/selectionController';
 
@@ -132,6 +135,26 @@ export function useSupportHistoryHandlers(enabled = true) {
           if (payload.startKnot) addKnot(payload.startKnot);
           if (payload.endKnot) addKnot(payload.endKnot);
           addBrace(payload.brace);
+        }
+        return true;
+      }),
+      registerHistoryHandler(SUPPORT_ADD_ANCHOR, (action, direction) => {
+        const payload = action.payload as SupportAnchorPayload | undefined;
+        if (!payload?.anchor) return false;
+        if (direction === 'undo') {
+          removeAnchor(payload.anchor.id);
+        } else {
+          addAnchor(payload.anchor);
+        }
+        return true;
+      }),
+      registerHistoryHandler(SUPPORT_REMOVE_ANCHOR, (action, direction) => {
+        const payload = action.payload as SupportAnchorPayload | undefined;
+        if (!payload?.anchor) return false;
+        if (direction === 'undo') {
+          addAnchor(payload.anchor);
+        } else {
+          removeAnchor(payload.anchor.id);
         }
         return true;
       }),

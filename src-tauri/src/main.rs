@@ -9,12 +9,23 @@ mod plugin_registry;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Deserialize;
 use serde::Serialize;
-use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
 use tauri::Manager;
+
+// Runtime type aliases — the feat/cef branch requires an explicit runtime
+// generic. These select Cef or Wry based on the active cargo feature.
+#[cfg(feature = "tauri-cef")]
+type DragonFruitAppHandle = tauri::AppHandle<tauri::Cef>;
+#[cfg(not(feature = "tauri-cef"))]
+type DragonFruitAppHandle = tauri::AppHandle<tauri::Wry>;
+
+#[cfg(feature = "tauri-cef")]
+type DragonFruitWindow = tauri::Window<tauri::Cef>;
+#[cfg(not(feature = "tauri-cef"))]
+type DragonFruitWindow = tauri::Window<tauri::Wry>;
 
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -283,6 +294,8 @@ struct SliceJobMetadata {
     source_height_px: u32,
     width_px: u32,
     height_px: u32,
+    #[serde(default)]
+    x_packing_mode: Option<String>,
     png_compression_strategy: String,
     anti_aliasing_level: String,
     aa_on_supports: bool,
@@ -323,13 +336,25 @@ struct NativeSlicerRuntimeMetrics {
     pool_threads: u32,
     max_concurrent: u32,
     queue_buffer: u32,
+    build_profile: String,
+    artifact_dir: String,
+    mesh_stage_dir: String,
+    metadata_parse_ns: u64,
+    mesh_decode_ns: u64,
+    artifact_metadata_ns: u64,
+    wrapper_total_ns: u64,
+    wrapper_overhead_ns: u64,
 }
 
-fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+fn duration_ns_u64(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
+}
+
+fn phase_to_label(phase: dragonfruit_slicing_engine::types::SliceProgressPhaseV3) -> &'static str {
     match phase {
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
-        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
     }
 }
 
@@ -339,7 +364,7 @@ fn slicer_pool() -> &'static ThreadPool {
             .map(|n| n.get())
             .unwrap_or(1);
         ThreadPoolBuilder::new()
-            .thread_name(|i| format!("dragonfruit-slicer-v3-{i}"))
+            .thread_name(|i| format!("dragonfruit-slicing-engine-{i}"))
             .num_threads(threads)
             .build()
             .expect("failed to create slicer rayon thread pool")
@@ -400,6 +425,60 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
     CANCEL_FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
+/// Build a progress callback that throttles `window.emit` to at most ~60 fps.
+///
+/// The first event, any phase change, and the final event (done == total) are
+/// always emitted immediately.  Intermediate updates are skipped if fewer than
+/// 16 ms have elapsed since the last emit.
+fn make_throttled_progress_cb(
+    win: DragonFruitWindow,
+) -> dragonfruit_slicing_engine::types::ProgressCallbackV3 {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    struct State {
+        last_emit: Instant,
+        last_phase: String,
+    }
+
+    let state = Arc::new(Mutex::new(State {
+        last_emit: Instant::now(),
+        last_phase: String::new(),
+    }));
+
+    Arc::new(
+        move |update: dragonfruit_slicing_engine::types::SliceProgressUpdateV3| {
+            let phase = phase_to_label(update.phase).to_string();
+            let is_final = update.done >= update.total;
+
+            let should_emit = {
+                let mut s = state.lock().unwrap();
+                let phase_changed = s.last_phase != phase;
+                let elapsed = s.last_emit.elapsed().as_millis() >= 8;
+
+                if is_final || phase_changed || elapsed {
+                    s.last_emit = Instant::now();
+                    s.last_phase = phase.clone();
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if should_emit {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase,
+                    },
+                );
+            }
+        },
+    )
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SliceProgressPayload {
@@ -417,7 +496,14 @@ struct NativeSliceTempPathResult {
     runtime: NativeSlicerRuntimeMetrics,
 }
 
-fn v3_runtime_metrics() -> NativeSlicerRuntimeMetrics {
+fn v3_runtime_metrics(
+    output_path: &std::path::Path,
+    metadata_parse_ns: u64,
+    mesh_decode_ns: u64,
+    artifact_metadata_ns: u64,
+    wrapper_total_ns: u64,
+    wrapper_overhead_ns: u64,
+) -> NativeSlicerRuntimeMetrics {
     let hw_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -429,38 +515,301 @@ fn v3_runtime_metrics() -> NativeSlicerRuntimeMetrics {
         .clamp(1, hw_threads);
     let queue_buffer = (max_concurrent * 2).clamp(2, 16);
 
+    let artifact_dir = output_path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| std::env::temp_dir().to_string_lossy().to_string());
+
+    let mesh_stage_dir = resolve_mesh_stage_directory().to_string_lossy().to_string();
+
+    let build_profile = if cfg!(debug_assertions) {
+        "debug".to_string()
+    } else {
+        "release".to_string()
+    };
+
     NativeSlicerRuntimeMetrics {
         pool_threads: hw_threads as u32,
         max_concurrent: max_concurrent as u32,
         queue_buffer: queue_buffer as u32,
+        build_profile,
+        artifact_dir,
+        mesh_stage_dir,
+        metadata_parse_ns,
+        mesh_decode_ns,
+        artifact_metadata_ns,
+        wrapper_total_ns,
+        wrapper_overhead_ns,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Native mesh export (STL / 3MF)
+// ---------------------------------------------------------------------------
+
+/// Read a little-endian `f32` from a byte slice at the given byte offset.
+#[inline(always)]
+fn read_f32_le(data: &[u8], off: usize) -> f32 {
+    f32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+}
+
+/// Write binary STL directly to `dest_path` from raw triangle staging data.
+///
+/// Staging format: 9 × f32 per triangle (v0x v0y v0z  v1x v1y v1z  v2x v2y v2z), LE.
+fn write_binary_stl(raw: &[u8], tri_count: usize, dest_path: &str) -> Result<(), String> {
+    use std::io::{BufWriter, Write};
+
+    let file =
+        std::fs::File::create(dest_path).map_err(|e| format!("Failed creating STL file: {e}"))?;
+    let mut w = BufWriter::with_capacity(256 * 1024, file);
+
+    // 80-byte header (all zeros)
+    w.write_all(&[0u8; 80])
+        .map_err(|e| format!("STL write: {e}"))?;
+    w.write_all(&(tri_count as u32).to_le_bytes())
+        .map_err(|e| format!("STL write: {e}"))?;
+
+    for i in 0..tri_count {
+        let base = i * 36; // 9 floats × 4 bytes
+        let v0x = read_f32_le(raw, base);
+        let v0y = read_f32_le(raw, base + 4);
+        let v0z = read_f32_le(raw, base + 8);
+        let v1x = read_f32_le(raw, base + 12);
+        let v1y = read_f32_le(raw, base + 16);
+        let v1z = read_f32_le(raw, base + 20);
+        let v2x = read_f32_le(raw, base + 24);
+        let v2y = read_f32_le(raw, base + 28);
+        let v2z = read_f32_le(raw, base + 32);
+
+        // Face normal = cross(v1 - v0, v2 - v0), normalized
+        let e1x = v1x - v0x;
+        let e1y = v1y - v0y;
+        let e1z = v1z - v0z;
+        let e2x = v2x - v0x;
+        let e2y = v2y - v0y;
+        let e2z = v2z - v0z;
+        let mut nx = e1y * e2z - e1z * e2y;
+        let mut ny = e1z * e2x - e1x * e2z;
+        let mut nz = e1x * e2y - e1y * e2x;
+        let len = (nx * nx + ny * ny + nz * nz).sqrt();
+        if len > 1e-30 {
+            let inv = 1.0 / len;
+            nx *= inv;
+            ny *= inv;
+            nz *= inv;
+        }
+
+        // Normal
+        w.write_all(&nx.to_le_bytes())
+            .map_err(|e| format!("STL write: {e}"))?;
+        w.write_all(&ny.to_le_bytes())
+            .map_err(|e| format!("STL write: {e}"))?;
+        w.write_all(&nz.to_le_bytes())
+            .map_err(|e| format!("STL write: {e}"))?;
+        // 3 vertices
+        w.write_all(&raw[base..base + 36])
+            .map_err(|e| format!("STL write: {e}"))?;
+        // Attribute byte count
+        w.write_all(&0u16.to_le_bytes())
+            .map_err(|e| format!("STL write: {e}"))?;
+    }
+
+    w.flush().map_err(|e| format!("STL flush: {e}"))?;
+    Ok(())
+}
+
+/// Write a 3MF file (DEFLATE-compressed ZIP) directly to `dest_path` from raw
+/// triangle staging data.
+///
+/// The `zip` crate handles DEFLATE compression, CRC32, and central directory
+/// bookkeeping.  XML text for vertex/triangle tags compresses ~10–20× with
+/// DEFLATE, so the resulting 3MF is typically smaller than the equivalent
+/// binary STL.
+fn write_3mf(raw: &[u8], tri_count: usize, dest_path: &str) -> Result<(), String> {
+    use std::io::{BufWriter, Write};
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
+    let file =
+        std::fs::File::create(dest_path).map_err(|e| format!("Failed creating 3MF file: {e}"))?;
+    // Large outer buffer so 4 MB compressed chunks land on disk efficiently.
+    let buf_writer = BufWriter::with_capacity(4 * 1024 * 1024, file);
+    let mut zip = ZipWriter::new(buf_writer);
+
+    // Level 1 = fastest deflate. Repetitive XML (vertex/triangle tags) still
+    // compresses 5–8× even at level 1, so output size stays reasonable while
+    // the compressor runs ~5× faster than the default level 6.
+    let deflate_opts = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .compression_level(Some(1));
+
+    // ── [Content_Types].xml ──
+    zip.start_file("[Content_Types].xml", deflate_opts)
+        .map_err(|e| format!("3MF zip: {e}"))?;
+    zip.write_all(
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+          <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+          <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+          <Default Extension=\"model\" ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/>\
+          </Types>",
+    )
+    .map_err(|e| format!("3MF zip: {e}"))?;
+
+    // ── _rels/.rels ──
+    zip.start_file("_rels/.rels", deflate_opts)
+        .map_err(|e| format!("3MF zip: {e}"))?;
+    zip.write_all(
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+          <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+          <Relationship Target=\"/3D/3dmodel.model\" Id=\"rel0\" \
+          Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/>\
+          </Relationships>",
+    )
+    .map_err(|e| format!("3MF zip: {e}"))?;
+
+    // ── 3D/3dmodel.model ──
+    // The old approach called zip.write_all once per vertex/triangle — for a
+    // 2 M-triangle mesh that is ~8 M individual DEFLATE feed calls, each with
+    // full compressor overhead. Instead we accumulate XML into a 4 MB in-memory
+    // chunk and flush to DEFLATE in bulk, reducing compressor calls by >1000×.
+    zip.start_file("3D/3dmodel.model", deflate_opts)
+        .map_err(|e| format!("3MF zip: {e}"))?;
+
+    const CHUNK: usize = 4 * 1024 * 1024;
+    let mut buf: Vec<u8> = Vec::with_capacity(CHUNK + 512);
+
+    buf.extend_from_slice(
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+          <model unit=\"millimeter\" xml:lang=\"en-US\" \
+          xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\
+          <resources><object id=\"1\" type=\"model\"><mesh><vertices>",
+    );
+
+    // ── Vertices ──
+    for i in 0..tri_count {
+        let base = i * 36;
+        for j in 0..3usize {
+            let fbase = base + j * 12;
+            let x = read_f32_le(raw, fbase);
+            let y = read_f32_le(raw, fbase + 4);
+            let z = read_f32_le(raw, fbase + 8);
+            write!(buf, "<vertex x=\"{x:.4}\" y=\"{y:.4}\" z=\"{z:.4}\"/>").unwrap();
+        }
+        // Flush every ~4 MB so we never hold more than one chunk in memory.
+        if buf.len() >= CHUNK {
+            zip.write_all(&buf).map_err(|e| format!("3MF zip: {e}"))?;
+            buf.clear();
+        }
+    }
+
+    buf.extend_from_slice(b"</vertices><triangles>");
+
+    // ── Triangles (sequential indices: tri i → 3i, 3i+1, 3i+2) ──
+    for i in 0..tri_count {
+        let v0 = i * 3;
+        write!(
+            buf,
+            "<triangle v1=\"{v0}\" v2=\"{}\" v3=\"{}\"/>",
+            v0 + 1,
+            v0 + 2
+        )
+        .unwrap();
+        if buf.len() >= CHUNK {
+            zip.write_all(&buf).map_err(|e| format!("3MF zip: {e}"))?;
+            buf.clear();
+        }
+    }
+
+    buf.extend_from_slice(
+        b"</triangles></mesh></object></resources>\
+          <build><item objectid=\"1\"/></build></model>",
+    );
+    zip.write_all(&buf).map_err(|e| format!("3MF zip: {e}"))?;
+
+    zip.finish().map_err(|e| format!("3MF zip finish: {e}"))?;
+    Ok(())
+}
+
+/// Exports raw staged geometry to a properly formatted mesh file.
+///
+/// JS sends raw triangle vertex data (9 × f32 LE per triangle) to a staging
+/// file via `append_mesh_stage_chunk`, then calls this command to convert
+/// the staging file into a valid STL or 3MF at the user-chosen destination.
 #[tauri::command]
-async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<Response, String> {
+async fn export_mesh_file(
+    staging_path: String,
+    dest_path: String,
+    format: String,
+) -> Result<String, String> {
+    // Flush and release the staged file appender if it was writing to our staging file,
+    // so all buffered bytes are written before we read.
+    {
+        let mut lock = staged_mesh_file_appender()
+            .lock()
+            .map_err(|e| format!("Appender lock poisoned: {e}"))?;
+        let matches = lock.as_ref().map_or(false, |a| a.path == staging_path);
+        if matches {
+            if let Some(appender) = lock.as_mut() {
+                use std::io::Write;
+                appender
+                    .writer
+                    .flush()
+                    .map_err(|e| format!("Failed flushing staging appender: {e}"))?;
+            }
+            *lock = None; // release file handle
+        }
+    }
+
+    let raw = std::fs::read(&staging_path)
+        .map_err(|e| format!("Failed reading staging file '{}': {e}", staging_path))?;
+
+    if raw.len() % 36 != 0 {
+        return Err(format!(
+            "Invalid staging data: {} bytes is not a multiple of 36 (9 × f32 per triangle)",
+            raw.len()
+        ));
+    }
+    let tri_count = raw.len() / 36;
+    if tri_count == 0 {
+        return Err("Cannot export: no triangles in staged geometry.".into());
+    }
+
+    log::info!(
+        "[export_mesh_file] {} triangles → {} format → {}",
+        tri_count,
+        format,
+        dest_path
+    );
+
+    match format.as_str() {
+        "stl" => write_binary_stl(&raw, tri_count, &dest_path)?,
+        "3mf" => write_3mf(&raw, tri_count, &dest_path)?,
+        _ => return Err(format!("Unsupported export format: {format}")),
+    }
+
+    // Clean up staging file
+    let _ = std::fs::remove_file(&staging_path);
+
+    Ok(dest_path)
+}
+
+#[tauri::command]
+async fn slice_solid_native(
+    window: DragonFruitWindow,
+    job_json: String,
+) -> Result<Response, String> {
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
 
     let win = window.clone();
     let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let job: dragonfruit_slicer_v3::types::SliceJobV3 = serde_json::from_str(&job_json)
+        let job: dragonfruit_slicing_engine::types::SliceJobV3 = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 = std::sync::Arc::new(
-            move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
-                let _ = win.emit(
-                    "slicer://progress",
-                    SliceProgressPayload {
-                        done: update.done,
-                        total: update.total,
-                        phase: phase_to_label(update.phase).to_string(),
-                    },
-                );
-            },
-        );
+        let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
-            let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
+            let artifact = dragonfruit_slicing_engine::slice_with_progress_v3(
                 &job,
                 Some(progress_cb),
                 Some(flag.as_ref()),
@@ -535,12 +884,30 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
             .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
     }
 
+    let offset_header = request.headers().get("x-mesh-stage-offset");
+    let is_first_chunk = match offset_header {
+        Some(value) => {
+            let raw = value
+                .to_str()
+                .map_err(|e| format!("Invalid x-mesh-stage-offset header value: {e}"))?
+                .trim();
+            if raw.is_empty() {
+                false
+            } else {
+                raw.parse::<u64>()
+                    .map_err(|e| format!("Invalid x-mesh-stage-offset header value: {e}"))?
+                    == 0
+            }
+        }
+        None => false,
+    };
+
     let mut appender_lock = staged_mesh_file_appender()
         .lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
 
     let needs_new_appender = match appender_lock.as_ref() {
-        Some(existing) => existing.path != path_text,
+        Some(existing) => is_first_chunk || existing.path != path_text,
         None => true,
     };
 
@@ -573,9 +940,41 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         .writer
         .write_all(bytes)
         .map_err(|err| format!("Failed appending mesh stage bytes: {err}"))?;
+    appender
+        .writer
+        .flush()
+        .map_err(|err| format!("Failed flushing mesh stage bytes: {err}"))?;
     appender.len = appender.len.saturating_add(bytes.len() as u64);
 
     Ok(appender.len)
+}
+
+#[tauri::command]
+async fn finish_mesh_stage_write(path: String) -> Result<u64, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("finish_mesh_stage_write requires a non-empty path".into());
+    }
+
+    let mut appender_lock = staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    if let Some(appender) = appender_lock.as_mut() {
+        if appender.path == trimmed {
+            use std::io::Write;
+            appender
+                .writer
+                .flush()
+                .map_err(|e| format!("Failed flushing mesh stage file writer: {e}"))?;
+            let len = appender.len;
+            *appender_lock = None; // release OS file handle immediately
+            return Ok(len);
+        }
+    }
+
+    // No open appender for this path (already closed or never opened).
+    Ok(0)
 }
 
 #[tauri::command]
@@ -728,7 +1127,7 @@ async fn stage_mesh_binary_chunk(
 
 #[tauri::command]
 async fn slice_solid_native_to_temp_path(
-    window: tauri::Window,
+    window: DragonFruitWindow,
     job_json: String,
 ) -> Result<NativeSliceTempPathResult, String> {
     // Take the pre-staged mesh bytes (set by stage_mesh_binary)
@@ -782,18 +1181,25 @@ async fn slice_solid_native_to_temp_path(
 
     let win = window.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let wrapper_start = std::time::Instant::now();
+
+        let metadata_parse_start = std::time::Instant::now();
         let meta: SliceJobMetadata = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
+        let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
 
+        let mesh_decode_start = std::time::Instant::now();
         let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
+        let mesh_decode_ns = duration_ns_u64(mesh_decode_start.elapsed());
 
-        let job = dragonfruit_slicer_v3::SliceJobV3 {
+        let job = dragonfruit_slicing_engine::SliceJobV3 {
             output_format: meta.output_format,
             format_version: meta.format_version,
             source_width_px: meta.source_width_px,
             source_height_px: meta.source_height_px,
             width_px: meta.width_px,
             height_px: meta.height_px,
+            x_packing_mode: meta.x_packing_mode.unwrap_or_else(|| "none".to_string()),
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
             aa_on_supports: meta.aa_on_supports,
@@ -810,17 +1216,7 @@ async fn slice_solid_native_to_temp_path(
             metadata_json: meta.metadata_json,
         };
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
-                let _ = win.emit(
-                    "slicer://progress",
-                    SliceProgressPayload {
-                        done: update.done,
-                        total: update.total,
-                        phase: phase_to_label(update.phase).to_string(),
-                    },
-                );
-            });
+        let progress_cb = make_throttled_progress_cb(win);
 
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {
@@ -833,7 +1229,7 @@ async fn slice_solid_native_to_temp_path(
             };
             let path = temp_artifact_path(ext);
 
-            let perf_raw = dragonfruit_slicer_v3::engine::slice_with_progress_v3_to_path(
+            let perf_raw = dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path(
                 &job,
                 &path,
                 Some(progress_cb),
@@ -850,11 +1246,23 @@ async fn slice_solid_native_to_temp_path(
                 archive_encode_ns: perf_raw.archive_encode_ns,
                 layers: perf_raw.layers,
             };
-            let runtime = v3_runtime_metrics();
 
+            let artifact_metadata_start = std::time::Instant::now();
             let byte_len = std::fs::metadata(&path)
                 .map_err(|err| format!("Failed reading temp artifact metadata: {err}"))?
                 .len();
+            let artifact_metadata_ns = duration_ns_u64(artifact_metadata_start.elapsed());
+
+            let wrapper_total_ns = duration_ns_u64(wrapper_start.elapsed());
+            let wrapper_overhead_ns = wrapper_total_ns.saturating_sub(perf_raw.total_ns);
+            let runtime = v3_runtime_metrics(
+                &path,
+                metadata_parse_ns,
+                mesh_decode_ns,
+                artifact_metadata_ns,
+                wrapper_total_ns,
+                wrapper_overhead_ns,
+            );
 
             Ok((
                 path.to_string_lossy().to_string(),
@@ -989,7 +1397,7 @@ struct NativeRleLabels {
 
 #[tauri::command]
 async fn run_island_scan_native(
-    window: tauri::Window,
+    window: DragonFruitWindow,
     params_json: String,
 ) -> Result<NativeIslandScanResult, String> {
     // Take staged mesh bytes
@@ -1005,7 +1413,7 @@ async fn run_island_scan_native(
             .map_err(|e| format!("Invalid island scan params JSON: {e}"))?;
 
         let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
-        let triangles = dragonfruit_slicer_v3::geometry::parse_triangles(&triangles_xyz);
+        let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&triangles_xyz);
 
         // Debug dump: write positions + params to temp dir for offline reproduction
         let dump_dir = std::env::temp_dir().join("dragonfruit-island-debug");
@@ -1019,7 +1427,7 @@ async fn run_island_scan_native(
             dump_dir.join("positions.bin"),
             &mesh_bytes,
         );
-        eprintln!(
+        log::debug!(
             "[island-scan-native] triangles={} bbox=({:.4},{:.4},{:.4})-({:.4},{:.4},{:.4}) px_mm={} layer_h={} buf={} conn={} min_area={} overlap_px={} neighborhood={}",
             triangles.len(),
             params.bbox_min_x, params.bbox_min_y, params.bbox_min_z,
@@ -1028,7 +1436,7 @@ async fn run_island_scan_native(
             params.connectivity, params.min_island_area_mm2,
             params.min_overlap_px, params.overlap_neighborhood_px,
         );
-        eprintln!("[island-scan-native] debug dump: {}", dump_dir.display());
+        log::debug!("[island-scan-native] debug dump: {}", dump_dir.display());
 
         // Phase A: Rasterize all layers using shared module (same code as bench)
         let total_layers;
@@ -1106,7 +1514,7 @@ async fn run_island_scan_native(
         let total_ms = rasterize_ms + scan_ms;
 
         let total_solid_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
-        eprintln!(
+        log::info!(
             "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} raster={:.0}ms scan={:.0}ms",
             grid_width, grid_height, num_layers, total_solid_px,
             scan_result.islands.len(), rasterize_ms, scan_ms,
@@ -1247,6 +1655,524 @@ struct PickOpenFilesArgs {
 struct PickedOpenFile {
     path: String,
     name: String,
+}
+
+const LOCAL_BACKUP_STATE_FILE_NAME: &str = "state.json";
+const LOCAL_BACKUP_HISTORY_DIR_NAME: &str = "history";
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBackupStateResponse {
+    document_json: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBackupSyncResponse {
+    synced_at: String,
+    history_id: String,
+    state_path: String,
+    history_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBackupHistoryEntry {
+    id: String,
+    path: String,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBackupReadHistoryResponse {
+    document_json: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBackupRestoreResponse {
+    synced_at: Option<String>,
+}
+
+fn normalize_backup_directory_path(directory_path: &str) -> Result<std::path::PathBuf, String> {
+    let trimmed = directory_path.trim();
+    if trimmed.is_empty() {
+        return Err("Backup directory path is empty".to_string());
+    }
+
+    let mut path = std::path::PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        path = std::env::current_dir()
+            .map_err(|err| format!("Failed to resolve current directory: {err}"))?
+            .join(path);
+    }
+
+    Ok(path)
+}
+
+fn local_backup_state_path(root: &std::path::Path) -> std::path::PathBuf {
+    root.join(LOCAL_BACKUP_STATE_FILE_NAME)
+}
+
+fn local_backup_history_dir(root: &std::path::Path) -> std::path::PathBuf {
+    root.join(LOCAL_BACKUP_HISTORY_DIR_NAME)
+}
+
+fn is_valid_local_backup_history_id(id: &str) -> bool {
+    id.len() == 13 && id.chars().all(|char| char.is_ascii_digit())
+}
+
+fn local_backup_history_file_path(
+    root: &std::path::Path,
+    id: &str,
+) -> Result<std::path::PathBuf, String> {
+    if !is_valid_local_backup_history_id(id) {
+        return Err("Invalid backup history identifier".to_string());
+    }
+
+    Ok(local_backup_history_dir(root).join(format!("{id}.json")))
+}
+
+fn ensure_local_backup_structure(root: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|err| {
+        format!(
+            "Failed creating backup directory '{}': {err}",
+            root.display()
+        )
+    })?;
+
+    std::fs::create_dir_all(local_backup_history_dir(root)).map_err(|err| {
+        format!(
+            "Failed creating backup history directory '{}': {err}",
+            local_backup_history_dir(root).display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn extract_backup_document_updated_at(raw: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+
+    parsed
+        .get("updatedAt")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            parsed
+                .get("snapshot")
+                .and_then(|snapshot| snapshot.get("updatedAt"))
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+        })
+}
+
+#[tauri::command]
+async fn local_backup_default_directory(app: DragonFruitAppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+
+        let base = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("Failed resolving app data directory: {err}"))?;
+
+        let directory = base.join("backups");
+        std::fs::create_dir_all(&directory).map_err(|err| {
+            format!(
+                "Failed creating default backup directory '{}': {err}",
+                directory.display()
+            )
+        })?;
+
+        Ok(directory.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("Default backup directory task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_pick_directory(current_path: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new();
+
+        if let Some(path) = current_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            dialog = dialog.set_directory(path);
+        }
+
+        let picked = dialog
+            .pick_folder()
+            .ok_or_else(|| "Folder selection cancelled by user".to_string())?;
+
+        Ok(picked.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("Pick backup folder task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_read_state(
+    directory_path: String,
+) -> Result<LocalBackupStateResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = normalize_backup_directory_path(&directory_path)?;
+        let state_path = local_backup_state_path(&root);
+
+        match std::fs::read_to_string(&state_path) {
+            Ok(content) => Ok(LocalBackupStateResponse {
+                updated_at: extract_backup_document_updated_at(&content),
+                document_json: Some(content),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(LocalBackupStateResponse {
+                    updated_at: None,
+                    document_json: None,
+                })
+            }
+            Err(error) => Err(format!(
+                "Failed reading backup state file '{}': {error}",
+                state_path.display()
+            )),
+        }
+    })
+    .await
+    .map_err(|err| format!("Read backup state task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_sync(
+    directory_path: String,
+    document_json: String,
+) -> Result<LocalBackupSyncResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = normalize_backup_directory_path(&directory_path)?;
+        ensure_local_backup_structure(&root)?;
+
+        let parsed = serde_json::from_str::<serde_json::Value>(&document_json)
+            .map_err(|err| format!("Invalid backup document JSON: {err}"))?;
+        let normalized_document = serde_json::to_string_pretty(&parsed)
+            .map_err(|err| format!("Failed formatting backup document JSON: {err}"))?;
+
+        let synced_at = parsed
+            .get("updatedAt")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+            .or_else(|| {
+                parsed
+                    .get("snapshot")
+                    .and_then(|snapshot| snapshot.get("updatedAt"))
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_else(|| String::new());
+
+        let history_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+
+        let state_path = local_backup_state_path(&root);
+        let history_path = local_backup_history_file_path(&root, &history_id)?;
+
+        std::fs::write(&state_path, normalized_document.as_bytes()).map_err(|err| {
+            format!(
+                "Failed writing backup state file '{}': {err}",
+                state_path.display()
+            )
+        })?;
+
+        std::fs::write(&history_path, normalized_document.as_bytes()).map_err(|err| {
+            format!(
+                "Failed writing backup history file '{}': {err}",
+                history_path.display()
+            )
+        })?;
+
+        Ok(LocalBackupSyncResponse {
+            synced_at,
+            history_id,
+            state_path: state_path.to_string_lossy().to_string(),
+            history_path: history_path.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|err| format!("Local backup sync task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_list_history(
+    directory_path: String,
+) -> Result<Vec<LocalBackupHistoryEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = normalize_backup_directory_path(&directory_path)?;
+        let history_dir = local_backup_history_dir(&root);
+
+        if !history_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let read_dir = std::fs::read_dir(&history_dir).map_err(|err| {
+            format!(
+                "Failed listing backup history directory '{}': {err}",
+                history_dir.display()
+            )
+        })?;
+
+        let mut entries: Vec<LocalBackupHistoryEntry> = Vec::new();
+
+        for dir_entry in read_dir.flatten() {
+            let path = dir_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_ascii_lowercase())
+                .unwrap_or_default();
+            if extension != "json" {
+                continue;
+            }
+
+            let id = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if !is_valid_local_backup_history_id(&id) {
+                continue;
+            }
+
+            let updated_at = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| extract_backup_document_updated_at(&content));
+
+            entries.push(LocalBackupHistoryEntry {
+                id,
+                path: path.to_string_lossy().to_string(),
+                updated_at,
+            });
+        }
+
+        entries.sort_by(|left, right| right.id.cmp(&left.id));
+
+        Ok(entries)
+    })
+    .await
+    .map_err(|err| format!("List local backup history task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_read_history_item(
+    directory_path: String,
+    id: String,
+) -> Result<LocalBackupReadHistoryResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = normalize_backup_directory_path(&directory_path)?;
+        let history_path = local_backup_history_file_path(&root, id.trim())?;
+
+        let document_json = std::fs::read_to_string(&history_path).map_err(|err| {
+            format!(
+                "Failed reading backup history file '{}': {err}",
+                history_path.display()
+            )
+        })?;
+
+        Ok(LocalBackupReadHistoryResponse { document_json })
+    })
+    .await
+    .map_err(|err| format!("Read local backup history item task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_delete_history_item(
+    directory_path: String,
+    id: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = normalize_backup_directory_path(&directory_path)?;
+        let history_path = local_backup_history_file_path(&root, id.trim())?;
+
+        match std::fs::remove_file(&history_path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(format!(
+                "Failed deleting backup history file '{}': {error}",
+                history_path.display()
+            )),
+        }
+    })
+    .await
+    .map_err(|err| format!("Delete local backup history item task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn local_backup_restore_history_item(
+    directory_path: String,
+    id: String,
+) -> Result<LocalBackupRestoreResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = normalize_backup_directory_path(&directory_path)?;
+        ensure_local_backup_structure(&root)?;
+
+        let history_path = local_backup_history_file_path(&root, id.trim())?;
+        let state_path = local_backup_state_path(&root);
+
+        let document_json = std::fs::read_to_string(&history_path).map_err(|err| {
+            format!(
+                "Failed reading backup history file '{}': {err}",
+                history_path.display()
+            )
+        })?;
+
+        std::fs::write(&state_path, document_json.as_bytes()).map_err(|err| {
+            format!(
+                "Failed restoring backup state file '{}': {err}",
+                state_path.display()
+            )
+        })?;
+
+        Ok(LocalBackupRestoreResponse {
+            synced_at: extract_backup_document_updated_at(&document_json),
+        })
+    })
+    .await
+    .map_err(|err| format!("Restore local backup history item task failed to join: {err}"))?
+}
+
+// ---------------------------------------------------------------------------
+// Scene Autosave
+// ---------------------------------------------------------------------------
+
+const SCENE_AUTOSAVE_DIR_NAME: &str = "autosave";
+const SCENE_AUTOSAVE_VOXL_FILE: &str = "scene.voxl";
+const SCENE_AUTOSAVE_MANIFEST_FILE: &str = "manifest.json";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SceneAutosaveManifest {
+    saved_at: String,
+    clean: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SceneAutosavePaths {
+    voxl_path: String,
+    manifest_path: String,
+}
+
+fn scene_autosave_resolve_dir(app: &DragonFruitAppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Failed resolving app data dir: {err}"))?;
+    let dir = base.join(SCENE_AUTOSAVE_DIR_NAME);
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("Failed creating autosave dir '{}': {err}", dir.display()))?;
+    Ok(dir)
+}
+
+#[tauri::command]
+async fn scene_autosave_get_paths(
+    app: DragonFruitAppHandle,
+    preferred_save_path: Option<String>,
+) -> Result<SceneAutosavePaths, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+
+        // Determine VOXL autosave path: if user has explicitly saved to a .voxl file,
+        // autosave directly to that file. Otherwise use the generic recovery location.
+        let voxl_path = if let Some(preferred) = preferred_save_path {
+            let path = std::path::Path::new(&preferred);
+            if is_scene_file_path(path) && path.exists() {
+                // User has explicitly saved; autosave directly to that file
+                preferred
+            } else {
+                // Not a valid scene file or doesn't exist; fall back to generic recovery
+                dir.join(SCENE_AUTOSAVE_VOXL_FILE)
+                    .to_string_lossy()
+                    .to_string()
+            }
+        } else {
+            // No preferred path; use generic recovery location
+            dir.join(SCENE_AUTOSAVE_VOXL_FILE)
+                .to_string_lossy()
+                .to_string()
+        };
+
+        Ok(SceneAutosavePaths {
+            voxl_path,
+            manifest_path: dir
+                .join(SCENE_AUTOSAVE_MANIFEST_FILE)
+                .to_string_lossy()
+                .to_string(),
+        })
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_get_paths task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn scene_autosave_write_manifest(
+    app: DragonFruitAppHandle,
+    saved_at: String,
+    clean: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let manifest = SceneAutosaveManifest { saved_at, clean };
+        let json = serde_json::to_string(&manifest)
+            .map_err(|err| format!("Failed serializing autosave manifest: {err}"))?;
+        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+        std::fs::write(&path, json.as_bytes())
+            .map_err(|err| format!("Failed writing autosave manifest: {err}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_write_manifest task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn scene_autosave_read_manifest(
+    app: DragonFruitAppHandle,
+) -> Result<Option<SceneAutosaveManifest>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|err| format!("Failed reading autosave manifest: {err}"))?;
+        let manifest: SceneAutosaveManifest = serde_json::from_str(&content)
+            .map_err(|err| format!("Failed parsing autosave manifest: {err}"))?;
+        Ok(Some(manifest))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_read_manifest task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let path = dir.join(SCENE_AUTOSAVE_VOXL_FILE);
+        if !path.exists() {
+            return Err("No autosaved scene file found".to_string());
+        }
+        std::fs::read(&path).map_err(|err| format!("Failed reading autosaved scene: {err}"))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_read_voxl_bytes task failed: {err}"))?
 }
 
 fn is_scene_file_path(path: &std::path::Path) -> bool {
@@ -1488,7 +2414,7 @@ async fn get_launch_scene_files() -> Result<Vec<PickedOpenFile>, String> {
     .map_err(|err| format!("Launch scene-files task failed to join: {err}"))?
 }
 
-fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str) {
+fn emit_scene_file_handoff(app: &DragonFruitAppHandle, args: &[String], source: &str) {
     let paths = collect_scene_file_paths_from_args(args);
     if paths.is_empty() {
         return;
@@ -1502,7 +2428,7 @@ fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str
     let _ = app.emit("dragonfruit://scene-file-handoff", payload);
 }
 
-fn focus_main_window(app: &tauri::AppHandle) {
+fn focus_main_window(app: &DragonFruitAppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
@@ -1522,15 +2448,35 @@ fn focus_main_window(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-async fn notify_launch_scene_handoff(app: tauri::AppHandle) -> Result<(), String> {
+fn get_slicer_engine_version() -> &'static str {
+    dragonfruit_slicing_engine::ENGINE_VERSION
+}
+
+#[tauri::command]
+async fn notify_launch_scene_handoff(app: DragonFruitAppHandle) -> Result<(), String> {
     let args = std::env::args().collect::<Vec<_>>();
     emit_scene_file_handoff(&app, &args, "primary-launch");
     Ok(())
 }
 
 #[tauri::command]
-async fn focus_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
     focus_main_window(&app);
+    Ok(())
+}
+
+/// Reveals the main window without calling set_focus().
+/// Used at startup to avoid triggering the Windows focus-stealing prevention
+/// mechanism, which plays an error sound when SetForegroundWindow is called
+/// from a process that does not currently own the foreground.
+#[tauri::command]
+async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let is_visible = window.is_visible().unwrap_or(true);
+        if !is_visible {
+            let _ = window.show();
+        }
+    }
     Ok(())
 }
 
@@ -1551,7 +2497,11 @@ async fn read_print_file_bytes(source_path: String) -> Result<Response, String> 
 }
 
 #[tauri::command]
-async fn read_print_layer_png(source_path: String, layer_number: u32) -> Result<Response, String> {
+async fn read_print_layer_png(
+    source_path: String,
+    layer_number: u32,
+    format_hint: String,
+) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         if layer_number == 0 {
             return Err("Layer number must be >= 1".to_string());
@@ -1562,22 +2512,17 @@ async fn read_print_layer_png(source_path: String, layer_number: u32) -> Result<
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        let file = std::fs::File::open(&source)
-            .map_err(|err| format!("Failed opening print archive: {err}"))?;
-        let mut zip = zip::ZipArchive::new(file)
-            .map_err(|err| format!("Failed reading print archive: {err}"))?;
-
-        let entry_name = format!("{}.png", layer_number);
-        let mut entry = zip
-            .by_name(&entry_name)
-            .map_err(|err| format!("Failed reading layer PNG {entry_name}: {err}"))?;
-
-        let mut png_bytes = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut png_bytes)
-            .map_err(|err| format!("Failed reading layer PNG bytes: {err}"))?;
-
-        Ok(png_bytes)
+        match format_hint.trim() {
+            f if f == ".ctb" || f.starts_with("ctb") => {
+                // ctb plugin does not yet implement read_layer_preview_png
+                // (present only in athena). Stub until ctb adds support.
+                Err("layer preview PNG not yet supported for .ctb files".to_string())
+            }
+            _ => {
+                // Default: NanoDLP ZIP archive (.nanodlp, athena, and any unknown format)
+                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::athena_encoder::read_layer_preview_png(&source, layer_number)
+            }
+        }
     })
     .await
     .map_err(|err| format!("Read layer task failed to join: {err}"))??;
@@ -1620,55 +2565,382 @@ async fn cleanup_all_print_temp_files() -> Result<u32, String> {
     Ok(removed)
 }
 
+/// Open the folder containing the given path in the OS file manager.
+/// On Windows this uses `explorer /select,<path>` to highlight the file.
+/// On macOS it uses `open -R <path>`. On Linux it falls back to `xdg-open`
+/// on the parent directory.
+#[tauri::command]
+async fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open Explorer: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let p = std::path::Path::new(&path);
+        let dir = p.parent().unwrap_or(p);
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open file manager: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Returns the path to the log-level preference file.
+/// This is intentionally computed with raw env vars so it can be called
+/// before the Tauri app (and its path resolver) is initialised.
+fn resolve_log_level_pref_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        std::path::PathBuf::from(appdata)
+            .join("org.openresinalliance.dragonfruit")
+            .join("loglevel")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::path::PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("org.openresinalliance.dragonfruit")
+            .join("loglevel")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+            format!("{}/.local/share", std::env::var("HOME").unwrap_or_default())
+        });
+        std::path::PathBuf::from(base)
+            .join("org.openresinalliance.dragonfruit")
+            .join("loglevel")
+    }
+}
+
+fn read_log_level_pref() -> log::LevelFilter {
+    let content = std::fs::read_to_string(resolve_log_level_pref_path()).unwrap_or_default();
+    match content.trim() {
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => log::LevelFilter::Info,
+    }
+}
+
+/// Persist the user's preferred log level to disk AND apply it immediately
+/// at runtime via `log::set_max_level`. No restart required.
+#[tauri::command]
+async fn set_log_level_pref(level: String) -> Result<(), String> {
+    const VALID: &[&str] = &["error", "warn", "info", "debug", "trace"];
+    let level = level.trim().to_lowercase();
+    if !VALID.contains(&level.as_str()) {
+        return Err(format!("Invalid log level: {level}"));
+    }
+    // Apply immediately — log::set_max_level is atomic and takes effect for all
+    // subsequent log macro calls without any restart.
+    let filter = match level.as_str() {
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => log::LevelFilter::Info,
+    };
+    log::set_max_level(filter);
+    // Persist for next startup.
+    let path = resolve_log_level_pref_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {e}"))?;
+    }
+    std::fs::write(&path, level.as_bytes())
+        .map_err(|e| format!("Failed to write log level pref: {e}"))
+}
+
+/// Return the last `lines` lines of the log file for the live viewer in Settings.
+/// Returns an empty string if the file does not yet exist.
+#[tauri::command]
+async fn read_log_tail(app: DragonFruitAppHandle, lines: usize) -> Result<String, String> {
+    use tauri::Manager;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log dir: {e}"))?;
+    let log_file = log_dir.join("dragonfruit.log");
+    match std::fs::read_to_string(&log_file) {
+        Ok(content) => {
+            let max = lines.clamp(10, 10_000);
+            // Collect the last `max` non-empty lines without reversing the order.
+            let all: Vec<&str> = content.lines().collect();
+            let tail = if all.len() > max {
+                &all[all.len() - max..]
+            } else {
+                &all[..]
+            };
+            Ok(tail.join("\n"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("Failed to read log file: {e}")),
+    }
+}
+
+/// Open the log file in the OS default text editor / viewer.
+#[tauri::command]
+async fn open_log_file(app: DragonFruitAppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log dir: {e}"))?;
+    let log_file = log_dir.join("dragonfruit.log");
+    if !log_file.exists() {
+        return Err("Log file does not exist yet.".to_string());
+    }
+    let path_str = log_file.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("notepad.exe")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open log file: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-t", &path_str])
+            .spawn()
+            .map_err(|e| format!("Failed to open log file: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open log file: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Delete the log file so it starts fresh on the next write.
+#[tauri::command]
+async fn delete_log_file(app: DragonFruitAppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to resolve log dir: {e}"))?;
+    let log_file = log_dir.join("dragonfruit.log");
+    match std::fs::remove_file(&log_file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to delete log file: {e}")),
+    }
+}
+
 fn main() {
+    // Issue #83: on Linux with Nvidia+Wayland, WebKitGTK's DMA-BUF renderer
+    // can crash inside gbm_bo_create_with_modifiers. Setting this env var
+    // before any GTK/WebKit init forces the SHM fallback path, which is
+    // slightly slower but stable. Only applies to the wry (WebKitGTK) path;
+    // CEF uses its own compositor and is unaffected.
+    #[cfg(all(target_os = "linux", not(feature = "tauri-cef")))]
+    {
+        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            // NOTE: called at the very start of main, single-threaded, before
+            // any other threads or libraries are initialized. On Rust edition
+            // 2024+ this will require an unsafe block (set_var became unsafe).
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
+    // Install a panic hook that writes the panic location and message to the
+    // DragonFruit log before the default handler runs.  This ensures that even
+    // hard crashes leave a human-readable trace in the log file rather than
+    // only a terse Windows Event 1005 entry.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message: String = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "(non-string panic payload)".to_string()
+        };
+        log::error!("[panic] {message} at {location}");
+        default_panic_hook(info);
+    }));
+
     // Sweep week-old stale temp artifacts on app startup.
     let _ = sweep_stale_temp_artifacts(7 * 24 * 60 * 60);
 
     // Initialize plugin registry and register built-in plugins
     if let Err(error) = plugin_registry::initialize_plugins() {
         if cfg!(debug_assertions) {
-            eprintln!("[plugin-registry] WARNING: {error}");
+            log::warn!("[plugin-registry] WARNING: {error}");
         } else {
             panic!("Failed to initialize plugin registry: {error}");
         }
     }
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
-            emit_scene_file_handoff(app, &argv, "single-instance");
+    log::info!(
+        "DragonFruit {} starting (debug={})",
+        env!("CARGO_PKG_VERSION"),
+        cfg!(debug_assertions)
+    );
 
-            // Only force foreground when this second launch is handing off a scene file.
-            // Avoiding unconditional focus here reduces Windows "error" chimes when users
-            // launch the app again while it's already running.
-            if has_scene_files {
-                focus_main_window(app);
+    let _log_level = read_log_level_pref();
+    // Log plugin disabled on CEF — it pulls tauri/wry transitively, causing
+    // E0252 collision. See Cargo.toml comment.
+    #[cfg(not(feature = "tauri-cef"))]
+    let log_plugin = {
+        use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
+        LogBuilder::new()
+            .targets([
+                Target::new(TargetKind::Stdout),
+                Target::new(TargetKind::LogDir {
+                    file_name: Some("dragonfruit".to_string()),
+                }),
+                Target::new(TargetKind::Webview),
+            ])
+            .level(_log_level)
+            // Suppress chatty low-level transport crates — these flood the log
+            // at DEBUG/TRACE and contain no actionable application information.
+            .level_for("tungstenite", log::LevelFilter::Warn)
+            .level_for("reqwest", log::LevelFilter::Warn)
+            .level_for("hyper", log::LevelFilter::Warn)
+            .level_for("hyper_util", log::LevelFilter::Warn)
+            .level_for("rustls", log::LevelFilter::Warn)
+            .level_for("h2", log::LevelFilter::Warn)
+            .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+            .max_file_size(5_000_000)
+            .rotation_strategy(RotationStrategy::KeepOne)
+            .build()
+    };
+
+    let builder = tauri::Builder::default();
+    #[cfg(not(feature = "tauri-cef"))]
+    let builder = builder.plugin(log_plugin);
+    let builder = builder.setup(|app| {
+        use tauri::WebviewWindowBuilder;
+
+        let window_config = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|window| window.label == "main")
+            .expect("Missing 'main' window config in tauri.conf.json");
+
+        let builder = WebviewWindowBuilder::from_config(app, window_config)?;
+
+        // Keep custom titlebar behavior on non-macOS.
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.decorations(false);
+
+        let window = builder.build()?;
+
+        // On macOS, reveal immediately so a frontend startup hiccup can't leave
+        // the app invisible when the window was created as hidden.
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(error) = window.show() {
+                log::warn!("Failed to show main window during setup: {error}");
             }
-        }))
+        }
+
+        log::info!("Main window created successfully");
+        Ok(())
+    });
+
+    // Single-instance plugin also disabled on CEF (same wry collision).
+    #[cfg(not(feature = "tauri-cef"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        log::info!("Single-instance activated: second launch detected (args={argv:?})");
+        let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
+        emit_scene_file_handoff(app, &argv, "single-instance");
+
+        // Only force foreground when this second launch is handing off a scene file.
+        // Avoiding unconditional focus here reduces Windows "error" chimes when users
+        // launch the app again while it's already running.
+        if has_scene_files {
+            focus_main_window(app);
+        }
+    }));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_macos_fps::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
+            finish_mesh_stage_write,
             stage_mesh_file_path,
             stage_mesh_binary_set,
             stage_mesh_binary_chunk,
             slice_solid_native_to_temp_path,
             cancel_slicing,
             run_island_scan_native,
+            export_mesh_file,
             save_print_file,
             save_print_file_from_path,
             pick_save_path,
             pick_open_files,
             get_launch_scene_files,
+            get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
+            reveal_main_window_command,
             write_bytes_to_path,
             read_print_file_bytes,
             read_print_layer_png,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,
+            local_backup_default_directory,
+            local_backup_pick_directory,
+            local_backup_read_state,
+            local_backup_sync,
+            local_backup_list_history,
+            local_backup_read_history_item,
+            local_backup_delete_history_item,
+            local_backup_restore_history_item,
+            scene_autosave_get_paths,
+            scene_autosave_write_manifest,
+            scene_autosave_read_manifest,
+            scene_autosave_read_voxl_bytes,
+            reveal_in_file_manager,
+            set_log_level_pref,
+            read_log_tail,
+            open_log_file,
+            delete_log_file,
             network::plugin_network_request,
             network::ensure_rtsp_relay
         ])
