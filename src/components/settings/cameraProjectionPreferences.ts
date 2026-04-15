@@ -8,13 +8,13 @@ export const CAMERA_PROJECTION_STORAGE_KEY = 'camera-projection-settings';
 const CAMERA_PROJECTION_EVENT = 'camera-projection-settings-changed';
 
 const DEFAULT_CAMERA_PROJECTION_SETTINGS: CameraProjectionSettings = {
-  //mode: 'orthographic',
-  mode: 'perspective',
+  mode: 'orthographic',
+  //mode: 'perspective',
 };
 
 function normalizeMode(input: unknown): CameraProjectionMode {
-  //return input === 'perspective' ? 'perspective' : 'orthographic';
-  return 'perspective';
+  return input === 'perspective' ? 'perspective' : 'orthographic';
+  //return 'perspective';
 }
 
 export function normalizeCameraProjectionSettings(input: unknown): CameraProjectionSettings {

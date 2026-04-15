@@ -119,6 +119,15 @@ export function CameraFocusHotkeyController({
       if (transition.isOrthographic && camera instanceof THREE.OrthographicCamera) {
         camera.zoom = transition.endZoom;
         camera.updateProjectionMatrix();
+        if (camera.zoom !== 1) {
+          const invZ = 1 / camera.zoom;
+          camera.top    *= invZ;
+          camera.bottom *= invZ;
+          camera.left   *= invZ;
+          camera.right  *= invZ;
+          camera.zoom = 1;
+          camera.updateProjectionMatrix();
+        }
       }
       controls.update();
 
@@ -215,12 +224,10 @@ export function CameraFocusHotkeyController({
         || selectedModelIds.includes(hoveredModelId)
       );
 
-    // Hovering a selected model should still refocus to the hovered point,
-    // but now also enforce model-fit zoom.
+    // Hovering a selected model: re-target the orbit pivot to the hovered
+    // surface point but keep the current zoom / distance unchanged.
     if (hoverPoint && hoveredSelectedModel) {
-      const hoveredModel = hoveredModelId ? (visibleById.get(hoveredModelId) ?? null) : null;
-      const hoveredRadius = hoveredModel ? computeModelWorldBoundingSphere(hoveredModel).radius : undefined;
-      snapCameraToPoint(hoverPoint, hoveredRadius);
+      snapCameraToPoint(hoverPoint);
       return;
     }
 

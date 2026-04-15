@@ -5,18 +5,27 @@ import type { CameraProjectionMode } from '@/components/settings/cameraProjectio
 
 export function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
   const { camera, controls, set, size } = useThree();
-  const ORTHO_NEAR = -20000;
-  const ORTHO_FAR = 20000;
+  // Orthographic cameras require a negative near so that geometry behind the
+  // camera's position (in its local +Z direction) remains visible. When the
+  // ortho camera inherits the intro animation's close-up position the build
+  // volume back/top corners can sit behind a positive near plane and get
+  // permanently clipped regardless of zoom. Using ±50000 gives a symmetric
+  // depth range; at 24-bit z-buffer that is ~0.006 mm resolution, sufficient
+  // for this scene's 100–600 mm working volume.
+  const ORTHO_NEAR = -50000;
+  const ORTHO_FAR = 50000;
   const PERSPECTIVE_NEAR = 0.005;
   const PERSPECTIVE_FAR = 50000;
 
   React.useEffect(() => {
     const aspect = size.width / Math.max(1, size.height);
     if (mode === 'orthographic' && camera instanceof THREE.OrthographicCamera) {
-      camera.left = -aspect;
-      camera.right = aspect;
-      camera.top = 1;
-      camera.bottom = -1;
+      // Preserve vertical world-space extent (camera.top) and zoom; only
+      // update horizontal bounds for the new aspect ratio.  This keeps the
+      // currently-visible world region stable across window resizes.
+      const halfH = camera.top;
+      camera.left = -halfH * aspect;
+      camera.right = halfH * aspect;
       camera.near = ORTHO_NEAR;
       camera.far = ORTHO_FAR;
       camera.updateProjectionMatrix();
@@ -36,7 +45,33 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       : new THREE.Vector3(0, 0, 0);
 
     if (mode === 'orthographic') {
-      const next = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, ORTHO_NEAR, ORTHO_FAR);
+      // Use world-scale frustum bounds (per Three.js docs canonical example:
+      //   new THREE.OrthographicCamera(w/-2, w/2, h/2, h/-2, near, far)
+      // ) so that zoom=1 represents the natural 1:1 view at the current
+      // orbit distance. This avoids the very large/tiny zoom values that the
+      // old normalised-frustum approach produced, which degraded GPU pick
+      // precision via setViewOffset floating-point arithmetic.
+      let worldHalfH: number;
+      if (camera instanceof THREE.PerspectiveCamera) {
+        const distance = Math.max(0.001, camera.position.distanceTo(target));
+        const fov = THREE.MathUtils.degToRad(camera.fov);
+        worldHalfH = Math.max(1, Math.tan(fov * 0.5) * distance);
+      } else {
+        // Already ortho (type mismatch shouldn't happen, but be safe)
+        worldHalfH = Math.max(1, camera.top);
+      }
+      const worldHalfW = worldHalfH * aspect;
+      const next = new THREE.OrthographicCamera(
+        -worldHalfW, worldHalfW, worldHalfH, -worldHalfH,
+        ORTHO_NEAR, ORTHO_FAR,
+      );
+      next.zoom = 1;
+      next.position.copy(camera.position);
+      // Preserve view direction. Without copying quaternion, the new camera has identity
+      // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
+      // app load controls is null, so update() is never called — the camera stays
+      // mis-oriented for every pick frame until the first gl.render().
+      next.quaternion.copy(camera.quaternion);
       next.position.copy(camera.position);
       // Preserve view direction. Without copying quaternion, the new camera has identity
       // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
@@ -44,15 +79,6 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       // mis-oriented for every pick frame until the first gl.render().
       next.quaternion.copy(camera.quaternion);
       next.up.copy(camera.up);
-
-      if (camera instanceof THREE.PerspectiveCamera) {
-        const distance = Math.max(0.001, camera.position.distanceTo(target));
-        const fov = THREE.MathUtils.degToRad(camera.fov);
-        const worldHeight = Math.max(1e-6, 2 * Math.tan(fov * 0.5) * distance);
-        next.zoom = Math.max(0.0001, 2 / worldHeight);
-      } else {
-        next.zoom = (camera as THREE.OrthographicCamera).zoom;
-      }
 
       next.updateProjectionMatrix();
       // Force matrixWorld to be set from position+quaternion immediately so the
@@ -311,6 +337,15 @@ export function CameraModeEntryFramingController({
         if (savedEnableZoomRef.current !== null && typeof orbit.enableZoom === 'boolean') {
           orbit.enableZoom = savedEnableZoomRef.current;
           savedEnableZoomRef.current = null;
+        }
+        if (isOrthographic && camera instanceof THREE.OrthographicCamera && camera.zoom !== 1) {
+          const invZ = 1 / camera.zoom;
+          camera.top    *= invZ;
+          camera.bottom *= invZ;
+          camera.left   *= invZ;
+          camera.right  *= invZ;
+          camera.zoom = 1;
+          camera.updateProjectionMatrix();
         }
         onComplete?.();
       }
