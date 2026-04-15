@@ -111,9 +111,10 @@ function hasVisibleNonModelIntersection(
   for (const int of intersections) {
     // Skip the model mesh itself (can appear multiple times for inner wall)
     if (int.object === modelObject) continue;
-    // Gizmo handles don't need the clip-bounds check — they are always
-    // rendered in their own layer and should be treated as visible.
-    if (int.object.userData?.isGizmoHandle) return true;
+    // Gizmo handles have their own interaction system (GPU pick +
+    // isGizmoHoverCategory); skip them here so a behind-the-model gizmo
+    // doesn't incorrectly trigger cross-section event propagation.
+    if (int.object.userData?.isGizmoHandle) continue;
     // Check the hit is within visible clip bounds
     if (clipUpper != null && int.point.z > clipUpper) continue;
     if (clipLower != null && int.point.z < clipLower) continue;
@@ -842,12 +843,11 @@ if (uDitherAmount > 0.0) {
             }
 
             // Let gizmo handles (especially center XY disc) receive clicks without
-            // model-level event swallowing. Check both GPU pick (may lag 1 frame)
-            // and the raw intersection list for immediate accuracy.
-            const hasGizmoIntersection = e.intersections.some(
-              (h) => h.object.userData?.isGizmoHandle === true,
-            );
-            if (isGizmoHoverCategory || hasGizmoIntersection) {
+            // model-level event swallowing. GPU pick (isGizmoHoverCategory) handles
+            // the visual-overlap case (depthTest=false). Also check if the nearest
+            // raycast hit is a gizmo handle (covers the 1-frame GPU pick lag).
+            const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+            if (isGizmoHoverCategory || firstIsGizmo) {
               return;
             }
             e.stopPropagation();
@@ -902,12 +902,12 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          // Check both GPU pick (may lag 1 frame) and raw intersection list
-          // so gizmo hover works even when gizmos are excluded from picking.
-          const hasGizmoIntersection = e.intersections.some(
-            (h) => h.object.userData?.isGizmoHandle === true,
-          );
-          if (shouldSuppressModelInteraction || isGizmoHoverCategory || hasGizmoIntersection) {
+          // GPU pick (isGizmoHoverCategory) handles visual gizmo overlap.
+          // Also check if the nearest raycast hit is a gizmo handle (1-frame
+          // GPU pick lag guard). Only the nearest hit matters — a gizmo behind
+          // the model in the ray should not suppress model hover.
+          const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+          if (shouldSuppressModelInteraction || isGizmoHoverCategory || firstIsGizmo) {
             if (!hasExternalHoverSource) schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
@@ -1067,13 +1067,11 @@ if (uDitherAmount > 0.0) {
 
             // If the pointer is over a gizmo handle, do not consume the event at
             // the model layer; let gizmo drag interactions win.
-            // Check both the GPU pick result (isGizmoHoverCategory) AND the raw
-            // intersection list (isGizmoHandle userData) to guard against the
-            // 1-frame lag where GPU pick hasn't updated yet at click time.
-            const hasGizmoIntersection = e.intersections.some(
-              (h) => h.object.userData?.isGizmoHandle === true,
-            );
-            if (isGizmoHoverCategory || hasGizmoIntersection) {
+            // GPU pick (isGizmoHoverCategory) handles the visual-overlap case.
+            // Also check if the nearest raycast hit is a gizmo handle to guard
+            // against the 1-frame GPU pick lag at click time.
+            const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+            if (isGizmoHoverCategory || firstIsGizmo) {
               return;
             }
 

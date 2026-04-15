@@ -457,9 +457,12 @@ export function GizmoRotation({
     <group
       rotation={rotation}
     >
-      {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
+      {/* Pickable mesh for GPU picking - invisible but rendered in pick pass.
+          visible={false} when isHidden disables raycasting so this handle does
+          not block pointer events during another gizmo's active drag. */}
       <mesh
         ref={pickMeshRef}
+        visible={!isHidden}
         position={initialHandlePos}
         onPointerDown={handlePointerDown}
         onPointerEnter={handlePointerEnterLocal}

@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
+import { AlertTriangle } from 'lucide-react';
 import { OrbitControls } from '@react-three/drei';
 import {
   CrossSectionStencilCap,
@@ -6236,7 +6237,7 @@ export function SceneCanvas({
 
       {activeBuildVolumeSettings?.enabled && activeBuildVolumeSettings.showViolationWarning && outOfBoundsModels.length > 0 && (
         <div
-          className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 animate-pulse rounded-full border px-5 py-2 text-sm font-semibold shadow-lg"
+          className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 animate-pulse rounded-full border px-5 py-2 text-sm font-semibold shadow-lg flex items-center gap-2"
           style={{
             pointerEvents: 'none',
             borderColor: 'color-mix(in srgb, #ff5b6f, var(--border-subtle) 42%)',
@@ -6245,8 +6246,8 @@ export function SceneCanvas({
           }}
           title={outOfBoundsModels.map((m) => m.name).join(', ')}
         >
-          <span style={{ marginRight: 6 }}>ΓÜá</span>
-          {outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span>{outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume</span>
         </div>
       )}
     </div>

@@ -54,13 +54,16 @@ export function GizmoMove({
 }: GizmoMoveProps) {
   const MIN_AXIS_DELTA = 1e-10;
   const [isDragging, setIsDragging] = useState(false);
-  const dragPlaneRef = useRef<THREE.Plane | null>(null);
-  const lastPointRef = useRef<THREE.Vector3 | null>(null);
+  const lastAxisParamRef = useRef<number | null>(null);
+  // Axis origin captured at drag-start; kept stable for the whole drag so that
+  // frame-to-frame t-values are in the same coordinate frame even as the model
+  // (and therefore gizmoPosition) moves in response to onDrag calls.
+  const dragAxisOriginRef = useRef<THREE.Vector3>(new THREE.Vector3());
   const raycasterRef = useRef(new THREE.Raycaster());
   const ndcRef = useRef(new THREE.Vector2());
-  const intersectionRef = useRef(new THREE.Vector3());
-  const worldDeltaRef = useRef(new THREE.Vector3());
   const axisDeltaRef = useRef(new THREE.Vector3());
+  const scratchAxisDirRef = useRef(new THREE.Vector3());
+  const scratchAxisToRayRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
 
   const pickMeshRef = useRef<THREE.Group>(null);
@@ -105,9 +108,7 @@ export function GizmoMove({
     : axis === 'z' ? (shouldFlipZ ? [Math.PI / 2, 0, 0] : [-Math.PI / 2, 0, 0])
     : [0, 0, 0];
 
-  const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
-    if (!dragPlaneRef.current) return null;
-
+  const getAxisParamFromMouse = useCallback((clientX: number, clientY: number): number | null => {
     const rect = gl.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
 
@@ -120,34 +121,52 @@ export function GizmoMove({
     const raycaster = raycasterRef.current;
     raycaster.setFromCamera(ndc, camera);
 
-    const intersection = intersectionRef.current;
-    const hitPoint = raycaster.ray.intersectPlane(dragPlaneRef.current, intersection);
-    if (!hitPoint) return null;
-    return intersection;
-  }, [camera, gl]);
+    const axisDir = scratchAxisDirRef.current;
+    if (axis === 'x') axisDir.set(1, 0, 0);
+    else if (axis === 'y') axisDir.set(0, 1, 0);
+    else axisDir.set(0, 0, 1);
+
+    // Closest points between the infinite drag axis line and pointer ray.
+    // Uses the FIXED drag origin (captured at pointer-down) as the axis reference
+    // point, so t-values are comparable across frames even as gizmoPosition
+    // updates in response to onDrag calls.
+    const ray = raycaster.ray;
+    const origin = dragAxisOriginRef.current;
+    const axisToRay = scratchAxisToRayRef.current.copy(origin).sub(ray.origin);
+    const axisDotRay = axisDir.dot(ray.direction);
+    const axisDotAxisToRay = axisDir.dot(axisToRay);
+    const rayDotAxisToRay = ray.direction.dot(axisToRay);
+    const denom = 1 - (axisDotRay * axisDotRay);
+
+    // Degenerate case: pointer ray nearly parallel to the axis.
+    if (Math.abs(denom) < 1e-6) {
+      return axisDotAxisToRay;
+    }
+
+    return ((axisDotRay * rayDotAxisToRay) - axisDotAxisToRay) / denom;
+  // gizmoPosition intentionally excluded — we use dragAxisOriginRef (stable).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [axis, camera, gl]);
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (e.button === 2) return;
+    if (isHidden) return;
 
     e.stopPropagation();
     e.stopped = true;
 
-    const cameraDir = new THREE.Vector3();
-    camera.getWorldDirection(cameraDir);
-    dragPlaneRef.current = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, gizmoPosition);
+    // Snapshot the gizmo position as the fixed axis origin for this drag.
+    // All subsequent t-values will be relative to this point.
+    dragAxisOriginRef.current.copy(gizmoPosition);
 
-    const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
-    if (!initialPoint) return;
+    const initialAxisParam = getAxisParamFromMouse(e.clientX, e.clientY);
+    if (initialAxisParam == null) return;
 
     const allowed = onDragStart();
     if (allowed === false) return;
 
     setIsDragging(true);
-    if (!lastPointRef.current) {
-      lastPointRef.current = new THREE.Vector3(initialPoint.x, initialPoint.y, initialPoint.z);
-    } else {
-      lastPointRef.current.copy(initialPoint);
-    }
+    lastAxisParamRef.current = initialAxisParam;
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
@@ -170,24 +189,23 @@ export function GizmoMove({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      if (!lastPointRef.current) return;
+      const lastAxisParam = lastAxisParamRef.current;
+      if (lastAxisParam == null) return;
 
-      const nextPoint = getWorldPointFromMouse(e.clientX, e.clientY);
-      if (!nextPoint || !lastPointRef.current) return;
+      const nextAxisParam = getAxisParamFromMouse(e.clientX, e.clientY);
+      if (nextAxisParam == null) return;
 
-      const worldDelta = worldDeltaRef.current.copy(nextPoint).sub(lastPointRef.current);
-      const axisMagnitude = worldDelta.dot(axisDirection);
+      const axisMagnitude = nextAxisParam - lastAxisParam;
       if (Math.abs(axisMagnitude) < MIN_AXIS_DELTA) return;
 
       const delta = axisDeltaRef.current.copy(axisDirection).multiplyScalar(axisMagnitude);
       onDrag(delta);
-      lastPointRef.current.copy(nextPoint);
+      lastAxisParamRef.current = nextAxisParam;
     };
 
     const handleGlobalPointerUp = () => {
       setIsDragging(false);
-      lastPointRef.current = null;
-      dragPlaneRef.current = null;
+      lastAxisParamRef.current = null;
       onDragEnd();
     };
 
@@ -198,7 +216,7 @@ export function GizmoMove({
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [axisDirection, getWorldPointFromMouse, isDragging, onDrag, onDragEnd]);
+  }, [axisDirection, getAxisParamFromMouse, isDragging, onDrag, onDragEnd]);
 
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
   const isHighlighted = !!isActive;
@@ -245,30 +263,37 @@ export function GizmoMove({
 
   const arrowTipPosition: [number, number, number] = [0, shaftLength, 0];
   const oppositeArrowTipPosition: [number, number, number] = [0, -shaftLength, 0];
+  const pickTipRadius = Math.max(0.14, headRadius * 2.35);
 
   return (
     <group rotation={rotation}>
+      {/* Invisible sphere pick targets. visible={!isHidden} is on the MESH,
+          not the parent group, so Three.js raycasting is actually suppressed
+          on hidden handles (R3F registers leaf meshes in internal.interaction,
+          and Three.js checks each object's OWN .visible, not its parent). */}
       <group ref={pickMeshRef}>
         <mesh
+          visible={!isHidden}
           position={arrowTipPosition}
           onPointerDown={handlePointerDown}
           onPointerEnter={handlePointerEnterLocal}
           onPointerLeave={handlePointerLeaveLocal}
           scale={handleScale}
         >
-          <sphereGeometry args={[Math.max(0.14, headRadius * 2.35), 12, 12]} />
+          <sphereGeometry args={[pickTipRadius, 12, 12]} />
           <meshBasicMaterial visible={false} depthTest={false} />
         </mesh>
 
         {moveHandleBidirectional && (
           <mesh
+            visible={!isHidden}
             position={oppositeArrowTipPosition}
             onPointerDown={handlePointerDown}
             onPointerEnter={handlePointerEnterLocal}
             onPointerLeave={handlePointerLeaveLocal}
             scale={handleScale}
           >
-            <sphereGeometry args={[Math.max(0.14, headRadius * 2.35), 12, 12]} />
+            <sphereGeometry args={[pickTipRadius, 12, 12]} />
             <meshBasicMaterial visible={false} depthTest={false} />
           </mesh>
         )}

@@ -10,7 +10,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
-import { RENDER_TARGET, TIMING } from './constants';
+import { PICK_ID, RENDER_TARGET, TIMING } from './constants';
 import { majorityVote, encodePickId } from './pickingUtils';
 import { reportPickingRenderSample } from './pickingDiagnostics';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
@@ -82,6 +82,7 @@ export function PickingRenderer({
   const previousMouseNdcRef = useRef<{ x: number; y: number } | null>(null);
   const previousCameraWorldMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
   const previousProjectionMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
+  const previousCameraKindRef = useRef<'orthographic' | 'perspective' | null>(null);
   const smoothedFrameMsRef = useRef<number>(1000 / 60);
 
   const disposePickObject = useCallback((pickId: number) => {
@@ -159,6 +160,11 @@ export function PickingRenderer({
       // this produces the wrong pick position. We manually copy source.matrixWorld in
       // syncPickObjectTransforms and must prevent Three.js from overwriting it.
       child.updateMatrixWorld = noop;
+      // Disable frustum culling on all pick clones. When setViewOffset narrows the
+      // pick camera to a 3x3 pixel patch, the bounding sphere of a gizmo handle near
+      // the screen edge can fail the frustum test even though the handle IS inside
+      // those pixels. This is especially visible for gizmos outside the build volume.
+      child.frustumCulled = false;
       // Gizmo handles must always render after model geometry in the pick scene
       // so their depthTest=false color wins regardless of depth values.
       // This is set here (not relied on from the source) because React child
@@ -338,10 +344,18 @@ export function PickingRenderer({
     // Restore render target
     gl.setRenderTarget(currentRenderTarget);
     
-    // Perform majority vote
+    const isPriorityPickId = (pickId: number) => {
+      if (pickId === PICK_ID.NONE) return false;
+      const registration = registrations.get(pickId);
+      return registration?.category === 'gizmo';
+    };
+
+    // Perform majority vote (with gizmo-priority pass).
+    // This is especially important in orthographic mode where parallel rays make
+    // model surfaces frequently dominate the 3x3 patch unless gizmos are promoted.
     const winnerId = config.patchSize === 1
       ? (pixelBufferRef.current[0] << 16) | (pixelBufferRef.current[1] << 8) | pixelBufferRef.current[2]
-      : majorityVote(pixelBufferRef.current, previousWinnerRef.current);
+      : majorityVote(pixelBufferRef.current, previousWinnerRef.current, isPriorityPickId);
     
     previousWinnerRef.current = winnerId;
 
@@ -379,10 +393,14 @@ export function PickingRenderer({
 
     const cameraWorldChanged = !previousCameraWorldMatrixRef.current.equals(camera.matrixWorld);
     const projectionChanged = !previousProjectionMatrixRef.current.equals(camera.projectionMatrix);
-    const sceneMoved = cameraWorldChanged || projectionChanged;
+    const cameraKind: 'orthographic' | 'perspective' =
+      (camera as THREE.OrthographicCamera).isOrthographicCamera ? 'orthographic' : 'perspective';
+    const cameraKindChanged = previousCameraKindRef.current !== cameraKind;
+    const sceneMoved = cameraWorldChanged || projectionChanged || cameraKindChanged;
     if (sceneMoved) {
       previousCameraWorldMatrixRef.current.copy(camera.matrixWorld);
       previousProjectionMatrixRef.current.copy(camera.projectionMatrix);
+      previousCameraKindRef.current = cameraKind;
     }
 
     const idleMs = now - (lastPointerMoveTimeRef.current || now);

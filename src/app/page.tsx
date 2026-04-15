@@ -16534,7 +16534,15 @@ export default function Home() {
             }
             animated
             visible={isSceneImportToastVisible}
+            className="flex items-center gap-2"
           >
+            {scene.sceneImportReport.tone === 'error' ? (
+              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : scene.sceneImportReport.tone === 'warning' ? (
+              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
             {scene.sceneImportReport.text}
           </Toast>
         </ToastViewport>
@@ -16542,7 +16550,8 @@ export default function Home() {
 
       {exportSuccessToast && (
         <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast tone="success" animated visible={isExportSuccessToastVisible}>
+          <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" />
             Saved to: {exportSuccessToast.path}
           </Toast>
         </ToastViewport>
