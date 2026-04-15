@@ -2469,13 +2469,25 @@ async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), Stri
 /// Used at startup to avoid triggering the Windows focus-stealing prevention
 /// mechanism, which plays an error sound when SetForegroundWindow is called
 /// from a process that does not currently own the foreground.
+/// Also closes the splash screen window if it is still open.
 #[tauri::command]
 async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
+    // Show the main window first so there is no gap between splash close and
+    // main window appearance (which would expose the desktop for a frame).
+    // Maximize before show so the window is already at full size when it
+    // becomes visible — avoids a two-step resize flash on Windows.
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
+            let _ = window.maximize();
+            // Re-enable taskbar entry just before we make the window visible.
+            #[cfg(target_os = "windows")]
+            let _ = window.set_skip_taskbar(false);
             let _ = window.show();
         }
+    }
+    if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.close();
     }
     Ok(())
 }
@@ -2846,34 +2858,61 @@ fn main() {
     #[cfg(not(feature = "tauri-cef"))]
     let builder = builder.plugin(log_plugin);
     let builder = builder.setup(|app| {
-        use tauri::WebviewWindowBuilder;
+        let app_handle = app.handle().clone();
 
-        let window_config = app
-            .config()
-            .app
-            .windows
-            .iter()
-            .find(|window| window.label == "main")
-            .expect("Missing 'main' window config in tauri.conf.json");
+        // Defer main window creation to an async task so the splashscreen's
+        // WebView2 instance fully initialises before the main window's does.
+        // On Windows, simultaneous WebView2 init produces a brief window flash
+        // even when the main window is created with visible=false.
+        tauri::async_runtime::spawn(async move {
+            use tauri::WebviewWindowBuilder;
 
-        let builder = WebviewWindowBuilder::from_config(app, window_config)?;
+            // Give the splash WebView2 a head-start on Windows only.
+            #[cfg(target_os = "windows")]
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
-        // Keep custom titlebar behavior on non-macOS.
-        #[cfg(not(target_os = "macos"))]
-        let builder = builder.decorations(false);
+            let config = app_handle.config();
+            let Some(window_config) = config.app.windows.iter().find(|w| w.label == "main") else {
+                log::error!("Missing 'main' window config in tauri.conf.json");
+                return;
+            };
 
-        let window = builder.build()?;
+            let builder = match WebviewWindowBuilder::from_config(&app_handle, window_config) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::error!("Failed to create main window builder: {e}");
+                    return;
+                }
+            };
 
-        // On macOS, reveal immediately so a frontend startup hiccup can't leave
-        // the app invisible when the window was created as hidden.
-        #[cfg(target_os = "macos")]
-        {
-            if let Err(error) = window.show() {
-                log::warn!("Failed to show main window during setup: {error}");
+            // Keep custom titlebar behavior on non-macOS.
+            #[cfg(not(target_os = "macos"))]
+            let builder = builder.decorations(false);
+
+            // Belt-and-suspenders: enforce hidden + no taskbar entry while
+            // the window is invisible, regardless of config values. On Windows
+            // a taskbar button flash is the tell-tale sign the window was
+            // briefly visible during WebView2 initialisation.
+            let builder = builder.visible(false);
+            #[cfg(target_os = "windows")]
+            let builder = builder.skip_taskbar(true);
+
+            match builder.build() {
+                Ok(_window) => {
+                    // On macOS, reveal immediately so a frontend startup hiccup
+                    // can't leave the app invisible when created as hidden.
+                    #[cfg(target_os = "macos")]
+                    {
+                        if let Err(error) = _window.show() {
+                            log::warn!("Failed to show main window during setup: {error}");
+                        }
+                    }
+                    log::info!("Main window created successfully");
+                }
+                Err(e) => log::error!("Failed to build main window: {e}"),
             }
-        }
+        });
 
-        log::info!("Main window created successfully");
         Ok(())
     });
 
