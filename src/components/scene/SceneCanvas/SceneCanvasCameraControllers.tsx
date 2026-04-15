@@ -338,15 +338,6 @@ export function CameraModeEntryFramingController({
           orbit.enableZoom = savedEnableZoomRef.current;
           savedEnableZoomRef.current = null;
         }
-        if (isOrthographic && camera instanceof THREE.OrthographicCamera && camera.zoom !== 1) {
-          const invZ = 1 / camera.zoom;
-          camera.top    *= invZ;
-          camera.bottom *= invZ;
-          camera.left   *= invZ;
-          camera.right  *= invZ;
-          camera.zoom = 1;
-          camera.updateProjectionMatrix();
-        }
         onComplete?.();
       }
     };
