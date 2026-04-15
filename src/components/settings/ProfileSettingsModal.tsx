@@ -1400,8 +1400,6 @@ export function ProfileSettingsModal({
     }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
-    setSelectedManufacturer(null);
-    setSelectedResinFamily(null);
     setIsMaterialEditorOpen(false);
     setIsEditingPrinter(false);
     setIsNetworkSettingsOpen(shouldOpenNetworkSettings);
@@ -1409,8 +1407,22 @@ export function ProfileSettingsModal({
     setPresetSearch('');
     if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
     const materials = getMaterialProfilesForPrinter(profileState.activePrinterProfileId, profileState);
-    setSelectedMaterialId(materials[0]?.id ?? null);
-  }, [initialTab, isOpen, openNetworkSettingsToken, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState, presetManufacturers]);
+    const activeMaterial = materials.find((material) => material.id === profileState.activeMaterialProfileId)
+      ?? materials[0]
+      ?? null;
+    setSelectedMaterialId(activeMaterial?.id ?? null);
+    setSelectedManufacturer(activeMaterial?.brand ?? null);
+    setSelectedResinFamily(activeMaterial?.resinFamily ?? null);
+  }, [
+    initialTab,
+    isOpen,
+    openNetworkSettingsToken,
+    openPrinterLibraryToken,
+    profileState.activeMaterialProfileId,
+    profileState.activePrinterProfileId,
+    profileState,
+    presetManufacturers,
+  ]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -1455,10 +1467,20 @@ export function ProfileSettingsModal({
     }
 
     if (!selectedMaterialId || !filteredMaterialProfiles.some((material) => material.id === selectedMaterialId)) {
-      setSelectedMaterialId(filteredMaterialProfiles[0]?.id ?? null);
+      const nextSelectedMaterialId = filteredMaterialProfiles[0]?.id ?? null;
+      setSelectedMaterialId(nextSelectedMaterialId);
+      if (nextSelectedMaterialId) {
+        setActiveMaterialProfile(nextSelectedMaterialId);
+      }
+      return;
+    }
+
+    if (profileState.activeMaterialProfileId !== selectedMaterialId) {
+      setActiveMaterialProfile(selectedMaterialId);
     }
   }, [
     isOpen,
+    profileState.activeMaterialProfileId,
     selectedPrinter,
     availableManufacturers,
     selectedManufacturer,
