@@ -371,7 +371,7 @@ function resolveMaterialProfileWithLocalSettings(
       nextProfile = { ...materialProfile };
     }
 
-    (nextProfile as MaterialProfile & Record<string, LocalMaterialSettingsValue>)[targetKey] = coercedValue;
+    (nextProfile as unknown as Record<string, LocalMaterialSettingsValue>)[targetKey] = coercedValue;
   });
 
   return nextProfile ?? materialProfile;
