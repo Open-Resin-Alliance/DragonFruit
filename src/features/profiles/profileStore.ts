@@ -1,6 +1,7 @@
 import printerPresetsData from '../../../profiles/printers';
 import materialTemplatesData from '../../../profiles/materials';
 import {
+  getProfileLocalMaterialSettingsAdapter,
   getInstalledProfilePlugins,
   getRuntimeMaterialTemplates,
   getRuntimePrinterPresets,
@@ -201,6 +202,17 @@ function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
 export type LocalMaterialSettingsValue = string | number | boolean;
 export type LocalMaterialSettingsMap = Record<string, LocalMaterialSettingsValue>;
 
+const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
+  'layerHeightMm',
+  'normalExposureSec',
+  'bottomExposureSec',
+  'bottomLayerCount',
+  'liftDistanceMm',
+  'liftSpeedMmMin',
+  'retractSpeedMmMin',
+  'minimumAaAlphaPercent',
+]);
+
 export type MaterialProfile = {
   id: string;
   printerProfileId: string;
@@ -264,6 +276,105 @@ function sanitizeLocalSettingsByOutput(input: unknown): Record<string, LocalMate
   });
 
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function resolveLocalMaterialOverrideTargetKey(
+  field: { key: string; metadataPath?: string },
+): keyof MaterialProfile | null {
+  const candidates: string[] = [];
+  const metadataPath = field.metadataPath?.trim() ?? '';
+
+  if (metadataPath) {
+    const segments = metadataPath
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
+
+    if (segments.length >= 2) {
+      const root = segments[0].toLowerCase();
+      if (root === 'material' || root === 'dragonfruit') {
+        candidates.push(segments[segments.length - 1]!);
+      }
+    }
+  }
+
+  candidates.push(field.key);
+
+  for (const candidate of candidates) {
+    if (MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS.has(candidate as keyof MaterialProfile)) {
+      return candidate as keyof MaterialProfile;
+    }
+  }
+
+  return null;
+}
+
+function coerceLocalMaterialOverrideValue(
+  rawValue: LocalMaterialSettingsValue,
+  kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
+): LocalMaterialSettingsValue | null {
+  if (kind === 'boolean') {
+    if (typeof rawValue === 'boolean') return rawValue;
+    if (typeof rawValue === 'string') {
+      const normalized = rawValue.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    return Boolean(rawValue);
+  }
+
+  if (kind === 'number' || kind === 'integer') {
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return null;
+    return kind === 'integer' ? Math.round(parsed) : parsed;
+  }
+
+  return String(rawValue);
+}
+
+function resolveMaterialProfileWithLocalSettings(
+  materialProfile: MaterialProfile,
+  printerProfile: PrinterProfile | null | undefined,
+): MaterialProfile {
+  if (!printerProfile) return materialProfile;
+
+  const normalizedOutput = normalizeOutputFormat(printerProfile.display.outputFormat);
+  const outputWithoutDot = normalizedOutput.replace(/^\./, '');
+  const adapter = getProfileLocalMaterialSettingsAdapter(
+    normalizedOutput,
+    printerProfile.display.settingsMode,
+  );
+
+  if (!adapter?.replacesDefaultMaterialSettings || adapter.fields.length === 0) {
+    return materialProfile;
+  }
+
+  const localForOutput = materialProfile.localSettingsByOutput?.[normalizedOutput]
+    ?? materialProfile.localSettingsByOutput?.[outputWithoutDot];
+
+  if (!localForOutput) return materialProfile;
+
+  let nextProfile: MaterialProfile | null = null;
+
+  adapter.fields.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(localForOutput, field.key)) return;
+
+    const targetKey = resolveLocalMaterialOverrideTargetKey(field);
+    if (!targetKey) return;
+
+    const coercedValue = coerceLocalMaterialOverrideValue(localForOutput[field.key]!, field.kind);
+    if (coercedValue == null) return;
+
+    if (materialProfile[targetKey] === coercedValue) return;
+
+    if (!nextProfile) {
+      nextProfile = { ...materialProfile };
+    }
+
+    (nextProfile as MaterialProfile & Record<string, LocalMaterialSettingsValue>)[targetKey] = coercedValue;
+  });
+
+  return nextProfile ?? materialProfile;
 }
 
 export type MaterialTemplate = Omit<MaterialProfile, 'id' | 'printerProfileId'> & {
@@ -2020,7 +2131,11 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
   const snapshot = stateOverride ?? state;
   const activePrinterId = snapshot.activePrinterProfileId;
 
-  return (
+  const activePrinterProfile = snapshot.printerProfiles.find((entry) => entry.id === activePrinterId)
+    ?? snapshot.printerProfiles[0]
+    ?? null;
+
+  const materialProfile = (
     snapshot.materialProfiles.find(
       (profile) => profile.id === snapshot.activeMaterialProfileId && profile.printerProfileId === activePrinterId,
     )
@@ -2028,11 +2143,17 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
     ?? snapshot.materialProfiles[0]
     ?? null
   );
+
+  if (!materialProfile) return null;
+  return resolveMaterialProfileWithLocalSettings(materialProfile, activePrinterProfile);
 }
 
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
   const snapshot = stateOverride ?? state;
-  return snapshot.materialProfiles.filter((profile) => profile.printerProfileId === printerProfileId);
+  const printerProfile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId) ?? null;
+  return snapshot.materialProfiles
+    .filter((profile) => profile.printerProfileId === printerProfileId)
+    .map((profile) => resolveMaterialProfileWithLocalSettings(profile, printerProfile));
 }
 
 export function getOfficialPrinterProfileUpdates(stateOverride?: ProfileStoreState): OfficialPrinterProfileUpdateInfo[] {
