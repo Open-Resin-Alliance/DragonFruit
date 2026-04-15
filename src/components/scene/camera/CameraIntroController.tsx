@@ -220,25 +220,6 @@ export function CameraIntroController({
 
         camera.position.copy(endPos);
         orbitControls.target.copy(endTarget);
-
-        // Normalize ortho frustum so zoom=1 with scaled bounds.  The visual
-        // result is identical (frustum/zoom ratio is unchanged), but
-        // OrbitControls' zoomToCursor path moves camera.position by
-        // (mouseBefore − mouseAfter) ∝ frustumHeight × Δ(1/zoom).  Leaving a
-        // large base frustum with a proportionally large zoom means every
-        // scroll step displaces the camera by hundreds of mm, which can push
-        // camera.z below the drag plane and cause ray.intersectPlane to return
-        // null (t < 0), silently stalling GizmoCenter drags.
-        if (isOrthographic && camera instanceof THREE.OrthographicCamera && camera.zoom !== 1) {
-          const invZ = 1 / camera.zoom;
-          camera.top    *= invZ;
-          camera.bottom *= invZ;
-          camera.left   *= invZ;
-          camera.right  *= invZ;
-          camera.zoom = 1;
-          camera.updateProjectionMatrix();
-        }
-
         orbitControls.update();
 
         onComplete?.(runId);
