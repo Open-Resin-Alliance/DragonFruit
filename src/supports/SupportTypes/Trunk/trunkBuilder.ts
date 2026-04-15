@@ -50,8 +50,8 @@ export interface TrunkBuildInput {
     tipNormal: Vec3;
     modelId: string;
     mesh?: THREE.Mesh;
-    /** When true, uses a reduced A* expansion budget and skips V1 fallback
-     *  for faster hover preview. Click placement should always use false/undefined. */
+    /** When true, uses a fast first-pass preview search and then parity-checks
+     *  collision outcomes against click-time tolerances before surfacing errors. */
     isPreview?: boolean;
     overrides?: {
         rootsDiameterMm?: number;
@@ -169,22 +169,18 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     let placement: TrunkPlacementResult;
     if (mesh) {
         // V2 grid A* pathfinder (SDF-backed, no raycast bundles).
-        // For hover preview, use a reduced A* budget (600 vs 2000) and skip the
-        // expensive V1 raycast fallback entirely — hover preview doesn't need
-        // perfect accuracy. `isPreview` also enables the preview-exhausted spatial
-        // cache so budget-exhausted positions near steep/internal surfaces are
-        // fast-failed on subsequent hover frames instead of re-running 600 expansions.
-        // Click placement always uses full budget + V1 fallback.
+        // Preview path: run a fast first pass, but if it reports collision,
+        // re-check once with click-time tolerances to avoid false preview rejects.
         const v2Context = isPreview ? { maxExpansions: 600, isPreview: true } : undefined;
-        const v2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+        const fastV2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+
+        const v2Result = (isPreview && fastV2Result.error === 'COLLISION_WITH_MODEL' && !fastV2Result.stagnated)
+            ? calculateSmartPlacementV2({ ...placementInput, mesh, modelId })
+            : fastV2Result;
+
         if (v2Result.error === 'COLLISION_WITH_MODEL') {
-            if (isPreview) {
-                // For hover preview: skip V1 entirely to keep the first-frame cost low.
-                // A stick preview will show instead (corrects to trunk on click).
-                placement = v2Result;
-            } else if (v2Result.stagnated || v2Result.exhaustedBudget) {
-                // V2 stagnated (closed cavity) or exhausted full 2000-expansion budget
-                // — V1's raycast-bundle search is equally futile. Skip it.
+            if (v2Result.stagnated) {
+                // True stagnation (closed cavity): V1 fallback is equally futile.
                 placement = v2Result;
             } else {
                 // Fallback to V1 raycast-based search, then SDF post-validate.
@@ -192,7 +188,9 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
                 // of V1's result against the SDF before accepting it.
                 const v1Result = calculateSmartPlacement({ ...placementInput, mesh, modelId });
                 if (v1Result.error) {
-                    placement = v1Result; // V1 also failed — pass error through
+                    // V1 also failed — preserve V2's exhaustedBudget so the call-site
+                    // knows both solvers exhausted their search (not just a quick reject).
+                    placement = { ...v1Result, exhaustedBudget: v1Result.exhaustedBudget ?? v2Result.exhaustedBudget };
                 } else {
                     const sdf = getOrCreateSDFCache(mesh);
                     sdf.refreshMatrix();

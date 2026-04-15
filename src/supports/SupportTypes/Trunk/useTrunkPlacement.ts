@@ -1,8 +1,8 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addAnchor, addBranch, addKnot, addRoot, addStick, addTrunk, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
+import { addAnchor, addBranch, addKnot, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK } from '../../history/actionTypes';
+import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
@@ -14,6 +14,7 @@ import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { buildStick } from '../Stick/stickBuilder';
+import { buildTwig } from '../Twig/twigBuilder';
 
 // ---------------------------------------------------------------------------
 // Cavity stick helpers
@@ -21,6 +22,9 @@ import { buildStick } from '../Stick/stickBuilder';
 
 const _cavityRaycaster = new THREE.Raycaster();
 const _downDir = new THREE.Vector3(0, 0, -1);
+const CAVITY_PREVIEW_CACHE_POS_EPSILON_MM = 1.0;
+const CAVITY_PREVIEW_CACHE_NORMAL_DOT_MIN = 0.99;
+const CAVITY_PREVIEW_CACHE_MISS_MAX_AGE_MS = 220;
 
 /**
  * When A* stagnates (tip is inside a closed cavity), attempt to find the
@@ -32,7 +36,10 @@ function buildCavityStick(
     tipNormal: { x: number; y: number; z: number },
     modelId: string,
     mesh: THREE.Mesh,
-): { supportData: SupportData; stick: ReturnType<typeof buildStick>['stick'] } | null {
+): (
+    | { kind: 'stick'; supportData: SupportData; stick: ReturnType<typeof buildStick>['stick'] }
+    | { kind: 'twig'; supportData: SupportData; twig: ReturnType<typeof buildTwig>['twig'] }
+) | null {
     _cavityRaycaster.set(
         new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z),
         _downDir,
@@ -57,22 +64,48 @@ function buildCavityStick(
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
 
     type Candidate = { hit: THREE.Intersection; normal: THREE.Vector3 };
-    const belowCandidates: Candidate[] = [];
+    const MAX_HIT_SCAN = 64;
+    let scanned = 0;
+    let firstBelowCandidate: Candidate | null = null;
+    let floorCandidate: Candidate | null = null;
 
     for (const h of hits) {
+        scanned += 1;
+        if (scanned > MAX_HIT_SCAN) break;
         if (h.point.z >= tipPos.z - BELOW_EPS_MM) continue;
         if (!h.face) continue;
         const n = h.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
-        belowCandidates.push({ hit: h, normal: n });
+        const candidate = { hit: h, normal: n };
+        if (!firstBelowCandidate) firstBelowCandidate = candidate;
+        if (n.z >= FLOOR_Z_MIN) {
+            floorCandidate = candidate;
+            break;
+        }
     }
 
-    if (belowCandidates.length === 0) return null;
-
-    const floorCandidate = belowCandidates.find((c) => c.normal.z >= FLOOR_Z_MIN);
-    const chosen = floorCandidate ?? belowCandidates[0];
+    const chosen = floorCandidate ?? firstBelowCandidate;
+    if (!chosen) return null;
 
     const bPos = { x: chosen.hit.point.x, y: chosen.hit.point.y, z: chosen.hit.point.z };
     const bNormal = { x: chosen.normal.x, y: chosen.normal.y, z: chosen.normal.z };
+
+    const settings = getSettings();
+    const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
+    const dx = tipPos.x - bPos.x;
+    const dy = tipPos.y - bPos.y;
+    const dz = tipPos.z - bPos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
+
+    if (kind === 'twig') {
+        const { twig } = buildTwig({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
+        const supportData: SupportData = {
+            id: twig.id,
+            segments: twig.segments,
+            contactDisks: [twig.contactDiskA, twig.contactDiskB],
+        };
+        return { kind, twig, supportData };
+    }
 
     const { stick } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
 
@@ -82,8 +115,10 @@ function buildCavityStick(
         contactCones: [stick.contactConeA, stick.contactConeB],
     };
 
-    return { stick, supportData };
+    return { kind: 'stick', stick, supportData };
 }
+
+type CavityStickBuildResult = NonNullable<ReturnType<typeof buildCavityStick>>;
 
 export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
@@ -96,9 +131,16 @@ export function useTrunkPlacementV2() {
     const { isPlacementHardDisabled } = useInteractionStatus();
     const hoverFrameRef = useRef<number | null>(null);
     const latestHoverRef = useRef<THREE.Intersection | null>(null);
-    const normalMatrixRef = useRef(new THREE.Matrix3());
     const hoverNormalRef = useRef(new THREE.Vector3());
-    const hoverFaceNormalRef = useRef(new THREE.Vector3());
+    const cavityPreviewCacheNormalRef = useRef(new THREE.Vector3());
+    const cavityPreviewCacheRef = useRef<{
+        objectUuid: string;
+        modelId: string;
+        point: THREE.Vector3;
+        normal: THREE.Vector3;
+        atMs: number;
+        result: CavityStickBuildResult | null;
+    } | null>(null);
     const lastProcessedHoverRef = useRef<{
         objectUuid: string;
         modelId: string;
@@ -111,12 +153,57 @@ export function useTrunkPlacementV2() {
         setPreviewData((prev) => (prev === null ? prev : null));
         setPreviewError((prev) => (prev === null ? prev : null));
         setPreviewWarning((prev) => (prev === null ? prev : null));
+        cavityPreviewCacheRef.current = null;
+    }, []);
+
+    const resolveCavityStickPreview = useCallback((
+        hit: THREE.Intersection,
+        tipPos: { x: number; y: number; z: number },
+        tipNormal: { x: number; y: number; z: number },
+        modelId: string,
+        mesh: THREE.Mesh,
+    ): CavityStickBuildResult | null => {
+        const now = performance.now();
+        const cached = cavityPreviewCacheRef.current;
+        if (cached && cached.objectUuid === hit.object.uuid && cached.modelId === modelId && cached.result === null) {
+            if ((now - cached.atMs) <= CAVITY_PREVIEW_CACHE_MISS_MAX_AGE_MS) {
+                const posEpsSq = CAVITY_PREVIEW_CACHE_POS_EPSILON_MM * CAVITY_PREVIEW_CACHE_POS_EPSILON_MM;
+                if (cached.point.distanceToSquared(hit.point) <= posEpsSq) {
+                    cavityPreviewCacheNormalRef.current.set(tipNormal.x, tipNormal.y, tipNormal.z);
+                    if (cached.normal.dot(cavityPreviewCacheNormalRef.current) >= CAVITY_PREVIEW_CACHE_NORMAL_DOT_MIN) {
+                        return cached.result;
+                    }
+                }
+            }
+        }
+
+        const computed = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+
+        // Cache only misses; successful stick previews should track pointer motion
+        // continuously and must not reuse stale geometry.
+        if (!computed) {
+            cavityPreviewCacheRef.current = {
+                objectUuid: hit.object.uuid,
+                modelId,
+                point: hit.point.clone(),
+                normal: new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
+                atMs: now,
+                result: null,
+            };
+        } else {
+            cavityPreviewCacheRef.current = null;
+        }
+
+        return computed;
     }, []);
 
     // Auto-clear preview when placement is disabled (e.g. hovering another object)
     useEffect(() => {
         if (isPlacementHardDisabled) {
-            clearPreview();
+            const frame = requestAnimationFrame(() => {
+                clearPreview();
+            });
+            return () => cancelAnimationFrame(frame);
         }
     }, [clearPreview, isPlacementHardDisabled]);
 
@@ -151,24 +238,9 @@ export function useTrunkPlacementV2() {
         const modelId = hit.object.userData.modelId || 'unknown';
         const objectUuid = hit.object.uuid;
 
-        // Fast hover normal for responsive preview: use transformed face normal.
-        // (Click path still uses smoothed normal for final placement correctness.)
-        let tipNormal: { x: number; y: number; z: number };
-        if (hit.face) {
-            hoverFaceNormalRef.current.copy(hit.face.normal);
-            if (hit.object instanceof THREE.Mesh) {
-                normalMatrixRef.current.getNormalMatrix(hit.object.matrixWorld);
-                hoverFaceNormalRef.current.applyNormalMatrix(normalMatrixRef.current);
-            }
-            hoverFaceNormalRef.current.normalize();
-            tipNormal = {
-                x: hoverFaceNormalRef.current.x,
-                y: hoverFaceNormalRef.current.y,
-                z: hoverFaceNormalRef.current.z,
-            };
-        } else {
-            tipNormal = calculateSmoothedNormal(hit);
-        }
+        // Keep hover preview on the same normal basis as click placement to
+        // avoid preview-only false collision reports near tolerance boundaries.
+        const tipNormal = calculateSmoothedNormal(hit);
 
         const now = performance.now();
         hoverNormalRef.current.set(tipNormal.x, tipNormal.y, tipNormal.z);
@@ -205,12 +277,13 @@ export function useTrunkPlacementV2() {
         // Pass mesh for collision detection
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh, isPreview: true });
+        const settings = getSettings();
 
-        // Fast-path for cavity hover: if the pathfinder stagnated or exhausted its
-        // reduced preview budget, try to find the cavity floor and show a stick preview.
+        // Fast-path for cavity hover when stagnated (closed cavity) or budget
+        // exhausted after both V1+V2 failed — these are genuine routing dead-ends.
         if (result.stagnated || result.exhaustedBudget) {
             if (mesh) {
-                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
                     setPreviewData(cavityStick.supportData);
                     setPreviewError(null);
@@ -225,7 +298,7 @@ export function useTrunkPlacementV2() {
         }
 
         const decision = decideGridPlacement({
-            settings: getSettings(),
+            settings,
             snapshot: getSnapshot(),
             candidate: result,
             tipPos,
@@ -264,29 +337,10 @@ export function useTrunkPlacementV2() {
 
         // reject
         if (decision.trunkBuild) {
-            if (mesh && decision.trunkBuild.error === 'COLLISION_WITH_MODEL') {
-                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
-                if (cavityStick) {
-                    setPreviewData(cavityStick.supportData);
-                    setPreviewError(null);
-                    setPreviewWarning(null);
-                    return;
-                }
-            }
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(decision.trunkBuild.error || null);
             setPreviewWarning(decision.trunkBuild.warning || null);
             return;
-        }
-
-        if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
-            const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
-            if (cavityStick) {
-                setPreviewData(cavityStick.supportData);
-                setPreviewError(null);
-                setPreviewWarning(null);
-                return;
-            }
         }
 
         setPreviewData((prev) => (prev === null ? prev : null));
@@ -298,7 +352,7 @@ export function useTrunkPlacementV2() {
                     : null
         );
         setPreviewWarning((prev) => (prev === null ? prev : null));
-    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled]);
+    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled, resolveCavityStickPreview]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
         latestHoverRef.current = hit;
@@ -323,19 +377,26 @@ export function useTrunkPlacementV2() {
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
 
-        // When the pathfinder stagnates (or exhausts its preview budget) the tip
-        // is effectively trapped in a cavity and can't route to the build plate.
-        // Fall back to a cavity stick that spans straight down to the nearest
-        // suitable surface.
+        // When the pathfinder stagnates or exhausts both V1+V2 budgets, the tip
+        // can't route to the build plate. Fall back to a cavity stick/twig that
+        // spans straight down to the nearest suitable surface.
         if (result.stagnated || result.exhaustedBudget) {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
-                    addStick(cavityStick.stick);
-                    pushHistory({
-                        type: SUPPORT_ADD_STICK,
-                        payload: { stick: cavityStick.stick },
-                    });
+                    if (cavityStick.kind === 'twig') {
+                        addTwig(cavityStick.twig);
+                        pushHistory({
+                            type: SUPPORT_ADD_TWIG,
+                            payload: { twig: cavityStick.twig },
+                        });
+                    } else {
+                        addStick(cavityStick.stick);
+                        pushHistory({
+                            type: SUPPORT_ADD_STICK,
+                            payload: { stick: cavityStick.stick },
+                        });
+                    }
                     clearSupportSelection();
                     return;
                 }
@@ -348,18 +409,8 @@ export function useTrunkPlacementV2() {
         // Only bail on trunk errors when grid is disabled (direct placement path).
         const settings = getSettings();
         if (result.error && !settings.grid?.enabled) {
-            if (result.error === 'COLLISION_WITH_MODEL' && mesh) {
-                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
-                if (cavityStick) {
-                    addStick(cavityStick.stick);
-                    pushHistory({
-                        type: SUPPORT_ADD_STICK,
-                        payload: { stick: cavityStick.stick },
-                    });
-                    clearSupportSelection();
-                    return;
-                }
-            }
+            // Stick/twig is now strict last resort: do not fallback here unless
+            // the solver reported true stagnation (handled above).
             return;
         }
 
@@ -454,18 +505,7 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'reject') {
-            if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
-                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
-                if (cavityStick) {
-                    addStick(cavityStick.stick);
-                    pushHistory({
-                        type: SUPPORT_ADD_STICK,
-                        payload: { stick: cavityStick.stick },
-                    });
-                    clearSupportSelection();
-                    return;
-                }
-            }
+            // Stick/twig is now strict last resort: keep reject behavior here.
             return;
         }
 

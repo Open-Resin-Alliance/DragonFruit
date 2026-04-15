@@ -81,6 +81,7 @@ const ROOTS_DISK_SAFETY_MM = 0.5;
 const PREVIEW_SEGMENT_STEP_MM = 2.0;   // matches A* step size
 const ROOTS_DISK_QUICK_Z_SLICES = 3;   // vs max(4, ceil(rootTopZ/0.5)) ≈ 10
 const ROOTS_DISK_QUICK_PERIMETER_SAMPLES = 6;  // vs 16
+const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
 
 /**
  * Coarse segment-blocked check for hover preview.
@@ -315,7 +316,8 @@ export function calculateSmartPlacementV2(
     const diskHeight = settings.roots.diskHeightMm;
     const coneHeight = settings.roots.coneHeightMm;
     const minRoutedTrunkAngleDeg = settings.grid.minRoutedTrunkAngleDeg;
-    const maxTotalLateralMm = Math.max(30, settings.grid.spacingMm * 8);
+    const maxSegmentAngleFromVerticalDeg = Math.min(88, (90 - minRoutedTrunkAngleDeg) + ROUTED_DETOUR_ANGLE_SLACK_DEG);
+    const maxTotalLateralMm = Math.max(48, settings.grid.spacingMm * 12);
 
     // 1. Standard placement (baseline — no collision check)
     const standard = calculateStandardPlacement(input);
@@ -382,7 +384,14 @@ export function calculateSmartPlacementV2(
         // cavity with no thin-wall escape.  Also probe a few lateral offsets
         // to confirm there's no nearby gap the A* could exploit.
         if (deeplyBlockedCount >= 6) {
-            const PROBE_OFFSETS = [clearance * 4, -clearance * 4];
+            const PROBE_OFFSETS = [
+                clearance * 4,
+                -clearance * 4,
+                clearance * 8,
+                -clearance * 8,
+                clearance * 12,
+                -clearance * 12,
+            ];
             let anyLateralClear = false;
             const probeZ = socketPos.z - vertSpan * 0.5;
             for (const off of PROBE_OFFSETS) {
@@ -408,7 +417,8 @@ export function calculateSmartPlacementV2(
 
     // For preview: use the quick (reduced-sample) roots check in the goal validator.
     // The full-resolution check is reserved for click-time placement.
-    const goalValidator = (wx: number, wy: number, _wz: number) => {
+    const goalValidator = (wx: number, wy: number, wz: number) => {
+        void wz;
         return isPreview
             ? !quickRootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius)
             : !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
@@ -417,7 +427,7 @@ export function calculateSmartPlacementV2(
     const result = gridAStar(sdf, socketPos, rootTopZ, {
         clearanceMm: clearance,
         maxLateralMm: maxTotalLateralMm,
-        minAngleFromVerticalDeg: 90 - minRoutedTrunkAngleDeg,
+        minAngleFromVerticalDeg: maxSegmentAngleFromVerticalDeg,
         occupancy: context?.occupancy,
         ignoreSupportId: context?.placingSupportId,
         maxExpansions: context?.maxExpansions ?? 2000,
@@ -545,7 +555,7 @@ export function calculateSmartPlacementV2(
         bestBase.rootTopTarget,
         sdf,
         clearance,
-        90 - minRoutedTrunkAngleDeg,
+        maxSegmentAngleFromVerticalDeg,
     );
 
     // 8. Final SDF validation of the complete chain.
@@ -568,7 +578,7 @@ export function calculateSmartPlacementV2(
             };
         }
 
-        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, 90 - minRoutedTrunkAngleDeg)) {
+        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxSegmentAngleFromVerticalDeg)) {
             return {
                 ...standard,
                 error: 'COLLISION_WITH_MODEL',
