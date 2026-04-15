@@ -38,6 +38,11 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
     if (mode === 'orthographic') {
       const next = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, ORTHO_NEAR, ORTHO_FAR);
       next.position.copy(camera.position);
+      // Preserve view direction. Without copying quaternion, the new camera has identity
+      // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
+      // app load controls is null, so update() is never called — the camera stays
+      // mis-oriented for every pick frame until the first gl.render().
+      next.quaternion.copy(camera.quaternion);
       next.up.copy(camera.up);
 
       if (camera instanceof THREE.PerspectiveCamera) {
@@ -50,10 +55,16 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       }
 
       next.updateProjectionMatrix();
+      // Force matrixWorld to be set from position+quaternion immediately so the
+      // PickingRenderer (which runs in useFrame, before gl.render) gets a valid
+      // camera matrix on the very first frame after the switch.
+      next.updateMatrixWorld();
       set({ camera: next });
       if (controls && typeof controls === 'object' && 'object' in controls) {
         (controls as any).object = next;
         (controls as any).update?.();
+        // Re-sync matrixWorld after OrbitControls corrects position/orientation.
+        next.updateMatrixWorld();
       }
       return;
     }
@@ -69,15 +80,21 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       if (direction.lengthSq() < 1e-10) direction.set(-1, -1, 1);
       direction.normalize();
       next.position.copy(target.clone().addScaledVector(direction, distance));
+      // Preserve approximate orientation so pick/raycast work before controls.update().
+      next.quaternion.copy(camera.quaternion);
     } else {
       next.position.copy(camera.position);
+      next.quaternion.copy(camera.quaternion);
     }
 
     next.updateProjectionMatrix();
+    // Force matrixWorld before the first useFrame pick run.
+    next.updateMatrixWorld();
     set({ camera: next });
     if (controls && typeof controls === 'object' && 'object' in controls) {
       (controls as any).object = next;
       (controls as any).update?.();
+      next.updateMatrixWorld();
     }
   }, [camera, controls, mode, set, size.height, size.width]);
 
