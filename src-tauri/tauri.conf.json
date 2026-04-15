@@ -36,6 +36,22 @@
   "app": {
     "windows": [
       {
+        "label": "splashscreen",
+        "url": "/splashscreen.html",
+        "width": 360,
+        "height": 280,
+        "center": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "visible": true,
+        "alwaysOnTop": true,
+        "theme": "Dark",
+        "backgroundColor": "#0B0F14",
+        "title": "DragonFruit"
+      },
+      {
         "label": "main",
         "create": false,
         "visible": false,
