@@ -186,6 +186,15 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, [emitLowerChange, max, min]);
 
+  const getThumbHitThresholds = React.useCallback((railHeightPx: number) => {
+    const normalizedPerPx = 1 / Math.max(1, railHeightPx);
+    // Visual thumb height is 9px. Keep the true handle core tight, with only a
+    // small comfort padding for easier grabbing without stealing the window area.
+    const coreThreshold = (9 / 2) * normalizedPerPx;
+    const grabThreshold = ((9 / 2) + 1.5) * normalizedPerPx;
+    return { coreThreshold, grabThreshold };
+  }, []);
+
   const openThumbEdit = React.useCallback((thumb: 'upper' | 'lower') => {
     const currentLayer = thumb === 'upper' ? valueRef.current : lowerValueRef.current;
     setEditMode('layer');
@@ -193,7 +202,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     setEditingThumb(thumb);
   }, []);
   // Keep ref in sync so drag closures can call it without stale captures
-  openThumbEditRef.current = openThumbEdit;
+  React.useEffect(() => {
+    openThumbEditRef.current = openThumbEdit;
+  }, [openThumbEdit]);
 
   const commitThumbEdit = React.useCallback(() => {
     if (!editingThumb) return;
@@ -253,7 +264,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         const clickInv = 1 - (e.clientY - rect.top) / rect.height;
         const span = Math.max(1e-6, max - min);
         const upperPos = (valueRef.current - min) / span;
-        const thumbGrabThreshold = 0.035;
+        const { grabThreshold: thumbGrabThreshold } = getThumbHitThresholds(rect.height);
         if (lowerValue != null) {
           const lowerPos = (lowerValueRef.current - min) / span;
           const lowerDistance = Math.abs(clickInv - lowerPos);
@@ -290,11 +301,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         const lowerPos = (lowerValueRef.current - min) / span;
         const lowerDistance = Math.abs(clickInv - lowerPos);
         const upperDistance = Math.abs(clickInv - upperPos);
-        const thumbGrabThreshold = 0.035;
+        const {
+          coreThreshold: thumbCoreThreshold,
+          grabThreshold: thumbGrabThreshold,
+        } = getThumbHitThresholds(rect.height);
+        const inWindowRegion = clickInv >= Math.min(lowerPos, upperPos) && clickInv <= Math.max(lowerPos, upperPos);
+        const inWindowCoreRegion = inWindowRegion
+          && lowerDistance > thumbCoreThreshold
+          && upperDistance > thumbCoreThreshold;
 
         if (lowerDistance > thumbGrabThreshold && upperDistance > thumbGrabThreshold) {
           // Not near either thumb — only accept if inside the window region for window-drag
-          const inWindowRegion = clickInv >= Math.min(lowerPos, upperPos) && clickInv <= Math.max(lowerPos, upperPos);
           if (inWindowRegion) {
             activeDraggingThumbRef.current = 'window';
             windowDragStartClientYRef.current = e.clientY;
@@ -308,6 +325,13 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             onScrubEnd?.();
             return;
           }
+        } else if (inWindowCoreRegion) {
+          // Handles are close: allow dragging the inner window region when the
+          // pointer is between the visible handle cores.
+          activeDraggingThumbRef.current = 'window';
+          windowDragStartClientYRef.current = e.clientY;
+          windowDragStartLowerRef.current = lowerValueRef.current;
+          windowDragStartUpperRef.current = valueRef.current;
         } else if (lowerDistance < upperDistance) {
           activeDraggingThumbRef.current = 'lower';
         } else {
@@ -323,7 +347,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         const clickInv = 1 - (e.clientY - rect.top) / rect.height;
         const span = Math.max(1e-6, max - min);
         const upperPos = (valueRef.current - min) / span;
-        const thumbGrabThreshold = 0.035;
+        const { grabThreshold: thumbGrabThreshold } = getThumbHitThresholds(rect.height);
 
         if (Math.abs(clickInv - upperPos) > thumbGrabThreshold) {
           // Not near thumb — ignore completely
@@ -443,7 +467,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [dragBatchMode, emitWindowChange, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
+  }, [dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
