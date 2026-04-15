@@ -137,8 +137,9 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
 
     // Fast-path: check placement cache before any computation.
     // The cache covers V2 A* + V1 fallback together, keyed by quantised
-    // (tipPos, tipNormal). Only used for mesh-backed placement (hover preview).
-    if (mesh && !overrides) {
+    // (tipPos, tipNormal). Keep it hover-preview only so click placement always
+    // computes against the exact click tip (no quantisation-induced deadzone).
+    if (mesh && !overrides && isPreview) {
         const pck = placementCacheKey(tipPos, tipNormal);
         const cached = getPlacementCache(modelId, pck);
         if (cached) {
@@ -149,10 +150,6 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     // Read current settings
     const settings = getSettings();
     const tipProfile = buildTipProfile(settings, overrides);
-    const tipDiskLengthOverrideMm = overrides?.tipDiskLengthOverrideMm;
-
-    const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
-    const rootsDiameter = overrides?.rootsDiameterMm ?? settings.roots.diameterMm;
     const diskHeight = overrides?.rootsDiskHeightMm ?? settings.roots.diskHeightMm;
     const coneHeight = overrides?.rootsConeHeightMm ?? settings.roots.coneHeightMm;
 
@@ -233,7 +230,7 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     }
 
     // Cache the placement result for frame-coherent hover reuse.
-    if (mesh && !overrides) {
+    if (mesh && !overrides && isPreview) {
         const pck = placementCacheKey(tipPos, tipNormal);
         setPlacementCache(modelId, pck, placement);
     }
@@ -251,6 +248,20 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     const rootsDiameter = overrides?.rootsDiameterMm ?? settings.roots.diameterMm;
     const diskHeight = overrides?.rootsDiskHeightMm ?? settings.roots.diskHeightMm;
     const coneHeight = overrides?.rootsConeHeightMm ?? settings.roots.coneHeightMm;
+    const effectiveConeAxis = placement.coneAxis ?? tipNormal;
+    const diskThickness = tipProfile.type === 'disk'
+        ? (tipDiskLengthOverrideMm ?? calculateDiskThickness(tipNormal, effectiveConeAxis, tipProfile))
+        : 0;
+
+    const coneStartPos = {
+        x: tipPos.x + tipNormal.x * diskThickness,
+        y: tipPos.y + tipNormal.y * diskThickness,
+        z: tipPos.z + tipNormal.z * diskThickness,
+    };
+
+    // Always derive socket from the live tip pose so cone/body stay locked even
+    // when route data came from a quantised preview cache entry.
+    const liveSocketPos = getSocketPosition(coneStartPos, effectiveConeAxis, tipProfile);
     const rootsTopZ = diskHeight + coneHeight;
     const routeJoints = placement.joints ? [...placement.joints] : [];
     const isStraightSupport = routeJoints.length === 0;
@@ -259,13 +270,13 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         ? withCentralStraightSupportJoint({
             basePos: placement.basePos,
             rootTopZ: rootsTopZ,
-            socketPos: placement.socketPos,
+            socketPos: liveSocketPos,
         })
         : initialConstructionJoints;
     const normalizedConstructionJoints = normalizeFirstConstructionJoint({
         basePos: placement.basePos,
         rootTopZ: rootsTopZ,
-        socketPos: placement.socketPos,
+        socketPos: liveSocketPos,
         routeJoints,
         constructionJoints: initialConstructionJoints.length > 0
             ? initialConstructionJoints
@@ -275,7 +286,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     const routeBase: TrunkRouteResult = {
         kind: isStraightSupport ? 'straight' : 'routed',
         basePos: placement.basePos,
-        socketPos: placement.socketPos,
+        socketPos: liveSocketPos,
         unsnappedBottomPos: placement.unsnappedBottomPos ?? placement.basePos,
         joints: routeJoints,
         constructionJoints: normalizedConstructionJoints,
@@ -283,7 +294,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         error: placement.error,
         warning: placement.warning,
         angle: placement.angle,
-        coneAxis: placement.coneAxis,
+        coneAxis: effectiveConeAxis,
     };
     const route: TrunkRouteResult | SnappedTrunkRouteResult = placement.snappedNodeKey
         ? {
@@ -308,7 +319,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         }
         : routeBase;
 
-    const { basePos, socketPos: placementSocketPos, joints, constructionJoints, error, warning, angle, coneAxis } = route;
+    const { basePos, socketPos, joints, constructionJoints, error, warning, angle } = route;
     const routeJointPositions: Vec3[] = [...joints];
     const constructionJointPositions: Vec3[] = [...constructionJoints];
     const jointPositions: Vec3[] = [...constructionJointPositions, ...routeJointPositions];
@@ -342,19 +353,6 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     });
 
     // NEW: Calculate Socket Joint Position and Create it
-    // We need to account for the primitive thickness (offset) just like the Renderer does.
-    const effectiveConeAxis = coneAxis ?? tipNormal;
-    const diskThickness = tipProfile.type === 'disk'
-        ? (tipDiskLengthOverrideMm ?? calculateDiskThickness(tipNormal, effectiveConeAxis, tipProfile))
-        : 0;
-
-    const coneStartPos = {
-        x: tipPos.x + tipNormal.x * diskThickness,
-        y: tipPos.y + tipNormal.y * diskThickness,
-        z: tipPos.z + tipNormal.z * diskThickness,
-    };
-
-    const socketPos = placementSocketPos ?? getSocketPosition(coneStartPos, effectiveConeAxis, tipProfile);
     const socketJoint: Joint = {
         id: socketJointId,
         pos: socketPos,
