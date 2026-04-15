@@ -430,8 +430,8 @@ export function DiagnosticsModal({
 
   if (!isOpen) return null;
 
-  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  const hardwareConcurrency = navigator.hardwareConcurrency;
+  const deviceMemory = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
+  const hardwareConcurrency = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined;
   const heapUsageRatio = stats.usedJsHeapBytes != null && stats.totalJsHeapBytes
     ? stats.usedJsHeapBytes / Math.max(1, stats.totalJsHeapBytes)
     : null;
