@@ -9555,6 +9555,15 @@ export default function Home() {
     zRange: sceneZRange
   });
 
+  const printingCurrentHeightMm = React.useMemo(() => {
+    if (scene.mode !== 'printing') return null;
+    if (printingPreviewTotalLayers <= 0) return null;
+
+    const clampedLayer = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
+    const height = clampedLayer * slicedLayerHeightMm;
+    return Math.min(Math.max(height, 0), Math.max(slicing.heightMm, 0));
+  }, [printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicedLayerHeightMm, slicing.heightMm]);
+
   React.useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) => {
       if (!(target instanceof HTMLElement)) return false;
@@ -13404,7 +13413,7 @@ export default function Home() {
             exportThumbnailRenderOptions={exportThumbnailRenderOptions}
             deferCameraIntro={holdEmptyStateSceneImportUi}
             freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
-            indicatorPlaneZ={scene.mode === 'printing' ? slicing.currentHeightMm : null}
+            indicatorPlaneZ={scene.mode === 'printing' ? printingCurrentHeightMm : null}
             indicatorPlaneColor={scene.selectionColor || '#ec2a77'}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
@@ -13504,7 +13513,7 @@ export default function Home() {
                 onChange={handlePrintingLayerChange}
                 onScrubStart={handlePrintingLayerScrubStart}
                 onScrubEnd={handlePrintingLayerScrubEnd}
-                currentHeightMm={slicing.currentHeightMm}
+                currentHeightMm={printingCurrentHeightMm ?? undefined}
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
                 crossSectionMode={slicing.crossSectionMode}
@@ -13573,7 +13582,7 @@ export default function Home() {
                         >
                           <PrintingLayerGpuPreview
                             models={scene.models}
-                            clipZ={slicing.currentHeightMm}
+                            clipZ={printingCurrentHeightMm}
                             buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
                             buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
                             viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
