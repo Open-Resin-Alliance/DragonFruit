@@ -27,10 +27,12 @@ type LayerSliderProps = {
   crossSectionEnabled?: boolean;
   onToggleCrossSection?: () => void;
   layerHeightMm?: number;
+  compactMinimalRail?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
+  const isCompactMinimalRail = isMinimalRail && compactMinimalRail;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const valueRef = React.useRef(value);
@@ -578,7 +580,23 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 10%)',
     background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
   };
+  const minimalRailBadgeClass = isCompactMinimalRail
+    ? 'inline-flex items-center rounded-md border px-0.5 py-0 text-[8px] font-semibold tabular-nums'
+    : railBadgeClass;
   const shouldPlaceCurrentBadgeBelowThumb = isMinimalRail && percent >= 96;
+  const thumbEditPopoverClassName = isCompactMinimalRail
+    ? 'absolute left-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2'
+    : 'absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2';
+  const thumbEditPopoverOffsetStyle: React.CSSProperties = isCompactMinimalRail
+    ? { marginLeft: '10px' }
+    : { marginRight: '10px' };
+  const minimalRailTitle = React.useMemo(() => {
+    const mmLabel = typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö';
+    const rightClickAction = onCrossSectionModeChange
+      ? `Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
+      : 'Right-click thumb to edit';
+    return `Layer ${value} ΓÇó ${mmLabel} ΓÇó ${rightClickAction}`;
+  }, [crossSectionMode, currentHeightMm, formatMm, onCrossSectionModeChange, value]);
 
   return (
     <div
@@ -591,7 +609,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     >
       <div
         className={embedded
-          ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg ${isMinimalRail ? 'px-0 py-1.5' : 'px-1 py-1'}`
+          ? isCompactMinimalRail
+            ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} mx-auto w-[34px] py-1`
+            : `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg ${isMinimalRail ? 'px-0 py-1.5' : 'px-1 py-1'}`
           : 'ui-panel w-44 rounded-lg px-2.5 py-2.5 shadow-lg'}
         style={embedded
           ? undefined
@@ -631,7 +651,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
         {isMinimalRail && (
           <div className="flex items-center justify-center mb-1">
-            <div className={railBadgeClass} style={railBadgeStyle}>
+            <div className={minimalRailBadgeClass} style={railBadgeStyle}>
               {max}
             </div>
           </div>
@@ -639,7 +659,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
         <div
           data-no-drag="true"
-          className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? 'w-5' : 'w-7') : 'w-10'} cursor-pointer`}
+          className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`}
           onMouseDown={onPointerDown}
           onDoubleClick={(e) => {
             if (!onToggleCrossSection) return;
@@ -648,15 +668,15 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             onToggleCrossSection();
           }}
           onContextMenu={(e) => {
-            if (!onCrossSectionModeChange) return;
             e.preventDefault();
             e.stopPropagation();
+            if (!onCrossSectionModeChange) return;
             onCrossSectionModeChange(crossSectionMode === 'smooth' ? 'rasterized' : 'smooth');
           }}
           tabIndex={0}
           onKeyDown={onKeyDown}
           title={isMinimalRail
-            ? `Layer ${value} ΓÇó ${typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö'} ΓÇó Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
+            ? minimalRailTitle
             : undefined}
         >
           {!isMinimalRail && (
@@ -714,7 +734,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   {showValue && typeof lowerCurrentHeightMm === 'number' && !hideLowerFloatingBadge && (
                     <div
                       className={isMinimalRail
-                        ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none top-3`
+                        ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${minimalRailBadgeClass} pointer-events-none top-3`
                         : 'absolute right-full mr-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] shadow tabular-nums pointer-events-none'}
                       style={isMinimalRail
                         ? railCurrentBadgeStyle
@@ -756,9 +776,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   {editingThumb === 'lower' && (
                     <div
                       ref={editPopoverRef}
-                      className="absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2"
+                      className={thumbEditPopoverClassName}
                       style={{
-                        marginRight: '10px',
+                        ...thumbEditPopoverOffsetStyle,
                         minWidth: '136px',
                         background: 'var(--surface-0)',
                         borderColor: 'var(--border-subtle)',
@@ -825,7 +845,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 {showValue && typeof currentHeightMm === 'number' && !hideUpperFloatingBadge && (
                   <div
                     className={isMinimalRail
-                      ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
+                      ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${minimalRailBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
                       : 'absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] shadow tabular-nums pointer-events-none'}
                     style={isMinimalRail
                       ? railCurrentBadgeStyle
@@ -868,9 +888,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             {editingThumb === 'upper' && (
               <div
                 ref={editPopoverRef}
-                className="absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2"
+                className={thumbEditPopoverClassName}
                 style={{
-                  marginRight: '10px',
+                  ...thumbEditPopoverOffsetStyle,
                   minWidth: '136px',
                   background: 'var(--surface-0)',
                   borderColor: 'var(--border-subtle)',
@@ -1008,14 +1028,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         {isMinimalRail && (
           <div className="mt-1 flex items-center justify-center gap-1.5">
             <div
-              className={railBadgeClass}
+              className={minimalRailBadgeClass}
               style={railBadgeStyle}
             >
               {min}
             </div>
             {showModeIndicator && (
               <div
-                className={railBadgeClass}
+                className={minimalRailBadgeClass}
                 style={railBadgeStyle}
                 title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
               >

@@ -13499,10 +13499,10 @@ export default function Home() {
         {scene.mode === 'printing' && (
           <div
             className="h-full w-1/2 min-w-0 min-h-0 grid overflow-hidden"
-            style={{ gridTemplateColumns: '104px minmax(0, 1fr)', background: 'var(--surface-0)' }}
+            style={{ gridTemplateColumns: '56px minmax(0, 1fr)', background: 'var(--surface-0)' }}
           >
             <div
-              className="h-full border-r px-1 py-2"
+              className="relative z-20 h-full overflow-visible border-r px-0 py-1.5"
               style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
             >
               <LayerSlider
@@ -13517,11 +13517,13 @@ export default function Home() {
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
                 crossSectionMode={slicing.crossSectionMode}
+                showModeIndicator={false}
+                compactMinimalRail
                 dragBatchMode="raf"
                 docked
                 embedded
                 expandToContainer
-                className="h-full"
+                className="mx-auto h-full"
               />
             </div>
 
