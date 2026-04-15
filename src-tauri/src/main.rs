@@ -2472,14 +2472,22 @@ async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), Stri
 /// Also closes the splash screen window if it is still open.
 #[tauri::command]
 async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
-    if let Some(splash) = app.get_webview_window("splashscreen") {
-        let _ = splash.close();
-    }
+    // Show the main window first so there is no gap between splash close and
+    // main window appearance (which would expose the desktop for a frame).
+    // Maximize before show so the window is already at full size when it
+    // becomes visible — avoids a two-step resize flash on Windows.
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
+            let _ = window.maximize();
+            // Re-enable taskbar entry just before we make the window visible.
+            #[cfg(target_os = "windows")]
+            let _ = window.set_skip_taskbar(false);
             let _ = window.show();
         }
+    }
+    if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.close();
     }
     Ok(())
 }
@@ -2880,6 +2888,14 @@ fn main() {
             // Keep custom titlebar behavior on non-macOS.
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
+
+            // Belt-and-suspenders: enforce hidden + no taskbar entry while
+            // the window is invisible, regardless of config values. On Windows
+            // a taskbar button flash is the tell-tale sign the window was
+            // briefly visible during WebView2 initialisation.
+            let builder = builder.visible(false);
+            #[cfg(target_os = "windows")]
+            let builder = builder.skip_taskbar(true);
 
             match builder.build() {
                 Ok(_window) => {
