@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.openresinalliance.dragonfruit</id>
+  <name>DragonFruit</name>
+  <summary>Open-source resin 3D printer slicer</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <developer id="org.openresinalliance">
+    <name>Open Resin Alliance</name>
+  </developer>
+
+  <launchable type="desktop-id">org.openresinalliance.dragonfruit.desktop</launchable>
+
+  <description>
+    <p>
+      DragonFruit is an open-source resin slicer for SLA and MSLA 3D printers.
+      Prepare STL and 3MF models for printing with multi-printer fleet
+      management, advanced support generation, and integrated preview.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Support for CTB v3/v4, SDCP 3.0.0, Anycubic and Elegoo printer families</li>
+      <li>GPU-accelerated preview with island detection and supports analysis</li>
+      <li>Fleet management for multi-printer workshops</li>
+      <li>Native VOXL scene format for lossless round-trip editing</li>
+      <li>Plugin architecture for extensible printer and format support</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>Graphics</category>
+    <category>3DGraphics</category>
+  </categories>
+
+  <url type="homepage">https://github.com/open-resin-alliance/DragonFruit</url>
+  <url type="bugtracker">https://github.com/open-resin-alliance/DragonFruit/issues</url>
+  <url type="vcs-browser">https://github.com/open-resin-alliance/DragonFruit</url>
+
+  <provides>
+    <binary>dragonfruit</binary>
+    <mediatype>application/vnd.dragonfruit.voxl+json</mediatype>
+    <mediatype>application/x-voxl</mediatype>
+  </provides>
+
+  <recommends>
+    <display_length compare="ge">768</display_length>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+
+  <requires>
+    <internet>always</internet>
+  </requires>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.3" date="2026-04-16">
+      <description>
+        <p>Flatpak packaging introduced (Linux). Ships CEF-based runtime for stability on Wayland+Nvidia.</p>
+      </description>
+    </release>
+  </releases>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#ff6b9d</color>
+    <color type="primary" scheme_preference="dark">#8b3a5c</color>
+  </branding>
+</component>

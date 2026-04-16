@@ -1,0 +1,89 @@
+# flatpak-builder manifest — fast-path packaging.
+#
+# This manifest consumes pre-built artifacts from src-tauri/target/release/
+# rather than rebuilding from source inside the flatpak sandbox. Run the
+# Linux Tauri build beforehand:
+#
+#     node scripts/tauri-build.mjs   # Linux path appends --features tauri-cef
+#     bash scripts/bundle-cef-libs.sh
+#
+# Those two commands leave dragonfruit-desktop, libcef.so, *.pak, icudtl.dat,
+# v8_context_snapshot.bin, chrome-sandbox, and locales/ all in
+# src-tauri/target/release/. This manifest picks them up from there.
+#
+# Rationale: the full workspace + CEF rebuild inside flatpak-builder is
+# multi-GB of crates + ~20 minutes of linker time; for iteration and for
+# self-hosted distribution this is wasted work. The hermetic-build variant
+# (required for Flathub) is tracked separately in flatpak/FLATHUB.md.
+
+app-id: org.openresinalliance.dragonfruit
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: dragonfruit
+
+finish-args:
+  # CEF zygote ↔ renderer shared memory
+  - --share=ipc
+
+  # Printer HTTP discovery + uploads (SDCP 3.0.0, Anycubic, Elegoo, Athena)
+  - --share=network
+
+  # Display
+  - --socket=wayland
+  - --socket=fallback-x11
+
+  # Audio (optional, tauri-plugin-log writes to journal; harmless)
+  - --socket=pulseaudio
+
+  # GPU acceleration for Three.js / react-three-fiber preview
+  - --device=dri
+
+  # File open/save via xdg-desktop-portal (rfd crate uses portal automatically
+  # when /.flatpak-info is present; no --filesystem=host needed)
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
+
+  # Portal access for file chooser, notifications, open-uri
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.FileChooser
+  - --talk-name=org.freedesktop.portal.OpenURI
+
+  # Writable app data dir (default; XDG_DATA_HOME-aware code in src-tauri
+  # writes to ~/.var/app/org.openresinalliance.dragonfruit/data/…)
+
+modules:
+  - name: dragonfruit
+    buildsystem: simple
+    build-commands:
+      # Binary + CEF runtime under /app/lib/
+      - install -Dm755 staging/bin/dragonfruit-desktop /app/lib/dragonfruit/dragonfruit-desktop
+      - install -d /app/lib/dragonfruit/cef
+      - 'cp -a staging/cef/. /app/lib/dragonfruit/cef/'
+
+      # Launcher at /app/bin/dragonfruit
+      - install -Dm755 staging/launcher.sh /app/bin/dragonfruit
+
+      # Desktop entry
+      - install -Dm644 staging/org.openresinalliance.dragonfruit.desktop /app/share/applications/org.openresinalliance.dragonfruit.desktop
+
+      # AppStream metainfo
+      - install -Dm644 staging/org.openresinalliance.dragonfruit.metainfo.xml /app/share/metainfo/org.openresinalliance.dragonfruit.metainfo.xml
+
+      # MIME type for .voxl files
+      - install -Dm644 staging/dragonfruit-voxl-mime.xml /app/share/mime/packages/org.openresinalliance.dragonfruit.xml
+
+      # Icons — hicolor theme
+      - install -Dm644 staging/icons/32x32.png   /app/share/icons/hicolor/32x32/apps/org.openresinalliance.dragonfruit.png
+      - install -Dm644 staging/icons/64x64.png   /app/share/icons/hicolor/64x64/apps/org.openresinalliance.dragonfruit.png
+      - install -Dm644 staging/icons/128x128.png /app/share/icons/hicolor/128x128/apps/org.openresinalliance.dragonfruit.png
+      - install -Dm644 staging/icons/256x256.png /app/share/icons/hicolor/256x256/apps/org.openresinalliance.dragonfruit.png
+      - install -Dm644 staging/icons/512x512.png /app/share/icons/hicolor/512x512/apps/org.openresinalliance.dragonfruit.png
+    sources:
+      - type: dir
+        # Staged by flatpak/build.sh prior to invocation. Keeps the flatpak-builder
+        # copy scope small (pre-built binary + CEF blobs only) — the alternative
+        # would pull node_modules + src-tauri/target/{deps,build} into the builder
+        # context (many GB, slow copy even with --disable-rofiles-fuse).
+        path: staging
+        dest: staging

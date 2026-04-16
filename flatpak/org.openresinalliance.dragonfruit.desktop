@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=DragonFruit
+GenericName=Resin Slicer
+Comment=Slice STL/3MF models for resin 3D printers
+Exec=dragonfruit %U
+Icon=org.openresinalliance.dragonfruit
+Terminal=false
+Categories=Graphics;3DGraphics;
+MimeType=application/vnd.dragonfruit.voxl+json;application/x-voxl;model/stl;model/3mf;
+StartupWMClass=dragonfruit-desktop
+StartupNotify=true
+Keywords=3D;Print;Printing;Slicer;Resin;MSLA;SLA;CAD;
