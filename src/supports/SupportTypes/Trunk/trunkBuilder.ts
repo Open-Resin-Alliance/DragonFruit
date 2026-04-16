@@ -14,8 +14,7 @@ import { getJointDiameter } from '../../constants';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
-import { calculateSmartPlacement } from '../../PlacementLogic/SmartPlacement';
-import { calculateSmartPlacementV2, getOrCreateSDFCache } from '../../PlacementLogic/Pathfinding';
+import { calculateSmartPlacementV2 } from '../../PlacementLogic/Pathfinding';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
@@ -135,17 +134,9 @@ export function clearPlacementCache(modelId?: string): void {
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
-    // Fast-path: check placement cache before any computation.
-    // The cache covers V2 A* + V1 fallback together, keyed by quantised
-    // (tipPos, tipNormal). Keep it hover-preview only so click placement always
-    // computes against the exact click tip (no quantisation-induced deadzone).
-    if (mesh && !overrides && isPreview) {
-        const pck = placementCacheKey(tipPos, tipNormal);
-        const cached = getPlacementCache(modelId, pck);
-        if (cached) {
-            return buildTrunkDataFromPlacement(input, cached);
-        }
-    }
+    // Placement computation always runs (no cache). This ensures preview and click
+    // use consistent logic and settings, preventing the mismatches that occurred
+    // when coarse preview results were cached and reused for click placement.
 
     // Read current settings
     const settings = getSettings();
@@ -168,69 +159,16 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
 
     let placement: TrunkPlacementResult;
     if (mesh) {
-        // V2 grid A* pathfinder (SDF-backed, no raycast bundles).
-        // Preview path: run a fast first pass, but if it reports collision,
-        // re-check once with click-time tolerances to avoid false preview rejects.
-        const v2Context = isPreview ? { maxExpansions: 600, isPreview: true } : undefined;
-        const fastV2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-
-        const v2Result = (isPreview && fastV2Result.error === 'COLLISION_WITH_MODEL' && !fastV2Result.stagnated)
-            ? calculateSmartPlacementV2({ ...placementInput, mesh, modelId })
-            : fastV2Result;
-
-        if (v2Result.error === 'COLLISION_WITH_MODEL') {
-            if (v2Result.stagnated) {
-                // True stagnation (closed cavity): V1 fallback is equally futile.
-                placement = v2Result;
-            } else {
-                // Fallback to V1 raycast-based search, then SDF post-validate.
-                // V1 uses 9-ray bundles which have gaps — verify every segment
-                // of V1's result against the SDF before accepting it.
-                const v1Result = calculateSmartPlacement({ ...placementInput, mesh, modelId });
-                if (v1Result.error) {
-                    // V1 also failed — preserve V2's exhaustedBudget so the call-site
-                    // knows both solvers exhausted their search (not just a quick reject).
-                    placement = { ...v1Result, exhaustedBudget: v1Result.exhaustedBudget ?? v2Result.exhaustedBudget };
-                } else {
-                    const sdf = getOrCreateSDFCache(mesh);
-                    sdf.refreshMatrix();
-                    const shaftRadius = settings.shaft.diameterMm / 2;
-                    const sdfClearance = shaftRadius + 0.25;
-                    // Build the chain: rootTopTarget → joints → socketPos
-                    const v1RootTop: Vec3 = { x: v1Result.basePos.x, y: v1Result.basePos.y, z: rootsTopZ };
-                    const v1Chain: Vec3[] = [
-                        v1RootTop,
-                        ...(v1Result.joints ?? []),
-                        v1Result.socketPos,
-                    ];
-                    let v1Clips = false;
-                    for (let i = 0; i < v1Chain.length - 1; i++) {
-                        const a = v1Chain[i];
-                        const b = v1Chain[i + 1];
-                        if (sdf.segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, sdfClearance)) {
-                            v1Clips = true;
-                            break;
-                        }
-                    }
-                    if (v1Clips) {
-                        // V1's path clips the model — reject it
-                        placement = { ...v1Result, error: 'COLLISION_WITH_MODEL' };
-                    } else {
-                        placement = v1Result;
-                    }
-                }
-            }
-        } else {
-            placement = v2Result;
-        }
+        // V2 grid A* pathfinder (SDF-backed).
+        // Both preview and click use FULL collision checks to ensure consistent safety.
+        // Preview uses lower budget (1200 expansions) for responsiveness, but same
+        // collision detection rigor as click. This trades slightly slower preview
+        // exploration for correct collision avoidance.
+        const v2Context = isPreview ? { maxExpansions: 1200 } : undefined;
+        const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+        placement = result;
     } else {
         placement = calculateStandardPlacement(placementInput);
-    }
-
-    // Cache the placement result for frame-coherent hover reuse.
-    if (mesh && !overrides && isPreview) {
-        const pck = placementCacheKey(tipPos, tipNormal);
-        setPlacementCache(modelId, pck, placement);
     }
 
     return buildTrunkDataFromPlacement(input, placement);

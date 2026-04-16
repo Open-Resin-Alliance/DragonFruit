@@ -223,9 +223,11 @@ export function gridAStar(
     const sqz = q(startPos.z);
     const gqz = q(goalZ);
 
-    // Goal column (directly below start) — we accept any cell at goalZ
-    const gqx = sqx;
-    const gqy = sqy;
+    // Goal Z layer (directly below start) — we accept any cell at goalZ,
+    // regardless of XY position. The heuristic is therefore purely vertical
+    // (remaining cells to drop) rather than 3D octile toward a fixed goal
+    // column. A vertical-only heuristic is admissible and lets lateral moves
+    // remain cheap so overhang routing (move sideways first, then drop) works.
 
     // ---- Warm-start or fresh ----
     let openSet: AStarEntry[];
@@ -245,7 +247,11 @@ export function gridAStar(
         for (const [k, v] of warmStart.cameFrom) cameFrom.set(k, v);
     } else {
         const startKey = cellKeyInt(sqx, sqy, sqz);
-        const h = heuristic(sqx, sqy, sqz, gqx, gqy, gqz);
+        // Pure vertical heuristic: remaining Z cells to drop to goalZ.
+        // Admissible (never over-estimates) and XY-agnostic so lateral moves
+        // are not penalised — required for overhang routing where the search
+        // must move sideways before it can descend.
+        const h = Math.max(0, sqz - gqz);
         openSet = [];
         heapPush(openSet, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h });
         gScore.set(startKey, 0);
@@ -254,12 +260,11 @@ export function gridAStar(
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
 
-    // Stagnation detection: bail early when the search is trapped in a
-    // cavity and cannot make downward progress. Track the lowest Z reached
-    // and the expansion count when it last improved. If 250 expansions pass
-    // without any Z improvement, the search is stuck and will never reach
-    // the goal — abort instead of burning the full 2000-expansion budget.
-    const STAGNATION_LIMIT = 250;
+    // Stagnation detection: abort when truly trapped in a cavity with no
+    // way down AND no lateral progress. Limit raised to 600 so the search
+    // can complete the lateral phase of overhang routing (move sideways to
+    // escape blocked column, THEN descend) without false-positive stagnation.
+    const STAGNATION_LIMIT = 600;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 
@@ -317,15 +322,12 @@ export function gridAStar(
                 const localLateral = Math.sqrt(n.dx * n.dx + n.dy * n.dy) * step;
                 const localDrop = Math.abs(n.dz) * step;
                 if (localDrop > 0 && localLateral / localDrop > maxLateralPerDrop) continue;
-            } else if (n.dz === 0) {
-                // Purely horizontal — allow near the goal level to enable
-                // lateral search for valid roots positions. Also allow above
-                // the socket for climbing around protrusions.
-                const nearGoal = (current.z - gqz) <= 3;
-                const aboveStart = current.z >= sqz;
-                if (!nearGoal && !aboveStart && minAngleFromVertDeg < 89) continue;
             }
-            // n.dz > 0 (upward) — no angle constraint, always allowed if within climb limit
+            // Horizontal (dz === 0) and upward (dz > 0) moves are always allowed
+            // within the maxLateral budget. Routing around overhangs often requires
+            // extended horizontal traversal before a clear downward path exists;
+            // restricting horizontal moves to near-goal or above-start blocks these
+            // valid routes. Final trunk angle validation happens after the path is found.
 
             // SDF collision check.
             // Full mode: fine-resolution segment check at SDF cellSize intervals.
@@ -391,7 +393,7 @@ export function gridAStar(
             gScore.set(nKey, tentativeG);
             cameFrom.set(nKey, current.key);
 
-            const h = heuristic(nx, ny, nz, gqx, gqy, gqz);
+            const h = Math.max(0, nz - gqz); // pure vertical: remaining drop to goalZ
             heapPush(openSet, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h });
         }
     }

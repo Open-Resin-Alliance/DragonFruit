@@ -61,7 +61,7 @@ const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 /** Number of XY perimeter samples around the roots cone at each height slice. */
 const ROOTS_DISK_PERIMETER_SAMPLES = 16;
 /** Safety margin in mm added to all roots volume checks. */
-const ROOTS_DISK_SAFETY_MM = 0.5;
+const ROOTS_DISK_SAFETY_MM = 0.1;
 
 /**
  * Preview-mode coarse sampling constants.
@@ -82,6 +82,21 @@ const PREVIEW_SEGMENT_STEP_MM = 2.0;   // matches A* step size
 const ROOTS_DISK_QUICK_Z_SLICES = 3;   // vs max(4, ceil(rootTopZ/0.5)) ≈ 10
 const ROOTS_DISK_QUICK_PERIMETER_SAMPLES = 6;  // vs 16
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
+
+// A* lattice resolution.
+// Fine pass: high-precision routing to avoid multiple supports collapsing
+// into a shared quantized root position when grid mode is disabled.
+// Wide pass: coarser rescue search for large detours, but still much finer
+// than legacy 6mm to keep roots tight.
+const FINE_ASTAR_STEP_MM = 0.25;
+const WIDE_ASTAR_STEP_MM = 0.6;
+const LEGACY_BASE_STEP_MM = 2.0;
+
+function scaleExpansionsForStep(baseExpansionsAt2mm: number, stepMm: number): number {
+    // Keep approximate travel reach comparable to historical 2mm tuning by
+    // scaling expansion budget with inverse step size.
+    return Math.max(1, Math.round((baseExpansionsAt2mm * LEGACY_BASE_STEP_MM) / stepMm));
+}
 
 /**
  * Coarse segment-blocked check for hover preview.
@@ -235,7 +250,14 @@ export function clearAllSDFCaches(): void {
 // ---------- Main API ----------
 
 /** Warm-start storage keyed by modelId for frame-coherent preview. */
-const warmStartByModel = new Map<string, WarmStartState>();
+const warmStartByModel = new Map<string, WarmStartState>(); // full / click-time runs
+/**
+ * Separate warm-start map for hover-preview A* runs (600- or 1200-expansion,
+ * endpointOnly collision checks). Preview warm states can traverse cells that
+ * full segmentBlocked would reject — keeping them separate prevents parity
+ * re-runs from starting at a biased search frontier.
+ */
+const previewWarmStartByModel = new Map<string, WarmStartState>(); // hover preview runs
 
 /**
  * Spatial stagnation cache — records socketPos positions where the A*
@@ -248,8 +270,16 @@ const warmStartByModel = new Map<string, WarmStartState>();
  * Entries are cleared when the model matrix changes (SDF refresh),
  * when SDF caches are cleared, or when warm-starts are cleared.
  */
-const STAGNATION_RADIUS_MM = 3;
+// True-stagnation radius: positions within 1.5mm of a confirmed cavity are
+// also treated as cavities (saves A* re-run for tiny hover jitter).
+const STAGNATION_RADIUS_MM = 1.5;
 const STAGNATION_RADIUS_SQ = STAGNATION_RADIUS_MM * STAGNATION_RADIUS_MM;
+// Preview-exhausted radius: smaller than stagnation because exhausted-budget
+// is NOT a confirmed dead-end — the full-budget solver may still succeed.
+// 1mm avoids re-running preview A* on identical pixel, but doesn't block
+// valid positions 1-2mm away from an exhausted query.
+const PREVIEW_EXHAUSTED_RADIUS_MM = 1.0;
+const PREVIEW_EXHAUSTED_RADIUS_SQ = PREVIEW_EXHAUSTED_RADIUS_MM * PREVIEW_EXHAUSTED_RADIUS_MM;
 const MAX_STAGNATION_ENTRIES = 512;
 const stagnationCache = new Map<string, Vec3[]>();
 
@@ -264,7 +294,7 @@ const stagnationCache = new Map<string, Vec3[]>();
  */
 const previewExhaustedCache = new Map<string, Vec3[]>();
 
-function isNearSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3): boolean {
+function isNearSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3, radiusSq: number): boolean {
     const points = cache.get(meshUuid);
     if (!points || points.length === 0) return false;
     for (let i = 0; i < points.length; i++) {
@@ -272,18 +302,18 @@ function isNearSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: V
         const dx = pos.x - p.x;
         const dy = pos.y - p.y;
         const dz = pos.z - p.z;
-        if (dx * dx + dy * dy + dz * dz < STAGNATION_RADIUS_SQ) return true;
+        if (dx * dx + dy * dy + dz * dz < radiusSq) return true;
     }
     return false;
 }
 
-function recordSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3): void {
+function recordSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3, radiusSq: number): void {
     let points = cache.get(meshUuid);
     if (!points) {
         points = [];
         cache.set(meshUuid, points);
     }
-    if (isNearSpatialPoint(cache, meshUuid, pos)) return;
+    if (isNearSpatialPoint(cache, meshUuid, pos, radiusSq)) return;
     if (points.length >= MAX_STAGNATION_ENTRIES) {
         points.splice(0, points.length - MAX_STAGNATION_ENTRIES + 1);
     }
@@ -291,11 +321,11 @@ function recordSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: V
 }
 
 function isNearStagnationPoint(meshUuid: string, pos: Vec3): boolean {
-    return isNearSpatialPoint(stagnationCache, meshUuid, pos);
+    return isNearSpatialPoint(stagnationCache, meshUuid, pos, STAGNATION_RADIUS_SQ);
 }
 
 function recordStagnation(meshUuid: string, pos: Vec3): void {
-    recordSpatialPoint(stagnationCache, meshUuid, pos);
+    recordSpatialPoint(stagnationCache, meshUuid, pos, STAGNATION_RADIUS_SQ);
 }
 
 /**
@@ -316,8 +346,16 @@ export function calculateSmartPlacementV2(
     const diskHeight = settings.roots.diskHeightMm;
     const coneHeight = settings.roots.coneHeightMm;
     const minRoutedTrunkAngleDeg = settings.grid.minRoutedTrunkAngleDeg;
+    // maxSegmentAngleFromVerticalDeg is used for FINAL path validation — it enforces
+    // the configured trunk angle on the resolved route.  A* exploration uses a
+    // separate, more generous angle so the pathfinder can route around overhangs
+    // without being artificially constrained by the same value.
     const maxSegmentAngleFromVerticalDeg = Math.min(88, (90 - minRoutedTrunkAngleDeg) + ROUTED_DETOUR_ANGLE_SLACK_DEG);
-    const maxTotalLateralMm = Math.max(48, settings.grid.spacingMm * 12);
+    // ROUTING_ANGLE_FROM_VERTICAL_DEG: generous A* budget (80°) so the pathfinder
+    // can take lateral steps to navigate around overhangs. Final trunk angle is
+    // validated via maxSegmentAngleFromVerticalDeg after the path is resolved.
+    const ROUTING_ANGLE_FROM_VERTICAL_DEG = 80;
+    const maxTotalLateralMm = Math.max(60, settings.grid.spacingMm * 15);
 
     // 1. Standard placement (baseline — no collision check)
     const standard = calculateStandardPlacement(input);
@@ -361,59 +399,35 @@ export function calculateSmartPlacementV2(
     }
     // Preview-exhausted fast-fail: if this is a preview call and a nearby position
     // already exhausted the reduced budget, skip A* for this frame too.
-    if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos)) {
+    // Uses a tighter radius (PREVIEW_EXHAUSTED_RADIUS_SQ) than true stagnation so
+    // we don't block valid positions 1-2mm away from an exhausted query.
+    if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos, PREVIEW_EXHAUSTED_RADIUS_SQ)) {
         return { ...standard, error: 'COLLISION_WITH_MODEL', exhaustedBudget: true };
     }
 
-    // 3c. Quick vertical solvability check: sample points along the
-    //     straight-down axis AND at lateral offsets.  Only bail if the
-    //     obstruction is thick AND there's no lateral escape route.
-    const vertSpan = socketPos.z - rootTopZ;
-    if (vertSpan > 1) {
-        const VERT_SAMPLES = 7;
-        const deepThreshold = -clearance * 3;
-        let deeplyBlockedCount = 0;
-        for (let i = 1; i <= VERT_SAMPLES; i++) {
-            const t = i / (VERT_SAMPLES + 1);
-            const sz = socketPos.z - t * vertSpan;
-            if (sdf.distanceAt(socketPos.x, socketPos.y, sz) < deepThreshold) {
-                deeplyBlockedCount++;
-            }
-        }
-        // Only bail if almost ALL samples are deeply blocked — meaning true
-        // cavity with no thin-wall escape.  Also probe a few lateral offsets
-        // to confirm there's no nearby gap the A* could exploit.
-        if (deeplyBlockedCount >= 6) {
-            const PROBE_OFFSETS = [
-                clearance * 4,
-                -clearance * 4,
-                clearance * 8,
-                -clearance * 8,
-                clearance * 12,
-                -clearance * 12,
-            ];
-            let anyLateralClear = false;
-            const probeZ = socketPos.z - vertSpan * 0.5;
-            for (const off of PROBE_OFFSETS) {
-                if (sdf.distanceAt(socketPos.x + off, socketPos.y, probeZ) > clearance ||
-                    sdf.distanceAt(socketPos.x, socketPos.y + off, probeZ) > clearance) {
-                    anyLateralClear = true;
-                    break;
-                }
-            }
-            if (!anyLateralClear) {
-                recordStagnation(mesh.uuid, socketPos);
-                return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
-            }
-        }
-    }
+    // 3c. (Removed) — The vertical solvability pre-check was a false optimisation.
+    //     On overhang geometry the entire model body is directly below the socket,
+    //     so all straight-down spine samples are inside the mesh (deeply negative SDF)
+    //     AND the narrow (3–9mm) lateral probes can also be blocked by the wide
+    //     overhang, causing instant stagnation before A* even runs. V1 had no such
+    //     pre-check — it always passed the position to the search. True cavities are
+    //     correctly detected by A*'s own STAGNATION_LIMIT (250 expansions with no Z
+    //     progress) and cached in the stagnationCache afterwards.
 
     // 4. Run grid A* from socket down to rootTopZ.
     //    The goalValidator integrates roots collision into the search:
     //    when A* reaches a cell at rootTopZ, it checks that the full roots
     //    volume below that XY is clear. If not, the search continues laterally
     //    to find a valid position — proper 3D pathfinding for the whole support.
-    const warmStart = context?.warmStart ?? warmStartByModel.get(modelId) ?? null;
+    // Preview runs borrow from the full warm-start map when their own map is cold,
+    // giving 600-expansion preview A* a good starting frontier without polluting
+    // the full map with endpoint-only states. Parity re-runs pass warmStart:null
+    // explicitly via context so they always start clean.
+    const warmStart = context?.warmStart !== undefined
+        ? context.warmStart
+        : isPreview
+            ? (previewWarmStartByModel.get(modelId) ?? warmStartByModel.get(modelId) ?? null)
+            : (warmStartByModel.get(modelId) ?? null);
 
     // For preview: use the quick (reduced-sample) roots check in the goal validator.
     // The full-resolution check is reserved for click-time placement.
@@ -427,11 +441,11 @@ export function calculateSmartPlacementV2(
     const result = gridAStar(sdf, socketPos, rootTopZ, {
         clearanceMm: clearance,
         maxLateralMm: maxTotalLateralMm,
-        minAngleFromVerticalDeg: maxSegmentAngleFromVerticalDeg,
+        minAngleFromVerticalDeg: ROUTING_ANGLE_FROM_VERTICAL_DEG,
         occupancy: context?.occupancy,
         ignoreSupportId: context?.placingSupportId,
-        maxExpansions: context?.maxExpansions ?? 2000,
-        stepMm: 2.0, // Coarse grid for pathfinding; fine SDF checking at cellSize
+        maxExpansions: scaleExpansionsForStep(context?.maxExpansions ?? 2000, FINE_ASTAR_STEP_MM),
+        stepMm: FINE_ASTAR_STEP_MM,
         goalValidator,
         // For hover preview, use endpoint-only SDF checks in the A* neighbor loop.
         // The default segmentBlocked samples at 0.5mm intervals on a 2mm grid — all
@@ -442,21 +456,124 @@ export function calculateSmartPlacementV2(
         endpointOnlyCollisionCheck: isPreview,
     }, warmStart);
 
-    // Store warm-start for next frame (don't save stagnated searches)
+    // ---------- Wide-step fallback (V1 parity for large-detour overhangs) ----------
+    //
+    // V1 (SmartPlacement) used macro-jump candidates at radii 2–40mm × 16 directions,
+    // letting it traverse a 40mm lateral detour in a SINGLE expansion. V2's 2mm grid
+    // needs ~20 steps for the same distance, exhausting its 2000-expansion budget on
+    // complex overhangs before finding the clear corridor.
+    //
+    // When the fine-step search fails (exhausted budget, stagnated, or simply hit
+    // a pathfinding ceiling), retry with a 6mm grid and 600 expansions. The coarser
+    // grid gives V1-equivalent reach (10 cells × 6mm = 60mm per axis), while keeping
+    // SDF-backed precision for each edge validation. Any directed path that V1 would
+    // find in macro-jumps, V2 at 6mm step will find in similar expansion counts.
+    // Only retry if we didn't already reach a goal — don't double-process successes.
+    if (!result.reached) {
+        const wideResult = gridAStar(sdf, socketPos, rootTopZ, {
+            clearanceMm: clearance,
+            maxLateralMm: maxTotalLateralMm,
+            minAngleFromVerticalDeg: ROUTING_ANGLE_FROM_VERTICAL_DEG,
+            occupancy: context?.occupancy,
+            ignoreSupportId: context?.placingSupportId,
+            maxExpansions: scaleExpansionsForStep(600, WIDE_ASTAR_STEP_MM),
+            stepMm: WIDE_ASTAR_STEP_MM,
+            goalValidator,
+            endpointOnlyCollisionCheck: isPreview,
+        }, null); // always cold-start wide search (different grid quantisation)
+        if (wideResult.reached) {
+            // Wide-step succeeded — use its result. Don't write to warm-start maps
+            // since the 6mm grid state is incompatible with the normal 2mm warm-start.
+            const widePathJoints = wideResult.path.slice(1, -1);
+            const widePathEnd = wideResult.path[wideResult.path.length - 1];
+            // Grid-snap the base and validate angle using the routing angle (looser than final)
+            const _wpc = new Map<string, string[]>();
+            const _bncCached = (pk: string, mr: number) => {
+                const k2 = `${pk}|${mr}`;
+                const cv = _wpc.get(k2);
+                if (cv) return cv;
+                const c2 = buildNearestCandidateNodeKeys(pk, mr);
+                _wpc.set(k2, c2);
+                return c2;
+            };
+            const _ge = settings.grid.enabled;
+            const _sp = settings.grid.spacingMm;
+            const _ubp: Vec3 = { x: widePathEnd.x, y: widePathEnd.y, z: 0 };
+            const _cnk = _ge
+                ? _bncCached(gridNodeKeyFromXY(_ubp.x, _ubp.y, _sp), MAX_NEAREST_NODE_SEARCH_RINGS)
+                : ['disabled'];
+            let _best: { basePos: Vec3; snapDistance: number; nodeKey: string | null } | null = null;
+            const _wideSubGridOffset = !_ge ? {
+                x: input.tipPos.x - Math.round(input.tipPos.x / WIDE_ASTAR_STEP_MM) * WIDE_ASTAR_STEP_MM,
+                y: input.tipPos.y - Math.round(input.tipPos.y / WIDE_ASTAR_STEP_MM) * WIDE_ASTAR_STEP_MM,
+            } : null;
+            for (const nk of _cnk) {
+                let sxy = _ge ? gridSnappedXYFromKey(nk, _sp) : { x: _ubp.x, y: _ubp.y };
+                if (!_ge && _wideSubGridOffset) {
+                    sxy = {
+                        x: sxy.x + _wideSubGridOffset.x,
+                        y: sxy.y + _wideSubGridOffset.y,
+                    };
+                }
+                const bp: Vec3 = { x: sxy.x, y: sxy.y, z: 0 };
+                if (rootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
+                const sd = distanceXY(bp, _ubp);
+                if (!_best || sd < _best.snapDistance) _best = { basePos: bp, snapDistance: sd, nodeKey: nk };
+            }
+            if (!_best) {
+                _best = {
+                    basePos: { x: _ubp.x, y: _ubp.y, z: 0 },
+                    snapDistance: 0,
+                    nodeKey: null,
+                };
+            }
+            const _joints = widePathJoints.map((j: Vec3) => ({ x: j.x, y: j.y, z: j.z }));
+            const _warning = standard.warning;
+            // During exploration, use loose angle constraint for routing
+            const _explorationMaxAngleDeg = 88;
+            const _angleCheck = segmentSatisfiesLengthAwareMaxAngleFromVertical;
+            const _allSegs = [socketPos, ..._joints, { x: _best.basePos.x, y: _best.basePos.y, z: rootTopZ }];
+            let _angleOk = true;
+            for (let _si = 0; _si < _allSegs.length - 1; _si++) {
+                const _sa = _allSegs[_si];
+                const _sb = _allSegs[_si + 1];
+                if (!_angleCheck(_sa, _sb, _explorationMaxAngleDeg)) { _angleOk = false; break; }
+            }
+            if (_angleOk) {
+                return {
+                    ...standard,
+                    joints: _joints,
+                    basePos: _best.basePos,
+                    unsnappedBottomPos: _ubp,
+                    snappedNodeKey: _best.nodeKey ?? null,
+                    warning: _warning,
+                    error: undefined,
+                };
+            }
+        }
+    }
+    // Record preview-exhaustion ONLY if both passes failed, not after just fine-step.
+    if (!result.reached && isPreview && (result.hitExpansionLimit || result.stagnated)) {
+        recordSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos, PREVIEW_EXHAUSTED_RADIUS_SQ);
+    }
+
+    // Store warm-start for next frame — write to the correct map based on mode.
     if (result.warmState) {
-        warmStartByModel.set(modelId, result.warmState);
+        if (isPreview) {
+            previewWarmStartByModel.set(modelId, result.warmState);
+        } else {
+            warmStartByModel.set(modelId, result.warmState);
+        }
     }
     if (result.stagnated) {
-        // Clear warm-start so the next nearby search starts fresh
-        warmStartByModel.delete(modelId);
-        // Record this position so future hovers skip the A* entirely
-        recordStagnation(mesh.uuid, socketPos);
-    }
-    // Preview-exhausted: record budget-exhausted positions so subsequent preview
-    // hover frames at similar positions skip the A* instead of re-running it.
-    // Only recorded for isPreview calls — doesn't affect click-time placement.
-    if (result.hitExpansionLimit && context?.isPreview) {
-        recordSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos);
+        if (isPreview) {
+            previewWarmStartByModel.delete(modelId);
+        } else {
+            warmStartByModel.delete(modelId);
+        }
+        if (!isPreview) {
+            recordStagnation(mesh.uuid, socketPos);
+        }
     }
 
     if (!result.reached || result.path.length < 2) {
@@ -475,6 +592,10 @@ export function calculateSmartPlacementV2(
     const pathEnd = result.path[result.path.length - 1];
 
     // 6. Grid snap the base position
+    //    When grid is disabled, preserve the sub-grid offset from socketPos
+    //    so that nearby placements don't all converge to the same 2mm grid cell.
+    const gridEnabled = settings.grid.enabled;
+    const spacingMm = settings.grid.spacingMm;
     const nearestCandidateNodeKeysCache = new Map<string, string[]>();
     const buildNearestCandidateNodeKeysCached = (preferredKey: string, maxRings: number) => {
         const key = `${preferredKey}|${maxRings}`;
@@ -485,13 +606,19 @@ export function calculateSmartPlacementV2(
         return computed;
     };
 
-    const gridEnabled = settings.grid.enabled;
-    const spacingMm = settings.grid.spacingMm;
     const unsnappedBottomPos: Vec3 = {
         x: pathEnd.x,
         y: pathEnd.y,
         z: 0,
     };
+
+    // Pre-compute sub-grid offset when grid is disabled. This carries the
+    // user-clicked position's fractional offset through the path to ensure
+    // unique base positions even when underlying pathfinder quantizes to 2mm.
+    const subGridOffset = !gridEnabled ? {
+        x: input.tipPos.x - Math.round(input.tipPos.x / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
+        y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
+    } : null;
 
     // Find best grid node for the base
     let bestBase: {
@@ -509,9 +636,17 @@ export function calculateSmartPlacementV2(
         : ['disabled'];
 
     for (const nodeKey of candidateNodeKeys) {
-        const snappedXY = gridEnabled
+        let snappedXY = gridEnabled
             ? gridSnappedXYFromKey(nodeKey, spacingMm)
             : { x: unsnappedBottomPos.x, y: unsnappedBottomPos.y };
+
+        // When grid is disabled, apply the sub-grid offset to preserve uniqueness
+        if (!gridEnabled && subGridOffset) {
+            snappedXY = {
+                x: snappedXY.x + subGridOffset.x,
+                y: snappedXY.y + subGridOffset.y,
+            };
+        }
 
         const basePos: Vec3 = { x: snappedXY.x, y: snappedXY.y, z: 0 };
         const rootTopTarget: Vec3 = { x: snappedXY.x, y: snappedXY.y, z: rootTopZ };
