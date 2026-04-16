@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.dragonfruit.voxl+json">
+    <comment>DragonFruit VOXL Scene</comment>
+    <icon name="org.openresinalliance.dragonfruit"/>
+    <glob pattern="*.voxl"/>
+    <alias type="application/x-voxl"/>
+    <magic priority="50">
+      <match type="string" offset="0" value="VOXL"/>
+    </magic>
+  </mime-type>
+</mime-info>

@@ -73,6 +73,7 @@ For release-style builds and bundles:
    - `npm run tauri:bundle:linux`
    - `npm run tauri:bundle:macos`
    - `npm run tauri:bundle:macos:arm64`
+4. **Flatpak (Linux):** After a Linux Tauri build, run `bash flatpak/build.sh` to produce a `.flatpak` bundle in `dist/`. See [`flatpak/README.md`](flatpak/README.md) for details.
 
 ## Project Structure
 

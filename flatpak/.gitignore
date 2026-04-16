@@ -1,0 +1,5 @@
+# flatpak-builder outputs
+build-dir/
+repo/
+staging/
+.flatpak-builder/
