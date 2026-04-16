@@ -386,7 +386,12 @@ export function calculateSmartPlacementV2(
         ? !quickRootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
         : !rootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
 
+    if (!isPreview) {
+        console.log(`[SmartPlacementV2] called — socket=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)} straightClear=${straightClear} rootsFit=${rootsFitStandard}`);
+    }
+
     if (straightClear && rootsFitStandard) {
+        if (!isPreview) console.log(`[SmartPlacementV2] STRAIGHT path — no routing needed`);
         return standard; // Shaft is clear and roots fit — no routing needed
     }
 
@@ -527,25 +532,238 @@ export function calculateSmartPlacementV2(
                     nodeKey: null,
                 };
             }
-            const _joints = widePathJoints.map((j: Vec3) => ({ x: j.x, y: j.y, z: j.z }));
+            // Z-monotonicity filter (wide A* also allows limited upward moves)
+            const _rawJoints = widePathJoints.map((j: Vec3) => ({ x: j.x, y: j.y, z: j.z }));
+            const _zJoints: Vec3[] = [];
+            let _prevZ = socketPos.z;
+            for (const _wj of _rawJoints) {
+                if (_wj.z < _prevZ) { _zJoints.push(_wj); _prevZ = _wj.z; }
+            }
+
+            const _wideRootTop: Vec3 = { x: _best.basePos.x, y: _best.basePos.y, z: rootTopZ };
             const _warning = standard.warning;
-            // During exploration, use loose angle constraint for routing
-            const _explorationMaxAngleDeg = 88;
-            const _angleCheck = segmentSatisfiesLengthAwareMaxAngleFromVertical;
-            const _allSegs = [socketPos, ..._joints, { x: _best.basePos.x, y: _best.basePos.y, z: rootTopZ }];
+
+            // Run the same simplification pipeline as the fine-step path.
+            // simplifyJointsSDF collapses unnecessary bends; the zero-joint sweep
+            // then checks if a completely straight line is possible.
+            const _simplifiedJoints = simplifyJointsSDF(
+                _zJoints,
+                socketPos,
+                _wideRootTop,
+                sdf,
+                clearance,
+                maxSegmentAngleFromVerticalDeg,
+            );
+
+            // Zero-joint sweep: try a straight line to the current base, below
+            // the socket, and at small radial offsets.
+            let _finalJoints = _simplifiedJoints;
+            let _finalBase = _best;
+            let _finalRootTop = _wideRootTop;
+            let _oneJointStats: string | null = null;
+
+            if (_finalJoints.length > 0) {
+                const _sweepCandidates: Array<{ x: number; y: number }> = [
+                    { x: _best.basePos.x, y: _best.basePos.y },
+                    { x: socketPos.x, y: socketPos.y },
+                ];
+                const _sr = [1, 2, 3, 4, 6, 8, 10, 14, 18];
+                for (const _r of _sr) {
+                    if (_r > maxTotalLateralMm) break;
+                    for (let _d = 0; _d < 16; _d++) {
+                        const _a = (_d / 16) * Math.PI * 2;
+                        _sweepCandidates.push({ x: socketPos.x + Math.cos(_a) * _r, y: socketPos.y + Math.sin(_a) * _r });
+                    }
+                }
+                for (const _sc of _sweepCandidates) {
+                    const _crt: Vec3 = { x: _sc.x, y: _sc.y, z: rootTopZ };
+                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _crt, maxSegmentAngleFromVerticalDeg)) continue;
+                    if (rootsDiskBlocked(sdf, _sc.x, _sc.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
+                    if (sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, _crt.x, _crt.y, _crt.z, clearance)) continue;
+                    _finalJoints = [];
+                    _finalBase = { basePos: { x: _sc.x, y: _sc.y, z: 0 }, snapDistance: 0, nodeKey: null };
+                    _finalRootTop = _crt;
+                    break;
+                }
+
+                // ---------- One-joint minimization fallback ----------
+                // If zero-joint sweep failed but we still have 2+ joints, run a broader
+                // search that moves BOTH the bend point and base XY. This aggressively
+                // prefers a single-bend path whenever any safe one-bend route exists.
+                if (!isPreview && _finalJoints.length >= 2) {
+                    const _baseCandidates: Array<{ x: number; y: number }> = [];
+                    _baseCandidates.push({ x: _finalBase.basePos.x, y: _finalBase.basePos.y });
+                    _baseCandidates.push({ x: socketPos.x, y: socketPos.y });
+                    for (const _j of _finalJoints) _baseCandidates.push({ x: _j.x, y: _j.y });
+
+                    // Radial base sweep around current base and socket.
+                    const _baseRadii = [0.5, 1, 1.5, 2, 3, 4, 6];
+                    for (const _r of _baseRadii) {
+                        for (let _d = 0; _d < 12; _d++) {
+                            const _a = (_d / 12) * Math.PI * 2;
+                            _baseCandidates.push({
+                                x: _finalBase.basePos.x + Math.cos(_a) * _r,
+                                y: _finalBase.basePos.y + Math.sin(_a) * _r,
+                            });
+                            _baseCandidates.push({
+                                x: socketPos.x + Math.cos(_a) * _r,
+                                y: socketPos.y + Math.sin(_a) * _r,
+                            });
+                        }
+                    }
+
+                    const _jointCandidates: Vec3[] = [];
+                    for (const _j of _finalJoints) _jointCandidates.push(_j);
+
+                    // Synthesize candidate bends across Z and around the interpolated centerline.
+                    const _jointRadii = [0, 0.6, 1.2];
+                    const _zStep = 2.0;
+                    for (let _zz = socketPos.z - _zStep; _zz > rootTopZ + _zStep; _zz -= _zStep) {
+                        const _t = (socketPos.z - _zz) / (socketPos.z - rootTopZ);
+                        const _cx = socketPos.x + (_finalBase.basePos.x - socketPos.x) * _t;
+                        const _cy = socketPos.y + (_finalBase.basePos.y - socketPos.y) * _t;
+                        for (const _jr of _jointRadii) {
+                            if (_jr === 0) {
+                                _jointCandidates.push({ x: _cx, y: _cy, z: _zz });
+                                continue;
+                            }
+                            for (let _d = 0; _d < 12; _d++) {
+                                const _a = (_d / 12) * Math.PI * 2;
+                                _jointCandidates.push({
+                                    x: _cx + Math.cos(_a) * _jr,
+                                    y: _cy + Math.sin(_a) * _jr,
+                                    z: _zz,
+                                });
+                            }
+                        }
+                    }
+
+                    let _bestOneJoint:
+                        | { joint: Vec3; baseXY: { x: number; y: number }; score: number }
+                        | null = null;
+
+                    // Stats for debug visibility.
+                    let _testedPairs = 0;
+                    let _skipRoots = 0;
+                    let _skipSeg1 = 0;
+                    let _skipSeg2 = 0;
+                    let _skipAngle = 0;
+
+                    const _rootsFitCache = new Map<string, boolean>();
+                    const _rootsFitAt = (x: number, y: number): boolean => {
+                        const _k = `${x.toFixed(3)},${y.toFixed(3)}`;
+                        const _c = _rootsFitCache.get(_k);
+                        if (_c !== undefined) return _c;
+                        const _ok = !rootsDiskBlocked(sdf, x, y, diskHeight, coneHeight, rootsRadius, shaftRadius);
+                        _rootsFitCache.set(_k, _ok);
+                        return _ok;
+                    };
+
+                    for (const _bxy of _baseCandidates) {
+                        if (!_rootsFitAt(_bxy.x, _bxy.y)) {
+                            _skipRoots++;
+                            continue;
+                        }
+                        const _crt: Vec3 = { x: _bxy.x, y: _bxy.y, z: rootTopZ };
+
+                        for (const _j of _jointCandidates) {
+                            _testedPairs++;
+
+                            // Joint must remain strictly between socket and rootTop in Z.
+                            if (_j.z >= socketPos.z - 0.001 || _j.z <= rootTopZ + 0.001) {
+                                _skipAngle++;
+                                continue;
+                            }
+
+                            // socket → joint
+                            if (sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, _j.x, _j.y, _j.z, clearance)) {
+                                _skipSeg1++;
+                                continue;
+                            }
+                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _j, maxSegmentAngleFromVerticalDeg)) {
+                                _skipAngle++;
+                                continue;
+                            }
+
+                            // joint → rootTop
+                            if (sdf.segmentBlocked(_j.x, _j.y, _j.z, _crt.x, _crt.y, _crt.z, clearance)) {
+                                _skipSeg2++;
+                                continue;
+                            }
+                            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_j, _crt, maxSegmentAngleFromVerticalDeg)) {
+                                _skipAngle++;
+                                continue;
+                            }
+
+                            // Score: prefer straighter + shorter-lateral supports.
+                            const _v1x = _j.x - socketPos.x;
+                            const _v1y = _j.y - socketPos.y;
+                            const _v1z = _j.z - socketPos.z;
+                            const _v2x = _crt.x - _j.x;
+                            const _v2y = _crt.y - _j.y;
+                            const _v2z = _crt.z - _j.z;
+                            const _n1 = Math.sqrt(_v1x * _v1x + _v1y * _v1y + _v1z * _v1z);
+                            const _n2 = Math.sqrt(_v2x * _v2x + _v2y * _v2y + _v2z * _v2z);
+                            const _cos = _n1 > 1e-6 && _n2 > 1e-6
+                                ? ((_v1x * _v2x + _v1y * _v2y + _v1z * _v2z) / (_n1 * _n2))
+                                : 1;
+                            const _bendPenalty = 1 - Math.max(-1, Math.min(1, _cos));
+                            const _lateralPenalty = distanceXY({ x: socketPos.x, y: socketPos.y, z: 0 }, { x: _crt.x, y: _crt.y, z: 0 });
+                            const _score = _bendPenalty * 100 + _lateralPenalty;
+
+                            if (!_bestOneJoint || _score < _bestOneJoint.score) {
+                                _bestOneJoint = { joint: { x: _j.x, y: _j.y, z: _j.z }, baseXY: { x: _bxy.x, y: _bxy.y }, score: _score };
+                            }
+                        }
+                    }
+
+                    _oneJointStats = `pairs=${_testedPairs} rootsSkip=${_skipRoots} seg1Block=${_skipSeg1} seg2Block=${_skipSeg2} angleSkip=${_skipAngle} found=${_bestOneJoint ? 'yes' : 'no'}`;
+
+                    if (_bestOneJoint) {
+                        _finalJoints = [_bestOneJoint.joint];
+                        _finalBase = {
+                            basePos: { x: _bestOneJoint.baseXY.x, y: _bestOneJoint.baseXY.y, z: 0 },
+                            snapDistance: 0,
+                            nodeKey: null,
+                        };
+                        _finalRootTop = { x: _bestOneJoint.baseXY.x, y: _bestOneJoint.baseXY.y, z: rootTopZ };
+                    }
+                }
+            }
+
+            // Angle check on final chain
+            const _allSegs = [socketPos, ..._finalJoints, _finalRootTop];
             let _angleOk = true;
             for (let _si = 0; _si < _allSegs.length - 1; _si++) {
-                const _sa = _allSegs[_si];
-                const _sb = _allSegs[_si + 1];
-                if (!_angleCheck(_sa, _sb, _explorationMaxAngleDeg)) { _angleOk = false; break; }
+                if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(_allSegs[_si], _allSegs[_si + 1], maxSegmentAngleFromVerticalDeg)) {
+                    _angleOk = false; break;
+                }
             }
             if (_angleOk) {
+                if (!isPreview) {
+                    const _wideChain = [socketPos, ..._finalJoints, _finalRootTop];
+                    const _wideSegs = _wideChain.slice(0,-1).map((p,i) => {
+                        const q = _wideChain[i+1];
+                        const dz = q.z-p.z; const dxy = Math.sqrt((q.x-p.x)**2+(q.y-p.y)**2);
+                        const dir = dz>0.001?'⬆️UP':dz<-0.001?'⬇️dn':'➡️hz';
+                        return `  seg${i}: (${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)})→(${q.x.toFixed(2)},${q.y.toFixed(2)},${q.z.toFixed(2)}) dz=${dz.toFixed(2)} dxy=${dxy.toFixed(2)} ${dir}`;
+                    });
+                    const _wideHasRise = _wideChain.slice(0,-1).some((p,i)=>_wideChain[i+1].z>p.z+0.001);
+                    console.log(
+                        `[SmartPlacementV2] WIDE-STEP result — ${_finalJoints.length} joint(s) (raw=${_rawJoints.length} simplified=${_simplifiedJoints.length})${_wideHasRise?' ⚠️ HAS UPWARD SEGMENTS':' ✅ monotonic'}\n` +
+                        `  socket: (${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)})\n` +
+                        `  finalJoints: [${_finalJoints.map((p: Vec3)=>`(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})`).join(' ')}]\n` +
+                        `  base: (${_finalBase.basePos.x.toFixed(2)},${_finalBase.basePos.y.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)}\n` +
+                        (_oneJointStats ? `  oneJointSearch: ${_oneJointStats}\n` : '') +
+                        _wideSegs.join('\n'),
+                    );
+                }
                 return {
                     ...standard,
-                    joints: _joints,
-                    basePos: _best.basePos,
+                    joints: _finalJoints,
+                    basePos: _finalBase.basePos,
                     unsnappedBottomPos: _ubp,
-                    snappedNodeKey: _best.nodeKey ?? null,
+                    snappedNodeKey: _finalBase.nodeKey ?? null,
                     warning: _warning,
                     error: undefined,
                 };
@@ -588,7 +806,18 @@ export function calculateSmartPlacementV2(
     // 5. Convert A* path to joints + resolve grid snapping
     //    Path goes [socketPos, joint1, joint2, ..., baseRegion]
     //    We need to extract joints and find the best grid-snapped base.
-    const pathJoints = result.path.slice(1, -1); // Exclude start (socket) and end (base region)
+    //    Safety: enforce Z-monotonicity on the joints (the A* allows limited
+    //    upward moves to route around protrusions — strip any that survived
+    //    simplification so the final support never rises).
+    const rawPathJoints = result.path.slice(1, -1);
+    const pathJoints: Vec3[] = [];
+    let prevJointZ = socketPos.z;
+    for (let ji = 0; ji < rawPathJoints.length; ji++) {
+        if (rawPathJoints[ji].z < prevJointZ) {
+            pathJoints.push(rawPathJoints[ji]);
+            prevJointZ = rawPathJoints[ji].z;
+        }
+    }
     const pathEnd = result.path[result.path.length - 1];
 
     // 6. Grid snap the base position
@@ -693,13 +922,120 @@ export function calculateSmartPlacementV2(
         maxSegmentAngleFromVerticalDeg,
     );
 
+    // 7b. Path straightening — eliminate zigzag by finding a base position
+    //     where a straight (zero-joint) or single-bend (one-joint) path
+    //     clears all geometry.  The A* at 0.25mm steps creates fine-grained
+    //     detours that survive simplification; this pass searches for a
+    //     more direct alternative before accepting the zigzag.
+    let finalJoints = simplifiedJoints;
+    let finalBase = bestBase;
+
+    if (finalJoints.length > 0) {
+        // ---------- Zero-joint radial sweep ----------
+        // Search for ANY base position where a straight socket→rootTop line
+        // is collision-free and angle-valid.  Start with the obvious candidates
+        // (original base, below socket, below lowest joint) then sweep radially
+        // around the socket XY projection at increasing radii.  The first hit
+        // wins — it produces the straightest possible support.
+        const zeroJointBaseXYCandidates: Array<{ x: number; y: number }> = [];
+
+        // Priority candidates first
+        zeroJointBaseXYCandidates.push({ x: bestBase.basePos.x, y: bestBase.basePos.y });
+        zeroJointBaseXYCandidates.push({ x: socketPos.x, y: socketPos.y });
+        if (finalJoints.length > 0) {
+            const lowest = finalJoints[finalJoints.length - 1];
+            zeroJointBaseXYCandidates.push({ x: lowest.x, y: lowest.y });
+        }
+
+        // Radial sweep around socket XY — test increasing radii to find the
+        // nearest clear straight-line base.  Max radius is the A* lateral limit.
+        const sweepDirs = 16;
+        const sweepRadii = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30];
+        for (const r of sweepRadii) {
+            if (r > maxTotalLateralMm) break;
+            for (let d = 0; d < sweepDirs; d++) {
+                const a = (d / sweepDirs) * Math.PI * 2;
+                zeroJointBaseXYCandidates.push({
+                    x: socketPos.x + Math.cos(a) * r,
+                    y: socketPos.y + Math.sin(a) * r,
+                });
+            }
+        }
+
+        let foundStraight = false;
+        for (const bxy of zeroJointBaseXYCandidates) {
+            const candRootTop: Vec3 = { x: bxy.x, y: bxy.y, z: rootTopZ };
+
+            // Quick angle pre-check (avoids expensive SDF calls for bad angles)
+            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, candRootTop, maxSegmentAngleFromVerticalDeg)) continue;
+
+            // Roots must fit
+            if (rootsDiskBlocked(sdf, bxy.x, bxy.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
+
+            // Straight shaft must be clear
+            if (sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, candRootTop.x, candRootTop.y, candRootTop.z, clearance)) continue;
+
+            // Winner — zero joints, straight support
+            finalJoints = [];
+            finalBase = {
+                basePos: { x: bxy.x, y: bxy.y, z: 0 },
+                rootTopTarget: candRootTop,
+                snapDistance: distanceXY({ x: bxy.x, y: bxy.y, z: 0 }, unsnappedBottomPos),
+                nodeKey: null,
+            };
+            foundStraight = true;
+            break;
+        }
+
+        // ---------- One-joint fallback ----------
+        // If no zero-joint path exists, try reducing to a single joint.
+        if (!foundStraight && finalJoints.length >= 2) {
+            const oneJointCandidates: Array<{ joint: Vec3; baseXY: { x: number; y: number } }> = [];
+
+            // Keep first or last joint with original base
+            oneJointCandidates.push({ joint: finalJoints[0], baseXY: { x: bestBase.basePos.x, y: bestBase.basePos.y } });
+            oneJointCandidates.push({ joint: finalJoints[finalJoints.length - 1], baseXY: { x: bestBase.basePos.x, y: bestBase.basePos.y } });
+
+            // Each joint with base below it
+            for (const j of finalJoints) {
+                oneJointCandidates.push({ joint: j, baseXY: { x: j.x, y: j.y } });
+            }
+
+            for (const oc of oneJointCandidates) {
+                const candRootTop: Vec3 = { x: oc.baseXY.x, y: oc.baseXY.y, z: rootTopZ };
+
+                if (rootsDiskBlocked(sdf, oc.baseXY.x, oc.baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
+
+                // Check both segments: socket→joint and joint→rootTop
+                const seg1Ok = !sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, oc.joint.x, oc.joint.y, oc.joint.z, clearance)
+                    && segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, oc.joint, maxSegmentAngleFromVerticalDeg);
+                if (!seg1Ok) continue;
+
+                const seg2Ok = !sdf.segmentBlocked(oc.joint.x, oc.joint.y, oc.joint.z, candRootTop.x, candRootTop.y, candRootTop.z, clearance)
+                    && segmentSatisfiesLengthAwareMaxAngleFromVertical(oc.joint, candRootTop, maxSegmentAngleFromVerticalDeg);
+                if (!seg2Ok) continue;
+
+                finalJoints = [oc.joint];
+                finalBase = {
+                    basePos: { x: oc.baseXY.x, y: oc.baseXY.y, z: 0 },
+                    rootTopTarget: candRootTop,
+                    snapDistance: distanceXY({ x: oc.baseXY.x, y: oc.baseXY.y, z: 0 }, unsnappedBottomPos),
+                    nodeKey: null,
+                };
+                break;
+            }
+        }
+    }
+
     // 8. Final SDF validation of the complete chain.
-    //    Even after simplification, verify every segment is clear.
+    //    Even after simplification + straightening, verify every segment is clear.
     //    This is the last line of defense against any clipping.
+    //    Chain runs high-Z (socketPos) → low-Z (rootTopTarget) so each
+    //    segment descends and the angle helper sees positive vertical drop.
     const finalChainPoints: Vec3[] = [
-        bestBase.rootTopTarget,
-        ...simplifiedJoints,
         socketPos,
+        ...finalJoints,
+        finalBase.rootTopTarget,
     ];
 
     for (let i = 0; i < finalChainPoints.length - 1; i++) {
@@ -724,15 +1060,37 @@ export function calculateSmartPlacementV2(
     // 9. Build the result
     const finalResult: TrunkPlacementResult = {
         socketPos,
-        joints: simplifiedJoints,
+        joints: finalJoints,
         constructionJoints: [],
-        basePos: bestBase.basePos,
+        basePos: finalBase.basePos,
         unsnappedBottomPos,
-        snappedNodeKey: bestBase.nodeKey,
+        snappedNodeKey: finalBase.nodeKey,
         warning: standard.warning,
         angle: standard.angle,
         coneAxis: standard.coneAxis,
     };
+
+    if (!isPreview) {
+        // Build the full chain for logging: socket → joints → rootTop
+        const logChain = [socketPos, ...finalJoints, finalBase.rootTopTarget];
+        const segmentLog = logChain.slice(0, -1).map((pt, i) => {
+            const next = logChain[i + 1];
+            const dz = next.z - pt.z;
+            const dxy = Math.sqrt((next.x - pt.x) ** 2 + (next.y - pt.y) ** 2);
+            const dir = dz > 0.001 ? '⬆️UP' : dz < -0.001 ? '⬇️dn' : '➡️hz';
+            return `  seg${i}: (${pt.x.toFixed(2)},${pt.y.toFixed(2)},${pt.z.toFixed(2)}) → (${next.x.toFixed(2)},${next.y.toFixed(2)},${next.z.toFixed(2)}) dz=${dz.toFixed(2)} dxy=${dxy.toFixed(2)} ${dir}`;
+        });
+        const hasRise = logChain.slice(0, -1).some((pt, i) => logChain[i + 1].z > pt.z + 0.001);
+        console.log(
+            `[SmartPlacementV2] PLACED support — ${finalJoints.length} joint(s)${hasRise ? ' ⚠️ HAS UPWARD SEGMENTS' : ' ✅ monotonic'}\n` +
+            `  socket:  (${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)})\n` +
+            `  rawJoints(pre-filter): [${result.path.slice(1,-1).map(p=>`(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})`).join(' ')}]\n` +
+            `  simplifiedJoints: [${simplifiedJoints.map(p=>`(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})`).join(' ')}]\n` +
+            `  finalJoints: [${finalJoints.map(p=>`(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})`).join(' ')}]\n` +
+            `  base/rootTop: (${finalBase.basePos.x.toFixed(2)},${finalBase.basePos.y.toFixed(2)}) rootTopZ=${finalBase.rootTopTarget.z.toFixed(2)}\n` +
+            segmentLog.join('\n'),
+        );
+    }
 
     return finalResult;
 }
@@ -766,8 +1124,10 @@ function simplifyJointsSDF(
         changed = false;
 
         for (let i = 0; i < simplified.length; i++) {
-            const prev = i === 0 ? rootTopTarget : simplified[i - 1];
-            const next = i === simplified.length - 1 ? socketPos : simplified[i + 1];
+            // Chain runs high-Z (socketPos) → low-Z (rootTopTarget) so each
+            // segment descends and the angle helper sees positive vertical drop.
+            const prev = i === 0 ? socketPos : simplified[i - 1];
+            const next = i === simplified.length - 1 ? rootTopTarget : simplified[i + 1];
 
             // Check if the direct segment (skipping this joint) is clear
             if (sdf.segmentBlocked(prev.x, prev.y, prev.z, next.x, next.y, next.z, clearance)) {

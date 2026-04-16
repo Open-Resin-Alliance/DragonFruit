@@ -485,20 +485,36 @@ export function gridAStar(
 function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: number): Vec3[] {
     if (path.length <= 2) return path;
 
-    const result: Vec3[] = [path[0]];
+    // First pass: enforce Z-monotonicity.  The A* allows limited upward
+    // movement to route around protrusions, but the final support must
+    // only descend. Walk the path and track the running Z minimum;
+    // remove any waypoint that rises above the envelope.
+    let monoPath: Vec3[] = [path[0]];
+    let minZ = path[0].z;
+    for (let i = 1; i < path.length; i++) {
+        if (path[i].z <= minZ) {
+            monoPath.push(path[i]);
+            minZ = path[i].z;
+        }
+        // else: skip — this point rises above the descending envelope
+    }
+    if (monoPath.length <= 2) return monoPath;
+
+    // Second pass: greedy line-of-sight collapse.
+    const result: Vec3[] = [monoPath[0]];
     let anchor = 0;
 
-    for (let probe = 2; probe < path.length; probe++) {
-        const a = path[anchor];
-        const b = path[probe];
+    for (let probe = 2; probe < monoPath.length; probe++) {
+        const a = monoPath[anchor];
+        const b = monoPath[probe];
 
         if (sdf.segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, clearance)) {
-            // Can't skip path[probe-1], it's needed as a joint
-            result.push(path[probe - 1]);
+            // Can't skip monoPath[probe-1], it's needed as a joint
+            result.push(monoPath[probe - 1]);
             anchor = probe - 1;
         }
     }
 
-    result.push(path[path.length - 1]);
+    result.push(monoPath[monoPath.length - 1]);
     return result;
 }
