@@ -137,6 +137,19 @@ pub trait FormatEncoder: Send + Sync {
         1
     }
 
+    /// Optionally decode a single 1-based layer preview image as PNG bytes
+    /// from an already-encoded print artifact on disk.
+    fn read_layer_preview_png(
+        &self,
+        _path: &Path,
+        _layer_number: u32,
+    ) -> Result<Vec<u8>, SlicerV3Error> {
+        Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} encoder does not implement layer preview PNG decoding",
+            self.output_format()
+        )))
+    }
+
     /// Capability-aware encode entrypoint.
     ///
     /// Default implementation preserves backwards compatibility by routing to

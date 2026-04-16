@@ -2524,17 +2524,12 @@ async fn read_print_layer_png(
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        match format_hint.trim() {
-            f if f == ".ctb" || f.starts_with("ctb") => {
-                // ctb plugin does not yet implement read_layer_preview_png
-                // (present only in athena). Stub until ctb adds support.
-                Err("layer preview PNG not yet supported for .ctb files".to_string())
-            }
-            _ => {
-                // Default: NanoDLP ZIP archive (.nanodlp, athena, and any unknown format)
-                dragonfruit_slicing_engine::encoders::generated_plugin_encoders::athena_encoder::read_layer_preview_png(&source, layer_number)
-            }
-        }
+        dragonfruit_slicing_engine::engine::read_layer_preview_png_by_format_hint(
+            &source,
+            layer_number,
+            &format_hint,
+        )
+        .map_err(|err| err.to_string())
     })
     .await
     .map_err(|err| format!("Read layer task failed to join: {err}"))??;

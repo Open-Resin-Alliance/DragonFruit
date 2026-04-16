@@ -14,8 +14,7 @@ import { getJointDiameter } from '../../constants';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
-import { calculateSmartPlacement } from '../../PlacementLogic/SmartPlacement';
-import { calculateSmartPlacementV2, getOrCreateSDFCache } from '../../PlacementLogic/Pathfinding';
+import { calculateSmartPlacementV2 } from '../../PlacementLogic/Pathfinding';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
@@ -50,8 +49,8 @@ export interface TrunkBuildInput {
     tipNormal: Vec3;
     modelId: string;
     mesh?: THREE.Mesh;
-    /** When true, uses a reduced A* expansion budget and skips V1 fallback
-     *  for faster hover preview. Click placement should always use false/undefined. */
+    /** When true, uses a fast first-pass preview search and then parity-checks
+     *  collision outcomes against click-time tolerances before surfacing errors. */
     isPreview?: boolean;
     overrides?: {
         rootsDiameterMm?: number;
@@ -135,24 +134,13 @@ export function clearPlacementCache(modelId?: string): void {
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
-    // Fast-path: check placement cache before any computation.
-    // The cache covers V2 A* + V1 fallback together, keyed by quantised
-    // (tipPos, tipNormal). Only used for mesh-backed placement (hover preview).
-    if (mesh && !overrides) {
-        const pck = placementCacheKey(tipPos, tipNormal);
-        const cached = getPlacementCache(modelId, pck);
-        if (cached) {
-            return buildTrunkDataFromPlacement(input, cached);
-        }
-    }
+    // Placement computation always runs (no cache). This ensures preview and click
+    // use consistent logic and settings, preventing the mismatches that occurred
+    // when coarse preview results were cached and reused for click placement.
 
     // Read current settings
     const settings = getSettings();
     const tipProfile = buildTipProfile(settings, overrides);
-    const tipDiskLengthOverrideMm = overrides?.tipDiskLengthOverrideMm;
-
-    const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
-    const rootsDiameter = overrides?.rootsDiameterMm ?? settings.roots.diameterMm;
     const diskHeight = overrides?.rootsDiskHeightMm ?? settings.roots.diskHeightMm;
     const coneHeight = overrides?.rootsConeHeightMm ?? settings.roots.coneHeightMm;
 
@@ -171,71 +159,16 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
 
     let placement: TrunkPlacementResult;
     if (mesh) {
-        // V2 grid A* pathfinder (SDF-backed, no raycast bundles).
-        // For hover preview, use a reduced A* budget (600 vs 2000) and skip the
-        // expensive V1 raycast fallback entirely — hover preview doesn't need
-        // perfect accuracy. `isPreview` also enables the preview-exhausted spatial
-        // cache so budget-exhausted positions near steep/internal surfaces are
-        // fast-failed on subsequent hover frames instead of re-running 600 expansions.
-        // Click placement always uses full budget + V1 fallback.
-        const v2Context = isPreview ? { maxExpansions: 600, isPreview: true } : undefined;
-        const v2Result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-        if (v2Result.error === 'COLLISION_WITH_MODEL') {
-            if (isPreview) {
-                // For hover preview: skip V1 entirely to keep the first-frame cost low.
-                // A stick preview will show instead (corrects to trunk on click).
-                placement = v2Result;
-            } else if (v2Result.stagnated || v2Result.exhaustedBudget) {
-                // V2 stagnated (closed cavity) or exhausted full 2000-expansion budget
-                // — V1's raycast-bundle search is equally futile. Skip it.
-                placement = v2Result;
-            } else {
-                // Fallback to V1 raycast-based search, then SDF post-validate.
-                // V1 uses 9-ray bundles which have gaps — verify every segment
-                // of V1's result against the SDF before accepting it.
-                const v1Result = calculateSmartPlacement({ ...placementInput, mesh, modelId });
-                if (v1Result.error) {
-                    placement = v1Result; // V1 also failed — pass error through
-                } else {
-                    const sdf = getOrCreateSDFCache(mesh);
-                    sdf.refreshMatrix();
-                    const shaftRadius = settings.shaft.diameterMm / 2;
-                    const sdfClearance = shaftRadius + 0.25;
-                    // Build the chain: rootTopTarget → joints → socketPos
-                    const v1RootTop: Vec3 = { x: v1Result.basePos.x, y: v1Result.basePos.y, z: rootsTopZ };
-                    const v1Chain: Vec3[] = [
-                        v1RootTop,
-                        ...(v1Result.joints ?? []),
-                        v1Result.socketPos,
-                    ];
-                    let v1Clips = false;
-                    for (let i = 0; i < v1Chain.length - 1; i++) {
-                        const a = v1Chain[i];
-                        const b = v1Chain[i + 1];
-                        if (sdf.segmentBlocked(a.x, a.y, a.z, b.x, b.y, b.z, sdfClearance)) {
-                            v1Clips = true;
-                            break;
-                        }
-                    }
-                    if (v1Clips) {
-                        // V1's path clips the model — reject it
-                        placement = { ...v1Result, error: 'COLLISION_WITH_MODEL' };
-                    } else {
-                        placement = v1Result;
-                    }
-                }
-            }
-        } else {
-            placement = v2Result;
-        }
+        // V2 grid A* pathfinder (SDF-backed).
+        // Both preview and click use FULL collision checks to ensure consistent safety.
+        // Preview uses lower budget (1200 expansions) for responsiveness, but same
+        // collision detection rigor as click. This trades slightly slower preview
+        // exploration for correct collision avoidance.
+        const v2Context = isPreview ? { maxExpansions: 1200 } : undefined;
+        const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+        placement = result;
     } else {
         placement = calculateStandardPlacement(placementInput);
-    }
-
-    // Cache the placement result for frame-coherent hover reuse.
-    if (mesh && !overrides) {
-        const pck = placementCacheKey(tipPos, tipNormal);
-        setPlacementCache(modelId, pck, placement);
     }
 
     return buildTrunkDataFromPlacement(input, placement);
@@ -251,6 +184,20 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     const rootsDiameter = overrides?.rootsDiameterMm ?? settings.roots.diameterMm;
     const diskHeight = overrides?.rootsDiskHeightMm ?? settings.roots.diskHeightMm;
     const coneHeight = overrides?.rootsConeHeightMm ?? settings.roots.coneHeightMm;
+    const effectiveConeAxis = placement.coneAxis ?? tipNormal;
+    const diskThickness = tipProfile.type === 'disk'
+        ? (tipDiskLengthOverrideMm ?? calculateDiskThickness(tipNormal, effectiveConeAxis, tipProfile))
+        : 0;
+
+    const coneStartPos = {
+        x: tipPos.x + tipNormal.x * diskThickness,
+        y: tipPos.y + tipNormal.y * diskThickness,
+        z: tipPos.z + tipNormal.z * diskThickness,
+    };
+
+    // Always derive socket from the live tip pose so cone/body stay locked even
+    // when route data came from a quantised preview cache entry.
+    const liveSocketPos = getSocketPosition(coneStartPos, effectiveConeAxis, tipProfile);
     const rootsTopZ = diskHeight + coneHeight;
     const routeJoints = placement.joints ? [...placement.joints] : [];
     const isStraightSupport = routeJoints.length === 0;
@@ -259,13 +206,13 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         ? withCentralStraightSupportJoint({
             basePos: placement.basePos,
             rootTopZ: rootsTopZ,
-            socketPos: placement.socketPos,
+            socketPos: liveSocketPos,
         })
         : initialConstructionJoints;
     const normalizedConstructionJoints = normalizeFirstConstructionJoint({
         basePos: placement.basePos,
         rootTopZ: rootsTopZ,
-        socketPos: placement.socketPos,
+        socketPos: liveSocketPos,
         routeJoints,
         constructionJoints: initialConstructionJoints.length > 0
             ? initialConstructionJoints
@@ -275,7 +222,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     const routeBase: TrunkRouteResult = {
         kind: isStraightSupport ? 'straight' : 'routed',
         basePos: placement.basePos,
-        socketPos: placement.socketPos,
+        socketPos: liveSocketPos,
         unsnappedBottomPos: placement.unsnappedBottomPos ?? placement.basePos,
         joints: routeJoints,
         constructionJoints: normalizedConstructionJoints,
@@ -283,7 +230,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         error: placement.error,
         warning: placement.warning,
         angle: placement.angle,
-        coneAxis: placement.coneAxis,
+        coneAxis: effectiveConeAxis,
     };
     const route: TrunkRouteResult | SnappedTrunkRouteResult = placement.snappedNodeKey
         ? {
@@ -308,7 +255,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         }
         : routeBase;
 
-    const { basePos, socketPos: placementSocketPos, joints, constructionJoints, error, warning, angle, coneAxis } = route;
+    const { basePos, socketPos, joints, constructionJoints, error, warning, angle } = route;
     const routeJointPositions: Vec3[] = [...joints];
     const constructionJointPositions: Vec3[] = [...constructionJoints];
     const jointPositions: Vec3[] = [...constructionJointPositions, ...routeJointPositions];
@@ -342,19 +289,6 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     });
 
     // NEW: Calculate Socket Joint Position and Create it
-    // We need to account for the primitive thickness (offset) just like the Renderer does.
-    const effectiveConeAxis = coneAxis ?? tipNormal;
-    const diskThickness = tipProfile.type === 'disk'
-        ? (tipDiskLengthOverrideMm ?? calculateDiskThickness(tipNormal, effectiveConeAxis, tipProfile))
-        : 0;
-
-    const coneStartPos = {
-        x: tipPos.x + tipNormal.x * diskThickness,
-        y: tipPos.y + tipNormal.y * diskThickness,
-        z: tipPos.z + tipNormal.z * diskThickness,
-    };
-
-    const socketPos = placementSocketPos ?? getSocketPosition(coneStartPos, effectiveConeAxis, tipProfile);
     const socketJoint: Joint = {
         id: socketJointId,
         pos: socketPos,

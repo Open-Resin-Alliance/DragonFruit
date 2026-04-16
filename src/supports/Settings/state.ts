@@ -127,9 +127,19 @@ export function updateTipProfile(tip: Partial<SupportSettings['tip']>): void {
 }
 
 export function updateShaftProfile(shaft: Partial<SupportSettings['shaft']>): void {
+    const nextShaft = { ...currentSettings.shaft, ...shaft };
+    const nextDiameter = shaft.diameterMm;
+    const shouldSyncTipBodyDiameter = typeof nextDiameter === 'number' && Number.isFinite(nextDiameter) && nextDiameter > 0;
+
     currentSettings = {
         ...currentSettings,
-        shaft: { ...currentSettings.shaft, ...shaft },
+        shaft: nextShaft,
+        tip: shouldSyncTipBodyDiameter
+            ? {
+                ...currentSettings.tip,
+                bodyDiameterMm: nextDiameter,
+            }
+            : currentSettings.tip,
     };
     notify();
 }

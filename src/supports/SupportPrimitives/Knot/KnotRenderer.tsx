@@ -164,7 +164,9 @@ export function KnotRenderer({
 
         const handleMouseUp = () => {
             onDragEnd();
-            document.body.style.cursor = 'grab';
+            // Always clear to '' on release — if still hovering, the next
+            // pointermove/enter will re-apply 'grab' via the effect below.
+            document.body.style.cursor = '';
             window.removeEventListener('mouseup', handleMouseUp);
         };
 
@@ -176,6 +178,8 @@ export function KnotRenderer({
     React.useEffect(() => {
         if (isHovered && isInteractable) {
             document.body.style.cursor = 'grab';
+        } else {
+            document.body.style.cursor = '';
         }
     }, [isHovered, isInteractable]);
 
