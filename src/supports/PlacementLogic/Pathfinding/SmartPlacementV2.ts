@@ -488,7 +488,8 @@ export function calculateSmartPlacementV2(
             minAngleFromVerticalDeg: ROUTING_ANGLE_FROM_VERTICAL_DEG,
             occupancy: context?.occupancy,
             ignoreSupportId: context?.placingSupportId,
-            maxExpansions: scaleExpansionsForStep(600, WIDE_ASTAR_STEP_MM),
+            // Preview should remain responsive; use a smaller wide-step budget.
+            maxExpansions: scaleExpansionsForStep(isPreview ? 250 : 600, WIDE_ASTAR_STEP_MM),
             stepMm: WIDE_ASTAR_STEP_MM,
             goalValidator,
             endpointOnlyCollisionCheck: isPreview,
@@ -528,7 +529,10 @@ export function calculateSmartPlacementV2(
                     };
                 }
                 const bp: Vec3 = { x: sxy.x, y: sxy.y, z: 0 };
-                if (rootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
+                const _rootsBlocked = isPreview
+                    ? quickRootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
+                    : rootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
+                if (_rootsBlocked) continue;
                 const sd = distanceXY(bp, _ubp);
                 if (!_best || sd < _best.snapDistance) _best = { basePos: bp, snapDistance: sd, nodeKey: nk };
             }
@@ -549,6 +553,20 @@ export function calculateSmartPlacementV2(
 
             const _wideRootTop: Vec3 = { x: _best.basePos.x, y: _best.basePos.y, z: rootTopZ };
             const _warning = standard.warning;
+
+            // Preview fast-path: skip expensive simplification/straightening passes.
+            // Click-time placement still runs the full quality pipeline.
+            if (isPreview) {
+                return {
+                    ...standard,
+                    joints: _zJoints,
+                    basePos: _best.basePos,
+                    unsnappedBottomPos: _ubp,
+                    snappedNodeKey: _best.nodeKey ?? null,
+                    warning: _warning,
+                    error: undefined,
+                };
+            }
 
             // Run the same simplification pipeline as the fine-step path.
             // simplifyJointsSDF collapses unnecessary bends; the zero-joint sweep
@@ -1079,15 +1097,26 @@ export function calculateSmartPlacementV2(
         // Volumetric roots check at this grid-snapped base position.
         // Grid snapping shifts XY, so a position the A* validated may not
         // hold after snapping — recheck the full cone/disk volume.
-        if (rootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
+        const rootsBlockedAtBase = isPreview
+            ? quickRootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
+            : rootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
+        if (rootsBlockedAtBase) continue;
 
         // Check that the last shaft segment (lowest joint → rootTopTarget) is also clear
         const lastJoint = pathJoints.length > 0 ? pathJoints[pathJoints.length - 1] : pathEnd;
-        const lastSegClear = !sdf.segmentBlocked(
-            lastJoint.x, lastJoint.y, lastJoint.z,
-            rootTopTarget.x, rootTopTarget.y, rootTopTarget.z,
-            clearance,
-        );
+        const lastSegClear = isPreview
+            ? !segmentBlockedCoarse(
+                sdf,
+                lastJoint.x, lastJoint.y, lastJoint.z,
+                rootTopTarget.x, rootTopTarget.y, rootTopTarget.z,
+                clearance,
+                PREVIEW_SEGMENT_STEP_MM,
+            )
+            : !sdf.segmentBlocked(
+                lastJoint.x, lastJoint.y, lastJoint.z,
+                rootTopTarget.x, rootTopTarget.y, rootTopTarget.z,
+                clearance,
+            );
         if (!lastSegClear) continue;
 
         if (!bestBase || snapDistance < bestBase.snapDistance) {
@@ -1100,6 +1129,23 @@ export function calculateSmartPlacementV2(
         return {
             ...standard,
             error: 'COLLISION_WITH_MODEL',
+        };
+    }
+
+    // Preview fast-path: avoid expensive SDF simplification, straightening and
+    // full-chain validation on every hover frame. Click-time placement (isPreview=false)
+    // still executes the full quality pipeline below.
+    if (isPreview) {
+        return {
+            socketPos,
+            joints: pathJoints,
+            constructionJoints: [],
+            basePos: bestBase.basePos,
+            unsnappedBottomPos,
+            snappedNodeKey: bestBase.nodeKey,
+            warning: standard.warning,
+            angle: standard.angle,
+            coneAxis: standard.coneAxis,
         };
     }
 
