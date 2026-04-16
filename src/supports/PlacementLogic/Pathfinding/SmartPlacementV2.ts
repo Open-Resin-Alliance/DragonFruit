@@ -27,6 +27,7 @@ import type { SupportOccupancy } from './SupportOccupancy';
 import {
     distanceXY,
     segmentSatisfiesLengthAwareMaxAngleFromVertical,
+    segmentSatisfiesMaxAngleFromVertical,
 } from '../smartPlacementSearchUtils';
 
 // ---------- Types ----------
@@ -567,19 +568,25 @@ export function calculateSmartPlacementV2(
                     { x: _best.basePos.x, y: _best.basePos.y },
                     { x: socketPos.x, y: socketPos.y },
                 ];
-                const _sr = [1, 2, 3, 4, 6, 8, 10, 14, 18];
+                const _sr = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30];
                 for (const _r of _sr) {
                     if (_r > maxTotalLateralMm) break;
                     for (let _d = 0; _d < 16; _d++) {
                         const _a = (_d / 16) * Math.PI * 2;
                         _sweepCandidates.push({ x: socketPos.x + Math.cos(_a) * _r, y: socketPos.y + Math.sin(_a) * _r });
+                        // Also sweep around the A*-found base (often already clear of geometry)
+                        _sweepCandidates.push({ x: _best.basePos.x + Math.cos(_a) * _r, y: _best.basePos.y + Math.sin(_a) * _r });
                     }
                 }
                 for (const _sc of _sweepCandidates) {
                     const _crt: Vec3 = { x: _sc.x, y: _sc.y, z: rootTopZ };
-                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _crt, maxSegmentAngleFromVerticalDeg)) continue;
+                    // Pre-filter with flat routing angle — avoids the length-aware tightening
+                    // that caps zero-joint base positions to ~9mm radius for 22mm-tall supports.
+                    if (!segmentSatisfiesMaxAngleFromVertical(socketPos, _crt, ROUTING_ANGLE_FROM_VERTICAL_DEG)) continue;
                     if (rootsDiskBlocked(sdf, _sc.x, _sc.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
                     if (sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, _crt.x, _crt.y, _crt.z, clearance)) continue;
+                    // Final angle gate: enforce tightened constraint before committing
+                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, _crt, maxSegmentAngleFromVerticalDeg)) continue;
                     _finalJoints = [];
                     _finalBase = { basePos: { x: _sc.x, y: _sc.y, z: 0 }, snapDistance: 0, nodeKey: null };
                     _finalRootTop = _crt;
@@ -947,17 +954,30 @@ export function calculateSmartPlacementV2(
             zeroJointBaseXYCandidates.push({ x: lowest.x, y: lowest.y });
         }
 
-        // Radial sweep around socket XY — test increasing radii to find the
-        // nearest clear straight-line base.  Max radius is the A* lateral limit.
+        // Radial sweep around BOTH socket XY and A*-found base XY.
+        // The model body is directly below the socket (hence straightClear=false),
+        // so sweeping only around socket XY wastes most candidates. Sweeping
+        // around the A*-found base (which is already clear) finds viable
+        // straight-line positions much faster.
+        //
+        // Use the flat routing angle (80°) as a generous pre-filter so the
+        // search isn't limited to ~9mm radius by length-aware tightening
+        // on 22mm-tall supports. The tightened angle is enforced at commit time.
         const sweepDirs = 16;
         const sweepRadii = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30];
         for (const r of sweepRadii) {
             if (r > maxTotalLateralMm) break;
             for (let d = 0; d < sweepDirs; d++) {
                 const a = (d / sweepDirs) * Math.PI * 2;
+                // Around socket XY
                 zeroJointBaseXYCandidates.push({
                     x: socketPos.x + Math.cos(a) * r,
                     y: socketPos.y + Math.sin(a) * r,
+                });
+                // Around A*-found base XY (often on the other side of the obstacle)
+                zeroJointBaseXYCandidates.push({
+                    x: bestBase.basePos.x + Math.cos(a) * r,
+                    y: bestBase.basePos.y + Math.sin(a) * r,
                 });
             }
         }
@@ -966,14 +986,20 @@ export function calculateSmartPlacementV2(
         for (const bxy of zeroJointBaseXYCandidates) {
             const candRootTop: Vec3 = { x: bxy.x, y: bxy.y, z: rootTopZ };
 
-            // Quick angle pre-check (avoids expensive SDF calls for bad angles)
-            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, candRootTop, maxSegmentAngleFromVerticalDeg)) continue;
+            // Pre-filter with flat routing angle (80°) — avoids discarding candidates
+            // that would be reachable by A* but fail the length-aware tightening.
+            // The tightened check below gates final commit.
+            if (!segmentSatisfiesMaxAngleFromVertical(socketPos, candRootTop, ROUTING_ANGLE_FROM_VERTICAL_DEG)) continue;
 
             // Roots must fit
             if (rootsDiskBlocked(sdf, bxy.x, bxy.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
 
             // Straight shaft must be clear
             if (sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, candRootTop.x, candRootTop.y, candRootTop.z, clearance)) continue;
+
+            // Final angle gate: enforce length-aware tightened constraint before commit
+            // so we never return a geometrically invalid support.
+            if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, candRootTop, maxSegmentAngleFromVerticalDeg)) continue;
 
             // Winner — zero joints, straight support
             finalJoints = [];
