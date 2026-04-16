@@ -65,6 +65,7 @@ export class SDFCache {
         distance: 0,
         faceIndex: -1,
     };
+    private readonly _faceNormalCache = new Map<number, { x: number; y: number; z: number }>();
 
     /** Last seen matrixWorld — used to detect stale cache. */
     private readonly _lastMatrix = new THREE.Matrix4();
@@ -172,33 +173,40 @@ export class SDFCache {
      * for inside/outside determination.
      */
     private _isQueryInsideSurface(faceIndex: number): boolean {
-        const geom = this.mesh.geometry;
-        const posAttr = geom.getAttribute('position');
-        const idx = geom.index;
+        let fn = this._faceNormalCache.get(faceIndex);
 
-        // Look up vertex indices for this triangle
-        let i0: number, i1: number, i2: number;
-        if (idx) {
-            i0 = idx.getX(faceIndex * 3);
-            i1 = idx.getX(faceIndex * 3 + 1);
-            i2 = idx.getX(faceIndex * 3 + 2);
-        } else {
-            i0 = faceIndex * 3;
-            i1 = faceIndex * 3 + 1;
-            i2 = faceIndex * 3 + 2;
+        if (!fn) {
+            const geom = this.mesh.geometry;
+            const posAttr = geom.getAttribute('position');
+            const idx = geom.index;
+
+            // Look up vertex indices for this triangle
+            let i0: number, i1: number, i2: number;
+            if (idx) {
+                i0 = idx.getX(faceIndex * 3);
+                i1 = idx.getX(faceIndex * 3 + 1);
+                i2 = idx.getX(faceIndex * 3 + 2);
+            } else {
+                i0 = faceIndex * 3;
+                i1 = faceIndex * 3 + 1;
+                i2 = faceIndex * 3 + 2;
+            }
+
+            // Compute geometric face normal once and cache it.
+            const v0x = posAttr.getX(i0), v0y = posAttr.getY(i0), v0z = posAttr.getZ(i0);
+            const v1x = posAttr.getX(i1), v1y = posAttr.getY(i1), v1z = posAttr.getZ(i1);
+            const v2x = posAttr.getX(i2), v2y = posAttr.getY(i2), v2z = posAttr.getZ(i2);
+
+            const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
+            const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
+
+            fn = {
+                x: e1y * e2z - e1z * e2y,
+                y: e1z * e2x - e1x * e2z,
+                z: e1x * e2y - e1y * e2x,
+            };
+            this._faceNormalCache.set(faceIndex, fn);
         }
-
-        // Compute face normal from triangle edge cross product (local space)
-        const v0x = posAttr.getX(i0), v0y = posAttr.getY(i0), v0z = posAttr.getZ(i0);
-        const v1x = posAttr.getX(i1), v1y = posAttr.getY(i1), v1z = posAttr.getZ(i1);
-        const v2x = posAttr.getX(i2), v2y = posAttr.getY(i2), v2z = posAttr.getZ(i2);
-
-        const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
-        const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
-
-        const fnx = e1y * e2z - e1z * e2y;
-        const fny = e1z * e2x - e1x * e2z;
-        const fnz = e1x * e2y - e1y * e2x;
 
         // Direction from closest surface point → query point (local space)
         const rp = this._resultTarget.point;
@@ -207,7 +215,7 @@ export class SDFCache {
         const dz = this._localPoint.z - rp.z;
 
         // Negative dot → query point faces into the mesh interior
-        return (dx * fnx + dy * fny + dz * fnz) < 0;
+        return (dx * fn.x + dy * fn.y + dz * fn.z) < 0;
     }
 
     /**

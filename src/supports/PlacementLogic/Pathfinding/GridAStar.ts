@@ -110,6 +110,18 @@ interface AStarEntry {
     g: number;
 }
 
+interface NeighborRuntime {
+    dx: number;
+    dy: number;
+    dz: number;
+    /** sqrt(dx^2 + dy^2 + dz^2) */
+    stepCostFactor: number;
+    /** sqrt(dx^2 + dy^2) */
+    lateralCells: number;
+    /** lateral/drop for downward moves; Infinity otherwise */
+    lateralPerDrop: number;
+}
+
 // 26-connected neighborhood offsets (no (0,0,0))
 const NEIGHBORS: ReadonlyArray<{ dx: number; dy: number; dz: number; cost: number }> = (() => {
     const out: { dx: number; dy: number; dz: number; cost: number }[] = [];
@@ -123,6 +135,19 @@ const NEIGHBORS: ReadonlyArray<{ dx: number; dy: number; dz: number; cost: numbe
     }
     return out;
 })();
+
+const NEIGHBOR_RUNTIME: ReadonlyArray<NeighborRuntime> = NEIGHBORS.map((n) => {
+    const lateralCells = Math.sqrt(n.dx * n.dx + n.dy * n.dy);
+    const lateralPerDrop = n.dz < 0 ? (lateralCells / Math.abs(n.dz)) : Infinity;
+    return {
+        dx: n.dx,
+        dy: n.dy,
+        dz: n.dz,
+        stepCostFactor: n.cost,
+        lateralCells,
+        lateralPerDrop,
+    };
+});
 
 function cellKeyInt(qx: number, qy: number, qz: number): number {
     const ux = (qx + 0x4000) | 0;
@@ -199,11 +224,14 @@ export function gridAStar(
     warmStart?: WarmStartState | null,
 ): GridAStarResult {
     const step = opts.stepMm ?? 2.0; // Coarse grid for pathfinding (2mm default)
+    const invStep = 1 / step;
     const maxExp = opts.maxExpansions ?? 2000;
     const clearance = opts.clearanceMm;
     const maxLateral = opts.maxLateralMm ?? 30;
+    const maxLateralSq = maxLateral * maxLateral;
     const occupancy = opts.occupancy;
     const ignoreSupportId = opts.ignoreSupportId;
+    const endpointOnlyCollisionCheck = !!opts.endpointOnlyCollisionCheck;
 
     // Angle constraint: minimum angle from vertical in degrees
     // Converted to maximum lateral-per-vertical ratio
@@ -211,23 +239,37 @@ export function gridAStar(
     const maxLateralPerDrop = Math.tan((minAngleFromVertDeg * Math.PI) / 180);
     const goalValidator = opts.goalValidator;
 
+    // Per-neighbor static costs (independent of node position).
+    const neighborStaticCosts = new Array<number>(NEIGHBOR_RUNTIME.length);
+    for (let i = 0; i < NEIGHBOR_RUNTIME.length; i++) {
+        const n = NEIGHBOR_RUNTIME[i];
+        const moveCost = n.stepCostFactor * step;
+        const verticalityPenalty = n.lateralCells * step * 1.5;
+        let shallowAnglePenalty = 0;
+        if (n.lateralCells > 0) {
+            if (n.dz !== 0) {
+                const ratio = n.lateralPerDrop;
+                shallowAnglePenalty = ratio * ratio * step * 0.8;
+            } else {
+                // Pure horizontal: maximum angle penalty
+                shallowAnglePenalty = step * 4.0;
+            }
+        }
+        const climbPenalty = n.dz > 0 ? step * 3 : 0;
+        neighborStaticCosts[i] = moveCost + verticalityPenalty + shallowAnglePenalty + climbPenalty;
+    }
+
     // Maximum upward climb in grid cells — allows routing over protrusions
     // but prevents the path from going far above the socket
     const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
 
-    const q = (v: number) => Math.round(v / step);
+    const q = (v: number) => Math.round(v * invStep);
 
     // Quantized start / goal
     const sqx = q(startPos.x);
     const sqy = q(startPos.y);
     const sqz = q(startPos.z);
     const gqz = q(goalZ);
-
-    // Goal Z layer (directly below start) — we accept any cell at goalZ,
-    // regardless of XY position. The heuristic is therefore purely vertical
-    // (remaining cells to drop) rather than 3D octile toward a fixed goal
-    // column. A vertical-only heuristic is admissible and lets lateral moves
-    // remain cheap so overhang routing (move sideways first, then drop) works.
 
     // ---- Warm-start or fresh ----
     let openSet: AStarEntry[];
@@ -247,11 +289,7 @@ export function gridAStar(
         for (const [k, v] of warmStart.cameFrom) cameFrom.set(k, v);
     } else {
         const startKey = cellKeyInt(sqx, sqy, sqz);
-        // Pure vertical heuristic: remaining Z cells to drop to goalZ.
-        // Admissible (never over-estimates) and XY-agnostic so lateral moves
-        // are not penalised — required for overhang routing where the search
-        // must move sideways before it can descend.
-        const h = Math.max(0, sqz - gqz);
+        const h = Math.max(0, sqz - gqz); // pure vertical heuristic
         openSet = [];
         heapPush(openSet, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h });
         gScore.set(startKey, 0);
@@ -260,10 +298,6 @@ export function gridAStar(
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
 
-    // Stagnation detection: abort when truly trapped in a cavity with no
-    // way down AND no lateral progress. Limit raised to 600 so the search
-    // can complete the lateral phase of overhang routing (move sideways to
-    // escape blocked column, THEN descend) without false-positive stagnation.
     const STAGNATION_LIMIT = 600;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
@@ -274,118 +308,55 @@ export function gridAStar(
         closedSet.add(current.key);
         expansions++;
 
-        // Track Z progress for stagnation detection
         if (current.z < bestZReached) {
             bestZReached = current.z;
             lastZProgressAt = expansions;
         }
         if (expansions - lastZProgressAt > STAGNATION_LIMIT) break;
 
-        // Goal check: reached the target Z layer
         if (current.z <= gqz) {
-            // Validate the goal position (e.g., roots collision check).
-            // If validation fails, DON'T break — continue searching for a
-            // valid goal position by exploring laterally at this Z level.
             if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step)) {
                 goalEntry = current;
                 break;
             }
-            // Invalid goal — fall through to neighbor expansion so the
-            // search can explore adjacent cells at the goal level.
         }
 
-        for (let ni = 0; ni < NEIGHBORS.length; ni++) {
-            const n = NEIGHBORS[ni];
+        const cwx = current.x * step;
+        const cwy = current.y * step;
+        const cwz = current.z * step;
+
+        for (let ni = 0; ni < NEIGHBOR_RUNTIME.length; ni++) {
+            const n = NEIGHBOR_RUNTIME[ni];
             const nx = current.x + n.dx;
             const ny = current.y + n.dy;
             const nz = current.z + n.dz;
 
-            // Allow limited upward movement to route around protrusions.
-            // Without this, any geometry between socket and base is impassable.
-            if (n.dz > 0) {
-                // Only allow climbing up to maxClimbCells above the start
-                if (nz > sqz + maxClimbCells) continue;
-            }
+            if (n.dz > 0 && nz > sqz + maxClimbCells) continue;
 
             const nKey = cellKeyInt(nx, ny, nz);
             if (closedSet.has(nKey)) continue;
 
-            // Lateral constraint
             const latX = (nx - sqx) * step;
             const latY = (ny - sqy) * step;
-            const lateral = Math.sqrt(latX * latX + latY * latY);
-            if (lateral > maxLateral) continue;
+            const lateralSq = latX * latX + latY * latY;
+            if (lateralSq > maxLateralSq) continue;
 
-            // Angle constraint for downward movement
-            if (n.dz < 0) {
-                // Has vertical drop — check ratio
-                const localLateral = Math.sqrt(n.dx * n.dx + n.dy * n.dy) * step;
-                const localDrop = Math.abs(n.dz) * step;
-                if (localDrop > 0 && localLateral / localDrop > maxLateralPerDrop) continue;
-            }
-            // Horizontal (dz === 0) and upward (dz > 0) moves are always allowed
-            // within the maxLateral budget. Routing around overhangs often requires
-            // extended horizontal traversal before a clear downward path exists;
-            // restricting horizontal moves to near-goal or above-start blocks these
-            // valid routes. Final trunk angle validation happens after the path is found.
+            if (n.dz < 0 && n.lateralPerDrop > maxLateralPerDrop) continue;
 
-            // SDF collision check.
-            // Full mode: fine-resolution segment check at SDF cellSize intervals.
-            // Endpoint-only mode (preview): just check the destination cell.
-            //   The intermediate sample points in segmentBlocked are NOT grid-aligned
-            //   and can never hit the SDF cache, producing permanent cold BVH misses
-            //   on every frame. Endpoint cells ARE on the 2mm grid and are cached
-            //   after first visit, so preview A* becomes cheap on revisits.
-            const cwx = current.x * step;
-            const cwy = current.y * step;
-            const cwz = current.z * step;
             const wx = nx * step;
             const wy = ny * step;
             const wz = nz * step;
 
-            if (opts.endpointOnlyCollisionCheck
+            if (endpointOnlyCollisionCheck
                 ? sdf.isBlocked(wx, wy, wz, clearance)
                 : sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)
             ) continue;
 
-            // Support occupancy check
             if (occupancy && occupancy.isOccupied(wx, wy, wz, ignoreSupportId)) continue;
 
-            // ---- Priority-based cost function ----
-            //
-            // 1. Shortest collision-free path (base euclidean distance)
-            // 2. Greatest verticality   (penalise lateral XY movement)
-            // 3. Least shallow angles   (penalise high lateral-to-drop ratio)
-
-            // (1) Base movement cost — euclidean distance in mm
-            const moveCost = n.cost * step;
-
-            // (2) Verticality penalty — pure-vertical moves are free;
-            //     lateral component is penalised proportionally.
-            const lateralCells = Math.sqrt(n.dx * n.dx + n.dy * n.dy);
-            const verticalityPenalty = lateralCells * step * 1.5;
-
-            // (3) Shallow-angle penalty — quadratic in lateral/drop ratio
-            //     so near-vertical moves are cheap; near-horizontal expensive.
-            let shallowAnglePenalty = 0;
-            if (lateralCells > 0) {
-                if (n.dz !== 0) {
-                    const ratio = lateralCells / Math.abs(n.dz);
-                    shallowAnglePenalty = ratio * ratio * step * 0.8;
-                } else {
-                    // Pure horizontal: maximum angle penalty
-                    shallowAnglePenalty = step * 4.0;
-                }
-            }
-
-            // Proximity penalty — prefer paths with more clearance from mesh
             const dist = sdf.distanceAt(wx, wy, wz);
             const clearancePenalty = dist < clearance * 2 ? (clearance * 2 - dist) * 0.5 : 0;
-
-            // Climb penalty — heavily discourage upward movement
-            const climbPenalty = n.dz > 0 ? step * 3 : 0;
-
-            const tentativeG = current.g + moveCost + verticalityPenalty + shallowAnglePenalty + clearancePenalty + climbPenalty;
+            const tentativeG = current.g + neighborStaticCosts[ni] + clearancePenalty;
 
             const existingG = gScore.get(nKey);
             if (existingG !== undefined && tentativeG >= existingG) continue;
@@ -393,12 +364,11 @@ export function gridAStar(
             gScore.set(nKey, tentativeG);
             cameFrom.set(nKey, current.key);
 
-            const h = Math.max(0, nz - gqz); // pure vertical: remaining drop to goalZ
+            const h = Math.max(0, nz - gqz);
             heapPush(openSet, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h });
         }
     }
 
-    // ---- Reconstruct path ----
     const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
     const hitExpansionLimit = !goalEntry && !stagnated && expansions >= maxExp;
 
@@ -420,20 +390,7 @@ export function gridAStar(
 
     const rawPath: Vec3[] = [];
     let traceKey = goalEntry.key;
-    // Decode key back to coords via the gScore chain
-    // We need coord tracking — build a lookup
-    const keyToCoord = new Map<number, { x: number; y: number; z: number }>();
-    // Collect from gScore keys by replaying
-    // More efficient: we stored entries, so collect from closed set
-    // Actually, we only need the path. Let's trace via cameFrom using stored coords.
-    // Since we don't store coords per key, rebuild from the search.
-    // Better approach: store coords alongside cameFrom.
 
-    // We'll use a different data structure. Let's build coord map from all entries we processed.
-    // For efficiency, use a parallel map.
-    // Actually for the grid A*, we can decode coordinates from the key directly.
-
-    // Decode key → coords
     function decodeKey(key: number): { x: number; y: number; z: number } {
         const uz = key % 0x8000;
         const rem = (key - uz) / 0x8000;
@@ -454,10 +411,9 @@ export function gridAStar(
         traceKey = parent;
     }
 
-    rawPath.reverse(); // Now goes from start → goal
+    rawPath.reverse();
 
-    // Simplify: remove co-linear intermediate points to produce joints
-    const simplified = simplifyPath(rawPath, sdf, clearance, step);
+    const simplified = simplifyPath(rawPath, sdf, clearance, step, endpointOnlyCollisionCheck);
 
     return {
         path: simplified,
@@ -467,7 +423,7 @@ export function gridAStar(
         hitExpansionLimit: false,
         warmState: {
             socketPos: { ...startPos },
-            openEntries: [], // search complete, no reuse needed
+            openEntries: [],
             gScores: gScore,
             cameFrom,
         },
@@ -482,7 +438,7 @@ export function gridAStar(
  * This turns a zig-zag grid path into clean straight segments with
  * joints only where needed to avoid geometry.
  */
-function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: number): Vec3[] {
+function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: number, previewFastMode = false): Vec3[] {
     if (path.length <= 2) return path;
 
     // First pass: enforce Z-monotonicity.  The A* allows limited upward
@@ -499,6 +455,31 @@ function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: numb
         // else: skip — this point rises above the descending envelope
     }
     if (monoPath.length <= 2) return monoPath;
+
+    // Preview fast-mode (endpoint-only A*): preserve path geometry while
+    // removing only strictly co-linear runs. This avoids expensive LOS
+    // segmentBlocked sweeps in hover mode without changing the polyline's
+    // occupied space.
+    if (previewFastMode) {
+        const out: Vec3[] = [monoPath[0]];
+        for (let i = 1; i < monoPath.length - 1; i++) {
+            const a = monoPath[i - 1];
+            const b = monoPath[i];
+            const c = monoPath[i + 1];
+
+            const d1x = Math.round((b.x - a.x) / step);
+            const d1y = Math.round((b.y - a.y) / step);
+            const d1z = Math.round((b.z - a.z) / step);
+            const d2x = Math.round((c.x - b.x) / step);
+            const d2y = Math.round((c.y - b.y) / step);
+            const d2z = Math.round((c.z - b.z) / step);
+
+            if (d1x === d2x && d1y === d2y && d1z === d2z) continue;
+            out.push(b);
+        }
+        out.push(monoPath[monoPath.length - 1]);
+        return out;
+    }
 
     // Second pass: greedy line-of-sight collapse.
     const result: Vec3[] = [monoPath[0]];
