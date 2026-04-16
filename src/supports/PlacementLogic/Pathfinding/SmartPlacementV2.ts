@@ -59,10 +59,14 @@ export interface SmartPlacementV2Context {
 
 const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 
+// Global standoff distance from model geometry to reduce resin overexposure
+// fusion risk when supports are placed close to surfaces.
+const COLLISION_AVOIDANCE_MM = 0.4;
+
 /** Number of XY perimeter samples around the roots cone at each height slice. */
 const ROOTS_DISK_PERIMETER_SAMPLES = 16;
 /** Safety margin in mm added to all roots volume checks. */
-const ROOTS_DISK_SAFETY_MM = 0.1;
+const ROOTS_DISK_SAFETY_MM = COLLISION_AVOIDANCE_MM;
 
 /**
  * Preview-mode coarse sampling constants.
@@ -348,7 +352,7 @@ export function calculateSmartPlacementV2(
     const { mesh, modelId } = input;
     const settings = getSettings();
     const shaftRadius = settings.shaft.diameterMm / 2;
-    const clearance = shaftRadius + 0.25;
+    const clearance = shaftRadius + COLLISION_AVOIDANCE_MM;
     const rootsRadius = settings.roots.diameterMm / 2;
     const diskHeight = settings.roots.diskHeightMm;
     const coneHeight = settings.roots.coneHeightMm;
