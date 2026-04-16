@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
+import { detectPlatform } from './usePlatform';
 
-/** Returns "Cmd" on macOS, "Ctrl" on other platforms. */
 export function usePlatformModifier(): string {
-  return useMemo(() => {
-    const platform = (navigator as any).userAgentData?.platform ?? navigator.platform ?? '';
-    return platform.startsWith('Mac') ? 'Cmd' : 'Ctrl';
+  const [mod, setMod] = useState('Ctrl');
+  useEffect(() => {
+    setMod(detectPlatform() === 'mac' ? 'Cmd' : 'Ctrl');
   }, []);
+  return mod;
 }
