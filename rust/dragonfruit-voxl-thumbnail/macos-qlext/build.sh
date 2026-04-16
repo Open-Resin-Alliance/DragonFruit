@@ -48,13 +48,13 @@ cp "$SCRIPT_DIR/Sources/VoxlThumbnailExtension/Info.plist" "$CONTENTS/Info.plist
 sed -i '' 's/$(PRODUCT_MODULE_NAME)/VoxlThumbnailExtension/g' "$CONTENTS/Info.plist"
 
 echo "Stripping extended attributes..."
-xattr -rc "$APPEX" 2>/dev/null || true
+find "$APPEX" -exec xattr -c {} \; 2>/dev/null || true
 
 echo "Signing (ad-hoc with sandbox entitlement)..."
 ENTITLEMENTS="$SCRIPT_DIR/Sources/VoxlThumbnailExtension/VoxlThumbnailExtension.entitlements"
 # Use Apple Development identity if available so the extension gets a Team ID
 # (required for the QL system to load it). Falls back to ad-hoc for CI.
-SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep 'Apple Development:' | head -1 | awk '{print $2}')
+SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep 'Apple Development:' | head -1 | awk '{print $2}' || true)
 [ -z "$SIGN_IDENTITY" ] && SIGN_IDENTITY="-"
 codesign --force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APPEX"
 
