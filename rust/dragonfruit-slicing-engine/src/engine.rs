@@ -1,6 +1,8 @@
 //! V3 engine orchestration and validation layer.
 
-use crate::encoders::registry::{find_encoder, supported_output_formats};
+use crate::encoders::registry::{
+    find_encoder, find_encoder_by_hint_or_source, supported_output_formats,
+};
 use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
@@ -44,6 +46,8 @@ pub enum SlicerV3Error {
     Json(String),
     #[error("missing rendered layer payload: {0}")]
     MissingRenderedLayerPayload(String),
+    #[error("layer preview read failed: {0}")]
+    LayerPreview(String),
 }
 
 fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {
@@ -368,6 +372,35 @@ pub fn slice_and_rasterize_v3(
     perf.index_build_ns = index_ns;
 
     Ok((rendered_layers, layer_area_stats, perf))
+}
+
+/// Decode a single 1-based layer preview PNG from an encoded print artifact,
+/// dispatching through the registered format plugin by hint or file extension.
+pub fn read_layer_preview_png_by_format_hint(
+    source_path: &Path,
+    layer_number: u32,
+    format_hint: &str,
+) -> Result<Vec<u8>, SlicerV3Error> {
+    let Some(encoder) = find_encoder_by_hint_or_source(format_hint, source_path) else {
+        let requested = format_hint.trim();
+        let requested_display = if requested.is_empty() {
+            source_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| format!(".{}", ext.trim_start_matches('.')))
+                .unwrap_or_else(|| "(unknown)".to_string())
+        } else {
+            requested.to_string()
+        };
+
+        return Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} (supported: {})",
+            requested_display,
+            supported_output_formats().join(", ")
+        )));
+    };
+
+    encoder.read_layer_preview_png(source_path, layer_number)
 }
 
 /// Encode rendered layers through a registered format encoder.

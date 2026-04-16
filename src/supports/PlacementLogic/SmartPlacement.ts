@@ -22,13 +22,14 @@ export interface SmartPlacementInput extends TrunkPlacementInput {
     modelId: string;
 }
 
-const MAX_SEARCH_EXPANSIONS = 160;
-const SEARCH_RADII_MM = [2, 4, 6, 8, 10, 12, 16, 20, 24];
-const SEARCH_DROPS_MM = [2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 40];
+const MAX_SEARCH_EXPANSIONS = 220;
+const SEARCH_RADII_MM = [2, 4, 6, 8, 10, 12, 16, 20, 24, 28, 32, 40];
+const SEARCH_DROPS_MM = [2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 40, 48];
 const MIN_SEGMENT_LENGTH_MM = 0.5;
 const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
 const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
+const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
 
 function pushQueuedNode(heap: QueuedNode[], node: QueuedNode) {
     heap.push(node);
@@ -213,7 +214,8 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
     }
     const rootTopZ = input.rootsTopZ;
     const minRoutedTrunkAngleDeg = settings.grid.minRoutedTrunkAngleDeg;
-    const maxTotalLateralMm = Math.max(18, settings.grid.spacingMm * 5);
+    const effectiveMinRoutedTrunkAngleDeg = Math.max(40, minRoutedTrunkAngleDeg - ROUTED_DETOUR_ANGLE_SLACK_DEG);
+    const maxTotalLateralMm = Math.max(42, settings.grid.spacingMm * 10);
     const initialRootTopTarget: Vec3 = {
         x: standard.basePos.x,
         y: standard.basePos.y,
@@ -291,7 +293,7 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
                 gridEnabled: settings.grid.enabled,
                 spacingMm: settings.grid.spacingMm,
                 maxNearestNodeSearchRings: MAX_NEAREST_NODE_SEARCH_RINGS,
-                minRoutedTrunkAngleDeg,
+                minRoutedTrunkAngleDeg: effectiveMinRoutedTrunkAngleDeg,
                 collisionRadius,
                 mesh,
                 warning: standard.warning,
@@ -324,7 +326,7 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
                 rootTopZ,
                 mesh,
                 collisionRadius,
-                minAngleDeg: minRoutedTrunkAngleDeg,
+                minAngleDeg: effectiveMinRoutedTrunkAngleDeg,
                 maxTotalLateralMm,
                 searchRadiiMm: SEARCH_RADII_MM,
                 searchDropsMm: SEARCH_DROPS_MM,
