@@ -68,24 +68,6 @@ const ROOTS_DISK_PERIMETER_SAMPLES = 16;
 /** Safety margin in mm added to all roots volume checks. */
 const ROOTS_DISK_SAFETY_MM = COLLISION_AVOIDANCE_MM;
 
-/**
- * Preview-mode coarse sampling constants.
- *
- * The SDF cache cell size is 0.5mm; segmentBlocked samples at that interval,
- * so a 50mm straight-down shaft triggers ~100 BVH closestPointToPoint calls
- * on first hover (cold cache). rootsDiskBlocked compounds it with up to 170
- * more per check. On cold cache every call is a full BVH traversal (~0.1ms
- * on complex meshes), causing a visible hitch on the very first hover over
- * any new area of the model.
- *
- * For hover preview we use 2mm steps (matching A* step size) for segment
- * checks and a 3-slice/6-point roots sweep. This reduces first-hover BVH
- * queries from ~270 to ~50 — a 5× reduction — while keeping accuracy
- * sufficient for preview (click-time always uses full resolution).
- */
-const PREVIEW_SEGMENT_STEP_MM = 2.0;   // matches A* step size
-const ROOTS_DISK_QUICK_Z_SLICES = 3;   // vs max(4, ceil(rootTopZ/0.5)) ≈ 10
-const ROOTS_DISK_QUICK_PERIMETER_SAMPLES = 6;  // vs 16
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
 
 // Minimum vertical span (mm) that routing joints must cover.
@@ -107,65 +89,6 @@ function scaleExpansionsForStep(baseExpansionsAt2mm: number, stepMm: number): nu
     // Keep approximate travel reach comparable to historical 2mm tuning by
     // scaling expansion budget with inverse step size.
     return Math.max(1, Math.round((baseExpansionsAt2mm * LEGACY_BASE_STEP_MM) / stepMm));
-}
-
-/**
- * Coarse segment-blocked check for hover preview.
- * Samples at `stepMm` intervals instead of the SDF cell size (0.5mm),
- * trading the ability to detect very thin (< 2mm) geometry for ~4× fewer
- * BVH queries. Acceptable for preview; click-time uses the full sdf method.
- */
-function segmentBlockedCoarse(
-    sdf: SDFCache,
-    ax: number, ay: number, az: number,
-    bx: number, by: number, bz: number,
-    clearance: number,
-    stepMm: number,
-): boolean {
-    const dx = bx - ax, dy = by - ay, dz = bz - az;
-    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 0.01) return sdf.isBlocked(ax, ay, az, clearance);
-    const steps = Math.max(1, Math.ceil(len / stepMm));
-    const inv = 1 / steps;
-    for (let i = 0; i <= steps; i++) {
-        const t = i * inv;
-        if (sdf.isBlocked(ax + dx * t, ay + dy * t, az + dz * t, clearance)) return true;
-    }
-    return false;
-}
-
-/**
- * Quick (reduced-sample) roots-disk blocked check for hover preview.
- * Uses 3 Z slices and 6 perimeter points vs the full sweep (~10 slices × 17
- * points). Reduces first-hover BVH calls from ~170 to ~28 for this check.
- */
-function quickRootsDiskBlocked(
-    sdf: SDFCache,
-    centerX: number,
-    centerY: number,
-    diskHeight: number,
-    coneHeight: number,
-    rootsRadius: number,
-    shaftRadius: number,
-): boolean {
-    const safety = ROOTS_DISK_SAFETY_MM;
-    const rootTopZ = diskHeight + coneHeight;
-    for (let zi = 0; zi <= ROOTS_DISK_QUICK_Z_SLICES; zi++) {
-        const z = (zi / ROOTS_DISK_QUICK_Z_SLICES) * rootTopZ;
-        let radiusAtZ: number;
-        if (z <= diskHeight) {
-            radiusAtZ = rootsRadius;
-        } else {
-            const t = coneHeight > 0 ? (z - diskHeight) / coneHeight : 1;
-            radiusAtZ = rootsRadius + t * (shaftRadius - rootsRadius);
-        }
-        if (sdf.isBlocked(centerX, centerY, z, safety)) return true;
-        for (let i = 0; i < ROOTS_DISK_QUICK_PERIMETER_SAMPLES; i++) {
-            const angle = (i / ROOTS_DISK_QUICK_PERIMETER_SAMPLES) * Math.PI * 2;
-            if (sdf.isBlocked(centerX + Math.cos(angle) * radiusAtZ, centerY + Math.sin(angle) * radiusAtZ, z, safety)) return true;
-        }
-    }
-    return false;
 }
 
 // ---------- Roots cone volume check ----------
@@ -207,8 +130,15 @@ function rootsDiskBlocked(
             radiusAtZ = rootsRadius + t * (shaftRadius - rootsRadius);
         }
 
-        // Center at this height — catches surfaces near the axis
-        if (sdf.isBlocked(centerX, centerY, z, safety)) return true;
+        // SDF bounding-ball early-out: by the 1-Lipschitz property, if the
+        // distance at the slice center is at least `radiusAtZ + safety`, then
+        // every perimeter point at this slice is at distance ≥ safety from any
+        // surface → not blocked.  Skips ~17 isBlocked calls per open slice.
+        const centerDist = sdf.distanceAt(centerX, centerY, z);
+        if (centerDist >= radiusAtZ + safety) continue;
+
+        // Center itself failing means this slice is blocked.
+        if (centerDist < safety) return true;
 
         // Perimeter at actual cone radius at this height
         for (let i = 0; i < ROOTS_DISK_PERIMETER_SAMPLES; i++) {
@@ -384,18 +314,13 @@ export function calculateSmartPlacementV2(
     const socketPos = standard.socketPos;
     const isPreview = context?.isPreview ?? false;
 
-    // For hover preview, use coarse sampling (2mm steps) to cut first-hover
-    // BVH cache-miss queries from ~100 to ~25 for the shaft check, and from
-    // ~170 to ~28 for the roots check.  Click-time always uses full resolution.
-    const straightClear = isPreview
-        ? !segmentBlockedCoarse(sdf, socketPos.x, socketPos.y, socketPos.z, socketPos.x, socketPos.y, rootTopZ, clearance, PREVIEW_SEGMENT_STEP_MM)
-        : !sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, socketPos.x, socketPos.y, rootTopZ, clearance);
+    // Shaft + roots checks now use SDF sphere-tracing and bounding-ball
+    // early-outs, so preview no longer needs the old coarse approximations —
+    // the accurate versions are fast in open space and equally accurate.
+    const straightClear = !sdf.segmentBlocked(socketPos.x, socketPos.y, socketPos.z, socketPos.x, socketPos.y, rootTopZ, clearance);
 
-    // Volumetric roots check at the standard base position.
     const baseXY = standard.basePos;
-    const rootsFitStandard = isPreview
-        ? !quickRootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
-        : !rootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
+    const rootsFitStandard = !rootsDiskBlocked(sdf, baseXY.x, baseXY.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
 
     if (!isPreview) {
         console.log(`[SmartPlacementV2] called — socket=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)} straightClear=${straightClear} rootsFit=${rootsFitStandard}`);
@@ -445,13 +370,11 @@ export function calculateSmartPlacementV2(
             ? (previewWarmStartByModel.get(modelId) ?? warmStartByModel.get(modelId) ?? null)
             : (warmStartByModel.get(modelId) ?? null);
 
-    // For preview: use the quick (reduced-sample) roots check in the goal validator.
-    // The full-resolution check is reserved for click-time placement.
+    // Full-resolution roots validation for both preview and click-time —
+    // the SDF bounding-ball early-out makes open slices effectively free.
     const goalValidator = (wx: number, wy: number, wz: number) => {
         void wz;
-        return isPreview
-            ? !quickRootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius)
-            : !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
+        return !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
     };
 
     const result = gridAStar(sdf, socketPos, rootTopZ, {
@@ -533,10 +456,7 @@ export function calculateSmartPlacementV2(
                     };
                 }
                 const bp: Vec3 = { x: sxy.x, y: sxy.y, z: 0 };
-                const _rootsBlocked = isPreview
-                    ? quickRootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
-                    : rootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
-                if (_rootsBlocked) continue;
+                if (rootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
                 const sd = distanceXY(bp, _ubp);
                 if (!_best || sd < _best.snapDistance) _best = { basePos: bp, snapDistance: sd, nodeKey: nk };
             }
@@ -1101,27 +1021,11 @@ export function calculateSmartPlacementV2(
         // Volumetric roots check at this grid-snapped base position.
         // Grid snapping shifts XY, so a position the A* validated may not
         // hold after snapping — recheck the full cone/disk volume.
-        const rootsBlockedAtBase = isPreview
-            ? quickRootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius)
-            : rootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius);
-        if (rootsBlockedAtBase) continue;
+        if (rootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
 
         // Check that the last shaft segment (lowest joint → rootTopTarget) is also clear
         const lastJoint = pathJoints.length > 0 ? pathJoints[pathJoints.length - 1] : pathEnd;
-        const lastSegClear = isPreview
-            ? !segmentBlockedCoarse(
-                sdf,
-                lastJoint.x, lastJoint.y, lastJoint.z,
-                rootTopTarget.x, rootTopTarget.y, rootTopTarget.z,
-                clearance,
-                PREVIEW_SEGMENT_STEP_MM,
-            )
-            : !sdf.segmentBlocked(
-                lastJoint.x, lastJoint.y, lastJoint.z,
-                rootTopTarget.x, rootTopTarget.y, rootTopTarget.z,
-                clearance,
-            );
-        if (!lastSegClear) continue;
+        if (sdf.segmentBlocked(lastJoint.x, lastJoint.y, lastJoint.z, rootTopTarget.x, rootTopTarget.y, rootTopTarget.z, clearance)) continue;
 
         if (!bestBase || snapDistance < bestBase.snapDistance) {
             bestBase = { basePos, rootTopTarget, snapDistance, nodeKey: gridEnabled ? nodeKey : null };
