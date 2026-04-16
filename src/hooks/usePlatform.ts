@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
 
-/** Detect the host OS from the browser's navigator API. */
-function detectPlatform(): 'mac' | 'windows' | 'linux' | 'unknown' {
+export function detectPlatform(): 'mac' | 'windows' | 'linux' | 'unknown' {
+  if (typeof navigator === 'undefined') return 'unknown';
   const ua = (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? '';
   if (ua.startsWith('Mac') || ua === 'macOS') return 'mac';
   if (ua.startsWith('Win')) return 'windows';
@@ -9,7 +9,10 @@ function detectPlatform(): 'mac' | 'windows' | 'linux' | 'unknown' {
   return 'unknown';
 }
 
-/** Returns true when the app is running on Linux (WebKitGTK or CEF). */
 export function useIsLinux(): boolean {
-  return useMemo(() => detectPlatform() === 'linux', []);
+  const [isLinux, setIsLinux] = useState(false);
+  useEffect(() => {
+    setIsLinux(detectPlatform() === 'linux');
+  }, []);
+  return isLinux;
 }
