@@ -84,6 +84,12 @@ const ROOTS_DISK_QUICK_Z_SLICES = 3;   // vs max(4, ceil(rootTopZ/0.5)) ≈ 10
 const ROOTS_DISK_QUICK_PERIMETER_SAMPLES = 6;  // vs 16
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
 
+// Minimum vertical span (mm) that routing joints must cover.
+// If 2+ joints are all crammed into a small Z band at the tip (< this value),
+// the path is squeezing through a model crack and should be rejected rather
+// than placed as an embedded/mangled support.
+const MIN_ROUTING_Z_SPAN_MM = 5.0;
+
 // A* lattice resolution.
 // Fine pass: high-precision routing to avoid multiple supports collapsing
 // into a shared quantized root position when grid mode is disabled.
@@ -738,6 +744,25 @@ export function calculateSmartPlacementV2(
                 }
             }
 
+            // Quality gate: if still 2+ joints and they're all crammed into a
+            // tight Z band (< MIN_ROUTING_Z_SPAN_MM), the path is squeezing
+            // through a model crack — reject it rather than embed the support.
+            if (_finalJoints.length >= 2) {
+                const _routingSpan = socketPos.z - _finalJoints[_finalJoints.length - 1].z;
+                if (_routingSpan < MIN_ROUTING_Z_SPAN_MM) {
+                    if (!isPreview) {
+                        console.log(
+                            `[SmartPlacementV2] WIDE-STEP rejected — tight crack (routingSpan=${_routingSpan.toFixed(2)}mm < ${MIN_ROUTING_Z_SPAN_MM}mm with ${_finalJoints.length} joints)`,
+                        );
+                    }
+                    // No usable path — fall through to COLLISION_WITH_MODEL.
+                    return {
+                        ...standard,
+                        error: 'COLLISION_WITH_MODEL',
+                    };
+                }
+            }
+
             // Angle check on final chain
             const _allSegs = [socketPos, ..._finalJoints, _finalRootTop];
             let _angleOk = true;
@@ -1053,7 +1078,19 @@ export function calculateSmartPlacementV2(
         }
     }
 
-    // 8. Final SDF validation of the complete chain.
+    // 8. Quality gate: reject paths where routing joints are compressed into a
+    //    tight Z band near the socket — signature of squeezing through a crack.
+    if (finalJoints.length >= 2) {
+        const routingZSpan = socketPos.z - finalJoints[finalJoints.length - 1].z;
+        if (routingZSpan < MIN_ROUTING_Z_SPAN_MM) {
+            return {
+                ...standard,
+                error: 'COLLISION_WITH_MODEL',
+            };
+        }
+    }
+
+    // 8b. Final SDF validation of the complete chain.
     //    Even after simplification + straightening, verify every segment is clear.
     //    This is the last line of defense against any clipping.
     //    Chain runs high-Z (socketPos) → low-Z (rootTopTarget) so each
