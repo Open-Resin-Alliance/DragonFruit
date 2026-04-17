@@ -1,8 +1,10 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Archive, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Archive, Check, ChevronLeft, ChevronRight, Copy, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
+import hljs from 'highlight.js';
+import 'highlight.js/styles/atom-one-dark.css';
 import { writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
@@ -1195,7 +1197,7 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
 
 // ─── Step: Repo ───────────────────────────────────────────────────────────────
 
-type StepRepoProps = { meta: PluginMeta; onMetaChange: (next: PluginMeta) => void };
+type StepRepoProps = { meta: PluginMeta };
 
 function RepoStep({ n, title, description, children }: { n: number; title: string; description: string; children?: React.ReactNode }) {
   return (
@@ -1221,7 +1223,9 @@ function RepoStep({ n, title, description, children }: { n: number; title: strin
   );
 }
 
-function StepRepo({ meta, onMetaChange }: StepRepoProps) {
+function StepRepo({ meta }: StepRepoProps) {
+  const [copiedRepoLink, setCopiedRepoLink] = React.useState(false);
+
   const slug = meta.slug || 'my-plugin';
   const repoName = `df-plugin-${slug}`;
   const parsedHomepageRepo = parseGithubRepoUrl(meta.homepage);
@@ -1230,14 +1234,24 @@ function StepRepo({ meta, onMetaChange }: StepRepoProps) {
   const resolvedOwner = explicitOwner || homepageOwner || '';
   const hasValidOwner = isValidGithubOwner(resolvedOwner);
   const hasHomepageRepoUrl = parsedHomepageRepo !== null;
+  const repoOwnerSuggestion = hasValidOwner ? resolvedOwner : '<owner>';
+  const suggestedRepoUrl = `https://github.com/${repoOwnerSuggestion}/${repoName}`;
   const repoUrl = hasHomepageRepoUrl
     ? meta.homepage.trim()
     : hasValidOwner
       ? `https://github.com/${resolvedOwner}/${repoName}`
-      : '';
-  const githubNewUrl = hasValidOwner
-    ? `https://github.com/new?owner=${encodeURIComponent(resolvedOwner)}&name=${encodeURIComponent(repoName)}${meta.description ? `&description=${encodeURIComponent(meta.description)}` : ''}`
-    : '';
+      : suggestedRepoUrl;
+
+  const copyRepoLink = React.useCallback(async () => {
+    if (!repoUrl) return;
+    try {
+      await navigator.clipboard.writeText(repoUrl);
+      setCopiedRepoLink(true);
+      window.setTimeout(() => setCopiedRepoLink(false), 2000);
+    } catch {
+      // no-op
+    }
+  }, [repoUrl]);
 
   const initCmd = `git init ${repoName}\ncd ${repoName}`;
   const commitCmd = `git add .\ngit commit -m "Initial plugin setup"\ngit remote add origin ${repoUrl || '<set-valid-github-owner-or-repo-url>'}\ngit push -u origin main`;
@@ -1256,17 +1270,16 @@ function StepRepo({ meta, onMetaChange }: StepRepoProps) {
           <div className="text-[10px] uppercase font-semibold tracking-wide mb-0.5" style={{ color: 'var(--text-muted)' }}>Repository</div>
           <code className="font-mono text-sm font-semibold" style={{ color: 'var(--accent-secondary)' }}>{repoName}</code>
         </div>
-        {hasHomepageRepoUrl && (
-          <a
-            href={meta.homepage.trim()}
-            target="_blank"
-            rel="noopener noreferrer"
+        {repoUrl && (
+          <button
+            type="button"
+            onClick={() => { void copyRepoLink(); }}
             className="ui-button ui-button-secondary !h-8 !px-3 text-xs inline-flex items-center gap-1.5 shrink-0"
             style={{ color: 'var(--accent-secondary)' }}
           >
-            <ExternalLink className="h-3.5 w-3.5" />
-            View on GitHub
-          </a>
+            <Copy className="h-3.5 w-3.5" />
+            {copiedRepoLink ? 'Copied!' : 'Copy GitHub Link'}
+          </button>
         )}
         {!hasHomepageRepoUrl && !hasValidOwner && (
           <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
@@ -1281,45 +1294,16 @@ function StepRepo({ meta, onMetaChange }: StepRepoProps) {
       </RepoStep>
 
       {/* Step 2 */}
-      <RepoStep n={2} title="Create on GitHub" description="Host your plugin publicly so DragonFruit can install it.">
-        <LabeledInput
-          label="GitHub Owner"
-          helpText="Required for generator links and commands"
-          value={meta.githubOwner}
-          onChange={(v) => onMetaChange({ ...meta, githubOwner: normalizeGithubOwner(v) })}
-        />
-        {hasValidOwner ? (
-          <a
-            href={githubNewUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ui-button ui-button-secondary !h-8 !px-3 text-xs inline-flex items-center gap-1.5"
-            style={{
-              color: 'var(--accent-secondary)',
-              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-            }}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Create {repoName} in {resolvedOwner}
-          </a>
-        ) : (
-          <button
-            type="button"
-            disabled
-            aria-disabled="true"
-            className="ui-button ui-button-secondary !h-8 !px-3 text-xs inline-flex items-center gap-1.5 opacity-50 cursor-not-allowed"
-            title="Enter a valid GitHub owner/org"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Set GitHub Owner to continue
-          </button>
-        )}
-        <LabeledInput
-          label="GitHub Repository URL"
-          helpText="Optional override (paste full URL to an existing repo)"
-          value={meta.homepage}
-          onChange={(v) => onMetaChange({ ...meta, homepage: v })}
-        />
+      <RepoStep n={2} title="Create on GitHub" description="Create a repository with this exact naming pattern.">
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          Create a new GitHub repository named <code className="font-mono">{repoName}</code>.
+          <br />
+          Example: if your slug is <code className="font-mono">elegoo</code>, create <code className="font-mono">df-plugin-elegoo</code>.
+        </div>
+        <CodeBlock label="Suggested repository URL" content={suggestedRepoUrl} />
+        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          Replace <code className="font-mono">&lt;owner&gt;</code> with your GitHub username/org. To set a custom repository URL, edit <strong>Repository URL</strong> in Plugin Details.
+        </div>
       </RepoStep>
 
       {/* Step 3 */}
@@ -1347,6 +1331,11 @@ function StepRepo({ meta, onMetaChange }: StepRepoProps) {
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Git Submodule</div>
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>From your DragonFruit directory:</div>
             <code className="block font-mono text-[11px] mt-1 break-all" style={{ color: 'var(--accent-secondary)' }}>{submoduleCmd}</code>
+            <div className="mt-2 rounded-md border px-2 py-1.5 text-[11px]" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 94%)', color: 'var(--text-muted)' }}>
+              If you use the submodule route, also register the plugin in{' '}
+              <code className="font-mono">src/config/builtin-simple-plugin-allowlist.json</code>{' '}
+              so it is included in generated built-in plugin manifests.
+            </div>
           </div>
         </div>
       </RepoStep>
@@ -1356,6 +1345,31 @@ function StepRepo({ meta, onMetaChange }: StepRepoProps) {
 
 function CodeBlock({ label, content }: { label: string; content: string }) {
   const [copied, setCopied] = React.useState(false);
+
+  // Detect language from label
+  const detectLanguage = (label: string): string => {
+    const lower = label.toLowerCase();
+    if (lower.includes('json') || lower.includes('dragonfruit')) return 'json';
+    if (lower.includes('readme') || lower.includes('markdown')) return 'markdown';
+    if (lower.includes('terminal') || lower.includes('git') || lower.includes('init') || lower.includes('commit')) return 'bash';
+    if (lower.includes('structure') || lower.includes('tree')) return 'plaintext';
+    if (lower.includes('url') || lower.includes('repository')) return 'plaintext';
+    return 'plaintext';
+  };
+
+  const language = detectLanguage(label);
+  let highlightedHtml = content;
+
+  try {
+    if (language !== 'plaintext') {
+      const result = hljs.highlight(content, { language, ignoreIllegals: true });
+      highlightedHtml = result.value;
+    }
+  } catch (e) {
+    // Fallback to plain text if highlighting fails
+    highlightedHtml = content;
+  }
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(content);
@@ -1363,6 +1377,7 @@ function CodeBlock({ label, content }: { label: string; content: string }) {
       setTimeout(() => setCopied(false), 2000);
     } catch { /* no-op */ }
   };
+
   return (
     <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
       <div className="px-3 py-1.5 border-b flex items-center justify-between" style={{ background: 'var(--surface-2)', borderColor: 'var(--border-subtle)' }}>
@@ -1378,7 +1393,7 @@ function CodeBlock({ label, content }: { label: string; content: string }) {
           {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
-      <pre className="text-xs font-mono px-3 py-2 overflow-x-auto leading-relaxed" style={{ background: 'var(--surface-1)', color: 'var(--text-strong)' }}>{content}</pre>
+      <pre className="text-xs font-mono px-3 py-2 overflow-x-auto leading-relaxed hljs" style={{ background: '#282c34' }}><code dangerouslySetInnerHTML={{ __html: highlightedHtml }} /></pre>
     </div>
   );
 }
@@ -2696,8 +2711,19 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
       <CodeBlock label="dragonfruit-plugin.json" content={jsonContent} />
       <CodeBlock label="README.md" content={readmeContent} />
 
+      {slug && (
+        <div className="rounded-xl border p-3 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Next Steps</div>
+          <ol className="text-xs space-y-1 list-decimal list-inside" style={{ color: 'var(--text-muted)' }}>
+            <li>Use <strong>Write to plugins/</strong> to generate files in your local plugin folder.</li>
+            <li>Commit and push your changes to GitHub.</li>
+            <li>In DragonFruit: Plugins → Install from GitHub URL → enter your repo URL.</li>
+          </ol>
+        </div>
+      )}
+
       {canWriteToPluginsDirectory && (
-        <div className="pt-1 flex items-center justify-end">
+        <div className="pt-1 flex items-center justify-center">
           <button
             type="button"
             onClick={() => { void handleWriteToPluginsDirectory(); }}
@@ -2709,17 +2735,6 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
             <Archive className="h-3.5 w-3.5" />
             {isWritingToPluginsDir ? 'Writing…' : 'Write to plugins/'}
           </button>
-        </div>
-      )}
-
-      {slug && (
-        <div className="rounded-xl border p-3 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Next Steps</div>
-          <ol className="text-xs space-y-1 list-decimal list-inside" style={{ color: 'var(--text-muted)' }}>
-            <li>Use <strong>Write to plugins/</strong> to generate files in your local plugin folder.</li>
-            <li>Commit and push your changes to GitHub.</li>
-            <li>In DragonFruit: Plugins → Install from GitHub URL → enter your repo URL.</li>
-          </ol>
         </div>
       )}
     </div>
@@ -3299,7 +3314,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                       incompleteFields={incompletePluginDetailFields}
                     />
                   )}
-                  {currentStep === 'repo' && <StepRepo meta={meta} onMetaChange={setMeta} />}
+                  {currentStep === 'repo' && <StepRepo meta={meta} />}
                   {currentStep === 'content' && (
                     <StepContent
                       includesPrinters={includesPrinters}
@@ -3372,7 +3387,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
             </button>
 
             {isLastStep ? (
-              <button type="button" onClick={onClose} className="ui-button ui-button-secondary !h-8 !px-3 text-xs">
+              <button type="button" onClick={requestExitStudio} className="ui-button ui-button-secondary !h-8 !px-3 text-xs">
                 Close
               </button>
             ) : (
@@ -3424,7 +3439,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   </span>
                   <div>
                     <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Exit Plugin Creation Studio?
+                      Are you sure you're done with everything?
                     </h2>
                     <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                       Any unsaved progress in this session will be lost.
