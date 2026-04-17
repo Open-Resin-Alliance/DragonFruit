@@ -1757,10 +1757,103 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
 
 // ─── Step: Printers ───────────────────────────────────────────────────────────
 
+type DeleteConfirmDialogProps = {
+  isOpen: boolean;
+  title: string;
+  message: React.ReactNode;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
+
+function DeleteConfirmDialog({ isOpen, title, message, confirmLabel, onCancel, onConfirm }: DeleteConfirmDialogProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[140] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+        style={{
+          background: 'var(--surface-0)',
+          borderColor: 'var(--border-subtle)',
+          boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+        }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+          <div className="flex items-center gap-2.5">
+            <span
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+              style={{
+                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
+                background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 88%)',
+                color: '#ff8f8f',
+              }}
+            >
+              <AlertTriangle className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                {title}
+              </h2>
+              <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                {message}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+            aria-label="Close delete confirmation"
+            onClick={onCancel}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-4">
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 86%)',
+                color: '#ffd1d1',
+              }}
+              onClick={onConfirm}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type StepPrintersProps = { presets: PrinterPresetDraft[]; onChange: (next: PrinterPresetDraft[]) => void };
 
 function StepPrinters({ presets, onChange }: StepPrintersProps) {
   const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const [pendingDeletePresetIndex, setPendingDeletePresetIndex] = React.useState<number | null>(null);
 
   // Keep selectedIndex in bounds as list changes
   const clampedIndex = presets.length === 0 ? -1 : Math.min(selectedIndex, presets.length - 1);
@@ -1806,15 +1899,28 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
   const selectedPreset = clampedIndex >= 0 ? presets[clampedIndex] : null;
 
   const requestDeletePreset = React.useCallback((index: number) => {
-    const target = presets[index];
-    const label = target ? [target.manufacturer, target.name].filter(Boolean).join(' ').trim() || 'this preset' : 'this preset';
-    const shouldDelete = window.confirm(`Delete ${label}?\n\nThis action cannot be undone.`);
-    if (!shouldDelete) return;
-    deletePreset(index);
-  }, [deletePreset, presets]);
+    setPendingDeletePresetIndex(index);
+  }, []);
+
+  const cancelDeletePreset = React.useCallback(() => {
+    setPendingDeletePresetIndex(null);
+  }, []);
+
+  const confirmDeletePreset = React.useCallback(() => {
+    if (pendingDeletePresetIndex === null) return;
+    deletePreset(pendingDeletePresetIndex);
+    setPendingDeletePresetIndex(null);
+  }, [deletePreset, pendingDeletePresetIndex]);
+
+  const pendingDeletePresetLabel = React.useMemo(() => {
+    if (pendingDeletePresetIndex === null) return 'this preset';
+    const target = presets[pendingDeletePresetIndex];
+    return target ? [target.manufacturer, target.name].filter(Boolean).join(' ').trim() || 'this preset' : 'this preset';
+  }, [pendingDeletePresetIndex, presets]);
 
   return (
-    <div className="h-full min-h-0 flex gap-3">
+    <>
+      <div className="h-full min-h-0 flex gap-3">
       {/* Sidebar: preset list */}
       <div
         className="flex flex-col rounded-xl border overflow-hidden shrink-0"
@@ -1966,7 +2072,17 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
           </div>
         )}
       </div>
-    </div>
+      </div>
+
+      <DeleteConfirmDialog
+        isOpen={pendingDeletePresetIndex !== null}
+        title={`Delete ${pendingDeletePresetLabel}?`}
+        message="This action cannot be undone."
+        confirmLabel="Delete Preset"
+        onCancel={cancelDeletePreset}
+        onConfirm={confirmDeletePreset}
+      />
+    </>
   );
 }
 
@@ -2359,7 +2475,9 @@ type StepMaterialsProps = { templates: MaterialTemplateDraft[]; onChange: (next:
 function StepMaterials({ templates, onChange }: StepMaterialsProps) {
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const [expandedMaterialGroups, setExpandedMaterialGroups] = React.useState<Set<string>>(() => new Set());
   const [expandedManufacturerFolders, setExpandedManufacturerFolders] = React.useState<Set<string>>(() => new Set());
+  const [pendingDeleteMaterialIndex, setPendingDeleteMaterialIndex] = React.useState<number | null>(null);
 
   const targetOptions = React.useMemo<PresetTargetOption[]>(() => {
     return buildTargetOptionsFromAvailablePresets();
@@ -2380,10 +2498,7 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
   const groupedMaterials = React.useMemo(() => {
     const groups = new Map<string, { index: number; template: MaterialTemplateDraft }[]>();
     templates.forEach((template, index) => {
-      const materialLabel = [template.draft.brand, template.draft.name]
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .join(' — ') || 'New Material';
+      const materialLabel = template.draft.name.trim() || 'New Material';
       if (!groups.has(materialLabel)) groups.set(materialLabel, []);
       groups.get(materialLabel)?.push({ index, template });
     });
@@ -2417,6 +2532,18 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
       .sort((a, b) => a.materialLabel.localeCompare(b.materialLabel));
   }, [targetOptionById, templates]);
 
+  const toggleMaterialGroup = React.useCallback((materialLabel: string) => {
+    setExpandedMaterialGroups((previous) => {
+      const next = new Set(previous);
+      if (next.has(materialLabel)) {
+        next.delete(materialLabel);
+      } else {
+        next.add(materialLabel);
+      }
+      return next;
+    });
+  }, []);
+
   const toggleManufacturerFolder = React.useCallback((folderKey: string) => {
     setExpandedManufacturerFolders((previous) => {
       const next = new Set(previous);
@@ -2447,23 +2574,40 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
     setSelectedIndex(next.length - 1);
   }, [onChange, templates]);
 
-  const requestDeleteMaterialTemplate = React.useCallback((index: number) => {
-    const template = templates[index];
-    const name = template
-      ? [template.draft.brand, template.draft.name].filter(Boolean).join(' — ') || 'this material preset'
-      : 'this material preset';
-    const shouldDelete = window.confirm(`Delete ${name}?\n\nThis action cannot be undone.`);
-    if (!shouldDelete) return;
+  const deleteMaterialTemplate = React.useCallback((index: number) => {
     const next = templates.filter((_, i) => i !== index);
     onChange(next);
     setSelectedIndex((prev) => Math.min(prev, Math.max(0, next.length - 1)));
   }, [onChange, templates]);
 
+  const requestDeleteMaterialTemplate = React.useCallback((index: number) => {
+    setPendingDeleteMaterialIndex(index);
+  }, []);
+
+  const cancelDeleteMaterialTemplate = React.useCallback(() => {
+    setPendingDeleteMaterialIndex(null);
+  }, []);
+
+  const confirmDeleteMaterialTemplate = React.useCallback(() => {
+    if (pendingDeleteMaterialIndex === null) return;
+    deleteMaterialTemplate(pendingDeleteMaterialIndex);
+    setPendingDeleteMaterialIndex(null);
+  }, [deleteMaterialTemplate, pendingDeleteMaterialIndex]);
+
+  const pendingDeleteMaterialLabel = React.useMemo(() => {
+    if (pendingDeleteMaterialIndex === null) return 'this material preset';
+    const template = templates[pendingDeleteMaterialIndex];
+    return template
+      ? [template.draft.brand, template.draft.name].filter(Boolean).join(' — ') || 'this material preset'
+      : 'this material preset';
+  }, [pendingDeleteMaterialIndex, templates]);
+
   const selectedTemplate = clampedIndex >= 0 ? templates[clampedIndex] : null;
   const selectedTarget = selectedTemplate ? targetOptionById.get(selectedTemplate.targetPresetId) ?? null : null;
 
   return (
-    <div className="h-full min-h-0 flex flex-col gap-2.5">
+    <>
+      <div className="h-full min-h-0 flex flex-col gap-2.5">
       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
         Define material presets as printer-bound variants. Same resin can have multiple entries targeting different printer presets.
       </div>
@@ -2498,85 +2642,114 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                 No material presets yet.
               </div>
             ) : (
-              groupedMaterials.map(({ materialLabel, manufacturerGroups }) => (
-                <div key={materialLabel}>
-                  <div
-                    className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest border-b flex items-center justify-between gap-2"
-                    style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), black 8%)' }}
-                  >
-                    <span className="truncate">{materialLabel}</span>
-                    <span className="tabular-nums">{manufacturerGroups.reduce((total, group) => total + group.members.length, 0)}</span>
-                  </div>
+              groupedMaterials.map(({ materialLabel, manufacturerGroups }) => {
+                const isMaterialExpanded = expandedMaterialGroups.has(materialLabel);
+                const materialVariantCount = manufacturerGroups.reduce((total, group) => total + group.members.length, 0);
 
-                  {manufacturerGroups.map(({ manufacturer, members }) => {
-                    const folderKey = `${materialLabel}::${manufacturer}`;
-                    const isExpanded = expandedManufacturerFolders.has(folderKey);
+                return (
+                  <div key={materialLabel} className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleMaterialGroup(materialLabel)}
+                      className="w-full px-3 py-1.5 text-left flex items-center justify-between gap-2"
+                      style={{ background: 'color-mix(in srgb, var(--surface-1), black 8%)' }}
+                      aria-expanded={isMaterialExpanded}
+                      aria-label={`${materialLabel} material profile`}
+                    >
+                      <span className="min-w-0 inline-flex items-center gap-1.5">
+                        <ChevronDown
+                          className="h-3.5 w-3.5 shrink-0 transition-transform"
+                          style={{ color: 'var(--text-muted)', transform: isMaterialExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                        />
+                        <span className="text-[10px] font-semibold uppercase tracking-widest truncate" style={{ color: 'var(--text-muted)' }}>
+                          {materialLabel}
+                        </span>
+                      </span>
+                      <span className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>{materialVariantCount}</span>
+                    </button>
 
-                    return (
-                      <div key={folderKey} className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-                        <button
-                          type="button"
-                          onClick={() => toggleManufacturerFolder(folderKey)}
-                          className="w-full px-3 py-1.5 text-left flex items-center justify-between gap-2"
-                          style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 12%)' }}
-                          aria-expanded={isExpanded}
-                          aria-label={`${manufacturer} printer folder`}
-                        >
-                          <span className="min-w-0 inline-flex items-center gap-1.5">
-                            <ChevronDown
-                              className="h-3.5 w-3.5 shrink-0 transition-transform"
-                              style={{ color: 'var(--text-muted)', transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
-                            />
-                            <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>
-                              {manufacturer}
-                            </span>
-                          </span>
-                          <span className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>{members.length}</span>
-                        </button>
+                    {isMaterialExpanded && (
+                      <div
+                        className="relative"
+                        style={{ background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%)' }}
+                      >
+                        <span
+                          className="pointer-events-none absolute left-3 top-0 bottom-0 w-px"
+                          style={{ background: 'color-mix(in srgb, var(--accent-secondary), transparent 74%)' }}
+                        />
 
-                        {isExpanded && members.map(({ index, template }) => {
-                          const target = targetOptionById.get(template.targetPresetId);
-                          const label = target?.label || 'Select printer';
-                          const active = index === clampedIndex;
-                          const scopeLabel = target?.outputFormat || 'No format yet';
+                        {manufacturerGroups.map(({ manufacturer, members }) => {
+                          const folderKey = `${materialLabel}::${manufacturer}`;
+                          const isExpanded = expandedManufacturerFolders.has(folderKey);
 
                           return (
-                            <div
-                              key={index}
-                              className="group grid grid-cols-[4px_minmax(0,1fr)_auto] items-center gap-2 border-t"
-                              style={{
-                                borderColor: 'var(--border-subtle)',
-                                background: active
-                                  ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)'
-                                  : 'transparent',
-                              }}
-                            >
-                              <span className="h-full" style={{ background: active ? 'var(--accent-secondary)' : 'transparent' }} />
-                              <button type="button" onClick={() => setSelectedIndex(index)} className="min-w-0 text-left py-2">
-                                <div className="text-xs font-medium truncate leading-tight" style={{ color: active ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
-                                  {label}
-                                </div>
-                                <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>
-                                  {scopeLabel}
-                                </div>
-                              </button>
+                            <div key={folderKey} className="border-t pl-2" style={{ borderColor: 'var(--border-subtle)' }}>
                               <button
                                 type="button"
-                                onClick={() => requestDeleteMaterialTemplate(index)}
-                                className="ui-button ui-button-ghost !h-5 !w-5 !p-0 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
-                                aria-label="Delete material"
-                                title="Delete material"
+                                onClick={() => toggleManufacturerFolder(folderKey)}
+                                className="w-full pl-4 pr-3 py-1.5 text-left flex items-center justify-between gap-2"
+                                style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 18%)' }}
+                                aria-expanded={isExpanded}
+                                aria-label={`${manufacturer} printer folder`}
                               >
-                                <Trash2 className="h-3 w-3" style={{ color: '#ff8f8f' }} />
+                                <span className="min-w-0 inline-flex items-center gap-1.5">
+                                  <span
+                                    className="h-px w-2 shrink-0"
+                                    style={{ background: 'color-mix(in srgb, var(--accent-secondary), transparent 62%)' }}
+                                  />
+                                  <ChevronDown
+                                    className="h-3.5 w-3.5 shrink-0 transition-transform"
+                                    style={{ color: 'var(--text-muted)', transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                                  />
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>
+                                    {manufacturer}
+                                  </span>
+                                </span>
+                                <span className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>{members.length}</span>
                               </button>
+
+                              {isExpanded && members.map(({ index, template }) => {
+                                const target = targetOptionById.get(template.targetPresetId);
+                                const label = target?.label || 'Select printer';
+                                const active = index === clampedIndex;
+
+                                return (
+                                  <div
+                                    key={index}
+                                    className="group grid grid-cols-[4px_minmax(0,1fr)_auto] items-center gap-2 border-t ml-5"
+                                    style={{
+                                      borderColor: 'var(--border-subtle)',
+                                      background: active
+                                        ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)'
+                                        : 'color-mix(in srgb, var(--surface-1), transparent 22%)',
+                                    }}
+                                  >
+                                    <span className="h-full" style={{ background: active ? 'var(--accent-secondary)' : 'color-mix(in srgb, var(--accent-secondary), transparent 82%)' }} />
+                                    <button type="button" onClick={() => setSelectedIndex(index)} className="min-w-0 text-left py-2">
+                                      <div className="text-xs font-medium truncate leading-tight" style={{ color: active ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
+                                        {label}
+                                      </div>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => requestDeleteMaterialTemplate(index)}
+                                      className="ui-button ui-button-ghost !h-5 !w-5 !p-0 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
+                                      aria-label="Delete material"
+                                      title="Delete material"
+                                    >
+                                      <Trash2 className="h-3 w-3" style={{ color: '#ff8f8f' }} />
+                                    </button>
+                                  </div>
+                                );
+                              })}
                             </div>
                           );
                         })}
                       </div>
-                    );
-                  })}
-                </div>
-              ))
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -2659,7 +2832,17 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
           )}
         </div>
       </div>
-    </div>
+      </div>
+
+      <DeleteConfirmDialog
+        isOpen={pendingDeleteMaterialIndex !== null}
+        title={`Delete ${pendingDeleteMaterialLabel}?`}
+        message="This action cannot be undone."
+        confirmLabel="Delete Material"
+        onCancel={cancelDeleteMaterialTemplate}
+        onConfirm={confirmDeleteMaterialTemplate}
+      />
+    </>
   );
 }
 
