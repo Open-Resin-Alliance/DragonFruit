@@ -18,9 +18,13 @@
 
 app-id: org.openresinalliance.dragonfruit
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
 command: dragonfruit
+# Keep local/self-hosted builds working on minimal hosts where the legacy
+# `appstream-compose` executable is absent. We still validate metainfo explicitly
+# in flatpak/build.sh before invoking flatpak-builder.
+appstream-compose: false
 
 finish-args:
   # CEF zygote ↔ renderer shared memory
@@ -59,7 +63,7 @@ modules:
       # Binary + CEF runtime under /app/lib/
       - install -Dm755 staging/bin/dragonfruit-desktop /app/lib/dragonfruit/dragonfruit-desktop
       - install -d /app/lib/dragonfruit/cef
-      - 'cp -a staging/cef/. /app/lib/dragonfruit/cef/'
+      - "cp -a staging/cef/. /app/lib/dragonfruit/cef/"
 
       # Launcher at /app/bin/dragonfruit
       - install -Dm755 staging/launcher.sh /app/bin/dragonfruit
