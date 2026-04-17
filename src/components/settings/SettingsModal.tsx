@@ -970,7 +970,7 @@ export function SettingsModal({
                                   Ty Mansfield
                                 </div>
                                 <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  TableFlip Foundry, Open Resin Alliance
+                                  Open Resin Alliance & Tableflip Foundry
                                 </div>
                                 <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                                   Core Framework, Supports, Bugfixes, and General Mayhem
@@ -1050,8 +1050,106 @@ export function SettingsModal({
                               >
                                 Contributor
                               </div>
+                              
                             </div>
                           </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Magistr
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  umag
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Support Tooling, Physics, and General Bugfixes. Linux Builds mysteriously work better when he's around, but who knows why.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Tim
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  tslater2006
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Anycubic Photon Support, Testing, and Bugfixes. Prints fun stuff.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Ada Phillips
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Open Resin Alliance
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Ensures the software doesn't set itself on fire.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
                         </div>
                       </div>
 
