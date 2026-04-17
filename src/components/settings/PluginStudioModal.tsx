@@ -309,6 +309,11 @@ type PrinterPresetSplitFile = {
   content: string;
 };
 
+type MaterialPresetSplitFile = {
+  relativePath: string;
+  content: string;
+};
+
 function buildPrinterPresetSplitFiles(printerPresets: PrinterPresetDraft[]): PrinterPresetSplitFile[] {
   if (printerPresets.length === 0) return [];
 
@@ -335,7 +340,27 @@ function buildPrinterPresetSplitFiles(printerPresets: PrinterPresetDraft[]): Pri
     });
 }
 
-function materialTemplateDraftToJson(d: MaterialTemplateDraft): Record<string, unknown> {
+function deriveMaterialPresetFileStem(targetPresetId: string, target: PresetTargetOption | undefined): string {
+  const manufacturerSlug = slugifyPathSegment(target?.manufacturer || 'unassigned');
+  let stem = targetPresetId.trim().toLowerCase();
+
+  if (manufacturerSlug && stem.startsWith(`${manufacturerSlug}-`)) {
+    stem = stem.slice(manufacturerSlug.length + 1);
+  }
+
+  const outputFormatSlug = slugifyPathSegment((target?.outputFormat || '').replace(/^\./, ''));
+  if (outputFormatSlug && stem.endsWith(`-${outputFormatSlug}`)) {
+    stem = stem.slice(0, -(`-${outputFormatSlug}`.length));
+  }
+
+  const fallback = target?.label || targetPresetId || 'unassigned';
+  return slugifyPathSegment(stem || fallback);
+}
+
+function materialTemplateDraftToJson(
+  d: MaterialTemplateDraft,
+  targetOptionById?: Map<string, PresetTargetOption>,
+): Record<string, unknown> {
   const { localSettingsByOutput: _local, ...rest } = d.draft as Record<string, unknown>;
   const template: Record<string, unknown> = { ...rest };
   const selectedPresetId = d.targetPresetId.trim();
@@ -343,7 +368,8 @@ function materialTemplateDraftToJson(d: MaterialTemplateDraft): Record<string, u
   if (selectedPresetId) {
     template['validForPresets'] = [selectedPresetId];
 
-    const matchingPreset = buildTargetOptionsFromAvailablePresets().find((preset) => preset.presetId === selectedPresetId);
+    const matchingPreset = targetOptionById?.get(selectedPresetId)
+      ?? buildTargetOptionsFromAvailablePresets().find((preset) => preset.presetId === selectedPresetId);
     const resolvedFormat = matchingPreset?.outputFormat ?? '';
     if (resolvedFormat) {
       const localSettings = d.localSettingsByOutput[resolvedFormat] ?? {};
@@ -364,12 +390,49 @@ function materialTemplateDraftToJson(d: MaterialTemplateDraft): Record<string, u
   return template;
 }
 
+function buildMaterialPresetSplitFiles(
+  materialTemplates: MaterialTemplateDraft[],
+  targetOptionById: Map<string, PresetTargetOption>,
+): MaterialPresetSplitFile[] {
+  if (materialTemplates.length === 0) return [];
+
+  const grouped = new Map<string, MaterialTemplateDraft[]>();
+
+  materialTemplates.forEach((template) => {
+    const selectedPresetId = template.targetPresetId.trim();
+    if (!selectedPresetId) return;
+
+    const target = targetOptionById.get(selectedPresetId);
+    const manufacturerSegment = slugifyPathSegment(target?.manufacturer || 'unassigned');
+    const fileStem = deriveMaterialPresetFileStem(selectedPresetId, target);
+    const relativePath = `materials/${manufacturerSegment}/${fileStem}.json`;
+
+    if (!grouped.has(relativePath)) grouped.set(relativePath, []);
+    grouped.get(relativePath)?.push(template);
+  });
+
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([relativePath, members]) => {
+      const orderedMembers = [...members].sort((a, b) => {
+        const aLabel = `${a.draft.brand} ${a.draft.name}`.trim() || 'Material';
+        const bLabel = `${b.draft.brand} ${b.draft.name}`.trim() || 'Material';
+        return aLabel.localeCompare(bLabel);
+      });
+
+      return {
+        relativePath,
+        content: JSON.stringify(orderedMembers.map((template) => materialTemplateDraftToJson(template, targetOptionById)), null, 2),
+      };
+    });
+}
+
 function buildPluginJson(
   meta: PluginMeta,
   includesPrinters: boolean,
   includesMaterials: boolean,
   printerPresets: PrinterPresetDraft[],
-  materialTemplates: MaterialTemplateDraft[],
+  materialPresetFiles: MaterialPresetSplitFile[],
 ): string {
   const normalizedSlug = meta.slug.trim() || 'my-plugin';
   const manifestId = normalizedSlug.startsWith('df-plugin-')
@@ -389,8 +452,8 @@ function buildPluginJson(
     const splitFiles = buildPrinterPresetSplitFiles(printerPresets);
     manifest['printerPresetPaths'] = splitFiles.map((file) => file.relativePath);
   }
-  if (includesMaterials && materialTemplates.length > 0) {
-    manifest['materialPresets'] = materialTemplates.map(materialTemplateDraftToJson);
+  if (includesMaterials && materialPresetFiles.length > 0) {
+    manifest['materialPresetPaths'] = materialPresetFiles.map((file) => file.relativePath);
   }
   return JSON.stringify(manifest, null, 2);
 }
@@ -482,24 +545,36 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
-function getIncompletePluginDetailFields(meta: PluginMeta): string[] {
+function getIncompletePluginDetailFields(
+  meta: PluginMeta,
+  options: { allowMissingAttribution?: boolean } = {},
+): string[] {
+  const { allowMissingAttribution = false } = options;
   const incomplete: string[] = [];
 
   if (!meta.name.trim()) incomplete.push('Display Name');
   if (!meta.slug.trim()) incomplete.push('Slug');
   if (!meta.version.trim()) incomplete.push('Version');
-  if (!meta.author.trim()) incomplete.push('Author');
+  if (!allowMissingAttribution && !meta.author.trim()) incomplete.push('Author');
   if (!meta.description.trim()) incomplete.push('Description');
 
-  if (!meta.githubOwner.trim()) {
-    incomplete.push('GitHub Owner');
-  } else if (!isValidGithubOwner(meta.githubOwner)) {
+  if (!allowMissingAttribution) {
+    if (!meta.githubOwner.trim()) {
+      incomplete.push('GitHub Owner');
+    } else if (!isValidGithubOwner(meta.githubOwner)) {
+      incomplete.push('GitHub Owner (invalid format)');
+    }
+  } else if (meta.githubOwner.trim() && !isValidGithubOwner(meta.githubOwner)) {
     incomplete.push('GitHub Owner (invalid format)');
   }
 
-  if (!meta.homepage.trim()) {
-    incomplete.push('Repository URL');
-  } else if (!isValidHttpUrl(meta.homepage)) {
+  if (!allowMissingAttribution) {
+    if (!meta.homepage.trim()) {
+      incomplete.push('Repository URL');
+    } else if (!isValidHttpUrl(meta.homepage)) {
+      incomplete.push('Repository URL (must start with http:// or https://)');
+    }
+  } else if (meta.homepage.trim() && !isValidHttpUrl(meta.homepage)) {
     incomplete.push('Repository URL (must start with http:// or https://)');
   }
 
@@ -769,17 +844,29 @@ function buildPrinterAssetPreviewCandidates(assetPath: string, context: AssetPre
   const githubSource = parseGithubOwnerRepoFromAnyUrl(context.sourceUrl ?? '')
     ?? parseGithubOwnerRepoFromAnyUrl(context.homepage ?? '');
 
-  const normalizePluginAssetNamespace = (value: string): string => value
-    .trim()
-    .replace(/^df-plugin-/i, '')
-    .replace(/-printer-profiles$/i, '');
+  const normalizePluginAssetNamespaceCandidates = (value: string): string[] => {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    const candidates = new Set<string>();
+    const base = trimmed.replace(/^df-plugin-/i, '');
+
+    candidates.add(base);
+    candidates.add(base.replace(/-printer-profiles$/i, ''));
+    candidates.add(base.replace(/-material-profiles$/i, ''));
+    candidates.add(base.replace(/-builtin$/i, ''));
+
+    return Array.from(candidates)
+      .map((candidate) => candidate.trim())
+      .filter(Boolean);
+  };
 
   const pluginCandidates = new Set<string>();
   const addPluginCandidate = (value: string | undefined) => {
     const normalized = value?.trim();
     if (!normalized) return;
-    const canonical = normalizePluginAssetNamespace(normalized);
-    if (canonical) pluginCandidates.add(canonical);
+    normalizePluginAssetNamespaceCandidates(normalized)
+      .forEach((candidate) => pluginCandidates.add(candidate));
   };
 
   addPluginCandidate(context.pluginId);
@@ -2853,11 +2940,12 @@ type StepExportProps = {
   readmeContent: string;
   slug: string;
   printerPresetFiles: PrinterPresetSplitFile[];
+  materialPresetFiles: MaterialPresetSplitFile[];
   printerAssetFiles: PrinterAssetExportFile[];
   confirmOverwriteOnSave?: boolean;
 };
 
-function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, printerAssetFiles, confirmOverwriteOnSave = false }: StepExportProps) {
+function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, materialPresetFiles, printerAssetFiles, confirmOverwriteOnSave = false }: StepExportProps) {
   const [writeStatus, setWriteStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
   const [isWritingToPluginsDir, setIsWritingToPluginsDir] = React.useState(false);
   const [showOverwriteConfirm, setShowOverwriteConfirm] = React.useState(false);
@@ -2871,8 +2959,13 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
         content: file.content,
         type: 'application/json',
       })),
+      ...materialPresetFiles.map((file) => ({
+        name: file.relativePath,
+        content: file.content,
+        type: 'application/json',
+      })),
     ],
-    [jsonContent, printerPresetFiles, readmeContent],
+    [jsonContent, materialPresetFiles, printerPresetFiles, readmeContent],
   );
 
   const hasBinaryAssets = printerAssetFiles.length > 0;
@@ -2945,6 +3038,19 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
           <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Generated Printer Files</div>
           <ul className="space-y-0.5">
             {printerPresetFiles.map((file) => (
+              <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                {file.relativePath}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {materialPresetFiles.length > 0 && (
+        <div className="rounded-xl border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Generated Material Files</div>
+          <ul className="space-y-0.5">
+            {materialPresetFiles.map((file) => (
               <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
                 {file.relativePath}
               </li>
@@ -3178,8 +3284,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
 
   const currentStepIndex = orderedSteps.indexOf(currentStep);
   const incompletePluginDetailFields = React.useMemo(
-    () => getIncompletePluginDetailFields(meta),
-    [meta],
+    () => getIncompletePluginDetailFields(meta, { allowMissingAttribution: isEditingImportedPlugin }),
+    [isEditingImportedPlugin, meta],
   );
   const isPluginDetailsComplete = incompletePluginDetailFields.length === 0;
   const hasInvalidMaterialTargets = materialTemplates.some((template) => !template.targetPresetId.trim());
@@ -3428,9 +3534,26 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     };
   }, [applyManifestToStudio]);
 
+  const targetOptions = React.useMemo<PresetTargetOption[]>(() => {
+    return buildTargetOptionsFromAvailablePresets();
+  }, [profileState]);
+
+  const targetOptionById = React.useMemo(() => {
+    const next = new Map<string, PresetTargetOption>();
+    targetOptions.forEach((option) => {
+      next.set(option.presetId, option);
+    });
+    return next;
+  }, [targetOptions]);
+
+  const materialPresetSplitFiles = React.useMemo(
+    () => (includesMaterials ? buildMaterialPresetSplitFiles(materialTemplates, targetOptionById) : []),
+    [includesMaterials, materialTemplates, targetOptionById],
+  );
+
   const jsonContent = React.useMemo(
-    () => buildPluginJson(meta, includesPrinters, includesMaterials, printerPresets, materialTemplates),
-    [meta, includesPrinters, includesMaterials, printerPresets, materialTemplates],
+    () => buildPluginJson(meta, includesPrinters, includesMaterials, printerPresets, materialPresetSplitFiles),
+    [meta, includesPrinters, includesMaterials, printerPresets, materialPresetSplitFiles],
   );
   const printerPresetSplitFiles = React.useMemo(
     () => (includesPrinters ? buildPrinterPresetSplitFiles(printerPresets) : []),
@@ -3697,6 +3820,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                       readmeContent={readmeContent}
                       slug={meta.slug}
                       printerPresetFiles={printerPresetSplitFiles}
+                      materialPresetFiles={materialPresetSplitFiles}
                       printerAssetFiles={printerAssetExportFiles}
                       confirmOverwriteOnSave={isEditingImportedPlugin}
                     />
