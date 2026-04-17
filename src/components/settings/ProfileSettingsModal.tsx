@@ -107,6 +107,15 @@ const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label
   { value: 'other', label: 'Other' },
 ];
 
+const RESIN_FAMILY_COLOR: Record<string, string> = {
+  'standard': '#60a5fa',
+  'abs-like': '#f59e0b',
+  'tough': '#a78bfa',
+  'flexible': '#34d399',
+  'engineering': '#f97316',
+  'other': '#94a3b8',
+};
+
 const CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CNY'];
 
 type PluginNumericFieldSchema = {
@@ -4620,113 +4629,94 @@ export function ProfileSettingsModal({
                   </div>
                 </div>
 
-                <div className="p-3 overflow-y-auto custom-scrollbar min-h-0">
-                  {isSearchingMaterialPresets ? (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
-                      {filteredMaterialPresets.map((preset, index) => {
-                        const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
-                        const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
-                        const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
-                        return (
-                          <button
-                            key={templateId || `${preset.brand || 'Default'}-${preset.name}-${index}`}
-                            type="button"
-                            disabled={isAlreadyAdded}
-                            onClick={() => handleApplyMaterialLibraryPreset(preset)}
-                            className="rounded-lg border p-2.5 text-left disabled:opacity-55"
-                            style={{
-                              borderColor: isAlreadyAdded
-                                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-                                : 'var(--border-subtle)',
-                              background: isAlreadyAdded
-                                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-                                : 'var(--surface-1)',
-                            }}
-                          >
-                            <div className="h-[136px] rounded-md border overflow-hidden flex flex-col items-center justify-center relative px-2" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
-                              <FlaskConical className="w-8 h-8" style={{ color: 'var(--accent-secondary)' }} />
-                              <div className="mt-2 text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                                {resinFamilyLabel}
+                <div className="py-2 px-2 overflow-y-auto custom-scrollbar min-h-0">
+                  {(() => {
+                    const renderMaterialPresetRow = (preset: MaterialPreset, index: number, groupKey: string, showFamily = false) => {
+                      const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
+                      const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
+                      const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
+                      const familyColor = RESIN_FAMILY_COLOR[preset.resinFamily] ?? '#94a3b8';
+                      return (
+                        <button
+                          key={templateId || `${groupKey}-${preset.brand || 'Default'}-${preset.name}-${index}`}
+                          type="button"
+                          disabled={isAlreadyAdded}
+                          onClick={() => handleApplyMaterialLibraryPreset(preset)}
+                          className="w-full rounded-lg border text-left transition-colors overflow-hidden disabled:opacity-60"
+                          style={isAlreadyAdded
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                                background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 91%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-1)',
+                              }}
+                        >
+                          <div className="flex h-full">
+                            <div className="w-[3px] shrink-0 self-stretch" style={{ background: isAlreadyAdded ? 'var(--accent-secondary)' : familyColor }} />
+                            <div className="flex-1 min-w-0 px-3 py-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{preset.name}</span>
+                                <div className="shrink-0 flex items-center gap-1.5">
+                                  {showFamily && (
+                                    <span
+                                      className="text-[10px] rounded-full border px-1.5 py-0.5 font-medium whitespace-nowrap"
+                                      style={{ borderColor: `color-mix(in srgb, ${familyColor}, transparent 45%)`, color: familyColor, background: `color-mix(in srgb, ${familyColor}, var(--surface-0) 88%)` }}
+                                    >
+                                      {resinFamilyLabel}
+                                    </span>
+                                  )}
+                                  {isAlreadyAdded && (
+                                    <span
+                                      className="text-[10px] rounded-full border px-1.5 py-0.5 font-semibold whitespace-nowrap"
+                                      style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}
+                                    >
+                                      Added
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                                {`${preset.layerHeightMm} mm · ${preset.normalExposureSec}s`}
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                                  {`${preset.layerHeightMm * 1000}μm · ${preset.normalExposureSec}s`}
+                                </span>
                               </div>
                             </div>
-                            <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
-                              <span className="truncate">{preset.name}</span>
-                              <span className="shrink-0 inline-flex items-center gap-1">
-                                {isAlreadyAdded && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
-                                    Added
-                                  </span>
-                                )}
+                          </div>
+                        </button>
+                      );
+                    };
+
+                    if (isSearchingMaterialPresets) {
+                      return (
+                        <div className="space-y-1.5">
+                          {filteredMaterialPresets.map((preset, index) => renderMaterialPresetRow(preset, index, 'search', true))}
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-4">
+                        {groupedFilteredMaterialPresets.map((group) => {
+                          const familyColor = RESIN_FAMILY_COLOR[group.family] ?? '#94a3b8';
+                          return (
+                          <section key={`${selectedMaterialPresetBrand}-${group.family}`}>
+                            <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                              <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: familyColor }} />
+                              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: familyColor }}>
+                                {group.family}
                               </span>
                             </div>
-                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              {preset.brand || 'Default'}
+                            <div className="space-y-1.5">
+                              {group.presets.map((preset, index) => renderMaterialPresetRow(preset, index, group.family))}
                             </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {groupedFilteredMaterialPresets.map((group) => (
-                        <section key={`${selectedMaterialPresetBrand}-${group.family}`} className="space-y-1.5">
-                          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                            {group.family}
-                          </div>
-                          <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
-                            {group.presets.map((preset, index) => {
-                              const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
-                              const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
-                              const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
-                              return (
-                                <button
-                                  key={templateId || `${group.family}-${preset.brand || 'Default'}-${preset.name}-${index}`}
-                                  type="button"
-                                  disabled={isAlreadyAdded}
-                                  onClick={() => handleApplyMaterialLibraryPreset(preset)}
-                                  className="rounded-lg border p-2.5 text-left disabled:opacity-55"
-                                  style={{
-                                    borderColor: isAlreadyAdded
-                                      ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-                                      : 'var(--border-subtle)',
-                                    background: isAlreadyAdded
-                                      ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-                                      : 'var(--surface-1)',
-                                  }}
-                                >
-                                  <div className="h-[136px] rounded-md border overflow-hidden flex flex-col items-center justify-center relative px-2" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
-                                    <FlaskConical className="w-8 h-8" style={{ color: 'var(--accent-secondary)' }} />
-                                    <div className="mt-2 text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                                      {resinFamilyLabel}
-                                    </div>
-                                    <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                                      {`${preset.layerHeightMm} mm · ${preset.normalExposureSec}s`}
-                                    </div>
-                                  </div>
-                                  <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
-                                    <span className="truncate">{preset.name}</span>
-                                    <span className="shrink-0 inline-flex items-center gap-1">
-                                      {isAlreadyAdded && (
-                                        <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
-                                          Added
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                    {preset.brand || 'Default'}
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </section>
-                      ))}
-                    </div>
-                  )}
+                          </section>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
