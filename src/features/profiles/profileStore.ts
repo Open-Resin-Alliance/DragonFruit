@@ -382,6 +382,11 @@ export type MaterialTemplate = Omit<MaterialProfile, 'id' | 'printerProfileId'> 
   profileVersion?: number;
 };
 
+export type MaterialPreset = MaterialTemplate & {
+  /** presetId values (or glob patterns with `*`) that this preset applies to. */
+  validForPresets?: string[];
+};
+
 export type OfficialPrinterProfileUpdateInfo = {
   printerProfileId: string;
   printerName: string;

@@ -41,8 +41,10 @@ import {
 import {
   getAvailableProfileNetworkModes,
   getDefaultProfileNetworkUiAdapter,
+  getRuntimeMaterialPresets,
   getProfileLocalMaterialSettingsAdapter,
   getProfileNetworkUiAdapter,
+  type MaterialPreset,
 } from '@/features/plugins/pluginRegistry';
 import {
   getAvailableOutputFormatOptions,
@@ -340,6 +342,9 @@ export function ProfileSettingsModal({
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
   const [isCreateMaterialOpen, setIsCreateMaterialOpen] = React.useState(false);
+  const [showMaterialPresetPicker, setShowMaterialPresetPicker] = React.useState(false);
+  const [materialPresetSearch, setMaterialPresetSearch] = React.useState('');
+  const [selectedMaterialPresetBrand, setSelectedMaterialPresetBrand] = React.useState<string>('');
   const [isMaterialEditorOpen, setIsMaterialEditorOpen] = React.useState(false);
   const [materialEditorTab, setMaterialEditorTab] = React.useState<string>('meta');
   const [showOfficialLockDialog, setShowOfficialLockDialog] = React.useState(false);
@@ -384,7 +389,7 @@ export function ProfileSettingsModal({
     minimumAaAlphaPercent: 35,
   });
   const [newMaterialDraft, setNewMaterialDraft] = React.useState<Omit<MaterialProfile, 'id' | 'printerProfileId'>>({
-    name: 'New Resin',
+    name: 'New Material',
     brand: 'Default',
     currencyCode: 'USD',
     bottlePrice: 0,
@@ -721,6 +726,55 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return [];
     return getMaterialProfilesForPrinter(selectedPrinter.id, profileState);
   }, [profileState, selectedPrinter]);
+
+  const availableMaterialPresets = React.useMemo(() => {
+    const printerPresetId = selectedPrinter?.officialPresetId?.trim() ?? '';
+    return getRuntimeMaterialPresets(printerPresetId.length > 0 ? printerPresetId : undefined);
+  }, [profileState, selectedPrinter?.officialPresetId]);
+
+  const materialPresetBrands = React.useMemo(() => {
+    const uniq = new Set(availableMaterialPresets.map((preset) => (preset.brand || 'Default').trim() || 'Default'));
+    return Array.from(uniq).sort((a, b) => a.localeCompare(b));
+  }, [availableMaterialPresets]);
+
+  const filteredMaterialPresets = React.useMemo(() => {
+    const search = materialPresetSearch.trim().toLowerCase();
+    return availableMaterialPresets.filter((preset) => {
+      const presetBrand = (preset.brand || 'Default').trim() || 'Default';
+      const brandMatch = search.length > 0 || selectedMaterialPresetBrand.length === 0 || presetBrand === selectedMaterialPresetBrand;
+      const searchMatch =
+        search.length === 0
+        || preset.name.toLowerCase().includes(search)
+        || presetBrand.toLowerCase().includes(search)
+        || preset.resinFamily.toLowerCase().includes(search);
+      return brandMatch && searchMatch;
+    });
+  }, [availableMaterialPresets, materialPresetSearch, selectedMaterialPresetBrand]);
+
+  const groupedFilteredMaterialPresets = React.useMemo(() => {
+    const grouped = new Map<string, typeof filteredMaterialPresets>();
+    filteredMaterialPresets.forEach((preset) => {
+      const family = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? 'Other';
+      const current = grouped.get(family);
+      if (current) current.push(preset);
+      else grouped.set(family, [preset]);
+    });
+
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([family, presets]) => ({ family, presets }));
+  }, [filteredMaterialPresets]);
+
+  const isSearchingMaterialPresets = materialPresetSearch.trim().length > 0;
+
+  const addedOfficialMaterialTemplateIds = React.useMemo(() => {
+    const set = new Set<string>();
+    printerMaterials.forEach((material) => {
+      const templateId = typeof material.officialTemplateId === 'string' ? material.officialTemplateId.trim() : '';
+      if (templateId.length > 0) set.add(templateId);
+    });
+    return set;
+  }, [printerMaterials]);
 
   const availableManufacturers = React.useMemo(() => {
     return Array.from(new Set(printerMaterials.map((material) => material.brand || 'Default'))).sort((a, b) => a.localeCompare(b));
@@ -1423,6 +1477,12 @@ export function ProfileSettingsModal({
     profileState,
     presetManufacturers,
   ]);
+
+  React.useLayoutEffect(() => {
+    if (selectedMaterialPresetBrand.length === 0 && materialPresetBrands.length > 0) {
+      setSelectedMaterialPresetBrand(materialPresetBrands[0]);
+    }
+  }, [materialPresetBrands, selectedMaterialPresetBrand]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -2510,6 +2570,46 @@ export function ProfileSettingsModal({
     setIsCreateMaterialOpen(true);
   }, [printerMaterials.length, replacementMaterialEditorDefaultTab, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
 
+  const handleApplyMaterialLibraryPreset = React.useCallback((preset: MaterialPreset) => {
+    if (!selectedPrinter) return;
+    setShowMaterialPresetPicker(false);
+    setMaterialEditorTab('meta');
+    setNewMaterialDraft({
+      name: preset.name,
+      brand: preset.brand ?? 'Default',
+      currencyCode: preset.currencyCode ?? 'USD',
+      bottlePrice: preset.bottlePrice ?? 0,
+      bottleCapacityMl: preset.bottleCapacityMl ?? 1000,
+      resinFamily: preset.resinFamily ?? 'standard',
+      scaleCompensationPct: preset.scaleCompensationPct ?? { x: 0, y: 0, z: 0 },
+      layerHeightMm: preset.layerHeightMm ?? 0.05,
+      normalExposureSec: preset.normalExposureSec ?? 2.5,
+      bottomExposureSec: preset.bottomExposureSec ?? 28,
+      bottomLayerCount: preset.bottomLayerCount ?? 5,
+      liftDistanceMm: preset.liftDistanceMm ?? 6,
+      liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
+      retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
+      minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+      ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
+      ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
+    });
+    setNewMaterialLocalSettingsByOutput(
+      preset.localSettingsByOutput
+        ? (preset.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
+        : resolveDefaultLocalSettingsForOutput(
+            selectedPrinter.display.outputFormat,
+            selectedResolvedSettingsMode,
+          ),
+    );
+    setIsCreateMaterialOpen(true);
+  }, [selectedPrinter, selectedResolvedSettingsMode]);
+
+  const handleOpenMaterialLibrary = React.useCallback(() => {
+    setShowMaterialPresetPicker(true);
+    setMaterialPresetSearch('');
+    if (materialPresetBrands.length > 0) setSelectedMaterialPresetBrand(materialPresetBrands[0]);
+  }, [materialPresetBrands]);
+
   const handleCreateMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
 
@@ -2790,7 +2890,7 @@ export function ProfileSettingsModal({
               <Box className="w-4 h-4" style={{ color: 'var(--accent)' }} />
             </span>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Printer & Material Profiles
+                  Printer & Material Profiles
             </h2>
           </div>
           <button
@@ -2858,7 +2958,7 @@ export function ProfileSettingsModal({
                   }}
                 >
                   <Plus className="w-4 h-4" />
-                  Printer Library
+                  Add Printer
                 </button>
               </div>
             </div>
@@ -2876,7 +2976,7 @@ export function ProfileSettingsModal({
                   <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     {shouldRenderFleetRail
                       ? `Showing connected devices for ${selectedPrinter?.name ?? 'selected profile'}.`
-                      : 'Each printer can store its own image and has a dedicated set of compatible resin/material profiles.'}
+                      : 'Each printer can store its own image and has a dedicated set of compatible material profiles.'}
                   </p>
                 </div>
 
@@ -2929,7 +3029,7 @@ export function ProfileSettingsModal({
                           }}
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      Printer Library
+                      Add Printer
                     </button>
                   </div>
                 )}
@@ -3427,6 +3527,19 @@ export function ProfileSettingsModal({
                       </button>
                       <button
                         type="button"
+                        onClick={handleOpenMaterialLibrary}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent)',
+                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                        }}
+                      >
+                        <FlaskConical className="w-3.5 h-3.5" />
+                        Library
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleAddMaterial}
                         className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
                         style={{
@@ -3436,7 +3549,7 @@ export function ProfileSettingsModal({
                         }}
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        Add Resin
+                        New
                       </button>
                     </>
                   )}
@@ -3627,7 +3740,7 @@ export function ProfileSettingsModal({
                   </div>
 
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Resin Type</div>
+                    <div className="px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Material Type</div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {availableResinTypes.map((resinType) => {
                         const active = selectedResinFamilyValue === resinType;
@@ -3851,15 +3964,26 @@ export function ProfileSettingsModal({
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
             <div className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
-                  <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Choose an official printer preset to add.</p>
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%), color-mix(in srgb, var(--accent), var(--surface-1) 90%))',
+                    }}
+                  >
+                    <Printer className="w-4 h-4" style={{ color: 'var(--accent-secondary)' }} />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official printer preset to add.</p>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowPresetPicker(false)}
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                   aria-label="Close printer library"
                 >
@@ -3941,8 +4065,8 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
-                      ? `Edit ${replacementMaterialModalLabel} Resin Profile`
-                      : 'Resin Profile Settings'}
+                      ? `Edit ${replacementMaterialModalLabel} Material Profile`
+                      : 'Material Profile Settings'}
                   </h3>
                   <p className="ui-meta">{selectedMaterial.name} • {selectedMaterial.brand}</p>
                 </div>
@@ -3951,7 +4075,7 @@ export function ProfileSettingsModal({
                   onClick={() => setIsMaterialEditorOpen(false)}
                   className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close resin editor"
+                  aria-label="Close material editor"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3998,7 +4122,7 @@ export function ProfileSettingsModal({
                   style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Delete Resin
+                  Delete Material
                 </button>
                 <div className="flex items-center gap-2">
                   <button
@@ -4015,7 +4139,7 @@ export function ProfileSettingsModal({
                     style={{ color: 'var(--accent-secondary)' }}
                   >
                     <Check className="w-3.5 h-3.5" />
-                    Save Resin
+                    Save Material
                   </button>
                 </div>
               </div>
@@ -4411,6 +4535,196 @@ export function ProfileSettingsModal({
           </div>
         )}
 
+        {showMaterialPresetPicker && selectedPrinter && (
+          <div
+            className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setShowMaterialPresetPicker(false);
+            }}
+          >
+            <div
+              className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
+              style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent), var(--surface-1) 86%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%))',
+                    }}
+                  >
+                    <FlaskConical className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Material Library</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official material preset to add.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMaterialPresetPicker(false)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close material library"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
+                <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                  <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none" style={{ color: 'var(--text-muted)' }} />
+                      <input
+                        value={materialPresetSearch}
+                        onChange={(event) => setMaterialPresetSearch(event.target.value)}
+                        placeholder="Search materials"
+                        className="ui-input w-full h-8 text-xs"
+                        style={{ paddingLeft: '2.5rem', paddingRight: '0.625rem' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
+                    {materialPresetBrands.map((brand) => (
+                      <button
+                        key={brand}
+                        type="button"
+                        onClick={() => setSelectedMaterialPresetBrand(brand)}
+                        className="w-full rounded-md border px-2.5 py-2 text-left text-sm font-semibold"
+                        style={selectedMaterialPresetBrand === brand
+                          ? {
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)',
+                              color: 'var(--text-strong)',
+                            }
+                          : {
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-1)',
+                              color: 'var(--text-muted)',
+                            }}
+                      >
+                        {brand}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="p-3 overflow-y-auto custom-scrollbar min-h-0">
+                  {isSearchingMaterialPresets ? (
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
+                      {filteredMaterialPresets.map((preset, index) => {
+                        const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
+                        const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
+                        const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
+                        return (
+                          <button
+                            key={templateId || `${preset.brand || 'Default'}-${preset.name}-${index}`}
+                            type="button"
+                            disabled={isAlreadyAdded}
+                            onClick={() => handleApplyMaterialLibraryPreset(preset)}
+                            className="rounded-lg border p-2.5 text-left disabled:opacity-55"
+                            style={{
+                              borderColor: isAlreadyAdded
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
+                                : 'var(--border-subtle)',
+                              background: isAlreadyAdded
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
+                                : 'var(--surface-1)',
+                            }}
+                          >
+                            <div className="h-[136px] rounded-md border overflow-hidden flex flex-col items-center justify-center relative px-2" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
+                              <FlaskConical className="w-8 h-8" style={{ color: 'var(--accent-secondary)' }} />
+                              <div className="mt-2 text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
+                                {resinFamilyLabel}
+                              </div>
+                              <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
+                                {`${preset.layerHeightMm} mm · ${preset.normalExposureSec}s`}
+                              </div>
+                            </div>
+                            <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
+                              <span className="truncate">{preset.name}</span>
+                              <span className="shrink-0 inline-flex items-center gap-1">
+                                {isAlreadyAdded && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
+                                    Added
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              {preset.brand || 'Default'}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {groupedFilteredMaterialPresets.map((group) => (
+                        <section key={`${selectedMaterialPresetBrand}-${group.family}`} className="space-y-1.5">
+                          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                            {group.family}
+                          </div>
+                          <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
+                            {group.presets.map((preset, index) => {
+                              const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
+                              const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
+                              const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
+                              return (
+                                <button
+                                  key={templateId || `${group.family}-${preset.brand || 'Default'}-${preset.name}-${index}`}
+                                  type="button"
+                                  disabled={isAlreadyAdded}
+                                  onClick={() => handleApplyMaterialLibraryPreset(preset)}
+                                  className="rounded-lg border p-2.5 text-left disabled:opacity-55"
+                                  style={{
+                                    borderColor: isAlreadyAdded
+                                      ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
+                                      : 'var(--border-subtle)',
+                                    background: isAlreadyAdded
+                                      ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
+                                      : 'var(--surface-1)',
+                                  }}
+                                >
+                                  <div className="h-[136px] rounded-md border overflow-hidden flex flex-col items-center justify-center relative px-2" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
+                                    <FlaskConical className="w-8 h-8" style={{ color: 'var(--accent-secondary)' }} />
+                                    <div className="mt-2 text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
+                                      {resinFamilyLabel}
+                                    </div>
+                                    <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
+                                      {`${preset.layerHeightMm} mm · ${preset.normalExposureSec}s`}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
+                                    <span className="truncate">{preset.name}</span>
+                                    <span className="shrink-0 inline-flex items-center gap-1">
+                                      {isAlreadyAdded && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
+                                          Added
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                    {preset.brand || 'Default'}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isCreateMaterialOpen && selectedPrinter && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsCreateMaterialOpen(false);
@@ -4420,8 +4734,8 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
-                      ? `Create ${replacementMaterialModalLabel} Resin Profile`
-                      : 'Create Resin Profile'}
+                      ? `Create ${replacementMaterialModalLabel} Material Profile`
+                      : 'Create Material Profile'}
                   </h3>
                   <p className="ui-meta">{selectedPrinter.name}</p>
                 </div>
@@ -4430,7 +4744,7 @@ export function ProfileSettingsModal({
                   onClick={() => setIsCreateMaterialOpen(false)}
                   className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close create resin dialog"
+                  aria-label="Close create material dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -4480,7 +4794,7 @@ export function ProfileSettingsModal({
                   style={{ color: 'var(--accent)' }}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Save Resin
+                  Save Material
                 </button>
               </div>
             </div>
@@ -4719,8 +5033,8 @@ export function ProfileSettingsModal({
               </div>
               <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
                 {deleteConfirmTarget.kind === 'printer'
-                  ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all resin profiles bound to it?</>
-                  : <>Delete resin profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
+                  ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all material profiles bound to it?</>
+                  : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
               </div>
               <div className="px-4 pb-4 flex items-center justify-end gap-2">
                 <button
@@ -4798,7 +5112,7 @@ function RemoteMaterialEditDialog({
       <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
         <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
           <div>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit {networkModeLabel} Resin Profile</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit {networkModeLabel} Material Profile</h3>
             <p className="ui-meta">{material.name} • Profile ID {material.id}</p>
           </div>
           <button
@@ -5929,7 +6243,7 @@ type MaterialProfileIdentitySectionProps = {
 function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIdentitySectionProps) {
   return (
     <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-      <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Resin Profile</div>
+      <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
       <div className="grid grid-cols-2 gap-2">
         <LabeledInput
           label="Manufacturer"
