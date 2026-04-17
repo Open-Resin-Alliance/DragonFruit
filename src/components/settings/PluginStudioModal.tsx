@@ -3,6 +3,7 @@
 import React from 'react';
 import { AlertTriangle, Archive, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
+import { writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
   getProfileLocalMaterialSettingsAdapter,
@@ -649,6 +650,17 @@ function normalizeAssetRelativePath(path: string): string {
   return normalized;
 }
 
+function normalizePluginDirectorySlug(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return 'my-plugin';
+  return trimmed.startsWith('df-plugin-') ? trimmed.slice('df-plugin-'.length) : trimmed;
+}
+
+function toPluginAssetFileRelativePath(assetPath: string): string {
+  const normalized = normalizeAssetRelativePath(assetPath).replace(/^printers\//i, '');
+  return normalized.startsWith('assets/') ? `printers/${normalized}` : `printers/assets/${normalized}`;
+}
+
 function shouldUseBundledAssetPathsForPreview(): boolean {
   if (typeof window === 'undefined') return false;
   if (process.env.NODE_ENV !== 'production') return false;
@@ -720,25 +732,23 @@ function buildPrinterAssetPreviewCandidates(assetPath: string, context: AssetPre
   const githubSource = parseGithubOwnerRepoFromAnyUrl(context.sourceUrl ?? '')
     ?? parseGithubOwnerRepoFromAnyUrl(context.homepage ?? '');
 
+  const normalizePluginAssetNamespace = (value: string): string => value
+    .trim()
+    .replace(/^df-plugin-/i, '')
+    .replace(/-printer-profiles$/i, '');
+
   const pluginCandidates = new Set<string>();
   const addPluginCandidate = (value: string | undefined) => {
     const normalized = value?.trim();
     if (!normalized) return;
-    pluginCandidates.add(normalized);
-    if (normalized.startsWith('df-plugin-')) {
-      pluginCandidates.add(normalized.slice('df-plugin-'.length));
-    } else {
-      pluginCandidates.add(`df-plugin-${normalized}`);
-    }
+    const canonical = normalizePluginAssetNamespace(normalized);
+    if (canonical) pluginCandidates.add(canonical);
   };
 
   addPluginCandidate(context.pluginId);
   addPluginCandidate(context.pluginSlug);
-  if (githubSource) {
+  if (pluginCandidates.size === 0 && githubSource) {
     addPluginCandidate(githubSource.repo);
-    if (githubSource.repo.startsWith('df-plugin-')) {
-      addPluginCandidate(githubSource.repo.slice('df-plugin-'.length));
-    }
   }
 
   pluginCandidates.forEach((plugin) => {
@@ -749,7 +759,7 @@ function buildPrinterAssetPreviewCandidates(assetPath: string, context: AssetPre
     addCandidate(`https://raw.githubusercontent.com/${githubSource.owner}/${githubSource.repo}/main/printers/${relativeAsset}`);
   }
 
-  return candidates.slice(0, 8);
+  return candidates.slice(0, 6);
 }
 
 function asResinFamily(value: unknown, fallback: MaterialDraft['resinFamily']): MaterialDraft['resinFamily'] {
@@ -2479,6 +2489,8 @@ type StepExportProps = {
 function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, printerAssetFiles, confirmOverwriteOnSave = false }: StepExportProps) {
   const [copied, setCopied] = React.useState(false);
   const [showOverwriteConfirm, setShowOverwriteConfirm] = React.useState(false);
+  const [writeStatus, setWriteStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
+  const [isWritingToPluginsDir, setIsWritingToPluginsDir] = React.useState(false);
 
   const exportFiles = React.useMemo(
     () => [
@@ -2494,6 +2506,9 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
   );
 
   const hasBinaryAssets = printerAssetFiles.length > 0;
+  const isDevRuntime = process.env.NODE_ENV === 'development';
+  const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const canWriteToPluginsDirectory = isDevRuntime && isTauriRuntime;
 
   const handleCopy = async () => {
     try {
@@ -2537,6 +2552,41 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
   const handleConfirmOverwriteSave = async () => {
     setShowOverwriteConfirm(false);
     await performDownload();
+  };
+
+  const handleWriteToPluginsDirectory = async () => {
+    if (!canWriteToPluginsDirectory) return;
+
+    const pluginDir = normalizePluginDirectorySlug(slug || 'my-plugin');
+    setIsWritingToPluginsDir(true);
+    setWriteStatus({ kind: 'idle', message: '' });
+
+    try {
+      const encoder = new TextEncoder();
+      const destinationBase = '../plugins';
+      for (const file of exportFiles) {
+        const destination = `${destinationBase}/${pluginDir}/${file.name}`;
+        await writeBytesToNativePath(destination, encoder.encode(file.content));
+      }
+
+      for (const asset of printerAssetFiles) {
+        const destination = `${destinationBase}/${pluginDir}/${toPluginAssetFileRelativePath(asset.relativePath)}`;
+        const bytes = new Uint8Array(await asset.file.arrayBuffer());
+        await writeBytesToNativePath(destination, bytes);
+      }
+
+      setWriteStatus({
+        kind: 'success',
+        message: `Wrote plugin files to plugins/${pluginDir}`,
+      });
+    } catch (error) {
+      setWriteStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Failed writing plugin files into plugins directory.',
+      });
+    } finally {
+      setIsWritingToPluginsDir(false);
+    }
   };
 
   return (
@@ -2589,7 +2639,26 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
           <Download className="h-3.5 w-3.5" />
           {hasBinaryAssets ? 'Save ZIP' : 'Save Files'}
         </button>
+        {canWriteToPluginsDirectory && (
+          <button
+            type="button"
+            onClick={() => { void handleWriteToPluginsDirectory(); }}
+            disabled={isWritingToPluginsDir}
+            className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
+            style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }}
+            title="Write files directly into plugins/<slug> in this dev workspace"
+          >
+            <Archive className="h-3.5 w-3.5" />
+            {isWritingToPluginsDir ? 'Writing…' : 'Write to plugins/'}
+          </button>
+        )}
       </div>
+
+      {writeStatus.kind !== 'idle' && (
+        <div className="text-xs" style={{ color: writeStatus.kind === 'error' ? '#fca5a5' : '#86efac' }}>
+          {writeStatus.message}
+        </div>
+      )}
 
       <CodeBlock label="dragonfruit-plugin.json" content={jsonContent} />
       <CodeBlock label="README.md" content={readmeContent} />
@@ -2727,7 +2796,40 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
   const [isDesktopWindow, setIsDesktopWindow] = React.useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = React.useState(false);
   const readmeLoadRunRef = React.useRef(0);
+  const wasOpenRef = React.useRef(false);
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+
+  const resetStudioState = React.useCallback(() => {
+    setMeta({ name: '', slug: '', version: '1.0.0', author: '', githubOwner: '', description: '', homepage: '' });
+    setIncludesPrinters(true);
+    setIncludesMaterials(true);
+    setPrinterPresets([]);
+    setMaterialTemplates([]);
+    setImportedReadmeContent(null);
+    setIsEditingImportedPlugin(false);
+    setCurrentStep('details');
+    setShowExitConfirm(false);
+    setAssetPreviewContext({});
+
+    setUploadedPrinterAssets((current) => {
+      Object.values(current).forEach((asset) => {
+        if (asset.previewUrl) URL.revokeObjectURL(asset.previewUrl);
+      });
+      return {};
+    });
+
+    readmeLoadRunRef.current += 1;
+  }, []);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      wasOpenRef.current = true;
+      return;
+    }
+    if (!wasOpenRef.current) return;
+    wasOpenRef.current = false;
+    resetStudioState();
+  }, [isOpen, resetStudioState]);
 
   const orderedSteps = React.useMemo((): StepId[] => {
     const steps: StepId[] = ['details', 'content'];

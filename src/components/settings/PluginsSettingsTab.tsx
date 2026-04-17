@@ -108,6 +108,7 @@ export function PluginsSettingsTab() {
   } | null>(null);
   const [pendingRemovePlugin, setPendingRemovePlugin] = React.useState<{ id: string; name: string } | null>(null);
   const [status, setStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
+  const isDevRuntime = process.env.NODE_ENV === 'development';
 
   // Read fresh list on every render; avoids stale memo behavior when external store
   // updates don't change snapshot identity but still emit notifications.
@@ -274,6 +275,11 @@ export function PluginsSettingsTab() {
       setIsInstalling(false);
     }
   }, [pendingInstallPreview]);
+
+  React.useEffect(() => {
+    if (isDevRuntime) return;
+    setStudioOpen(false);
+  }, [isDevRuntime]);
 
   return (
     <div className="space-y-3">
@@ -643,18 +649,20 @@ export function PluginsSettingsTab() {
         </div>
       </div>
 
-      <div className="pt-1 flex justify-center">
-        <button
-          type="button"
-          onClick={() => setStudioOpen(true)}
-          className="text-[11px] underline-offset-2 hover:underline"
-          style={{ color: 'var(--text-faint, var(--text-muted))' }}
-        >
-          Plugin Creation Studio
-        </button>
-      </div>
+      {isDevRuntime && (
+        <div className="pt-1 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setStudioOpen(true)}
+            className="text-[11px] underline-offset-2 hover:underline"
+            style={{ color: 'var(--text-faint, var(--text-muted))' }}
+          >
+            Plugin Creation Studio
+          </button>
+        </div>
+      )}
 
-      <PluginStudioModal isOpen={studioOpen} onClose={() => setStudioOpen(false)} />
+      <PluginStudioModal isOpen={isDevRuntime && studioOpen} onClose={() => setStudioOpen(false)} />
     </div>
   );
 }
