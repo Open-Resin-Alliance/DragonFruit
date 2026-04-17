@@ -1109,220 +1109,245 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
   }, []);
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide">Identity</div>
-        <div className="grid grid-cols-2 gap-3">
-          <LabeledInput
-            label="Display Name"
-            helpText="Full name shown in the plugin manager (e.g. Siraya Tech)"
-            value={meta.name}
-            onChange={(v) => onChange({ ...meta, name: v })}
-          />
-          <div className="space-y-1">
-            <span className="ui-label font-medium inline-flex items-center gap-1.5">
-              Slug
-              <span
-                title="Lowercase identifier used in the repository name and manifest ID"
-                className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-              >?</span>
-            </span>
-            <div className="flex items-center">
-              <span
-                className="font-mono text-xs px-2 h-[36px] flex items-center rounded-l border-y border-l shrink-0"
-                style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 8%)', color: 'var(--text-muted)' }}
+    <div className="h-full min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+        <div className="space-y-4 pb-4">
+          <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+            <div className="ui-meta font-semibold uppercase tracking-wide">Identity</div>
+            <div className="grid grid-cols-2 gap-3">
+              <LabeledInput
+                label="Display Name"
+                helpText="Full name shown in the plugin manager (e.g. Siraya Tech)"
+                value={meta.name}
+                onChange={(v) => onChange({ ...meta, name: v })}
+              />
+              <div className="space-y-1">
+                <span className="ui-label font-medium inline-flex items-center gap-1.5">
+                  Slug
+                  <span
+                    title="Lowercase identifier used in the repository name and manifest ID"
+                    className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
+                  >?</span>
+                </span>
+                <div className="flex items-center">
+                  <span
+                    className="font-mono text-xs px-2 h-[36px] flex items-center rounded-l border-y border-l shrink-0"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 8%)', color: 'var(--text-muted)' }}
+                  >
+                    df-plugin-
+                  </span>
+                  <input
+                    type="text"
+                    value={meta.slug}
+                    onChange={(e) => onChange({ ...meta, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
+                    placeholder="myplugin"
+                    className="ui-input flex-1 h-[36px] px-2.5 leading-tight text-sm"
+                    style={{ borderRadius: '0 var(--radius) var(--radius) 0' }}
+                  />
+                </div>
+              </div>
+              <LabeledInput label="Version" value={meta.version} onChange={(v) => onChange({ ...meta, version: v })} />
+              <LabeledInput label="Author" helpText="Company or person name" value={meta.author} onChange={(v) => onChange({ ...meta, author: v })} />
+              <LabeledInput
+                label="GitHub Owner"
+                helpText="Username or organization (e.g. Open-Resin-Alliance)"
+                value={meta.githubOwner}
+                onChange={(v) => onChange({ ...meta, githubOwner: normalizeGithubOwner(v) })}
+              />
+              <LabeledInput label="Description" helpText="Brief description shown in the plugin manager" value={meta.description} onChange={(v) => onChange({ ...meta, description: v })} />
+              <LabeledInput label="Repository URL" helpText="Link to your GitHub repository or website" value={meta.homepage} onChange={(v) => onChange({ ...meta, homepage: v })} />
+            </div>
+          </div>
+
+          <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div className="ui-meta font-semibold uppercase tracking-wide">Edit Existing Plugin</div>
+                <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Load an installed <strong>simple plugin</strong>, or import manifest JSON directly.
+                </div>
+              </div>
+              <div className="inline-flex items-center rounded-md border p-0.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <button
+                  type="button"
+                  onClick={() => switchEditMode('installed')}
+                  className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
+                  style={editSourceMode === 'installed'
+                    ? {
+                      color: 'var(--accent-secondary)',
+                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
+                    }
+                    : undefined}
+                >
+                  Installed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchEditMode('json')}
+                  className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
+                  style={editSourceMode === 'json'
+                    ? {
+                      color: 'var(--accent-secondary)',
+                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
+                    }
+                    : undefined}
+                >
+                  JSON
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              {editSourceMode === 'installed' ? (
+                installedPlugins.length === 0 ? (
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    No installed simple plugins found yet. Switch to JSON mode to import a manifest file.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
+                    <SelectDropdown
+                      label="Installed Simple Plugin"
+                      value={selectedInstalledPluginId}
+                      onChange={(value) => setSelectedInstalledPluginId(value)}
+                      options={installedPluginOptions}
+                      className="space-y-1 block"
+                      labelClassName="font-medium"
+                      selectClassName="w-full h-[36px] px-2.5 pr-10 text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleImportInstalledPlugin}
+                      disabled={!selectedInstalledPluginId}
+                      className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs disabled:opacity-50"
+                      style={{
+                        color: 'var(--accent-secondary)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                      }}
+                    >
+                      Load Plugin
+                    </button>
+                  </div>
+                )
+              ) : (
+                <div className="space-y-2.5">
+                  <textarea
+                    value={importManifestText}
+                    onChange={(event) => setImportManifestText(event.target.value)}
+                    placeholder="Paste your dragonfruit-plugin.json content here…"
+                    rows={6}
+                    className="ui-input w-full px-2.5 py-2 text-xs font-mono leading-relaxed"
+                    style={{ resize: 'vertical' }}
+                  />
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handlePickFile}
+                      className="ui-button ui-button-secondary !h-8 !px-3 text-xs"
+                    >
+                      Load from File
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={handleFileChosen}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={handleImport}
+                      disabled={importManifestText.trim().length === 0}
+                      className="ui-button ui-button-secondary !h-8 !px-3 text-xs disabled:opacity-50"
+                      style={{
+                        color: 'var(--accent-secondary)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                      }}
+                    >
+                      Import into Studio
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImportManifestText('');
+                        setImportFeedback(null);
+                      }}
+                      className="ui-button ui-button-secondary !h-8 !px-3 text-xs"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {importFeedback && (
+              <div
+                className="rounded-lg border px-2.5 py-2 text-xs"
+                style={importFeedback.type === 'success'
+                  ? {
+                    borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, #40c463, var(--surface-2) 92%)',
+                    color: '#c7f9d3',
+                  }
+                  : {
+                    borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, #ff6b6b, var(--surface-2) 93%)',
+                    color: '#ffd0d0',
+                  }}
               >
-                df-plugin-
-              </span>
-              <input
-                type="text"
-                value={meta.slug}
-                onChange={(e) => onChange({ ...meta, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
-                placeholder="myplugin"
-                className="ui-input flex-1 h-[36px] px-2.5 leading-tight text-sm"
-                style={{ borderRadius: '0 var(--radius) var(--radius) 0' }}
-              />
-            </div>
-          </div>
-          <LabeledInput label="Version" value={meta.version} onChange={(v) => onChange({ ...meta, version: v })} />
-          <LabeledInput label="Author" helpText="Company or person name" value={meta.author} onChange={(v) => onChange({ ...meta, author: v })} />
-          <LabeledInput
-            label="GitHub Owner"
-            helpText="Username or organization (e.g. Open-Resin-Alliance)"
-            value={meta.githubOwner}
-            onChange={(v) => onChange({ ...meta, githubOwner: normalizeGithubOwner(v) })}
-          />
-          <LabeledInput label="Description" helpText="Brief description shown in the plugin manager" value={meta.description} onChange={(v) => onChange({ ...meta, description: v })} />
-          <LabeledInput label="Repository URL" helpText="Link to your GitHub repository or website" value={meta.homepage} onChange={(v) => onChange({ ...meta, homepage: v })} />
-        </div>
-      </div>
-
-      <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <div className="ui-meta font-semibold uppercase tracking-wide">Edit Existing Plugin</div>
-            <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-              Load an installed <strong>simple plugin</strong>, or import manifest JSON directly.
-            </div>
-          </div>
-          <div className="inline-flex items-center rounded-md border p-0.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <button
-              type="button"
-              onClick={() => switchEditMode('installed')}
-              className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
-              style={editSourceMode === 'installed'
-                ? {
-                  color: 'var(--accent-secondary)',
-                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-                }
-                : undefined}
-            >
-              Installed
-            </button>
-            <button
-              type="button"
-              onClick={() => switchEditMode('json')}
-              className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
-              style={editSourceMode === 'json'
-                ? {
-                  color: 'var(--accent-secondary)',
-                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-                }
-                : undefined}
-            >
-              JSON
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-          {editSourceMode === 'installed' ? (
-            installedPlugins.length === 0 ? (
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                No installed simple plugins found yet. Switch to JSON mode to import a manifest file.
+                {importFeedback.message}
               </div>
-            ) : (
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
-                <SelectDropdown
-                  label="Installed Simple Plugin"
-                  value={selectedInstalledPluginId}
-                  onChange={(value) => setSelectedInstalledPluginId(value)}
-                  options={installedPluginOptions}
-                  className="space-y-1 block"
-                  labelClassName="font-medium"
-                  selectClassName="w-full h-[36px] px-2.5 pr-10 text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={handleImportInstalledPlugin}
-                  disabled={!selectedInstalledPluginId}
-                  className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs disabled:opacity-50"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                  }}
-                >
-                  Load Plugin
-                </button>
+            )}
+          </div>
+
+          {incompleteFields.length > 0 && (
+            <div className="rounded-xl border px-3 py-2.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 93%)' }}>
+              <div className="text-xs font-semibold" style={{ color: '#f4bf4f' }}>
+                Complete Plugin Details to unlock the next steps
               </div>
-            )
-          ) : (
-            <div className="space-y-2.5">
-              <textarea
-                value={importManifestText}
-                onChange={(event) => setImportManifestText(event.target.value)}
-                placeholder="Paste your dragonfruit-plugin.json content here…"
-                rows={6}
-                className="ui-input w-full px-2.5 py-2 text-xs font-mono leading-relaxed"
-                style={{ resize: 'vertical' }}
-              />
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handlePickFile}
-                  className="ui-button ui-button-secondary !h-8 !px-3 text-xs"
-                >
-                  Load from File
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={handleFileChosen}
-                />
-
-                <button
-                  type="button"
-                  onClick={handleImport}
-                  disabled={importManifestText.trim().length === 0}
-                  className="ui-button ui-button-secondary !h-8 !px-3 text-xs disabled:opacity-50"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                  }}
-                >
-                  Import into Studio
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setImportManifestText('');
-                    setImportFeedback(null);
-                  }}
-                  className="ui-button ui-button-secondary !h-8 !px-3 text-xs"
-                >
-                  Clear
-                </button>
+              <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                Remaining fields: {incompleteFields.join(', ')}
               </div>
             </div>
           )}
-        </div>
 
-        {importFeedback && (
-          <div
-            className="rounded-lg border px-2.5 py-2 text-xs"
-            style={importFeedback.type === 'success'
-              ? {
-                borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #40c463, var(--surface-2) 92%)',
-                color: '#c7f9d3',
-              }
-              : {
-                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ff6b6b, var(--surface-2) 93%)',
-                color: '#ffd0d0',
-              }}
-          >
-            {importFeedback.message}
-          </div>
-        )}
+          {meta.slug && (
+            <div className="rounded-xl border px-3 py-2 flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Plugin ID:</span>
+              <code className="font-mono text-xs font-semibold" style={{ color: 'var(--accent-secondary)' }}>
+                {meta.slug.startsWith('df-plugin-') ? meta.slug.slice('df-plugin-'.length) : meta.slug}
+              </code>
+            </div>
+          )}
+        </div>
       </div>
 
-      {incompleteFields.length > 0 && (
-        <div className="rounded-xl border px-3 py-2.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 93%)' }}>
-          <div className="text-xs font-semibold" style={{ color: '#f4bf4f' }}>
-            Complete Plugin Details to unlock the next steps
-          </div>
-          <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
-            Remaining fields: {incompleteFields.join(', ')}
+      <div
+        className="mt-3 shrink-0 rounded-xl border px-4 py-3"
+        style={{
+          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)',
+          background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)',
+          boxShadow: '0 -1px 0 color-mix(in srgb, #f59e0b, transparent 84%)',
+        }}
+      >
+        <div className="flex items-start gap-2.5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: '#f59e0b' }} />
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold leading-5" style={{ color: 'var(--text-strong)' }}>
+              Development Build Warning
+            </div>
+            <div className="mt-0.5 text-[12px] font-medium leading-5" style={{ color: 'var(--text-muted)' }}>
+              You are running a development build of <span style={{ color: 'var(--text-strong)' }}>DragonFruit</span>. Plugin Creation Studio is intended for developers, integrators, and OEM partners creating or maintaining printer and material profile packs. Changes made here can overwrite or replace local plugin data, so review edits carefully before importing, editing, or writing files.
+            </div>
           </div>
         </div>
-      )}
-
-      {meta.slug && (
-        <div className="rounded-xl border px-3 py-2 flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Plugin ID:</span>
-          <code className="font-mono text-xs font-semibold" style={{ color: 'var(--accent-secondary)' }}>
-            {meta.slug.startsWith('df-plugin-') ? meta.slug.slice('df-plugin-'.length) : meta.slug}
-          </code>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -3398,7 +3423,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
   const activeStepMeta = STEP_META[currentStep];
   const activeStepColor = activeStepMeta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
   const ActiveStepIcon = activeStepMeta.icon;
-  const isFillHeightStep = currentStep === 'materials' || currentStep === 'printers';
+  const isFillHeightStep = currentStep === 'details' || currentStep === 'materials' || currentStep === 'printers';
 
   const requestExitStudio = React.useCallback(() => {
     setShowExitConfirm(true);
