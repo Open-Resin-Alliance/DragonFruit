@@ -247,6 +247,37 @@ function printerPresetDraftToJson(d: PrinterPresetDraft): Record<string, unknown
   return preset;
 }
 
+type PrinterPresetSplitFile = {
+  relativePath: string;
+  content: string;
+};
+
+function buildPrinterPresetSplitFiles(printerPresets: PrinterPresetDraft[]): PrinterPresetSplitFile[] {
+  if (printerPresets.length === 0) return [];
+
+  const grouped = new Map<string, PrinterPresetDraft[]>();
+  printerPresets.forEach((preset) => {
+    const family = preset.family.trim() || preset.manufacturer.trim() || 'ungrouped';
+    if (!grouped.has(family)) grouped.set(family, []);
+    grouped.get(family)?.push(preset);
+  });
+
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([family, members]) => {
+      const relativePath = `printers/${slugifyPathSegment(family)}-series.json`;
+      const orderedMembers = [...members].sort((a, b) => {
+        const aLabel = `${a.manufacturer} ${a.name}`.trim();
+        const bLabel = `${b.manufacturer} ${b.name}`.trim();
+        return aLabel.localeCompare(bLabel);
+      });
+      return {
+        relativePath,
+        content: JSON.stringify(orderedMembers.map(printerPresetDraftToJson), null, 2),
+      };
+    });
+}
+
 function materialTemplateDraftToJson(d: MaterialTemplateDraft): Record<string, unknown> {
   const { localSettingsByOutput: _local, ...rest } = d.draft as Record<string, unknown>;
   const template: Record<string, unknown> = { ...rest };
@@ -277,9 +308,14 @@ function buildPluginJson(
   printerPresets: PrinterPresetDraft[],
   materialTemplates: MaterialTemplateDraft[],
 ): string {
+  const normalizedSlug = meta.slug.trim() || 'my-plugin';
+  const manifestId = normalizedSlug.startsWith('df-plugin-')
+    ? normalizedSlug.slice('df-plugin-'.length)
+    : normalizedSlug;
+
   const manifest: Record<string, unknown> = {
     schemaVersion: 1,
-    id: `df-plugin-${meta.slug || 'my-plugin'}`,
+    id: manifestId,
     name: meta.name || 'My Plugin',
     version: meta.version || '1.0.0',
   };
@@ -287,7 +323,8 @@ function buildPluginJson(
   if (meta.author.trim()) manifest['author'] = meta.author.trim();
   if (meta.homepage.trim()) manifest['homepage'] = meta.homepage.trim();
   if (includesPrinters && printerPresets.length > 0) {
-    manifest['printerPresets'] = printerPresets.map(printerPresetDraftToJson);
+    const splitFiles = buildPrinterPresetSplitFiles(printerPresets);
+    manifest['printerPresetPaths'] = splitFiles.map((file) => file.relativePath);
   }
   if (includesMaterials && materialTemplates.length > 0) {
     manifest['materialPresets'] = materialTemplates.map(materialTemplateDraftToJson);
@@ -398,6 +435,62 @@ function buildReadmeTemplate(meta: PluginMeta): string {
     submoduleCmd,
     '```',
   ].join('\n');
+}
+
+function buildReadmeFetchCandidates(options: { homepage?: string; sourceUrl?: string; pluginId?: string }): string[] {
+  const candidates: string[] = [];
+  const add = (value: string) => {
+    if (!value) return;
+    if (!candidates.includes(value)) candidates.push(value);
+  };
+
+  const addLocalPluginReadmeCandidates = (folderName: string) => {
+    const safe = folderName.trim();
+    if (!safe) return;
+    add(`/api/profile-assets/plugins/${safe}/README.md`);
+    add(`/plugins/${safe}/README.md`);
+  };
+
+  const addGithubRepoCandidates = (repoUrl: string) => {
+    const parsed = parseGithubRepoUrl(repoUrl);
+    if (!parsed) return;
+
+    add(`https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/main/README.md`);
+    add(`https://raw.githubusercontent.com/${parsed.owner}/${parsed.repo}/master/README.md`);
+
+    if (parsed.repo.startsWith('df-plugin-')) {
+      const localFolder = parsed.repo.slice('df-plugin-'.length);
+      addLocalPluginReadmeCandidates(localFolder);
+    }
+  };
+
+  if (options.pluginId) {
+    const slugFromId = parseSlugFromPluginId(options.pluginId);
+    const parts = slugFromId.split('-').filter(Boolean);
+    if (parts.length > 0) addLocalPluginReadmeCandidates(parts[0]);
+    addLocalPluginReadmeCandidates(slugFromId);
+  }
+
+  if (options.sourceUrl) addGithubRepoCandidates(options.sourceUrl);
+  if (options.homepage) addGithubRepoCandidates(options.homepage);
+
+  return candidates;
+}
+
+async function tryLoadExistingReadme(options: { homepage?: string; sourceUrl?: string; pluginId?: string }): Promise<string | null> {
+  const candidates = buildReadmeFetchCandidates(options);
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate, { cache: 'no-store' });
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (text.trim().length === 0) continue;
+      return text;
+    } catch {
+      // no-op: continue trying other candidates
+    }
+  }
+  return null;
 }
 
 function isSimplePluginManifestLike(manifest: Record<string, unknown>): boolean {
@@ -706,7 +799,7 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
             <span className="ui-label font-medium inline-flex items-center gap-1.5">
               Slug
               <span
-                title="Lowercase identifier used in the repository name and plugin ID"
+                title="Lowercase identifier used in the repository name and manifest ID"
                 className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
               >?</span>
@@ -901,7 +994,9 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
       {meta.slug && (
         <div className="rounded-xl border px-3 py-2 flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Plugin ID:</span>
-          <code className="font-mono text-xs font-semibold" style={{ color: 'var(--accent-secondary)' }}>{`df-plugin-${meta.slug}`}</code>
+          <code className="font-mono text-xs font-semibold" style={{ color: 'var(--accent-secondary)' }}>
+            {meta.slug.startsWith('df-plugin-') ? meta.slug.slice('df-plugin-'.length) : meta.slug}
+          </code>
         </div>
       )}
     </div>
@@ -1989,9 +2084,9 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
 
 // ─── Step: Export ─────────────────────────────────────────────────────────────
 
-type StepExportProps = { jsonContent: string; readmeContent: string; slug: string };
+type StepExportProps = { jsonContent: string; readmeContent: string; slug: string; printerPresetFiles: PrinterPresetSplitFile[] };
 
-function StepExport({ jsonContent, readmeContent, slug }: StepExportProps) {
+function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles }: StepExportProps) {
   const [copied, setCopied] = React.useState(false);
 
   const handleCopy = async () => {
@@ -2008,6 +2103,11 @@ function StepExport({ jsonContent, readmeContent, slug }: StepExportProps) {
     const files: Array<{ name: string; content: string; type: string }> = [
       { name: 'dragonfruit-plugin.json', content: jsonContent, type: 'application/json' },
       { name: 'README.md', content: readmeContent, type: 'text/markdown;charset=utf-8' },
+      ...printerPresetFiles.map((file) => ({
+        name: file.relativePath,
+        content: file.content,
+        type: 'application/json',
+      })),
     ];
 
     files.forEach(({ name, content, type }) => {
@@ -2024,8 +2124,21 @@ function StepExport({ jsonContent, readmeContent, slug }: StepExportProps) {
   return (
     <div className="space-y-3">
       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-        Export provides both <code className="font-mono">dragonfruit-plugin.json</code> and <code className="font-mono">README.md</code> for your repository root.
+        Export provides <code className="font-mono">dragonfruit-plugin.json</code>, <code className="font-mono">README.md</code>, and family-split printer preset files when printer content is included.
       </div>
+
+      {printerPresetFiles.length > 0 && (
+        <div className="rounded-xl border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Generated Printer Files</div>
+          <ul className="space-y-0.5">
+            {printerPresetFiles.map((file) => (
+              <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                {file.relativePath}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <button
@@ -2077,10 +2190,12 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
   const [includesMaterials, setIncludesMaterials] = React.useState(true);
   const [printerPresets, setPrinterPresets] = React.useState<PrinterPresetDraft[]>([]);
   const [materialTemplates, setMaterialTemplates] = React.useState<MaterialTemplateDraft[]>([]);
+  const [importedReadmeContent, setImportedReadmeContent] = React.useState<string | null>(null);
   const [currentStep, setCurrentStep] = React.useState<StepId>('details');
   const [showExitConfirm, setShowExitConfirm] = React.useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = React.useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = React.useState(false);
+  const readmeLoadRunRef = React.useRef(0);
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const orderedSteps = React.useMemo((): StepId[] => {
@@ -2237,7 +2352,18 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     }
   }, []);
 
-  const applyManifestToStudio = React.useCallback((manifestLike: Record<string, unknown>): ImportManifestResult => {
+  const hydrateReadmeFromImport = React.useCallback(async (options: { homepage?: string; sourceUrl?: string; pluginId?: string }) => {
+    const runId = readmeLoadRunRef.current + 1;
+    readmeLoadRunRef.current = runId;
+    setImportedReadmeContent(null);
+
+    const loaded = await tryLoadExistingReadme(options);
+    if (readmeLoadRunRef.current !== runId) return;
+    if (!loaded) return;
+    setImportedReadmeContent(loaded);
+  }, []);
+
+  const applyManifestToStudio = React.useCallback((manifestLike: Record<string, unknown>, options?: { sourceUrl?: string }): ImportManifestResult => {
     const incomingId = asString(manifestLike.id);
     const incomingSlug = parseSlugFromPluginId(incomingId);
     const incomingHomepage = asString(manifestLike.homepage);
@@ -2270,12 +2396,13 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     setPrinterPresets(nextPrinterPresets);
     setMaterialTemplates(nextMaterialTemplates);
     setCurrentStep('details');
+    void hydrateReadmeFromImport({ homepage: nextMeta.homepage, sourceUrl: options?.sourceUrl, pluginId: incomingId });
 
     return {
       ok: true,
       message: `Loaded plugin (${nextPrinterPresets.length} printer preset${nextPrinterPresets.length === 1 ? '' : 's'}, ${nextMaterialTemplates.length} material preset${nextMaterialTemplates.length === 1 ? '' : 's'}).`,
     };
-  }, [meta]);
+  }, [hydrateReadmeFromImport, meta]);
 
   const handleImportManifest = React.useCallback((rawText: string): ImportManifestResult => {
     const text = rawText.trim();
@@ -2326,7 +2453,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     }
 
     const manifestLike = plugin.manifest as unknown as Record<string, unknown>;
-    const result = applyManifestToStudio(manifestLike);
+    const result = applyManifestToStudio(manifestLike, { sourceUrl: plugin.sourceUrl });
     if (!result.ok) return result;
 
     return {
@@ -2339,9 +2466,13 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     () => buildPluginJson(meta, includesPrinters, includesMaterials, printerPresets, materialTemplates),
     [meta, includesPrinters, includesMaterials, printerPresets, materialTemplates],
   );
+  const printerPresetSplitFiles = React.useMemo(
+    () => (includesPrinters ? buildPrinterPresetSplitFiles(printerPresets) : []),
+    [includesPrinters, printerPresets],
+  );
   const readmeContent = React.useMemo(
-    () => buildReadmeTemplate(meta),
-    [meta],
+    () => importedReadmeContent ?? buildReadmeTemplate(meta),
+    [importedReadmeContent, meta],
   );
 
   if (!isOpen) return null;
@@ -2557,7 +2688,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   )}
                   {currentStep === 'printers' && <StepPrinters presets={printerPresets} onChange={setPrinterPresets} />}
                   {currentStep === 'materials' && <StepMaterials templates={materialTemplates} onChange={setMaterialTemplates} />}
-                  {currentStep === 'export' && <StepExport jsonContent={jsonContent} readmeContent={readmeContent} slug={meta.slug} />}
+                  {currentStep === 'export' && <StepExport jsonContent={jsonContent} readmeContent={readmeContent} slug={meta.slug} printerPresetFiles={printerPresetSplitFiles} />}
                 </div>
               </div>
             </div>
