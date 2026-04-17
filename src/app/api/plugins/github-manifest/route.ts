@@ -10,6 +10,7 @@ type GithubRepoRef = {
 
 const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
+const MAX_MATERIAL_PRESETS = 2048;
 const MAX_INLINE_ASSET_BYTES = 2_500_000;
 const MAX_INLINE_ASSET_BUDGET_BYTES = 20_000_000;
 const DEFAULT_GITHUB_PLUGIN_ALLOWLIST = 'open-resin-alliance/*';
@@ -139,6 +140,48 @@ function sanitizeMaterialTemplate(input: unknown) {
     liftDistanceMm: sanitizeNumber(value.liftDistanceMm, 6, 0, 1000),
     liftSpeedMmMin: sanitizeNumber(value.liftSpeedMmMin, 60, 0, 100000),
     retractSpeedMmMin: sanitizeNumber(value.retractSpeedMmMin, 150, 0, 100000),
+  };
+}
+
+function sanitizeMaterialPreset(input: unknown) {
+  const base = sanitizeMaterialTemplate(input);
+  if (!base) return null;
+
+  const value = (input ?? {}) as Record<string, unknown>;
+  const templateId = boundedString(value.templateId as string | undefined, 200) || undefined;
+  const profileVersion = Number.isFinite(Number(value.profileVersion))
+    ? Math.max(1, Math.round(Number(value.profileVersion)))
+    : undefined;
+  const validForPresets = Array.isArray(value.validForPresets)
+    ? (value.validForPresets as unknown[])
+      .slice(0, 256)
+      .map((v) => boundedString(v as string, 120))
+      .filter((v): v is string => v.length > 0)
+    : undefined;
+
+  const localSettingsByOutput = value.localSettingsByOutput && typeof value.localSettingsByOutput === 'object' && !Array.isArray(value.localSettingsByOutput)
+    ? Object.fromEntries(
+        Object.entries(value.localSettingsByOutput as Record<string, unknown>)
+          .slice(0, 32)
+          .map(([format, settings]) => [
+            format,
+            settings && typeof settings === 'object' && !Array.isArray(settings)
+              ? Object.fromEntries(
+                  Object.entries(settings as Record<string, unknown>)
+                    .slice(0, 256)
+                    .map(([k, v]) => [k, typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string' ? v : 0]),
+                )
+              : {},
+          ]),
+      )
+    : undefined;
+
+  return {
+    ...base,
+    ...(templateId !== undefined ? { templateId } : {}),
+    ...(profileVersion !== undefined ? { profileVersion } : {}),
+    ...(validForPresets !== undefined ? { validForPresets } : {}),
+    ...(localSettingsByOutput !== undefined ? { localSettingsByOutput } : {}),
   };
 }
 
@@ -524,6 +567,57 @@ async function sanitizeManifest(manifest: any, baseRawDir: string) {
       .filter((template: ReturnType<typeof sanitizeMaterialTemplate>): template is NonNullable<ReturnType<typeof sanitizeMaterialTemplate>> => template !== null)
     : [];
 
+  const inlineMaterialPresetEntries: unknown[] = Array.isArray(value.materialPresets)
+    ? value.materialPresets
+    : [];
+
+  const materialPresetPathEntries: string[] = Array.isArray(value.materialPresetPaths)
+    ? value.materialPresetPaths
+      .map((entry: unknown) => sanitizeRelativeManifestPath(entry))
+      .filter((entry: string | null): entry is string => entry !== null)
+      .slice(0, 64)
+    : [];
+
+  const fetchedMaterialPresetEntries = await Promise.all(
+    materialPresetPathEntries.map(async (relativePath: string) => {
+      const rawUrl = `${baseRawDir}/${relativePath}`;
+      try {
+        const response = await fetch(rawUrl, {
+          headers: {
+            Accept: 'application/json',
+          },
+          cache: 'no-store',
+          signal: AbortSignal.timeout(9000),
+        });
+
+        if (!response.ok) return [] as unknown[];
+        const payload = await response.json().catch(() => null) as unknown;
+
+        if (Array.isArray(payload)) return payload;
+        if (payload && typeof payload === 'object' && Array.isArray((payload as any).materialPresets)) {
+          return (payload as any).materialPresets as unknown[];
+        }
+        if (payload && typeof payload === 'object') {
+          return [payload];
+        }
+      } catch {
+        // Ignore preset-source fetch failures and continue with remaining sources.
+      }
+
+      return [] as unknown[];
+    }),
+  );
+
+  const combinedMaterialPresetEntries = [
+    ...inlineMaterialPresetEntries,
+    ...fetchedMaterialPresetEntries.flat(),
+  ];
+
+  const sanitizedMaterialPresets = combinedMaterialPresetEntries
+    .slice(0, MAX_MATERIAL_PRESETS)
+    .map((preset: unknown) => sanitizeMaterialPreset(preset))
+    .filter((preset: ReturnType<typeof sanitizeMaterialPreset>): preset is NonNullable<ReturnType<typeof sanitizeMaterialPreset>> => preset !== null);
+
   const sanitized = {
     schemaVersion: Number.isFinite(Number(value.schemaVersion)) ? Number(value.schemaVersion) : 1,
     id: boundedString(value.id, 120),
@@ -534,6 +628,7 @@ async function sanitizeManifest(manifest: any, baseRawDir: string) {
     homepage: optionalHttpUrl(value.homepage),
     printerPresets: offlineReadyPrinterPresets,
     materialTemplates: sanitizedMaterialTemplates,
+    materialPresets: sanitizedMaterialPresets,
   };
 
   if (!sanitized.id || !sanitized.name || !sanitized.version) {
