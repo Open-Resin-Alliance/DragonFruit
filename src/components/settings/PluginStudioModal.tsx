@@ -2487,10 +2487,9 @@ type StepExportProps = {
 };
 
 function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, printerAssetFiles, confirmOverwriteOnSave = false }: StepExportProps) {
-  const [copied, setCopied] = React.useState(false);
-  const [showOverwriteConfirm, setShowOverwriteConfirm] = React.useState(false);
   const [writeStatus, setWriteStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
   const [isWritingToPluginsDir, setIsWritingToPluginsDir] = React.useState(false);
+  const [showOverwriteConfirm, setShowOverwriteConfirm] = React.useState(false);
 
   const exportFiles = React.useMemo(
     () => [
@@ -2509,61 +2508,22 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
   const isDevRuntime = process.env.NODE_ENV === 'development';
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const canWriteToPluginsDirectory = isDevRuntime && isTauriRuntime;
+  const pluginDir = normalizePluginDirectorySlug(slug || 'my-plugin');
+  const destinationBase = '../plugins';
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(jsonContent);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // clipboard API not available
-    }
-  };
+  const destinationPreviewFiles = React.useMemo(() => [
+    ...exportFiles.map((file) => `plugins/${pluginDir}/${file.name}`),
+    ...printerAssetFiles.map((asset) => `plugins/${pluginDir}/${toPluginAssetFileRelativePath(asset.relativePath)}`),
+  ], [exportFiles, pluginDir, printerAssetFiles]);
 
-  const performDownload = React.useCallback(async () => {
-    if (hasBinaryAssets) {
-      const zip = new JSZip();
-      exportFiles.forEach(({ name, content }) => {
-        zip.file(name, content);
-      });
-      printerAssetFiles.forEach((asset) => {
-        zip.file(normalizeAssetRelativePath(asset.relativePath), asset.file);
-      });
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const archiveName = `${slug || 'dragonfruit-plugin'}-export.zip`;
-      triggerBlobDownload(zipBlob, archiveName);
-      return;
-    }
-
-    exportFiles.forEach(({ name, content, type }) => {
-      const blob = new Blob([content], { type });
-      triggerBlobDownload(blob, name);
-    });
-  }, [exportFiles, hasBinaryAssets, printerAssetFiles, slug]);
-
-  const handleDownload = async () => {
-    if (confirmOverwriteOnSave) {
-      setShowOverwriteConfirm(true);
-      return;
-    }
-    await performDownload();
-  };
-
-  const handleConfirmOverwriteSave = async () => {
-    setShowOverwriteConfirm(false);
-    await performDownload();
-  };
-
-  const handleWriteToPluginsDirectory = async () => {
+  const performWriteToPluginsDirectory = async () => {
     if (!canWriteToPluginsDirectory) return;
 
-    const pluginDir = normalizePluginDirectorySlug(slug || 'my-plugin');
     setIsWritingToPluginsDir(true);
     setWriteStatus({ kind: 'idle', message: '' });
 
     try {
       const encoder = new TextEncoder();
-      const destinationBase = '../plugins';
       for (const file of exportFiles) {
         const destination = `${destinationBase}/${pluginDir}/${file.name}`;
         await writeBytesToNativePath(destination, encoder.encode(file.content));
@@ -2589,10 +2549,24 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
     }
   };
 
+  const handleWriteToPluginsDirectory = async () => {
+    if (!canWriteToPluginsDirectory) return;
+    if (confirmOverwriteOnSave) {
+      setShowOverwriteConfirm(true);
+      return;
+    }
+    await performWriteToPluginsDirectory();
+  };
+
+  const handleConfirmOverwriteWrite = async () => {
+    setShowOverwriteConfirm(false);
+    await performWriteToPluginsDirectory();
+  };
+
   return (
     <div className="space-y-3">
       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-        Export provides <code className="font-mono">dragonfruit-plugin.json</code>, <code className="font-mono">README.md</code>, family-split printer preset files, and asset files. Asset-inclusive exports are bundled into a ZIP to preserve folder structure.
+        Export previews generated files and can write directly into your local <code className="font-mono">plugins/</code> directory in dev runtime.
       </div>
 
       {printerPresetFiles.length > 0 && (
@@ -2621,56 +2595,9 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5"
-        >
-          <Copy className="h-3.5 w-3.5" />
-          {copied ? 'Copied!' : 'Copy JSON'}
-        </button>
-        <button
-          type="button"
-          onClick={handleDownload}
-          className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5"
-          style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }}
-        >
-          <Download className="h-3.5 w-3.5" />
-          {hasBinaryAssets ? 'Save ZIP' : 'Save Files'}
-        </button>
-        {canWriteToPluginsDirectory && (
-          <button
-            type="button"
-            onClick={() => { void handleWriteToPluginsDirectory(); }}
-            disabled={isWritingToPluginsDir}
-            className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
-            style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }}
-            title="Write files directly into plugins/<slug> in this dev workspace"
-          >
-            <Archive className="h-3.5 w-3.5" />
-            {isWritingToPluginsDir ? 'Writing…' : 'Write to plugins/'}
-          </button>
-        )}
-      </div>
-
       {writeStatus.kind !== 'idle' && (
         <div className="text-xs" style={{ color: writeStatus.kind === 'error' ? '#fca5a5' : '#86efac' }}>
           {writeStatus.message}
-        </div>
-      )}
-
-      <CodeBlock label="dragonfruit-plugin.json" content={jsonContent} />
-      <CodeBlock label="README.md" content={readmeContent} />
-
-      {slug && (
-        <div className="rounded-xl border p-3 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Next Steps</div>
-          <ol className="text-xs space-y-1 list-decimal list-inside" style={{ color: 'var(--text-muted)' }}>
-            <li>Save <code className="font-mono">dragonfruit-plugin.json</code> and <code className="font-mono">README.md</code> to your repository root.</li>
-            <li>Commit and push your changes to GitHub.</li>
-            <li>In DragonFruit: Plugins → Install from GitHub URL → enter your repo URL.</li>
-          </ol>
         </div>
       )}
 
@@ -2709,7 +2636,7 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
                     Overwrite existing plugin files?
                   </h2>
                   <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    This plugin is loaded in edit mode. Saving may replace existing files.
+                    This plugin is loaded in edit mode. Writing will replace existing files.
                   </p>
                 </div>
               </div>
@@ -2731,14 +2658,9 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
               </p>
               <div className="rounded-lg border p-2 max-h-44 overflow-auto" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <ul className="space-y-1">
-                  {exportFiles.map((file) => (
-                    <li key={file.name} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
-                      {file.name}
-                    </li>
-                  ))}
-                  {printerAssetFiles.map((file) => (
-                    <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
-                      {normalizeAssetRelativePath(file.relativePath)}
+                  {destinationPreviewFiles.map((file) => (
+                    <li key={file} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                      {file}
                     </li>
                   ))}
                 </ul>
@@ -2760,14 +2682,44 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, prin
                     borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
                     background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
                   }}
-                  onClick={handleConfirmOverwriteSave}
+                  onClick={() => { void handleConfirmOverwriteWrite(); }}
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  Overwrite & Save
+                  <Archive className="w-3.5 h-3.5" />
+                  Overwrite & Write
                 </button>
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      <CodeBlock label="dragonfruit-plugin.json" content={jsonContent} />
+      <CodeBlock label="README.md" content={readmeContent} />
+
+      {canWriteToPluginsDirectory && (
+        <div className="pt-1 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => { void handleWriteToPluginsDirectory(); }}
+            disabled={isWritingToPluginsDir}
+            className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
+            style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }}
+            title="Write files directly into plugins/<slug> in this dev workspace"
+          >
+            <Archive className="h-3.5 w-3.5" />
+            {isWritingToPluginsDir ? 'Writing…' : 'Write to plugins/'}
+          </button>
+        </div>
+      )}
+
+      {slug && (
+        <div className="rounded-xl border p-3 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Next Steps</div>
+          <ol className="text-xs space-y-1 list-decimal list-inside" style={{ color: 'var(--text-muted)' }}>
+            <li>Use <strong>Write to plugins/</strong> to generate files in your local plugin folder.</li>
+            <li>Commit and push your changes to GitHub.</li>
+            <li>In DragonFruit: Plugins → Install from GitHub URL → enter your repo URL.</li>
+          </ol>
         </div>
       )}
     </div>
