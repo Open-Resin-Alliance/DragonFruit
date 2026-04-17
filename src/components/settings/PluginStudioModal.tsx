@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Archive, Check, ChevronLeft, ChevronRight, Copy, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Archive, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css';
@@ -30,6 +30,7 @@ import {
   LabeledInput,
   LabeledNumberInput,
   LabeledToggleInput,
+  MaterialProfileIdentitySection,
   MaterialProfileFormSections,
   PluginLocalMaterialSettingsSections,
 } from './profileFormAtoms';
@@ -80,9 +81,7 @@ type PrinterPresetDraft = {
 type MaterialTemplateDraft = {
   draft: MaterialDraft;
   localSettingsByOutput: LocalSettingsByOutputDraft;
-  enabledFormats: string[];
-  applyToAllPrinters: boolean;
-  targetPresetIds: string[];
+  targetPresetId: string;
 };
 
 type StepId = 'details' | 'repo' | 'content' | 'printers' | 'assets' | 'materials' | 'export';
@@ -92,6 +91,9 @@ type PresetTargetOption = {
   presetId: string;
   label: string;
   description: string;
+  manufacturer: string;
+  outputFormat: string;
+  settingsMode: string;
 };
 
 type UploadedPrinterAsset = {
@@ -232,6 +234,33 @@ const DEFAULT_MATERIAL_DRAFT: MaterialDraft = {
   minimumAaAlphaPercent: 35,
 };
 
+function normalizeOutputFormatKey(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return '';
+  return normalized.startsWith('.') ? normalized : `.${normalized}`;
+}
+
+function buildTargetOptionsFromAvailablePresets(): PresetTargetOption[] {
+  return getAvailablePrinterPresets()
+    .map((preset) => ({
+      presetId: preset.presetId,
+      label: `${preset.manufacturer} ${preset.name}`.trim(),
+      description: preset.family?.trim() || 'No family',
+      manufacturer: preset.manufacturer?.trim() || 'Unknown',
+      outputFormat: normalizeOutputFormatKey(preset.display.outputFormat),
+      settingsMode: preset.display.settingsMode?.trim().toLowerCase() || '',
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function createDefaultMaterialTemplateDraft(targetPresetId = ''): MaterialTemplateDraft {
+  return {
+    draft: { ...DEFAULT_MATERIAL_DRAFT },
+    localSettingsByOutput: {},
+    targetPresetId,
+  };
+}
+
 // ─── JSON builders ────────────────────────────────────────────────────────────
 
 function printerPresetDraftToJson(d: PrinterPresetDraft): Record<string, unknown> {
@@ -309,23 +338,29 @@ function buildPrinterPresetSplitFiles(printerPresets: PrinterPresetDraft[]): Pri
 function materialTemplateDraftToJson(d: MaterialTemplateDraft): Record<string, unknown> {
   const { localSettingsByOutput: _local, ...rest } = d.draft as Record<string, unknown>;
   const template: Record<string, unknown> = { ...rest };
-  if (d.enabledFormats.length > 0) {
-    const localSettingsByOutput: Record<string, unknown> = {};
-    d.enabledFormats.forEach((fmt) => {
-      localSettingsByOutput[fmt] = d.localSettingsByOutput[fmt] ?? {};
-    });
-    template['localSettingsByOutput'] = localSettingsByOutput;
-  }
-  if (!d.applyToAllPrinters) {
-    const validForPresets = Array.from(new Set(
-      d.targetPresetIds
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0),
-    ));
-    if (validForPresets.length > 0) {
-      template['validForPresets'] = validForPresets;
+  const selectedPresetId = d.targetPresetId.trim();
+
+  if (selectedPresetId) {
+    template['validForPresets'] = [selectedPresetId];
+
+    const matchingPreset = buildTargetOptionsFromAvailablePresets().find((preset) => preset.presetId === selectedPresetId);
+    const resolvedFormat = matchingPreset?.outputFormat ?? '';
+    if (resolvedFormat) {
+      const localSettings = d.localSettingsByOutput[resolvedFormat] ?? {};
+      if (Object.keys(localSettings).length > 0) {
+        template['localSettingsByOutput'] = { [resolvedFormat]: localSettings };
+      }
+    }
+  } else {
+    const fallbackFormat = Object.keys(d.localSettingsByOutput)[0];
+    if (fallbackFormat) {
+      const localSettings = d.localSettingsByOutput[fallbackFormat] ?? {};
+      if (Object.keys(localSettings).length > 0) {
+        template['localSettingsByOutput'] = { [fallbackFormat]: localSettings };
+      }
     }
   }
+
   return template;
 }
 
@@ -825,15 +860,17 @@ function parsePrinterPresetDraft(value: unknown): PrinterPresetDraft {
   };
 }
 
-function parseMaterialTemplateDraft(value: unknown): MaterialTemplateDraft {
+function cloneLocalSettingsByOutput(source: LocalSettingsByOutputDraft): LocalSettingsByOutputDraft {
+  const next: LocalSettingsByOutputDraft = {};
+  Object.entries(source).forEach(([format, settings]) => {
+    next[format] = { ...settings };
+  });
+  return next;
+}
+
+function parseMaterialTemplateDrafts(value: unknown): MaterialTemplateDraft[] {
   if (!isRecord(value)) {
-    return {
-      draft: { ...DEFAULT_MATERIAL_DRAFT },
-      localSettingsByOutput: {},
-      enabledFormats: [],
-      applyToAllPrinters: true,
-      targetPresetIds: [],
-    };
+    return [createDefaultMaterialTemplateDraft()];
   }
 
   const rawScaleComp = isRecord(value.scaleCompensationPct) ? value.scaleCompensationPct : {};
@@ -861,7 +898,7 @@ function parseMaterialTemplateDraft(value: unknown): MaterialTemplateDraft {
       .filter((entry) => entry.length > 0)
     : [];
 
-  return {
+  const baseTemplate: MaterialTemplateDraft = {
     draft: {
       ...DEFAULT_MATERIAL_DRAFT,
       name: asString(value.name, DEFAULT_MATERIAL_DRAFT.name),
@@ -885,10 +922,18 @@ function parseMaterialTemplateDraft(value: unknown): MaterialTemplateDraft {
       minimumAaAlphaPercent: asNumber(value.minimumAaAlphaPercent, DEFAULT_MATERIAL_DRAFT.minimumAaAlphaPercent),
     },
     localSettingsByOutput,
-    enabledFormats: Object.keys(localSettingsByOutput),
-    applyToAllPrinters: validForPresets.length === 0,
-    targetPresetIds: validForPresets,
+    targetPresetId: '',
   };
+
+  if (validForPresets.length === 0) {
+    return [baseTemplate];
+  }
+
+  return validForPresets.map((presetId) => ({
+    draft: { ...baseTemplate.draft },
+    localSettingsByOutput: cloneLocalSettingsByOutput(baseTemplate.localSettingsByOutput),
+    targetPresetId: presetId,
+  }));
 }
 
 // ─── Step: Details ────────────────────────────────────────────────────────────
@@ -1769,7 +1814,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
   }, [deletePreset, presets]);
 
   return (
-    <div className="flex gap-3" style={{ minHeight: 480 }}>
+    <div className="h-full min-h-0 flex gap-3">
       {/* Sidebar: preset list */}
       <div
         className="flex flex-col rounded-xl border overflow-hidden shrink-0"
@@ -1873,16 +1918,16 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
       </div>
 
       {/* Detail editor */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 h-full">
         {selectedPreset === null ? (
           <div
-            className="rounded-xl border flex items-center justify-center text-xs"
+            className="rounded-xl border h-full flex items-center justify-center text-xs"
             style={{ minHeight: 200, borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
           >
             Add a printer preset to get started.
           </div>
         ) : (
-          <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-2), transparent 4%), var(--surface-2))' }}>
+          <div className="rounded-xl border p-3 h-full min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-2), transparent 4%), var(--surface-2))' }}>
             <div className="flex items-center justify-between gap-2 mb-3">
               <div className="min-w-0">
                 <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
@@ -1911,11 +1956,13 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
                 Delete
               </button>
             </div>
-            <PrinterPresetEditor
-              key={clampedIndex}
-              preset={selectedPreset}
-              onChange={(next) => updatePreset(clampedIndex, next)}
-            />
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+              <PrinterPresetEditor
+                key={clampedIndex}
+                preset={selectedPreset}
+                onChange={(next) => updatePreset(clampedIndex, next)}
+              />
+            </div>
           </div>
         )}
       </div>
@@ -2133,277 +2180,175 @@ type MaterialTemplateEditorProps = {
   targetOptions: PresetTargetOption[];
   onChange: (next: MaterialTemplateDraft) => void;
   onDelete: () => void;
+  hideHeader?: boolean;
 };
 
-function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete }: MaterialTemplateEditorProps) {
-  const [activeFormatTab, setActiveFormatTab] = React.useState<string>('core');
-  const [targetSearch, setTargetSearch] = React.useState('');
+function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, hideHeader = false }: MaterialTemplateEditorProps) {
+  type EditorTab = { id: string; title: string; kind: 'meta' | 'format'; formatTabId?: string };
 
-  const formatTabs = React.useMemo(() => [
-    { id: 'core', label: 'Core' },
-    ...template.enabledFormats.map((fmt) => ({ id: fmt, label: fmt })),
-  ], [template.enabledFormats]);
-
-  const addFormat = (fmt: string) => {
-    if (template.enabledFormats.includes(fmt)) return;
-    onChange({ ...template, enabledFormats: [...template.enabledFormats, fmt] });
-    setActiveFormatTab(fmt);
-  };
-
-  const removeFormat = (fmt: string) => {
-    onChange({ ...template, enabledFormats: template.enabledFormats.filter((f) => f !== fmt) });
-    if (activeFormatTab === fmt) setActiveFormatTab('core');
-  };
-
-  const unusedFormats = OUTPUT_FORMAT_OPTIONS.filter((o) => !template.enabledFormats.includes(o.value));
-
-  const selectedTargetSet = React.useMemo(
-    () => new Set(template.targetPresetIds),
-    [template.targetPresetIds],
+  const selectedTarget = React.useMemo(
+    () => targetOptions.find((option) => option.presetId === template.targetPresetId) ?? null,
+    [targetOptions, template.targetPresetId],
   );
 
-  const filteredTargetOptions = React.useMemo(() => {
-    const search = targetSearch.trim().toLowerCase();
-    if (!search) return targetOptions;
-    return targetOptions.filter((option) => (
-      option.label.toLowerCase().includes(search)
-      || option.description.toLowerCase().includes(search)
-      || option.presetId.toLowerCase().includes(search)
-    ));
-  }, [targetOptions, targetSearch]);
+  const resolvedOutputFormat = normalizeOutputFormatKey(selectedTarget?.outputFormat ?? '');
+  const resolvedSettingsMode = selectedTarget?.settingsMode?.trim().toLowerCase() || undefined;
+  const localSettingsAdapter = React.useMemo(
+    () => (resolvedOutputFormat ? getProfileLocalMaterialSettingsAdapter(resolvedOutputFormat, resolvedSettingsMode) : null),
+    [resolvedOutputFormat, resolvedSettingsMode],
+  );
 
-  const toggleTargetPreset = (presetId: string) => {
-    const nextSelected = selectedTargetSet.has(presetId)
-      ? template.targetPresetIds.filter((id) => id !== presetId)
-      : [...template.targetPresetIds, presetId];
-    onChange({ ...template, targetPresetIds: nextSelected });
-  };
+  const editorTabs = React.useMemo<EditorTab[]>(() => {
+    const tabs: EditorTab[] = [{ id: 'meta', title: 'Meta', kind: 'meta' }];
+    if (!localSettingsAdapter || localSettingsAdapter.fields.length === 0) {
+      return tabs;
+    }
+
+    const declared = [...(localSettingsAdapter.tabs ?? [])]
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    if (declared.length > 0) {
+      declared.forEach((tab) => {
+        tabs.push({
+          id: `format:${tab.id}`,
+          title: tab.title,
+          kind: 'format',
+          formatTabId: tab.id,
+        });
+      });
+      return tabs;
+    }
+
+    tabs.push({
+      id: 'format:local',
+      title: localSettingsAdapter.displayName ?? 'Format Settings',
+      kind: 'format',
+      formatTabId: 'local',
+    });
+    return tabs;
+  }, [localSettingsAdapter]);
+
+  const [activeEditorTabId, setActiveEditorTabId] = React.useState<string>('meta');
+
+  React.useEffect(() => {
+    if (!editorTabs.some((tab) => tab.id === activeEditorTabId)) {
+      setActiveEditorTabId(editorTabs[0]?.id ?? 'meta');
+    }
+  }, [activeEditorTabId, editorTabs]);
+
+  const activeEditorTab = React.useMemo(
+    () => editorTabs.find((tab) => tab.id === activeEditorTabId) ?? editorTabs[0] ?? { id: 'meta', title: 'Meta', kind: 'meta' as const },
+    [activeEditorTabId, editorTabs],
+  );
+  const useReplacementMetaOnly = Boolean(localSettingsAdapter?.replacesDefaultMaterialSettings);
 
   const label = template.draft.brand || template.draft.name
     ? [template.draft.brand, template.draft.name].filter(Boolean).join(' — ')
     : 'Material Template';
 
   return (
-    <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="ui-meta font-semibold uppercase tracking-wide">{label}</span>
-        <button type="button" onClick={onDelete} className="ui-button ui-button-ghost !h-7 !w-7 !p-0 flex items-center justify-center" aria-label="Remove material">
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+    <div className="rounded-xl border p-3 h-full min-h-0 flex flex-col gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+      {!hideHeader && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="ui-meta font-semibold uppercase tracking-wide">{label}</span>
+          <button type="button" onClick={onDelete} className="ui-button ui-button-ghost !h-7 !w-7 !p-0 flex items-center justify-center" aria-label="Remove material">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      <div className="rounded-lg border px-2 py-1.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="flex items-center justify-between gap-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          <div className="font-semibold uppercase tracking-wide">Target</div>
+          {selectedTarget?.outputFormat && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 4%)' }}>
+              {normalizeOutputFormatKey(selectedTarget.outputFormat) || selectedTarget.outputFormat}
+            </span>
+          )}
+        </div>
+        <SelectDropdown
+          label=""
+          value={template.targetPresetId}
+          onChange={(presetId) => onChange({ ...template, targetPresetId: presetId })}
+          options={[{ value: '', label: '— select printer preset —' }, ...targetOptions.map((option) => ({
+            value: option.presetId,
+            label: `${option.label} · ${option.presetId}`,
+          }))]}
+          className="space-y-0 block"
+          labelClassName="hidden"
+          selectClassName="w-full h-[32px] px-2 pr-8 leading-tight text-xs"
+        />
       </div>
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1.5 flex-wrap border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
-        {formatTabs.map((tab) => {
-          const active = tab.id === activeFormatTab;
-          return (
-            <div key={tab.id} className="flex items-center gap-0.5">
+      <div className="rounded-xl border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {editorTabs.map((tab) => {
+            const active = tab.id === activeEditorTab.id;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                onClick={() => setActiveFormatTab(tab.id)}
+                onClick={() => setActiveEditorTabId(tab.id)}
                 className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
                 style={active
                   ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
                   : { color: 'var(--text-muted)' }}
               >
-                {tab.label}
+                {tab.title}
               </button>
-              {tab.id !== 'core' && (
-                <button
-                  type="button"
-                  onClick={() => removeFormat(tab.id)}
-                  className="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-white/10"
-                  aria-label={`Remove ${tab.id} settings`}
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              )}
-            </div>
-          );
-        })}
-        {unusedFormats.length > 0 && (
-          <select
-            className="ui-input h-7 px-2 pr-7 text-[11px] rounded-md cursor-pointer"
-            style={{ color: 'var(--text-muted)' }}
-            value=""
-            onChange={(e) => { if (e.target.value) addFormat(e.target.value); }}
-          >
-            <option value="">+ Add format…</option>
-            {unusedFormats.map((f) => (
-              <option key={f.value} value={f.value}>{f.label}</option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide">Applies To Printers</div>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => onChange({ ...template, applyToAllPrinters: true, targetPresetIds: [] })}
-            className="ui-button ui-button-secondary !h-8 !px-2.5 text-xs"
-            style={template.applyToAllPrinters
-              ? {
-                color: 'var(--accent-secondary)',
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-              }
-              : undefined}
-          >
-            All Supported Printers
-          </button>
-          <button
-            type="button"
-            onClick={() => onChange({ ...template, applyToAllPrinters: false })}
-            className="ui-button ui-button-secondary !h-8 !px-2.5 text-xs"
-            style={!template.applyToAllPrinters
-              ? {
-                color: 'var(--accent-secondary)',
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-              }
-              : undefined}
-          >
-            Selected Presets Only
-          </button>
+            );
+          })}
         </div>
+      </div>
 
-        {!template.applyToAllPrinters && (
-          <>
-            <input
-              type="text"
-              value={targetSearch}
-              onChange={(e) => setTargetSearch(e.target.value)}
-              className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm"
-              placeholder="Search by manufacturer, model, family, or preset ID"
+      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+        {activeEditorTab.kind === 'meta' ? (
+          useReplacementMetaOnly ? (
+            <MaterialProfileIdentitySection
+              draft={template.draft}
+              onChange={(next) => {
+                const resolved = typeof next === 'function' ? next(template.draft) : next;
+                onChange({ ...template, draft: resolved });
+              }}
             />
-
-            <div className="flex items-center justify-between gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              <span>{template.targetPresetIds.length} selected</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onChange({ ...template, targetPresetIds: targetOptions.map((option) => option.presetId) })}
-                  className="underline-offset-2 hover:underline"
-                >
-                  Select all
-                </button>
-                <span>•</span>
-                <button
-                  type="button"
-                  onClick={() => onChange({ ...template, targetPresetIds: [] })}
-                  className="underline-offset-2 hover:underline"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            <div className="max-h-44 overflow-auto rounded-lg border p-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-              {filteredTargetOptions.length === 0 ? (
-                <div className="px-2 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  No printer presets match your search.
-                </div>
-              ) : (
-                filteredTargetOptions.map((option) => {
-                  const selected = selectedTargetSet.has(option.presetId);
-                  return (
-                    <button
-                      key={option.presetId}
-                      type="button"
-                      onClick={() => toggleTargetPreset(option.presetId)}
-                      className="w-full rounded-md border px-2 py-1.5 text-left mb-1 last:mb-0"
-                      style={selected
-                        ? {
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                        }
-                        : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                        }}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className="mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded border"
-                          style={{
-                            borderColor: selected ? 'var(--accent-secondary)' : 'var(--border-subtle)',
-                            background: selected ? 'var(--accent-secondary)' : 'transparent',
-                          }}
-                        >
-                          {selected && <Check className="h-2.5 w-2.5 text-black" />}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{option.label}</div>
-                          <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                            {option.description} · <code className="font-mono">{option.presetId}</code>
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </>
+          ) : (
+            <MaterialProfileFormSections
+              draft={template.draft}
+              onChange={(next) => {
+                const resolved = typeof next === 'function' ? next(template.draft) : next;
+                onChange({ ...template, draft: resolved });
+              }}
+            />
+          )
+        ) : (resolvedOutputFormat && localSettingsAdapter && localSettingsAdapter.fields.length > 0 && activeEditorTab.formatTabId) ? (
+          <PluginLocalMaterialSettingsSections
+            outputFormat={resolvedOutputFormat}
+            settingsMode={resolvedSettingsMode}
+            adapter={localSettingsAdapter}
+            localSettingsByOutput={template.localSettingsByOutput}
+            onChange={(next) => {
+              const resolved = typeof next === 'function' ? next(template.localSettingsByOutput) : next;
+              onChange({ ...template, localSettingsByOutput: resolved });
+            }}
+            activeTabId={activeEditorTab.formatTabId}
+            onActiveTabChange={() => {}}
+            showTabBar={false}
+            replacementMode
+          />
+        ) : (
+          <div className="py-3 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+            {resolvedOutputFormat
+              ? (
+                <>
+                  No format-specific settings are registered for{' '}
+                  <code className="font-mono">{resolvedOutputFormat}</code>.
+                </>
+              )
+              : 'Pick a printer preset to edit format-specific material settings.'}
+          </div>
         )}
       </div>
-
-      {/* Tab body */}
-      {activeFormatTab === 'core' ? (
-        <MaterialProfileFormSections
-          draft={template.draft}
-          onChange={(next) => {
-            const resolved = typeof next === 'function' ? next(template.draft) : next;
-            onChange({ ...template, draft: resolved });
-          }}
-        />
-      ) : (
-        <FormatSettingsBody
-          outputFormat={activeFormatTab}
-          localSettingsByOutput={template.localSettingsByOutput}
-          onLocalSettingsChange={(next) => {
-            const resolved = typeof next === 'function' ? next(template.localSettingsByOutput) : next;
-            onChange({ ...template, localSettingsByOutput: resolved });
-          }}
-        />
-      )}
     </div>
-  );
-}
-
-type FormatSettingsBodyProps = {
-  outputFormat: string;
-  localSettingsByOutput: LocalSettingsByOutputDraft;
-  onLocalSettingsChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
-};
-
-function FormatSettingsBody({ outputFormat, localSettingsByOutput, onLocalSettingsChange }: FormatSettingsBodyProps) {
-  const adapter = React.useMemo(
-    () => getProfileLocalMaterialSettingsAdapter(outputFormat),
-    [outputFormat],
-  );
-
-  if (!adapter || adapter.fields.length === 0) {
-    return (
-      <div className="py-4 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
-        No format-specific settings are registered for{' '}
-        <code className="font-mono">{outputFormat}</code>.
-        <br />
-        Values in this section will still be exported if you set them via JSON.
-      </div>
-    );
-  }
-
-  return (
-    <PluginLocalMaterialSettingsSections
-      outputFormat={outputFormat}
-      adapter={adapter}
-      localSettingsByOutput={localSettingsByOutput}
-      onChange={onLocalSettingsChange}
-    />
   );
 }
 
@@ -2413,19 +2358,94 @@ type StepMaterialsProps = { templates: MaterialTemplateDraft[]; onChange: (next:
 
 function StepMaterials({ templates, onChange }: StepMaterialsProps) {
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const [expandedManufacturerFolders, setExpandedManufacturerFolders] = React.useState<Set<string>>(() => new Set());
 
   const targetOptions = React.useMemo<PresetTargetOption[]>(() => {
-    const presets = getAvailablePrinterPresets();
-    return presets
-      .map((preset) => ({
-        presetId: preset.presetId,
-        label: `${preset.manufacturer} ${preset.name}`.trim(),
-        description: preset.family?.trim() || 'No family',
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+    return buildTargetOptionsFromAvailablePresets();
   }, [profileState]);
 
-  const hasInvalidPresetSelection = templates.some((template) => !template.applyToAllPrinters && template.targetPresetIds.length === 0);
+  const targetOptionById = React.useMemo(() => {
+    const next = new Map<string, PresetTargetOption>();
+    targetOptions.forEach((option) => {
+      next.set(option.presetId, option);
+    });
+    return next;
+  }, [targetOptions]);
+
+  const hasInvalidPresetSelection = templates.some((template) => !template.targetPresetId.trim());
+
+  const clampedIndex = templates.length === 0 ? -1 : Math.min(selectedIndex, templates.length - 1);
+
+  const groupedMaterials = React.useMemo(() => {
+    const groups = new Map<string, { index: number; template: MaterialTemplateDraft }[]>();
+    templates.forEach((template, index) => {
+      const materialLabel = [template.draft.brand, template.draft.name]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(' — ') || 'New Material';
+      if (!groups.has(materialLabel)) groups.set(materialLabel, []);
+      groups.get(materialLabel)?.push({ index, template });
+    });
+
+    return Array.from(groups.entries())
+      .map(([materialLabel, members]) => {
+        const manufacturerGroups = new Map<string, { index: number; template: MaterialTemplateDraft }[]>();
+        members.forEach((member) => {
+          const target = targetOptionById.get(member.template.targetPresetId);
+          const manufacturer = target?.manufacturer?.trim() || 'Unassigned';
+          if (!manufacturerGroups.has(manufacturer)) manufacturerGroups.set(manufacturer, []);
+          manufacturerGroups.get(manufacturer)?.push(member);
+        });
+
+        return {
+          materialLabel,
+          manufacturerGroups: Array.from(manufacturerGroups.entries())
+            .map(([manufacturer, manufacturerMembers]) => ({
+              manufacturer,
+              members: [...manufacturerMembers].sort((a, b) => {
+                const aOption = targetOptionById.get(a.template.targetPresetId);
+                const bOption = targetOptionById.get(b.template.targetPresetId);
+                const aLabel = aOption?.label ?? 'Select printer';
+                const bLabel = bOption?.label ?? 'Select printer';
+                return aLabel.localeCompare(bLabel);
+              }),
+            }))
+            .sort((a, b) => a.manufacturer.localeCompare(b.manufacturer)),
+        };
+      })
+      .sort((a, b) => a.materialLabel.localeCompare(b.materialLabel));
+  }, [targetOptionById, templates]);
+
+  const toggleManufacturerFolder = React.useCallback((folderKey: string) => {
+    setExpandedManufacturerFolders((previous) => {
+      const next = new Set(previous);
+      if (next.has(folderKey)) {
+        next.delete(folderKey);
+      } else {
+        next.add(folderKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const addTemplate = React.useCallback(() => {
+    const next = [...templates, createDefaultMaterialTemplateDraft()];
+    onChange(next);
+    setSelectedIndex(next.length - 1);
+  }, [onChange, templates]);
+
+  const addPrinterVariantFromTemplate = React.useCallback((index: number) => {
+    const source = templates[index];
+    if (!source) return;
+    const next = [...templates, {
+      draft: { ...source.draft },
+      localSettingsByOutput: {},
+      targetPresetId: '',
+    }];
+    onChange(next);
+    setSelectedIndex(next.length - 1);
+  }, [onChange, templates]);
 
   const requestDeleteMaterialTemplate = React.useCallback((index: number) => {
     const template = templates[index];
@@ -2434,58 +2454,211 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
       : 'this material preset';
     const shouldDelete = window.confirm(`Delete ${name}?\n\nThis action cannot be undone.`);
     if (!shouldDelete) return;
-    onChange(templates.filter((_, i) => i !== index));
+    const next = templates.filter((_, i) => i !== index);
+    onChange(next);
+    setSelectedIndex((prev) => Math.min(prev, Math.max(0, next.length - 1)));
   }, [onChange, templates]);
 
+  const selectedTemplate = clampedIndex >= 0 ? templates[clampedIndex] : null;
+  const selectedTarget = selectedTemplate ? targetOptionById.get(selectedTemplate.targetPresetId) ?? null : null;
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          Define material presets. Each entry can apply to all DragonFruit-supported printers or selected preset IDs (including plugin-provided presets).
-        </div>
-        <button
-          type="button"
-          onClick={() => onChange([...templates, {
-            draft: { ...DEFAULT_MATERIAL_DRAFT },
-            localSettingsByOutput: {},
-            enabledFormats: [],
-            applyToAllPrinters: true,
-            targetPresetIds: [],
-          }])}
-          className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] flex items-center gap-1.5 shrink-0"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add Material
-        </button>
+    <div className="h-full min-h-0 flex flex-col gap-2.5">
+      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+        Define material presets as printer-bound variants. Same resin can have multiple entries targeting different printer presets.
       </div>
 
       {hasInvalidPresetSelection && (
         <div className="rounded-xl border p-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-          One or more materials are set to <strong>Selected Presets Only</strong> but have no target presets selected yet.
+          One or more material variants are missing a target printer preset.
         </div>
       )}
 
-      {templates.length === 0 ? (
-        <div className="rounded-xl border p-6 text-center text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-          No material templates yet. Click "Add Material" to get started.
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {templates.map((template, index) => (
-            <MaterialTemplateEditor
-              key={index}
-              template={template}
-              targetOptions={targetOptions}
-              onChange={(next) => {
-                const updated = [...templates];
-                updated[index] = next;
-                onChange(updated);
+      <div className="flex-1 min-h-0 flex gap-3">
+        <div
+          className="flex flex-col rounded-xl border overflow-hidden shrink-0"
+          style={{
+            width: 236,
+            borderColor: 'var(--border-subtle)',
+            background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 10%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 97%))',
+          }}
+        >
+          <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Material Presets
+            </span>
+            <span className="text-[10px] tabular-nums px-1.5 py-0.5 rounded-md border" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              {templates.length}
+            </span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {templates.length === 0 ? (
+              <div className="px-3 py-4 text-[11px] text-center" style={{ color: 'var(--text-muted)' }}>
+                No material presets yet.
+              </div>
+            ) : (
+              groupedMaterials.map(({ materialLabel, manufacturerGroups }) => (
+                <div key={materialLabel}>
+                  <div
+                    className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest border-b flex items-center justify-between gap-2"
+                    style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), black 8%)' }}
+                  >
+                    <span className="truncate">{materialLabel}</span>
+                    <span className="tabular-nums">{manufacturerGroups.reduce((total, group) => total + group.members.length, 0)}</span>
+                  </div>
+
+                  {manufacturerGroups.map(({ manufacturer, members }) => {
+                    const folderKey = `${materialLabel}::${manufacturer}`;
+                    const isExpanded = expandedManufacturerFolders.has(folderKey);
+
+                    return (
+                      <div key={folderKey} className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleManufacturerFolder(folderKey)}
+                          className="w-full px-3 py-1.5 text-left flex items-center justify-between gap-2"
+                          style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 12%)' }}
+                          aria-expanded={isExpanded}
+                          aria-label={`${manufacturer} printer folder`}
+                        >
+                          <span className="min-w-0 inline-flex items-center gap-1.5">
+                            <ChevronDown
+                              className="h-3.5 w-3.5 shrink-0 transition-transform"
+                              style={{ color: 'var(--text-muted)', transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                            />
+                            <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>
+                              {manufacturer}
+                            </span>
+                          </span>
+                          <span className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>{members.length}</span>
+                        </button>
+
+                        {isExpanded && members.map(({ index, template }) => {
+                          const target = targetOptionById.get(template.targetPresetId);
+                          const label = target?.label || 'Select printer';
+                          const active = index === clampedIndex;
+                          const scopeLabel = target?.outputFormat || 'No format yet';
+
+                          return (
+                            <div
+                              key={index}
+                              className="group grid grid-cols-[4px_minmax(0,1fr)_auto] items-center gap-2 border-t"
+                              style={{
+                                borderColor: 'var(--border-subtle)',
+                                background: active
+                                  ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)'
+                                  : 'transparent',
+                              }}
+                            >
+                              <span className="h-full" style={{ background: active ? 'var(--accent-secondary)' : 'transparent' }} />
+                              <button type="button" onClick={() => setSelectedIndex(index)} className="min-w-0 text-left py-2">
+                                <div className="text-xs font-medium truncate leading-tight" style={{ color: active ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
+                                  {label}
+                                </div>
+                                <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>
+                                  {scopeLabel}
+                                </div>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => requestDeleteMaterialTemplate(index)}
+                                className="ui-button ui-button-ghost !h-5 !w-5 !p-0 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
+                                aria-label="Delete material"
+                                title="Delete material"
+                              >
+                                <Trash2 className="h-3 w-3" style={{ color: '#ff8f8f' }} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="p-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+            <button
+              type="button"
+              onClick={addTemplate}
+              className="ui-button ui-button-secondary w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
+              style={{
+                color: 'var(--accent-secondary)',
+                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
               }}
-              onDelete={() => requestDeleteMaterialTemplate(index)}
-            />
-          ))}
+              title="Add Material"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add Material
+            </button>
+          </div>
         </div>
-      )}
+
+        <div className="flex-1 min-w-0 h-full">
+          {selectedTemplate === null ? (
+            <div className="rounded-xl border h-full flex items-center justify-center text-xs" style={{ minHeight: 220, borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+              Add a material preset to get started.
+            </div>
+          ) : (
+            <div className="rounded-xl border p-3 h-full min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-2), transparent 4%), var(--surface-2))' }}>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                    {[selectedTemplate.draft.brand, selectedTemplate.draft.name].filter(Boolean).join(' — ') || 'New Material'}
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    <span className="px-1.5 py-0.5 rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      {selectedTarget ? selectedTarget.label : 'No printer selected'}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      {selectedTarget?.outputFormat || 'format pending'}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => addPrinterVariantFromTemplate(clampedIndex)}
+                    className="ui-button ui-button-secondary !h-7 !px-2 text-[11px] flex items-center gap-1.5"
+                    style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 60%)' }}
+                    title="Duplicate this material core profile into a new printer variant"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Printer Variant
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => requestDeleteMaterialTemplate(clampedIndex)}
+                    className="ui-button ui-button-ghost !h-7 !px-2 text-[11px] flex items-center gap-1.5"
+                    style={{ color: '#ff8f8f', borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 60%)' }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-0">
+                <MaterialTemplateEditor
+                  key={clampedIndex}
+                  template={selectedTemplate}
+                  targetOptions={targetOptions}
+                  hideHeader
+                  onChange={(next) => {
+                    const updated = [...templates];
+                    updated[clampedIndex] = next;
+                    onChange(updated);
+                  }}
+                  onDelete={() => requestDeleteMaterialTemplate(clampedIndex)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2826,7 +2999,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     [meta],
   );
   const isPluginDetailsComplete = incompletePluginDetailFields.length === 0;
-  const hasInvalidMaterialTargets = materialTemplates.some((template) => !template.applyToAllPrinters && template.targetPresetIds.length === 0);
+  const hasInvalidMaterialTargets = materialTemplates.some((template) => !template.targetPresetId.trim());
   const canGoBack = currentStepIndex > 0;
   const canGoNext = currentStepIndex < orderedSteps.length - 1
     && !(currentStep === 'details' && !isPluginDetailsComplete)
@@ -2838,13 +3011,14 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
       : currentStep === 'content' && !includesPrinters && !includesMaterials
         ? 'Select at least one content type to continue'
         : currentStep === 'materials' && hasInvalidMaterialTargets
-          ? 'Select target presets for materials using "Selected Presets Only"'
+          ? 'Select a target printer preset for every material variant'
           : undefined
     : undefined;
   const isLastStep = currentStepIndex === orderedSteps.length - 1;
   const activeStepMeta = STEP_META[currentStep];
   const activeStepColor = activeStepMeta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
   const ActiveStepIcon = activeStepMeta.icon;
+  const isFillHeightStep = currentStep === 'materials' || currentStep === 'printers';
 
   const requestExitStudio = React.useCallback(() => {
     setShowExitConfirm(true);
@@ -2988,7 +3162,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
         : [];
 
     const nextPrinterPresets = incomingPrinterPresets.map(parsePrinterPresetDraft);
-    const nextMaterialTemplates = incomingMaterialPresets.map(parseMaterialTemplateDraft);
+    const nextMaterialTemplates = incomingMaterialPresets.flatMap(parseMaterialTemplateDrafts);
 
     setMeta(nextMeta);
     setIncludesPrinters(nextPrinterPresets.length > 0);
@@ -3293,8 +3467,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2.5">
-              <div className="w-full">
+            <div className={isFillHeightStep ? 'flex-1 min-h-0 overflow-hidden p-2.5' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2.5'}>
+              <div className={isFillHeightStep ? 'w-full h-full min-h-0 flex flex-col' : 'w-full'}>
                 <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                   <div className="flex items-center gap-2">
                     <ActiveStepIcon className="h-4 w-4" style={{ color: activeStepColor }} />
@@ -3303,7 +3477,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{activeStepMeta.description}</p>
                 </div>
 
-                <div key={currentStep} className="animate-[settingsTabIn_180ms_ease-out]">
+                <div key={currentStep} className={isFillHeightStep ? 'animate-[settingsTabIn_180ms_ease-out] h-full min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
                   {currentStep === 'details' && (
                     <StepDetails
                       meta={meta}
