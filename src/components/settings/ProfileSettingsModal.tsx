@@ -4037,11 +4037,19 @@ export function ProfileSettingsModal({
                       {filteredPrinterPresets.map(renderPresetLibraryCard)}
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {groupedFilteredPrinterPresets.map((group) => (
-                        <section key={`${selectedPresetManufacturer}-${group.family}`} className="space-y-1.5">
-                          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                            {group.family}
+                    <div className="space-y-0">
+                      {groupedFilteredPrinterPresets.map((group, groupIndex) => (
+                        <section key={`${selectedPresetManufacturer}-${group.family}`}>
+                          {groupIndex > 0 && (
+                            <div className="my-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
+                          )}
+                          <div className="mb-2 flex items-center gap-2">
+                            <span
+                              className="text-[11px] font-bold uppercase tracking-widest"
+                              style={{ color: 'var(--accent-secondary)' }}
+                            >
+                              {group.family}
+                            </span>
                           </div>
                           <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
                             {group.presets.map(renderPresetLibraryCard)}
