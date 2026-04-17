@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { AlertTriangle, Archive, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
+import JSZip from 'jszip';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
   getProfileLocalMaterialSettingsAdapter,
@@ -81,7 +82,7 @@ type MaterialTemplateDraft = {
   targetPresetIds: string[];
 };
 
-type StepId = 'details' | 'repo' | 'content' | 'printers' | 'materials' | 'export';
+type StepId = 'details' | 'repo' | 'content' | 'printers' | 'assets' | 'materials' | 'export';
 type StepTone = 'primary' | 'secondary';
 type ImportManifestResult = { ok: true; message: string } | { ok: false; message: string };
 type PresetTargetOption = {
@@ -90,15 +91,33 @@ type PresetTargetOption = {
   description: string;
 };
 
+type UploadedPrinterAsset = {
+  file: File;
+  previewUrl: string;
+};
+
+type PrinterAssetExportFile = {
+  relativePath: string;
+  file: File;
+};
+
+type AssetPreviewContext = {
+  pluginId?: string;
+  pluginSlug?: string;
+  sourceUrl?: string;
+  homepage?: string;
+};
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const ALL_STEP_IDS: StepId[] = ['details', 'content', 'printers', 'materials', 'export', 'repo'];
+const ALL_STEP_IDS: StepId[] = ['details', 'content', 'printers', 'assets', 'materials', 'export', 'repo'];
 
 const STEP_LABELS: Record<StepId, string> = {
   details: 'Plugin Details',
   repo: 'Repository',
   content: 'Content',
   printers: 'Printers',
+  assets: 'Assets',
   materials: 'Materials',
   export: 'Export',
 };
@@ -131,6 +150,12 @@ const STEP_META: Record<StepId, {
     label: 'Printer Presets',
     description: 'Define contributed printer models',
     icon: Printer,
+    tone: 'primary',
+  },
+  assets: {
+    label: 'Assets',
+    description: 'Upload printer images by family folder',
+    icon: Archive,
     tone: 'primary',
   },
   materials: {
@@ -362,6 +387,51 @@ function parseGithubRepoUrl(value: string): { owner: string; repo: string } | nu
   }
 }
 
+function parseGithubOwnerRepoFromAnyUrl(value: string): { owner: string; repo: string } | null {
+  const input = value.trim();
+  if (!input) return null;
+
+  try {
+    const parsed = new URL(input);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host === 'github.com') {
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length >= 2) {
+        return {
+          owner: normalizeGithubOwner(segments[0]),
+          repo: segments[1].replace(/\.git$/i, ''),
+        };
+      }
+    }
+
+    if (host === 'raw.githubusercontent.com') {
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length >= 2) {
+        return {
+          owner: normalizeGithubOwner(segments[0]),
+          repo: segments[1].replace(/\.git$/i, ''),
+        };
+      }
+    }
+
+    if (host === 'api.github.com') {
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const reposIdx = segments.findIndex((segment) => segment === 'repos');
+      if (reposIdx >= 0 && segments.length >= reposIdx + 3) {
+        return {
+          owner: normalizeGithubOwner(segments[reposIdx + 1]),
+          repo: segments[reposIdx + 2].replace(/\.git$/i, ''),
+        };
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 function isValidHttpUrl(value: string): boolean {
   const input = value.trim();
   if (!input) return false;
@@ -551,6 +621,56 @@ function buildSuggestedPrinterAssetPath(preset: PrinterPresetDraft): string {
   return `./assets/${slugifyPathSegment(familyOrMaker)}/${slugifyPathSegment(model)}.png`;
 }
 
+function getPresetAssetUploadKey(preset: PrinterPresetDraft, index: number): string {
+  const id = preset.presetId.trim();
+  if (id) return `preset:${id}`;
+  const fallback = [preset.manufacturer, preset.family, preset.name]
+    .map((part) => slugifyPathSegment(part))
+    .filter(Boolean)
+    .join('-');
+  return `draft:${fallback || 'printer'}:${index}`;
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  document.body?.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function normalizeAssetRelativePath(path: string): string {
+  const normalized = path.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  return normalized;
+}
+
+function shouldUseBundledAssetPathsForPreview(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (process.env.NODE_ENV !== 'production') return false;
+  const protocol = window.location?.protocol ?? '';
+  const hostname = window.location?.hostname ?? '';
+  const hasTauriInternals = typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+  return protocol === 'file:' || protocol === 'tauri:' || hostname === 'tauri.localhost' || hasTauriInternals;
+}
+
+function toRuntimeAssetPath(path: string): string {
+  const isBundledRuntime = shouldUseBundledAssetPathsForPreview();
+  if (path.startsWith('/api/profile-assets/')) {
+    if (!isBundledRuntime) return path;
+    return `/${path.slice('/api/profile-assets/'.length)}`;
+  }
+  if (path.startsWith('/plugins/') || path.startsWith('/printers/')) {
+    if (isBundledRuntime) return path;
+    return `/api/profile-assets${path}`;
+  }
+  return path;
+}
+
 function normalizeImportedImageAssetPath(rawPath: string): string {
   const trimmed = rawPath.trim();
   if (!trimmed) return '';
@@ -570,6 +690,66 @@ function normalizeImportedImageAssetPath(rawPath: string): string {
   }
 
   return trimmed;
+}
+
+function buildPrinterAssetPreviewCandidates(assetPath: string, context: AssetPreviewContext = {}): string[] {
+  const trimmed = assetPath.trim();
+  if (!trimmed) return [];
+
+  const candidates: string[] = [];
+  const addCandidate = (candidate: string) => {
+    const value = candidate.trim();
+    if (!value) return;
+    if (!candidates.includes(value)) candidates.push(value);
+  };
+
+  const isAbsolute = /^https?:\/\//i.test(trimmed) || /^data:/i.test(trimmed) || /^blob:/i.test(trimmed);
+  if (isAbsolute) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith('/api/profile-assets/') || trimmed.startsWith('/plugins/') || trimmed.startsWith('/printers/')) {
+    addCandidate(toRuntimeAssetPath(trimmed));
+    return candidates;
+  }
+
+  const relativeAsset = normalizeAssetRelativePath(trimmed)
+    .replace(/^printers\//i, '');
+
+  const githubSource = parseGithubOwnerRepoFromAnyUrl(context.sourceUrl ?? '')
+    ?? parseGithubOwnerRepoFromAnyUrl(context.homepage ?? '');
+
+  const pluginCandidates = new Set<string>();
+  const addPluginCandidate = (value: string | undefined) => {
+    const normalized = value?.trim();
+    if (!normalized) return;
+    pluginCandidates.add(normalized);
+    if (normalized.startsWith('df-plugin-')) {
+      pluginCandidates.add(normalized.slice('df-plugin-'.length));
+    } else {
+      pluginCandidates.add(`df-plugin-${normalized}`);
+    }
+  };
+
+  addPluginCandidate(context.pluginId);
+  addPluginCandidate(context.pluginSlug);
+  if (githubSource) {
+    addPluginCandidate(githubSource.repo);
+    if (githubSource.repo.startsWith('df-plugin-')) {
+      addPluginCandidate(githubSource.repo.slice('df-plugin-'.length));
+    }
+  }
+
+  pluginCandidates.forEach((plugin) => {
+    addCandidate(toRuntimeAssetPath(`/plugins/${plugin}/printers/${relativeAsset}`));
+  });
+
+  if (githubSource) {
+    addCandidate(`https://raw.githubusercontent.com/${githubSource.owner}/${githubSource.repo}/main/printers/${relativeAsset}`);
+  }
+
+  return candidates.slice(0, 8);
 }
 
 function asResinFamily(value: unknown, fallback: MaterialDraft['resinFamily']): MaterialDraft['resinFamily'] {
@@ -1718,6 +1898,209 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
   );
 }
 
+// ─── Step: Assets ────────────────────────────────────────────────────────────
+
+type StepAssetsProps = {
+  presets: PrinterPresetDraft[];
+  onPresetsChange: (next: PrinterPresetDraft[]) => void;
+  uploadedAssets: Record<string, UploadedPrinterAsset>;
+  onUploadedAssetsChange: (next: Record<string, UploadedPrinterAsset>) => void;
+  previewContext?: AssetPreviewContext;
+};
+
+type PrinterAssetPreviewProps = {
+  alt: string;
+  uploadedPreviewUrl?: string;
+  pathValue: string;
+  previewContext?: AssetPreviewContext;
+};
+
+function PrinterAssetPreview({ alt, uploadedPreviewUrl, pathValue, previewContext }: PrinterAssetPreviewProps) {
+  const candidates = React.useMemo(() => {
+    const next = uploadedPreviewUrl
+      ? [uploadedPreviewUrl, ...buildPrinterAssetPreviewCandidates(pathValue, previewContext)]
+      : buildPrinterAssetPreviewCandidates(pathValue, previewContext);
+    return Array.from(new Set(next));
+  }, [pathValue, previewContext, uploadedPreviewUrl]);
+
+  const [candidateIndex, setCandidateIndex] = React.useState(0);
+  const activeCandidate = candidates[candidateIndex];
+
+  React.useEffect(() => {
+    setCandidateIndex(0);
+  }, [candidates]);
+
+  if (!activeCandidate) {
+    return (
+      <div className="h-[88px] w-[88px] rounded-lg border flex items-center justify-center text-[10px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+        No image
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-[88px] w-[88px] rounded-lg border overflow-hidden p-1" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 4%)' }}>
+      <img
+        src={activeCandidate}
+        alt={alt}
+        className="h-full w-full object-contain"
+        loading="lazy"
+        onError={() => {
+          setCandidateIndex((prev) => {
+            if (prev + 1 < candidates.length) return prev + 1;
+            return prev;
+          });
+        }}
+      />
+    </div>
+  );
+}
+
+function StepAssets({ presets, onPresetsChange, uploadedAssets, onUploadedAssetsChange, previewContext }: StepAssetsProps) {
+  const groupedByFamily = React.useMemo(() => {
+    const groups = new Map<string, Array<{ index: number; preset: PrinterPresetDraft }>>();
+    presets.forEach((preset, index) => {
+      const family = preset.family.trim() || preset.manufacturer.trim() || 'Ungrouped';
+      if (!groups.has(family)) groups.set(family, []);
+      groups.get(family)?.push({ index, preset });
+    });
+    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [presets]);
+
+  const applyPresetUpdate = React.useCallback((index: number, nextPreset: PrinterPresetDraft) => {
+    const next = [...presets];
+    next[index] = nextPreset;
+    onPresetsChange(next);
+  }, [onPresetsChange, presets]);
+
+  const handleUpload = React.useCallback((index: number, file: File | undefined) => {
+    if (!file) return;
+    const preset = presets[index];
+    if (!preset) return;
+
+    const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : '.png';
+    const familySegment = slugifyPathSegment(preset.family.trim() || preset.manufacturer.trim() || 'series');
+    const modelSegment = slugifyPathSegment(preset.name.trim() || preset.presetId.trim() || `printer-${index + 1}`);
+    const existingPath = preset.imageAssetPath.trim();
+    const relativePath = existingPath || `./assets/${familySegment}/${modelSegment}${ext}`;
+    const key = getPresetAssetUploadKey(preset, index);
+
+    if (!existingPath) {
+      applyPresetUpdate(index, { ...preset, imageAssetPath: relativePath });
+    }
+    const previewUrl = URL.createObjectURL(file);
+    const existing = uploadedAssets[key];
+    if (existing?.previewUrl) {
+      URL.revokeObjectURL(existing.previewUrl);
+    }
+    onUploadedAssetsChange({
+      ...uploadedAssets,
+      [key]: { file, previewUrl },
+    });
+  }, [applyPresetUpdate, onUploadedAssetsChange, presets, uploadedAssets]);
+
+  const clearUpload = React.useCallback((index: number) => {
+    const preset = presets[index];
+    if (!preset) return;
+    const key = getPresetAssetUploadKey(preset, index);
+    const nextAssets = { ...uploadedAssets };
+    const existing = nextAssets[key];
+    if (existing?.previewUrl) {
+      URL.revokeObjectURL(existing.previewUrl);
+    }
+    delete nextAssets[key];
+    onUploadedAssetsChange(nextAssets);
+  }, [onUploadedAssetsChange, presets, uploadedAssets]);
+
+  if (presets.length === 0) {
+    return (
+      <div className="rounded-xl border p-6 text-center text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+        Add printer presets first, then manage image assets here.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+        Asset paths come from <strong>Printer Presets</strong>. Upload here only replaces the file/preview for that path.
+      </div>
+
+      {groupedByFamily.map(([family, items]) => (
+        <div key={family} className="rounded-xl border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>
+            {family}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2">
+            {items.map(({ index, preset }) => {
+              const key = getPresetAssetUploadKey(preset, index);
+              const uploaded = uploadedAssets[key];
+              return (
+                <div
+                  key={key}
+                  className="rounded-lg border p-2.5 flex flex-col gap-2"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                      {[preset.manufacturer, preset.name].filter(Boolean).join(' ').trim() || `Preset ${index + 1}`}
+                    </div>
+                    {uploaded && (
+                      <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
+                        {uploaded.file.name}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-stretch gap-2.5">
+                    <PrinterAssetPreview
+                      alt={`${preset.manufacturer} ${preset.name}`.trim() || `Preset ${index + 1}`}
+                      uploadedPreviewUrl={uploaded?.previewUrl}
+                      pathValue={preset.imageAssetPath}
+                      previewContext={previewContext}
+                    />
+
+                    <div className="min-w-0 flex-1 min-h-[88px] flex flex-col">
+                      <div className="text-[11px] font-mono truncate" style={{ color: 'var(--text-muted)' }} title={preset.imageAssetPath || 'No asset path set in Printer Presets'}>
+                        {preset.imageAssetPath || 'No asset path set in Printer Presets'}
+                      </div>
+
+                      <div className="mt-auto pt-2 flex items-center gap-1.5">
+                        <label className="ui-button ui-button-secondary !h-8 !px-2.5 text-[11px] inline-flex items-center cursor-pointer">
+                        Upload
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            handleUpload(index, file);
+                            event.currentTarget.value = '';
+                          }}
+                        />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => clearUpload(index)}
+                          className="ui-button ui-button-secondary !h-8 !px-2.5 text-[11px]"
+                          style={{ color: uploaded ? '#ff8f8f' : 'var(--text-muted)' }}
+                          disabled={!uploaded}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Material Template Editor ─────────────────────────────────────────────────
 
 type MaterialTemplateEditorProps = {
@@ -2084,10 +2467,33 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
 
 // ─── Step: Export ─────────────────────────────────────────────────────────────
 
-type StepExportProps = { jsonContent: string; readmeContent: string; slug: string; printerPresetFiles: PrinterPresetSplitFile[] };
+type StepExportProps = {
+  jsonContent: string;
+  readmeContent: string;
+  slug: string;
+  printerPresetFiles: PrinterPresetSplitFile[];
+  printerAssetFiles: PrinterAssetExportFile[];
+  confirmOverwriteOnSave?: boolean;
+};
 
-function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles }: StepExportProps) {
+function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, printerAssetFiles, confirmOverwriteOnSave = false }: StepExportProps) {
   const [copied, setCopied] = React.useState(false);
+  const [showOverwriteConfirm, setShowOverwriteConfirm] = React.useState(false);
+
+  const exportFiles = React.useMemo(
+    () => [
+      { name: 'dragonfruit-plugin.json', content: jsonContent, type: 'application/json' },
+      { name: 'README.md', content: readmeContent, type: 'text/markdown;charset=utf-8' },
+      ...printerPresetFiles.map((file) => ({
+        name: file.relativePath,
+        content: file.content,
+        type: 'application/json',
+      })),
+    ],
+    [jsonContent, printerPresetFiles, readmeContent],
+  );
+
+  const hasBinaryAssets = printerAssetFiles.length > 0;
 
   const handleCopy = async () => {
     try {
@@ -2099,32 +2505,44 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles }: St
     }
   };
 
-  const handleDownload = () => {
-    const files: Array<{ name: string; content: string; type: string }> = [
-      { name: 'dragonfruit-plugin.json', content: jsonContent, type: 'application/json' },
-      { name: 'README.md', content: readmeContent, type: 'text/markdown;charset=utf-8' },
-      ...printerPresetFiles.map((file) => ({
-        name: file.relativePath,
-        content: file.content,
-        type: 'application/json',
-      })),
-    ];
+  const performDownload = React.useCallback(async () => {
+    if (hasBinaryAssets) {
+      const zip = new JSZip();
+      exportFiles.forEach(({ name, content }) => {
+        zip.file(name, content);
+      });
+      printerAssetFiles.forEach((asset) => {
+        zip.file(normalizeAssetRelativePath(asset.relativePath), asset.file);
+      });
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const archiveName = `${slug || 'dragonfruit-plugin'}-export.zip`;
+      triggerBlobDownload(zipBlob, archiveName);
+      return;
+    }
 
-    files.forEach(({ name, content, type }) => {
+    exportFiles.forEach(({ name, content, type }) => {
       const blob = new Blob([content], { type });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = name;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(blob, name);
     });
+  }, [exportFiles, hasBinaryAssets, printerAssetFiles, slug]);
+
+  const handleDownload = async () => {
+    if (confirmOverwriteOnSave) {
+      setShowOverwriteConfirm(true);
+      return;
+    }
+    await performDownload();
+  };
+
+  const handleConfirmOverwriteSave = async () => {
+    setShowOverwriteConfirm(false);
+    await performDownload();
   };
 
   return (
     <div className="space-y-3">
       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-        Export provides <code className="font-mono">dragonfruit-plugin.json</code>, <code className="font-mono">README.md</code>, and family-split printer preset files when printer content is included.
+        Export provides <code className="font-mono">dragonfruit-plugin.json</code>, <code className="font-mono">README.md</code>, family-split printer preset files, and asset files. Asset-inclusive exports are bundled into a ZIP to preserve folder structure.
       </div>
 
       {printerPresetFiles.length > 0 && (
@@ -2134,6 +2552,19 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles }: St
             {printerPresetFiles.map((file) => (
               <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
                 {file.relativePath}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {printerAssetFiles.length > 0 && (
+        <div className="rounded-xl border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Uploaded Asset Files</div>
+          <ul className="space-y-0.5">
+            {printerAssetFiles.map((file) => (
+              <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                {normalizeAssetRelativePath(file.relativePath)}
               </li>
             ))}
           </ul>
@@ -2156,7 +2587,7 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles }: St
           style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }}
         >
           <Download className="h-3.5 w-3.5" />
-          Save Files
+          {hasBinaryAssets ? 'Save ZIP' : 'Save Files'}
         </button>
       </div>
 
@@ -2171,6 +2602,103 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles }: St
             <li>Commit and push your changes to GitHub.</li>
             <li>In DragonFruit: Plugins → Install from GitHub URL → enter your repo URL.</li>
           </ol>
+        </div>
+      )}
+
+      {showOverwriteConfirm && (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowOverwriteConfirm(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm overwrite files"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Overwrite existing plugin files?
+                  </h2>
+                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    This plugin is loaded in edit mode. Saving may replace existing files.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                aria-label="Close overwrite confirmation"
+                onClick={() => setShowOverwriteConfirm(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Files to overwrite:
+              </p>
+              <div className="rounded-lg border p-2 max-h-44 overflow-auto" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <ul className="space-y-1">
+                  {exportFiles.map((file) => (
+                    <li key={file.name} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                      {file.name}
+                    </li>
+                  ))}
+                  {printerAssetFiles.map((file) => (
+                    <li key={file.relativePath} className="text-xs font-mono" style={{ color: 'var(--text-strong)' }}>
+                      {normalizeAssetRelativePath(file.relativePath)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => setShowOverwriteConfirm(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+                  style={{
+                    color: 'var(--accent-secondary)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                  }}
+                  onClick={handleConfirmOverwriteSave}
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Overwrite & Save
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -2189,8 +2717,11 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
   const [includesPrinters, setIncludesPrinters] = React.useState(true);
   const [includesMaterials, setIncludesMaterials] = React.useState(true);
   const [printerPresets, setPrinterPresets] = React.useState<PrinterPresetDraft[]>([]);
+  const [uploadedPrinterAssets, setUploadedPrinterAssets] = React.useState<Record<string, UploadedPrinterAsset>>({});
+  const [assetPreviewContext, setAssetPreviewContext] = React.useState<AssetPreviewContext>({});
   const [materialTemplates, setMaterialTemplates] = React.useState<MaterialTemplateDraft[]>([]);
   const [importedReadmeContent, setImportedReadmeContent] = React.useState<string | null>(null);
+  const [isEditingImportedPlugin, setIsEditingImportedPlugin] = React.useState(false);
   const [currentStep, setCurrentStep] = React.useState<StepId>('details');
   const [showExitConfirm, setShowExitConfirm] = React.useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = React.useState(false);
@@ -2200,7 +2731,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
 
   const orderedSteps = React.useMemo((): StepId[] => {
     const steps: StepId[] = ['details', 'content'];
-    if (includesPrinters) steps.push('printers');
+    if (includesPrinters) steps.push('printers', 'assets');
     if (includesMaterials) steps.push('materials');
     steps.push('export', 'repo');
     return steps;
@@ -2393,9 +2924,18 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     setMeta(nextMeta);
     setIncludesPrinters(nextPrinterPresets.length > 0);
     setIncludesMaterials(nextMaterialTemplates.length > 0);
+
+    setAssetPreviewContext({
+      pluginId: incomingId,
+      pluginSlug: incomingSlug,
+      sourceUrl: options?.sourceUrl,
+      homepage: incomingHomepage,
+    });
     setPrinterPresets(nextPrinterPresets);
+    setUploadedPrinterAssets({});
     setMaterialTemplates(nextMaterialTemplates);
     setCurrentStep('details');
+    setIsEditingImportedPlugin(true);
     void hydrateReadmeFromImport({ homepage: nextMeta.homepage, sourceUrl: options?.sourceUrl, pluginId: incomingId });
 
     return {
@@ -2470,10 +3010,38 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     () => (includesPrinters ? buildPrinterPresetSplitFiles(printerPresets) : []),
     [includesPrinters, printerPresets],
   );
+  const printerAssetExportFiles = React.useMemo((): PrinterAssetExportFile[] => {
+    if (!includesPrinters) return [];
+
+    return printerPresets.flatMap((preset, index) => {
+      const relativePath = preset.imageAssetPath.trim();
+      if (!relativePath) return [];
+      const key = getPresetAssetUploadKey(preset, index);
+      const upload = uploadedPrinterAssets[key];
+      if (!upload?.file) return [];
+      return [{ relativePath, file: upload.file }];
+    });
+  }, [includesPrinters, printerPresets, uploadedPrinterAssets]);
   const readmeContent = React.useMemo(
     () => importedReadmeContent ?? buildReadmeTemplate(meta),
     [importedReadmeContent, meta],
   );
+
+  React.useEffect(() => {
+    if (isEditingImportedPlugin) return;
+    setAssetPreviewContext((current) => ({
+      ...current,
+      pluginSlug: meta.slug.trim(),
+      homepage: meta.homepage.trim(),
+    }));
+  }, [isEditingImportedPlugin, meta.homepage, meta.slug]);
+
+  React.useEffect(() => {
+    if (isOpen) return;
+    Object.values(uploadedPrinterAssets).forEach((asset) => {
+      if (asset.previewUrl) URL.revokeObjectURL(asset.previewUrl);
+    });
+  }, [isOpen, uploadedPrinterAssets]);
 
   if (!isOpen) return null;
 
@@ -2687,8 +3255,26 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                     />
                   )}
                   {currentStep === 'printers' && <StepPrinters presets={printerPresets} onChange={setPrinterPresets} />}
+                  {currentStep === 'assets' && (
+                    <StepAssets
+                      presets={printerPresets}
+                      onPresetsChange={setPrinterPresets}
+                      uploadedAssets={uploadedPrinterAssets}
+                      onUploadedAssetsChange={setUploadedPrinterAssets}
+                      previewContext={assetPreviewContext}
+                    />
+                  )}
                   {currentStep === 'materials' && <StepMaterials templates={materialTemplates} onChange={setMaterialTemplates} />}
-                  {currentStep === 'export' && <StepExport jsonContent={jsonContent} readmeContent={readmeContent} slug={meta.slug} printerPresetFiles={printerPresetSplitFiles} />}
+                  {currentStep === 'export' && (
+                    <StepExport
+                      jsonContent={jsonContent}
+                      readmeContent={readmeContent}
+                      slug={meta.slug}
+                      printerPresetFiles={printerPresetSplitFiles}
+                      printerAssetFiles={printerAssetExportFiles}
+                      confirmOverwriteOnSave={isEditingImportedPlugin}
+                    />
+                  )}
                 </div>
               </div>
             </div>
