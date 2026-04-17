@@ -358,6 +358,7 @@ export function ProfileSettingsModal({
   const [materialEditorTab, setMaterialEditorTab] = React.useState<string>('meta');
   const [showOfficialLockDialog, setShowOfficialLockDialog] = React.useState(false);
   const [officialLockedProfileId, setOfficialLockedProfileId] = React.useState<string | null>(null);
+  const [showOfficialMaterialLockDialog, setShowOfficialMaterialLockDialog] = React.useState(false);
   const [isNetworkSettingsOpen, setIsNetworkSettingsOpen] = React.useState(false);
   const [isAddingNetworkPrinter, setIsAddingNetworkPrinter] = React.useState(false);
   const [networkDiscoveryEnabled, setNetworkDiscoveryEnabled] = React.useState(true);
@@ -421,6 +422,8 @@ export function ProfileSettingsModal({
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('');
+  const [selectedLibraryPresetIds, setSelectedLibraryPresetIds] = React.useState<Set<string>>(new Set());
+  const [selectedLibraryMaterialKeys, setSelectedLibraryMaterialKeys] = React.useState<Set<string>>(new Set());
   const [manualBuildDimensionsByPrinterId, setManualBuildDimensionsByPrinterId] = React.useState<Record<string, ManualBuildDimensions>>({});
   const [printerRailViewMode, setPrinterRailViewMode] = React.useState<PrinterRailViewMode>('profiles');
   const [isEditFleetUnitModalOpen, setIsEditFleetUnitModalOpen] = React.useState(false);
@@ -2534,6 +2537,7 @@ export function ProfileSettingsModal({
   }, []);
 
   const handleAddPrinter = React.useCallback(() => {
+    setSelectedLibraryPresetIds(new Set());
     setShowPresetPicker(true);
   }, []);
 
@@ -2544,6 +2548,19 @@ export function ProfileSettingsModal({
     setPresetSearch('');
     if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
   }, [handlePickPrinter, presetManufacturers]);
+
+  const handleAddSelectedPrinterPresets = React.useCallback(() => {
+    if (selectedLibraryPresetIds.size === 0) return;
+    let lastId: string | null = null;
+    for (const presetId of selectedLibraryPresetIds) {
+      lastId = addPrinterProfileFromPreset(presetId);
+    }
+    if (lastId) handlePickPrinter(lastId);
+    setShowPresetPicker(false);
+    setPresetSearch('');
+    setSelectedLibraryPresetIds(new Set());
+    if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
+  }, [selectedLibraryPresetIds, handlePickPrinter, presetManufacturers]);
 
   const requestDeleteSelectedPrinter = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -2614,10 +2631,57 @@ export function ProfileSettingsModal({
   }, [selectedPrinter, selectedResolvedSettingsMode]);
 
   const handleOpenMaterialLibrary = React.useCallback(() => {
+    setSelectedLibraryMaterialKeys(new Set());
     setShowMaterialPresetPicker(true);
     setMaterialPresetSearch('');
     if (materialPresetBrands.length > 0) setSelectedMaterialPresetBrand(materialPresetBrands[0]);
   }, [materialPresetBrands]);
+
+  const handleAddSelectedMaterialPresets = React.useCallback(() => {
+    if (!selectedPrinter || selectedLibraryMaterialKeys.size === 0) return;
+    let lastId: string | null = null;
+    let lastBrand = 'Default';
+    let lastFamily = 'standard';
+    for (const key of selectedLibraryMaterialKeys) {
+      const preset = availableMaterialPresets.find(
+        (p) => (p.templateId ?? `${p.brand}::${p.name}`) === key,
+      );
+      if (!preset) continue;
+      const newId = addMaterialProfile(selectedPrinter.id, {
+        name: preset.name,
+        brand: (preset.brand ?? 'Default').trim() || 'Default',
+        currencyCode: preset.currencyCode ?? 'USD',
+        bottlePrice: preset.bottlePrice ?? 0,
+        bottleCapacityMl: preset.bottleCapacityMl ?? 1000,
+        resinFamily: preset.resinFamily ?? 'standard',
+        scaleCompensationPct: preset.scaleCompensationPct ?? { x: 0, y: 0, z: 0 },
+        layerHeightMm: preset.layerHeightMm ?? 0.05,
+        normalExposureSec: preset.normalExposureSec ?? 2.5,
+        bottomExposureSec: preset.bottomExposureSec ?? 28,
+        bottomLayerCount: preset.bottomLayerCount ?? 5,
+        liftDistanceMm: preset.liftDistanceMm ?? 6,
+        liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
+        retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
+        minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+        ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
+        ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
+        localSettingsByOutput: preset.localSettingsByOutput
+          ? (preset.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
+          : resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat, selectedResolvedSettingsMode),
+      });
+      lastId = newId;
+      lastBrand = (preset.brand ?? 'Default').trim() || 'Default';
+      lastFamily = preset.resinFamily ?? 'standard';
+    }
+    if (lastId) {
+      setSelectedManufacturer(lastBrand);
+      setSelectedResinFamily(lastFamily as 'standard' | 'abs-like' | 'tough' | 'flexible' | 'engineering' | 'other');
+      setSelectedMaterialId(lastId);
+      setActiveMaterialProfile(lastId);
+    }
+    setShowMaterialPresetPicker(false);
+    setSelectedLibraryMaterialKeys(new Set());
+  }, [selectedPrinter, selectedLibraryMaterialKeys, availableMaterialPresets, selectedResolvedSettingsMode]);
 
   const handleCreateMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -2643,6 +2707,11 @@ export function ProfileSettingsModal({
 
   const openSelectedMaterialEditor = React.useCallback(() => {
     if (!selectedMaterial) return;
+    const isOfficial = typeof selectedMaterial.officialTemplateId === 'string' && selectedMaterial.officialTemplateId.trim().length > 0;
+    if (isOfficial) {
+      setShowOfficialMaterialLockDialog(true);
+      return;
+    }
     setIsMaterialEditorOpen(true);
   }, [selectedMaterial]);
 
@@ -2702,6 +2771,35 @@ export function ProfileSettingsModal({
     setOfficialLockedProfileId(null);
     setIsEditingPrinter(true);
   }, [officialLockedProfileId, handlePickPrinter]);
+
+  const handleDuplicateMaterialAsCustom = React.useCallback(() => {
+    if (!selectedMaterial || !selectedPrinter) return;
+    const baseName = selectedMaterial.name.includes('Custom') ? selectedMaterial.name : `${selectedMaterial.name} Custom`;
+    const newId = addMaterialProfile(selectedPrinter.id, {
+      name: baseName,
+      brand: selectedMaterial.brand,
+      currencyCode: selectedMaterial.currencyCode,
+      bottlePrice: selectedMaterial.bottlePrice,
+      bottleCapacityMl: selectedMaterial.bottleCapacityMl,
+      resinFamily: selectedMaterial.resinFamily,
+      scaleCompensationPct: selectedMaterial.scaleCompensationPct,
+      layerHeightMm: selectedMaterial.layerHeightMm,
+      normalExposureSec: selectedMaterial.normalExposureSec,
+      bottomExposureSec: selectedMaterial.bottomExposureSec,
+      bottomLayerCount: selectedMaterial.bottomLayerCount,
+      liftDistanceMm: selectedMaterial.liftDistanceMm,
+      liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
+      retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
+      minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
+      localSettingsByOutput: selectedMaterial.localSettingsByOutput,
+      officialTemplateId: undefined,
+      officialTemplateVersion: undefined,
+    });
+    setSelectedMaterialId(newId);
+    setActiveMaterialProfile(newId);
+    setShowOfficialMaterialLockDialog(false);
+    setIsMaterialEditorOpen(true);
+  }, [selectedMaterial, selectedPrinter]);
 
   const triggerImageUpload = React.useCallback((printerId: string) => {
     setUploadTargetPrinterId(printerId);
@@ -2772,8 +2870,107 @@ export function ProfileSettingsModal({
     })();
   }, []);
 
+  const handleExportSelectedMaterialBundle = React.useCallback(() => {
+    void (async () => {
+      if (!selectedMaterial) return;
+
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        material: selectedMaterial,
+      };
+
+      const safeName = selectedMaterial.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+      const suggestedFilename = `${safeName || 'material-profile'}-bundle.json`;
+      const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
+
+      try {
+        await savePrintArtifactWithNativeDialog(bytes, suggestedFilename);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) return;
+        throw error;
+      }
+    })();
+  }, [selectedMaterial]);
+
+  const handleImportSelectedMaterialBundle = React.useCallback(() => {
+    void (async () => {
+      try {
+        if (!selectedPrinter) return;
+
+        const picked = await pickOpenFilesWithNativeDialog('bundle', false);
+        const sourcePath = picked[0]?.path?.trim();
+        if (!sourcePath) return;
+
+        const bytes = await readPrintArtifactBytesFromPath(sourcePath);
+        const payload = JSON.parse(new TextDecoder().decode(bytes)) as {
+          material?: Partial<MaterialProfile>;
+        };
+
+        const source = payload?.material;
+        if (!source || typeof source !== 'object') {
+          throw new Error('[ProfileSettingsModal] Invalid material bundle payload');
+        }
+
+        const importedId = addMaterialProfile(selectedPrinter.id, {
+          officialTemplateId: typeof source.officialTemplateId === 'string' && source.officialTemplateId.trim().length > 0
+            ? source.officialTemplateId.trim()
+            : undefined,
+          officialTemplateVersion: Number.isFinite(Number(source.officialTemplateVersion))
+            ? Number(source.officialTemplateVersion)
+            : undefined,
+          name: typeof source.name === 'string' && source.name.trim().length > 0
+            ? source.name.trim()
+            : `Material ${printerMaterials.length + 1}`,
+          brand: typeof source.brand === 'string' && source.brand.trim().length > 0
+            ? source.brand.trim()
+            : 'Default',
+          currencyCode: typeof source.currencyCode === 'string' && source.currencyCode.trim().length > 0
+            ? source.currencyCode.trim().toUpperCase()
+            : 'USD',
+          bottlePrice: Number.isFinite(Number(source.bottlePrice)) ? Number(source.bottlePrice) : 0,
+          bottleCapacityMl: Number.isFinite(Number(source.bottleCapacityMl)) ? Number(source.bottleCapacityMl) : 1000,
+          resinFamily: (source.resinFamily ?? 'standard') as MaterialProfile['resinFamily'],
+          scaleCompensationPct: {
+            x: Number(source.scaleCompensationPct?.x ?? 0),
+            y: Number(source.scaleCompensationPct?.y ?? 0),
+            z: Number(source.scaleCompensationPct?.z ?? 0),
+          },
+          layerHeightMm: Number.isFinite(Number(source.layerHeightMm)) ? Number(source.layerHeightMm) : 0.05,
+          normalExposureSec: Number.isFinite(Number(source.normalExposureSec)) ? Number(source.normalExposureSec) : 2.5,
+          bottomExposureSec: Number.isFinite(Number(source.bottomExposureSec)) ? Number(source.bottomExposureSec) : 28,
+          bottomLayerCount: Number.isFinite(Number(source.bottomLayerCount)) ? Math.max(1, Math.round(Number(source.bottomLayerCount))) : 5,
+          liftDistanceMm: Number.isFinite(Number(source.liftDistanceMm)) ? Number(source.liftDistanceMm) : 6,
+          liftSpeedMmMin: Number.isFinite(Number(source.liftSpeedMmMin)) ? Number(source.liftSpeedMmMin) : 60,
+          retractSpeedMmMin: Number.isFinite(Number(source.retractSpeedMmMin)) ? Number(source.retractSpeedMmMin) : 150,
+          minimumAaAlphaPercent: Number.isFinite(Number(source.minimumAaAlphaPercent))
+            ? Math.max(0, Math.min(100, Number(source.minimumAaAlphaPercent)))
+            : 35,
+          localSettingsByOutput: source.localSettingsByOutput
+            ? (source.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
+            : resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat, selectedResolvedSettingsMode),
+        });
+
+        const importedBrand = typeof source.brand === 'string' && source.brand.trim().length > 0
+          ? source.brand.trim()
+          : 'Default';
+        const importedFamily = (source.resinFamily ?? 'standard') as MaterialProfile['resinFamily'];
+        setSelectedManufacturer(importedBrand);
+        setSelectedResinFamily(importedFamily);
+        setSelectedMaterialId(importedId);
+        setActiveMaterialProfile(importedId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) return;
+        console.warn('[ProfileSettingsModal] Failed to import material bundle', error);
+      }
+    })();
+  }, [printerMaterials.length, selectedPrinter, selectedResolvedSettingsMode]);
+
   const renderPresetLibraryCard = React.useCallback((preset: (typeof availablePrinterPresets)[number]) => {
     const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
+    const isSelected = selectedLibraryPresetIds.has(preset.presetId);
     const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
       || preset.name.toLowerCase().includes('generic');
     const platformBadge = preset.platformBadge?.text?.trim()
@@ -2786,20 +2983,35 @@ export function ProfileSettingsModal({
       ? `${bitDepthBits} Bit`
       : null;
 
+    const handleToggle = () => {
+      if (isAlreadyAdded) return;
+      setSelectedLibraryPresetIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(preset.presetId)) next.delete(preset.presetId);
+        else next.add(preset.presetId);
+        return next;
+      });
+    };
+
     return (
       <button
         key={preset.presetId}
         type="button"
         disabled={isAlreadyAdded}
-        onClick={() => handleAddPrinterFromPreset(preset.presetId)}
-        className="rounded-lg border p-2.5 text-left disabled:opacity-55"
+        onClick={handleToggle}
+        className="rounded-lg border p-2.5 text-left disabled:opacity-55 transition-colors"
         style={{
           borderColor: isAlreadyAdded
             ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-            : 'var(--border-subtle)',
+            : isSelected
+              ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 20%)'
+              : 'var(--border-subtle)',
           background: isAlreadyAdded
             ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-            : 'var(--surface-1)',
+            : isSelected
+              ? 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)'
+              : 'var(--surface-1)',
+          outline: isSelected ? '1.5px solid color-mix(in srgb, var(--accent), transparent 40%)' : 'none',
         }}
       >
         <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
@@ -2816,6 +3028,14 @@ export function ProfileSettingsModal({
             isGenericPreset
               ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
               : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+          )}
+          {isSelected && (
+            <span
+              className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full"
+              style={{ background: 'var(--accent)', color: '#0a0f0a' }}
+            >
+              <Check className="w-3 h-3" strokeWidth={3} />
+            </span>
           )}
           {platformBadge && (
             <span
@@ -2866,7 +3086,7 @@ export function ProfileSettingsModal({
         </div>
       </button>
     );
-  }, [addedOfficialPresetIds, availablePrinterPresets, handleAddPrinterFromPreset]);
+  }, [addedOfficialPresetIds, availablePrinterPresets, selectedLibraryPresetIds]);
 
   if (!isOpen) return null;
   const hasPrinters = profileState.printerProfiles.length > 0;
@@ -3526,16 +3746,6 @@ export function ProfileSettingsModal({
                     <>
                       <button
                         type="button"
-                        onClick={openSelectedMaterialEditor}
-                        disabled={!selectedMaterial}
-                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Edit
-                      </button>
-                      <button
-                        type="button"
                         onClick={handleOpenMaterialLibrary}
                         className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
                         style={{
@@ -3561,22 +3771,6 @@ export function ProfileSettingsModal({
                         New
                       </button>
                     </>
-                  )}
-                  {selectedMaterialUpdate && (
-                    <button
-                      type="button"
-                      onClick={handleApplySelectedMaterialOfficialUpdate}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                      style={{
-                        color: 'var(--accent-secondary)',
-                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                      }}
-                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Update Material
-                    </button>
                   )}
                 </div>
               </div>
@@ -3787,6 +3981,7 @@ export function ProfileSettingsModal({
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {filteredMaterialProfiles.map((material) => {
                         const active = selectedMaterial?.id === material.id;
+                        const isOfficial = typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0;
                         return (
                           <button
                             key={material.id}
@@ -3798,7 +3993,11 @@ export function ProfileSettingsModal({
                             onDoubleClick={() => {
                               setSelectedMaterialId(material.id);
                               setActiveMaterialProfile(material.id);
-                              setIsMaterialEditorOpen(true);
+                              if (isOfficial) {
+                                setShowOfficialMaterialLockDialog(true);
+                              } else {
+                                setIsMaterialEditorOpen(true);
+                              }
                             }}
                             className="w-full rounded-md border px-2.5 py-2 text-left text-sm"
                             style={active
@@ -3814,7 +4013,10 @@ export function ProfileSettingsModal({
                                 }}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="truncate font-semibold">{material.name}</span>
+                              <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-semibold">
+                                {isOfficial && <Lock className="w-3.5 h-3.5 shrink-0" />}
+                                <span className="truncate">{material.name}</span>
+                              </span>
                               <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)}μm</span>
                             </div>
                           </button>
@@ -3822,6 +4024,67 @@ export function ProfileSettingsModal({
                       })}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedMaterialUpdate && (
+                    <button
+                      type="button"
+                      onClick={handleApplySelectedMaterialOfficialUpdate}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                      style={{
+                        color: 'var(--accent-secondary)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                      }}
+                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Update Material
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openSelectedMaterialEditor}
+                    disabled={!selectedMaterial}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    style={{ color: 'var(--text-strong)' }}
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleImportSelectedMaterialBundle}
+                    disabled={!selectedPrinter}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    style={{ color: 'var(--text-strong)' }}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    Import
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportSelectedMaterialBundle}
+                    disabled={!selectedMaterial}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    style={{ color: 'var(--text-strong)' }}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    onClick={requestDeleteSelectedMaterial}
+                    disabled={!selectedMaterial || printerMaterials.length <= 1}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
+                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </button>
                 </div>
               </div>
 
@@ -4068,6 +4331,26 @@ export function ProfileSettingsModal({
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Printer Library footer */}
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                  {selectedLibraryPresetIds.size > 0
+                    ? `${selectedLibraryPresetIds.size} printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''} selected`
+                    : 'Select printers to add'}
+                </span>
+                <button
+                  type="button"
+                  aria-disabled={selectedLibraryPresetIds.size === 0}
+                  onClick={selectedLibraryPresetIds.size > 0 ? handleAddSelectedPrinterPresets : undefined}
+                  className={`ui-button !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed ${selectedLibraryPresetIds.size > 0 ? 'ui-button-accent' : 'ui-button-secondary aria-disabled:opacity-45'}`}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {selectedLibraryPresetIds.size > 0
+                    ? `Add ${selectedLibraryPresetIds.size} Printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''}`
+                    : 'Add Printers'}
+                </button>
               </div>
             </div>
           </div>
@@ -4633,38 +4916,65 @@ export function ProfileSettingsModal({
                   {(() => {
                     const renderMaterialPresetRow = (preset: MaterialPreset, index: number, groupKey: string, showFamily = false) => {
                       const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
+                      const selectionKey = templateId || `${preset.brand ?? 'Default'}::${preset.name}`;
                       const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
+                      const isSelected = !isAlreadyAdded && selectedLibraryMaterialKeys.has(selectionKey);
                       const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
                       const familyColor = RESIN_FAMILY_COLOR[preset.resinFamily] ?? '#94a3b8';
+
+                      const handleToggle = () => {
+                        if (isAlreadyAdded) return;
+                        setSelectedLibraryMaterialKeys((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(selectionKey)) next.delete(selectionKey);
+                          else next.add(selectionKey);
+                          return next;
+                        });
+                      };
+
                       return (
                         <button
                           key={templateId || `${groupKey}-${preset.brand || 'Default'}-${preset.name}-${index}`}
                           type="button"
                           disabled={isAlreadyAdded}
-                          onClick={() => handleApplyMaterialLibraryPreset(preset)}
+                          onClick={handleToggle}
                           className="w-full rounded-lg border text-left transition-colors overflow-hidden disabled:opacity-60"
                           style={isAlreadyAdded
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
                                 background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 91%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
                               }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'var(--surface-1)',
-                              }}
+                            : isSelected
+                              ? {
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 20%)',
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                                  outline: '1.5px solid color-mix(in srgb, var(--accent), transparent 40%)',
+                                }
+                              : {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--surface-1)',
+                                }}
                         >
                           <div className="flex h-full">
-                            <div className="w-[3px] shrink-0 self-stretch" style={{ background: isAlreadyAdded ? 'var(--accent-secondary)' : familyColor }} />
+                            <div className="w-[3px] shrink-0 self-stretch" style={{ background: isAlreadyAdded ? 'var(--accent-secondary)' : isSelected ? 'var(--accent)' : familyColor }} />
                             <div className="flex-1 min-w-0 px-3 py-2.5">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{preset.name}</span>
                                 <div className="shrink-0 flex items-center gap-1.5">
-                                  {showFamily && (
+                                  {showFamily && !isAlreadyAdded && !isSelected && (
                                     <span
                                       className="text-[10px] rounded-full border px-1.5 py-0.5 font-medium whitespace-nowrap"
                                       style={{ borderColor: `color-mix(in srgb, ${familyColor}, transparent 45%)`, color: familyColor, background: `color-mix(in srgb, ${familyColor}, var(--surface-0) 88%)` }}
                                     >
                                       {resinFamilyLabel}
+                                    </span>
+                                  )}
+                                  {isSelected && (
+                                    <span
+                                      className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+                                      style={{ background: 'var(--accent)', color: '#0a0f0a' }}
+                                    >
+                                      <Check className="w-3 h-3" strokeWidth={3} />
                                     </span>
                                   )}
                                   {isAlreadyAdded && (
@@ -4718,6 +5028,26 @@ export function ProfileSettingsModal({
                     );
                   })()}
                 </div>
+              </div>
+
+              {/* Material Library footer */}
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                  {selectedLibraryMaterialKeys.size > 0
+                    ? `${selectedLibraryMaterialKeys.size} material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''} selected`
+                    : 'Select materials to add'}
+                </span>
+                <button
+                  type="button"
+                  aria-disabled={selectedLibraryMaterialKeys.size === 0}
+                  onClick={selectedLibraryMaterialKeys.size > 0 ? handleAddSelectedMaterialPresets : undefined}
+                  className={`ui-button !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed ${selectedLibraryMaterialKeys.size > 0 ? 'ui-button-accent' : 'ui-button-secondary aria-disabled:opacity-45'}`}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {selectedLibraryMaterialKeys.size > 0
+                    ? `Add ${selectedLibraryMaterialKeys.size} Material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''}`
+                    : 'Add Materials'}
+                </button>
               </div>
             </div>
           </div>
@@ -5001,6 +5331,49 @@ export function ProfileSettingsModal({
                 <button
                   type="button"
                   onClick={handleDuplicateOfficialProfile}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                  style={{
+                    color: 'var(--accent-secondary)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                  }}
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  Make Custom Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showOfficialMaterialLockDialog && selectedMaterial && (
+          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowOfficialMaterialLockDialog(false);
+          }}>
+            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
+                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Official Profile Locked
+                </h3>
+              </div>
+              <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
+                Official material profiles cannot be edited directly. Create a custom copy to adjust exposure times and settings.
+                <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <strong style={{ color: 'var(--text-strong)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+                </div>
+              </div>
+              <div className="px-4 pb-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowOfficialMaterialLockDialog(false)}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDuplicateMaterialAsCustom}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
                   style={{
                     color: 'var(--accent-secondary)',
