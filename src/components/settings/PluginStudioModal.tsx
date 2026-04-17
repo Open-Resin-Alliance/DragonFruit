@@ -5,6 +5,7 @@ import { AlertTriangle, Archive, Check, ChevronLeft, ChevronRight, Copy, Downloa
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
   getProfileLocalMaterialSettingsAdapter,
+  getAvailableProfileNetworkModes,
 } from '@/features/plugins/pluginRegistry';
 import {
   getAvailableOutputFormatOptions,
@@ -46,16 +47,27 @@ type PrinterPresetDraft = {
   manufacturer: string;
   family: string;
   name: string;
+  imageAssetPath: string;
   outputFormat: string;
   formatVersion: string;
   settingsMode: string;
+  networkSupport: string;
+  networkFilter: string;
+  hasCamera: boolean;
+  webcamRotationDeg: 0 | 90 | 180 | 270;
   resolutionX: number;
   resolutionY: number;
+  bitDepth: number;
   mirrorX: boolean;
   mirrorY: boolean;
+  autoBuildWidthDepth: boolean;
   buildWidth: number;
   buildDepth: number;
   buildHeight: number;
+  frontMargin: number;
+  backMargin: number;
+  leftMargin: number;
+  rightMargin: number;
   pixelSizeX: number;
   pixelSizeY: number;
   antiAliasing: boolean;
@@ -136,22 +148,39 @@ const STEP_META: Record<StepId, {
 };
 
 const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
+const WEBCAM_ROTATION_OPTIONS: Array<{ value: `${0 | 90 | 180 | 270}`; label: string }> = [
+  { value: '0', label: '0°' },
+  { value: '90', label: '90°' },
+  { value: '180', label: '180°' },
+  { value: '270', label: '270°' },
+];
 
 const DEFAULT_PRINTER_PRESET: PrinterPresetDraft = {
   presetId: '',
   manufacturer: '',
   family: '',
   name: '',
+  imageAssetPath: '',
   outputFormat: '',
   formatVersion: '',
   settingsMode: '',
+  networkSupport: '',
+  networkFilter: '',
+  hasCamera: true,
+  webcamRotationDeg: 0,
   resolutionX: 0,
   resolutionY: 0,
+  bitDepth: 8,
   mirrorX: false,
   mirrorY: false,
+  autoBuildWidthDepth: false,
   buildWidth: 0,
   buildDepth: 0,
   buildHeight: 0,
+  frontMargin: 0,
+  backMargin: 0,
+  leftMargin: 0,
+  rightMargin: 0,
   pixelSizeX: 0,
   pixelSizeY: 0,
   antiAliasing: false,
@@ -182,19 +211,38 @@ function printerPresetDraftToJson(d: PrinterPresetDraft): Record<string, unknown
     presetId: d.presetId,
     manufacturer: d.manufacturer,
     name: d.name,
-    buildVolumeMm: { width: d.buildWidth, depth: d.buildDepth, height: d.buildHeight },
+    buildVolumeMm: {
+      width: d.autoBuildWidthDepth ? null : d.buildWidth,
+      depth: d.autoBuildWidthDepth ? null : d.buildDepth,
+      height: d.buildHeight,
+    },
     display: {
       resolutionX: d.resolutionX,
       resolutionY: d.resolutionY,
       outputFormat: d.outputFormat || '.ctb',
       ...(d.formatVersion ? { formatVersion: d.formatVersion } : {}),
       ...(d.settingsMode ? { settingsMode: d.settingsMode } : {}),
+      ...(d.hasCamera ? { webcamRotationDeg: d.webcamRotationDeg } : {}),
       mirrorX: d.mirrorX,
       mirrorY: d.mirrorY,
     },
+    hasCamera: d.hasCamera,
   };
+
+  if (d.bitDepth > 0) preset['bitDepth'] = { bits: d.bitDepth };
   if (d.family.trim()) preset['family'] = d.family.trim();
+  if (d.imageAssetPath.trim()) preset['imageAssetPath'] = d.imageAssetPath.trim();
   if (d.pixelSizeX > 0 && d.pixelSizeY > 0) preset['pixelSize'] = { x: d.pixelSizeX, y: d.pixelSizeY };
+  if (d.frontMargin > 0 || d.backMargin > 0 || d.leftMargin > 0 || d.rightMargin > 0) {
+    preset['safetyMarginMm'] = {
+      front: d.frontMargin,
+      back: d.backMargin,
+      left: d.leftMargin,
+      right: d.rightMargin,
+    };
+  }
+  if (d.networkSupport.trim()) preset['networkSupport'] = d.networkSupport.trim().toLowerCase();
+  if (d.networkFilter.trim()) preset['networkFilter'] = d.networkFilter.trim();
   if (d.antiAliasing) preset['antiAliasing'] = true;
   return preset;
 }
@@ -375,10 +423,60 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function normalizeWebcamRotation(value: unknown, fallback: 0 | 90 | 180 | 270 = 0): 0 | 90 | 180 | 270 {
+  const parsed = Number(value);
+  if (parsed === 0 || parsed === 90 || parsed === 180 || parsed === 270) {
+    return parsed;
+  }
+  return fallback;
+}
+
+function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): number {
+  const safeResolution = Math.max(1, Math.round(resolutionPx));
+  const safePixel = Math.max(0.001, Number(pixelSizeUm) || 0.001);
+  return Number(((safeResolution * safePixel) / 1000).toFixed(3));
+}
+
 function parseSlugFromPluginId(id: string): string {
   const normalized = id.trim();
   if (!normalized) return '';
   return normalized.startsWith('df-plugin-') ? normalized.slice('df-plugin-'.length) : normalized;
+}
+
+function slugifyPathSegment(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'printer';
+}
+
+function buildSuggestedPrinterAssetPath(preset: PrinterPresetDraft): string {
+  const familyOrMaker = preset.family.trim() || preset.manufacturer.trim() || 'printers';
+  const model = preset.name.trim() || preset.presetId.trim() || 'printer';
+  return `./assets/${slugifyPathSegment(familyOrMaker)}/${slugifyPathSegment(model)}.png`;
+}
+
+function normalizeImportedImageAssetPath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (!trimmed) return '';
+
+  // Runtime-resolved profile asset path:
+  // /api/profile-assets/plugins/<plugin>/printers/assets/<...>
+  const runtimeMatch = trimmed.match(/^\/api\/profile-assets\/plugins\/[^/]+\/printers\/(assets\/.+)$/i);
+  if (runtimeMatch?.[1]) {
+    return `./${runtimeMatch[1]}`;
+  }
+
+  // Bundled plugin asset path:
+  // /plugins/<plugin>/printers/assets/<...>
+  const bundledMatch = trimmed.match(/^\/?plugins\/[^/]+\/printers\/(assets\/.+)$/i);
+  if (bundledMatch?.[1]) {
+    return `./${bundledMatch[1]}`;
+  }
+
+  return trimmed;
 }
 
 function asResinFamily(value: unknown, fallback: MaterialDraft['resinFamily']): MaterialDraft['resinFamily'] {
@@ -395,24 +493,49 @@ function parsePrinterPresetDraft(value: unknown): PrinterPresetDraft {
   const display = isRecord(value.display) ? value.display : {};
   const buildVolume = isRecord(value.buildVolumeMm) ? value.buildVolumeMm : {};
   const pixelSize = isRecord(value.pixelSize) ? value.pixelSize : {};
+  const safetyMargin = isRecord(value.safetyMarginMm) ? value.safetyMarginMm : {};
+  const bitDepth = isRecord(value.bitDepth) ? value.bitDepth : {};
+
+  const resolutionX = asNumber(display.resolutionX);
+  const resolutionY = asNumber(display.resolutionY);
+  const pixelSizeX = asNumber(pixelSize.x);
+  const pixelSizeY = asNumber(pixelSize.y);
+
+  const hasExplicitWidth = typeof buildVolume.width === 'number' && Number.isFinite(buildVolume.width);
+  const hasExplicitDepth = typeof buildVolume.depth === 'number' && Number.isFinite(buildVolume.depth);
+  const autoBuildWidthDepth = !hasExplicitWidth || !hasExplicitDepth;
+
+  const computedWidth = resolutionX > 0 && pixelSizeX > 0 ? computeBuildDimensionMm(resolutionX, pixelSizeX) : 0;
+  const computedDepth = resolutionY > 0 && pixelSizeY > 0 ? computeBuildDimensionMm(resolutionY, pixelSizeY) : 0;
 
   return {
     presetId: asString(value.presetId),
     manufacturer: asString(value.manufacturer),
     family: asString(value.family),
     name: asString(value.name),
+    imageAssetPath: normalizeImportedImageAssetPath(asString(value.imageAssetPath)),
     outputFormat: asString(display.outputFormat),
     formatVersion: asString(display.formatVersion),
     settingsMode: asString(display.settingsMode),
-    resolutionX: asNumber(display.resolutionX),
-    resolutionY: asNumber(display.resolutionY),
+    networkSupport: asString(value.networkSupport),
+    networkFilter: asString(value.networkFilter),
+    hasCamera: asBoolean(value.hasCamera, true),
+    webcamRotationDeg: normalizeWebcamRotation(display.webcamRotationDeg),
+    resolutionX,
+    resolutionY,
+    bitDepth: Math.max(1, Math.round(asNumber(bitDepth.bits, 8))),
     mirrorX: asBoolean(display.mirrorX),
     mirrorY: asBoolean(display.mirrorY),
-    buildWidth: asNumber(buildVolume.width),
-    buildDepth: asNumber(buildVolume.depth),
+    autoBuildWidthDepth,
+    buildWidth: hasExplicitWidth ? asNumber(buildVolume.width) : computedWidth,
+    buildDepth: hasExplicitDepth ? asNumber(buildVolume.depth) : computedDepth,
     buildHeight: asNumber(buildVolume.height),
-    pixelSizeX: asNumber(pixelSize.x),
-    pixelSizeY: asNumber(pixelSize.y),
+    frontMargin: asNumber(safetyMargin.front),
+    backMargin: asNumber(safetyMargin.back),
+    leftMargin: asNumber(safetyMargin.left),
+    rightMargin: asNumber(safetyMargin.right),
+    pixelSizeX,
+    pixelSizeY,
     antiAliasing: asBoolean(value.antiAliasing),
   };
 }
@@ -1108,9 +1231,30 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
     () => getAvailableSettingsModeOptions(preset.outputFormat || null),
     [preset.outputFormat],
   );
+  const resolvedBuildWidth = preset.autoBuildWidthDepth
+    ? (preset.resolutionX > 0 && preset.pixelSizeX > 0 ? computeBuildDimensionMm(preset.resolutionX, preset.pixelSizeX) : 0)
+    : preset.buildWidth;
+  const resolvedBuildDepth = preset.autoBuildWidthDepth
+    ? (preset.resolutionY > 0 && preset.pixelSizeY > 0 ? computeBuildDimensionMm(preset.resolutionY, preset.pixelSizeY) : 0)
+    : preset.buildDepth;
+  const networkModeOptions = React.useMemo(() => {
+    const registered = getAvailableProfileNetworkModes();
+    const base = [
+      { value: '', label: 'None (Local only)' },
+      ...registered.map((mode) => ({ value: mode.mode, label: mode.displayName })),
+    ];
+    const currentMode = preset.networkSupport.trim().toLowerCase();
+    if (!currentMode) return base;
+    if (base.some((option) => option.value === currentMode)) return base;
+    return [...base, { value: currentMode, label: `Unknown (${currentMode})` }];
+  }, [preset.networkSupport]);
+  const suggestedAssetPath = React.useMemo(
+    () => buildSuggestedPrinterAssetPath(preset),
+    [preset],
+  );
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5">
       <div className="grid grid-cols-2 gap-2">
         <LabeledInput label="Manufacturer" helpText="Brand name (e.g. Elegoo)" value={preset.manufacturer} onChange={(v) => onChange({ ...preset, manufacturer: v })} />
         <LabeledInput label="Name" helpText="Model name (e.g. Saturn 4 Ultra)" value={preset.name} onChange={(v) => onChange({ ...preset, name: v })} />
@@ -1118,9 +1262,35 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
         <LabeledInput label="Preset ID" helpText="Unique lowercase ID (e.g. elegoo-saturn-4-ultra)" value={preset.presetId} onChange={(v) => onChange({ ...preset, presetId: v.toLowerCase().replace(/\s+/g, '-') })} />
       </div>
 
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Format</div>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="rounded-xl border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="ui-meta font-semibold uppercase tracking-wide mb-1.5">Assets</div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
+          <LabeledInput
+            label="Image Asset Path"
+            helpText="Relative path in plugin repo (e.g. ./assets/mars/mars-4-ultra.png)"
+            value={preset.imageAssetPath}
+            onChange={(v) => onChange({ ...preset, imageAssetPath: v })}
+          />
+          <button
+            type="button"
+            onClick={() => onChange({ ...preset, imageAssetPath: suggestedAssetPath })}
+            className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs"
+            style={{
+              color: 'var(--accent-secondary)',
+              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+            }}
+          >
+            Use Suggested
+          </button>
+        </div>
+        <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          Suggested: <code className="font-mono">{suggestedAssetPath}</code>
+        </div>
+      </div>
+
+      <div className="rounded-xl border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="ui-meta font-semibold uppercase tracking-wide mb-1.5">Format + Output</div>
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
           <SelectDropdown
             label="Output Format"
             value={preset.outputFormat}
@@ -1152,34 +1322,88 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
               selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
             />
           )}
-        </div>
-      </div>
+          <SelectDropdown
+            label="Network Support"
+            value={preset.networkSupport}
+            onChange={(v) => onChange({ ...preset, networkSupport: v.trim().toLowerCase() })}
+            options={networkModeOptions}
+            className="space-y-1 block"
+            labelClassName="font-medium"
+            selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+          />
+          <LabeledInput
+            label="Network Filter"
+            helpText="Example: Saturn 4"
+            value={preset.networkFilter}
+            onChange={(v) => onChange({ ...preset, networkFilter: v })}
+          />
+          <LabeledToggleInput label="Webcam Support" checked={preset.hasCamera} onChange={(v) => onChange({ ...preset, hasCamera: v })} />
 
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Display Resolution</div>
-        <div className="grid grid-cols-2 gap-2">
-          <LabeledNumberInput label="Resolution X (px)" value={preset.resolutionX} onChange={(v) => onChange({ ...preset, resolutionX: v })} />
-          <LabeledNumberInput label="Resolution Y (px)" value={preset.resolutionY} onChange={(v) => onChange({ ...preset, resolutionY: v })} />
+          {preset.hasCamera && (
+            <SelectDropdown
+              label="Webcam Rotation"
+              value={String(preset.webcamRotationDeg)}
+              onChange={(v) => onChange({ ...preset, webcamRotationDeg: normalizeWebcamRotation(v) })}
+              options={WEBCAM_ROTATION_OPTIONS}
+              className="space-y-1 block"
+              labelClassName="font-medium"
+              selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+            />
+          )}
+
           <LabeledToggleInput label="Mirror X" checked={preset.mirrorX} onChange={(v) => onChange({ ...preset, mirrorX: v })} />
           <LabeledToggleInput label="Mirror Y" checked={preset.mirrorY} onChange={(v) => onChange({ ...preset, mirrorY: v })} />
         </div>
       </div>
 
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Build Volume (mm)</div>
-        <div className="grid grid-cols-3 gap-2">
-          <LabeledNumberInput label="Width" value={preset.buildWidth} onChange={(v) => onChange({ ...preset, buildWidth: v })} />
-          <LabeledNumberInput label="Depth" value={preset.buildDepth} onChange={(v) => onChange({ ...preset, buildDepth: v })} />
-          <LabeledNumberInput label="Height" value={preset.buildHeight} onChange={(v) => onChange({ ...preset, buildHeight: v })} />
-        </div>
-      </div>
-
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Optional</div>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="rounded-xl border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="ui-meta font-semibold uppercase tracking-wide mb-1.5">Display</div>
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-2">
+          <LabeledNumberInput label="Resolution X (px)" value={preset.resolutionX} onChange={(v) => onChange({ ...preset, resolutionX: v })} />
+          <LabeledNumberInput label="Resolution Y (px)" value={preset.resolutionY} onChange={(v) => onChange({ ...preset, resolutionY: v })} />
+          <LabeledNumberInput label="Bit Depth" value={preset.bitDepth} onChange={(v) => onChange({ ...preset, bitDepth: Math.max(1, Math.round(v)) })} />
           <LabeledNumberInput label="Pixel Size X (µm)" value={preset.pixelSizeX} onChange={(v) => onChange({ ...preset, pixelSizeX: v })} />
           <LabeledNumberInput label="Pixel Size Y (µm)" value={preset.pixelSizeY} onChange={(v) => onChange({ ...preset, pixelSizeY: v })} />
           <LabeledToggleInput label="Anti-aliasing" checked={preset.antiAliasing} onChange={(v) => onChange({ ...preset, antiAliasing: v })} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+        <div className="ui-meta font-semibold uppercase tracking-wide mb-1.5">Build Volume (mm)</div>
+        <div
+          className="mb-1.5 rounded-lg border p-1.5 flex items-center justify-between gap-2"
+          style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 6%)' }}
+        >
+          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            Auto-calculate width/depth from resolution × pixel size
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={preset.autoBuildWidthDepth}
+            onClick={() => onChange({ ...preset, autoBuildWidthDepth: !preset.autoBuildWidthDepth })}
+            className="ui-button ui-button-secondary !h-7 !px-2.5 text-[11px]"
+            style={preset.autoBuildWidthDepth
+              ? {
+                color: 'var(--accent-secondary)',
+                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
+              }
+              : undefined}
+          >
+            {preset.autoBuildWidthDepth ? 'Auto' : 'Manual'}
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <LabeledNumberInput label="Width" disabled={preset.autoBuildWidthDepth} value={resolvedBuildWidth} onChange={(v) => onChange({ ...preset, buildWidth: v })} />
+          <LabeledNumberInput label="Depth" disabled={preset.autoBuildWidthDepth} value={resolvedBuildDepth} onChange={(v) => onChange({ ...preset, buildDepth: v })} />
+          <LabeledNumberInput label="Height" value={preset.buildHeight} onChange={(v) => onChange({ ...preset, buildHeight: v })} />
+        </div>
+        <div className="mt-1.5 grid grid-cols-2 xl:grid-cols-4 gap-2">
+          <LabeledNumberInput label="Front Margin (mm)" value={preset.frontMargin} onChange={(v) => onChange({ ...preset, frontMargin: v })} />
+          <LabeledNumberInput label="Back Margin (mm)" value={preset.backMargin} onChange={(v) => onChange({ ...preset, backMargin: v })} />
+          <LabeledNumberInput label="Left Margin (mm)" value={preset.leftMargin} onChange={(v) => onChange({ ...preset, leftMargin: v })} />
+          <LabeledNumberInput label="Right Margin (mm)" value={preset.rightMargin} onChange={(v) => onChange({ ...preset, rightMargin: v })} />
         </div>
       </div>
     </div>
@@ -1235,6 +1459,14 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
   }, [presets]);
 
   const selectedPreset = clampedIndex >= 0 ? presets[clampedIndex] : null;
+
+  const requestDeletePreset = React.useCallback((index: number) => {
+    const target = presets[index];
+    const label = target ? [target.manufacturer, target.name].filter(Boolean).join(' ').trim() || 'this preset' : 'this preset';
+    const shouldDelete = window.confirm(`Delete ${label}?\n\nThis action cannot be undone.`);
+    if (!shouldDelete) return;
+    deletePreset(index);
+  }, [deletePreset, presets]);
 
   return (
     <div className="flex gap-3" style={{ minHeight: 480 }}>
@@ -1309,7 +1541,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
                       </button>
                       <button
                         type="button"
-                        onClick={() => deletePreset(index)}
+                        onClick={() => requestDeletePreset(index)}
                         className="ui-button ui-button-ghost !h-5 !w-5 !p-0 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mr-2"
                         aria-label="Delete preset"
                         title="Delete preset"
@@ -1371,7 +1603,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
               </div>
               <button
                 type="button"
-                onClick={() => deletePreset(clampedIndex)}
+                onClick={() => requestDeletePreset(clampedIndex)}
                 className="ui-button ui-button-ghost !h-7 !px-2 text-[11px] flex items-center gap-1.5"
                 style={{ color: '#ff8f8f', borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 60%)' }}
               >
@@ -1692,6 +1924,16 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
 
   const hasInvalidPresetSelection = templates.some((template) => !template.applyToAllPrinters && template.targetPresetIds.length === 0);
 
+  const requestDeleteMaterialTemplate = React.useCallback((index: number) => {
+    const template = templates[index];
+    const name = template
+      ? [template.draft.brand, template.draft.name].filter(Boolean).join(' — ') || 'this material preset'
+      : 'this material preset';
+    const shouldDelete = window.confirm(`Delete ${name}?\n\nThis action cannot be undone.`);
+    if (!shouldDelete) return;
+    onChange(templates.filter((_, i) => i !== index));
+  }, [onChange, templates]);
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -1736,7 +1978,7 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                 updated[index] = next;
                 onChange(updated);
               }}
-              onDelete={() => onChange(templates.filter((_, i) => i !== index))}
+              onDelete={() => requestDeleteMaterialTemplate(index)}
             />
           ))}
         </div>
@@ -1908,6 +2150,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
       if (showExitConfirm) {
         setShowExitConfirm(false);
         return;
@@ -1915,8 +2159,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
       setShowExitConfirm(true);
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [isOpen, showExitConfirm]);
 
   React.useEffect(() => {
