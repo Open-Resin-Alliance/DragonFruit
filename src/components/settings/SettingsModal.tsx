@@ -97,7 +97,7 @@ const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
-const ORA_LOGO_DARK_URL = 'https://raw.githubusercontent.com/Open-Resin-Alliance/Orion/athena_public_beta/assets/images/ora/open_resin_alliance_logo_darkmode.png';
+const ORA_LOGO_DARK_URL = '/dragonfruit_assets/branding/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
 type SettingsModalProps = {
@@ -598,6 +598,7 @@ export function SettingsModal({
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+  const isAboutTab = activeTab === 'about';
   const isBetaBuildChannel = DRAGONFRUIT_BUILD_CHANNEL.includes('beta');
   const buildStatusLabel = isBetaBuildChannel
     ? 'BETA VERSION'
@@ -779,7 +780,7 @@ export function SettingsModal({
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4">
+          <div className={isAboutTab ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
             <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div className="flex items-center gap-2">
                 <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
@@ -788,7 +789,7 @@ export function SettingsModal({
               <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{tabMeta[activeTab].description}</p>
             </div>
 
-            <div key={activeTab} className="animate-[settingsTabIn_180ms_ease-out]">
+            <div key={activeTab} className={isAboutTab ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
               {activeTab === 'general' && (
                 <GeneralSettingsTab
                   floatingLayoutPersistence={draftFloatingLayoutPersistence}
@@ -897,168 +898,270 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'about' && (
-                <div className="flex min-h-full flex-col gap-3.5">
-                  <div
-                    className="rounded-xl border p-4"
-                    style={{
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 62%)',
-                      background: 'linear-gradient(145deg, color-mix(in srgb, var(--accent), var(--surface-0) 95%), color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%))',
-                    }}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <img
-                          src="/dragonfruit_assets/branding/text_logo.svg"
-                          alt="DragonFruit"
-                          className="h-8 w-auto object-contain"
-                        />
-                        <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                          DragonFruit is an open-source slicer for resin 3D printing.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <span
-                        className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums"
-                        style={{
-                          color: 'var(--text-strong)',
-                          borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
-                          background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
-                        }}
-                      >
-                        v{DRAGONFRUIT_VERSION}
-                      </span>
-                      <span
-                        className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                        style={{
-                          color: 'var(--accent-secondary-contrast)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), transparent 24%)',
-                        }}
-                      >
-                        An Open Resin Alliance Project
-                      </span>
-                      <span
-                        className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                        style={buildStatusStyle}
-                      >
-                        {buildStatusLabel}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Team & Credits
-                    </h5>
-
-                    <div className="mt-2.5 space-y-2">
+                <div className="flex h-full min-h-0 flex-col gap-3.5">
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+                    <div className="space-y-3.5 pb-2">
                       <div
-                        className="rounded-lg border px-3 py-2.5"
+                        className="rounded-xl border p-4"
                         style={{
-                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 62%)',
+                          background: 'linear-gradient(145deg, color-mix(in srgb, var(--accent), var(--surface-0) 95%), color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%))',
                         }}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                              Ty Mansfield
-                            </div>
-                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              TableFlip Foundry, Open Resin Alliance
-                            </div>
-                            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              Core Framework, Supports, Bugfixes, and General Mayhem
-                            </div>
-                          </div>
-                          <div
-                            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                            style={{
-                              color: 'var(--accent-contrast)',
-                              borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
-                              background: 'color-mix(in srgb, var(--accent), transparent 18%)',
-                            }}
-                          >
-                            Main Developer & Maintainer
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1">
+                            <img
+                              src="/dragonfruit_assets/branding/text_logo.svg"
+                              alt="DragonFruit"
+                              className="h-8 w-auto object-contain"
+                            />
+                            <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                              DragonFruit is an open-source slicer for resin 3D printing.
+                            </p>
                           </div>
                         </div>
-                      </div>
 
-                      <div
-                        className="rounded-lg border px-3 py-2.5"
-                        style={{
-                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                              Paul Skapczyk
-                            </div>
-                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              Open Resin Alliance
-                            </div>
-                            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              Core Framework, UI & UX, Backend, Plugins and Chaos Engineering
-                            </div>
-                          </div>
-                          <div
-                            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span
+                            className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums"
                             style={{
-                              color: 'var(--accent-contrast)',
-                              borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
-                              background: 'color-mix(in srgb, var(--accent), transparent 18%)',
+                              color: 'var(--text-strong)',
+                              borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
+                              background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                             }}
                           >
-                            Main Developer & Maintainer
-                          </div>
-                        </div>
-                      </div>
-
-                      <div
-                        className="rounded-lg border px-3 py-2.5"
-                        style={{
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                              William Patton
-                            </div>
-                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              PattonWebz
-                            </div>
-                            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              Breaks stuff, maybe fixes it. Maybe.
-                            </div>
-                          </div>
-                          <div
-                            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                            v{DRAGONFRUIT_VERSION}
+                          </span>
+                          <span
+                            className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
                             style={{
                               color: 'var(--accent-secondary-contrast)',
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), transparent 24%)',
                             }}
                           >
-                            Contributor
+                            An Open Resin Alliance Project
+                          </span>
+                          <span
+                            className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                            style={buildStatusStyle}
+                          >
+                            {buildStatusLabel}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                        <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                          Team & Credits
+                        </h5>
+
+                        <div className="mt-2.5 space-y-2">
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Ty Mansfield
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Open Resin Alliance & Tableflip Foundry
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Core Framework, Supports, Bugfixes, and General Mayhem
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
+                                  background: 'color-mix(in srgb, var(--accent), transparent 18%)',
+                                }}
+                              >
+                                Main Developer & Maintainer
+                              </div>
+                            </div>
                           </div>
+
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Paul Skapczyk
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Open Resin Alliance
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Core Framework, UI & UX, Backend, Plugins and Chaos Engineering
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
+                                  background: 'color-mix(in srgb, var(--accent), transparent 18%)',
+                                }}
+                              >
+                                Main Developer & Maintainer
+                              </div>
+                            </div>
+                          </div>
+
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  William Patton
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  PattonWebz
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Breaks stuff, maybe fixes it. Maybe.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>
+                              
+                            </div>
+                          </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Magistr
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  umag
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Support Tooling, Physics, and General Bugfixes. Linux Builds mysteriously work better when he's around, but who knows why.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Tim
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  tslater2006
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Anycubic Photon Support, Testing, and Bugfixes. Prints fun stuff.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Ada Phillips
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Open Resin Alliance
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Ensures the software doesn't set itself on fire.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 25%)' }}>
+                        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          DragonFruit is actively evolving. Expect rapid iteration and workflow improvements.
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 25%)' }}>
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      DragonFruit is actively evolving. Expect rapid iteration and workflow improvements.
-                    </div>
-                  </div>
-
-                  <div className="mt-auto rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="shrink-0 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                       Open Resin Alliance
                     </h5>

@@ -11,6 +11,7 @@ import {
   uninstallPlugin,
 } from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
+import { PluginStudioModal } from './PluginStudioModal';
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
@@ -90,6 +91,7 @@ export function PluginsSettingsTab() {
   React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const [repoUrl, setRepoUrl] = React.useState('');
+  const [studioOpen, setStudioOpen] = React.useState(false);
   const [isInstalling, setIsInstalling] = React.useState(false);
   const [pendingLiabilityInstall, setPendingLiabilityInstall] = React.useState<{
     repoUrl: string;
@@ -106,6 +108,7 @@ export function PluginsSettingsTab() {
   } | null>(null);
   const [pendingRemovePlugin, setPendingRemovePlugin] = React.useState<{ id: string; name: string } | null>(null);
   const [status, setStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
+  const isDevRuntime = process.env.NODE_ENV === 'development';
 
   // Read fresh list on every render; avoids stale memo behavior when external store
   // updates don't change snapshot identity but still emit notifications.
@@ -272,6 +275,11 @@ export function PluginsSettingsTab() {
       setIsInstalling(false);
     }
   }, [pendingInstallPreview]);
+
+  React.useEffect(() => {
+    if (isDevRuntime) return;
+    setStudioOpen(false);
+  }, [isDevRuntime]);
 
   return (
     <div className="space-y-3">
@@ -640,6 +648,21 @@ export function PluginsSettingsTab() {
           })}
         </div>
       </div>
+
+      {isDevRuntime && (
+        <div className="pt-1 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setStudioOpen(true)}
+            className="text-[11px] underline-offset-2 hover:underline"
+            style={{ color: 'var(--text-faint, var(--text-muted))' }}
+          >
+            Plugin Creation Studio
+          </button>
+        </div>
+      )}
+
+      <PluginStudioModal isOpen={isDevRuntime && studioOpen} onClose={() => setStudioOpen(false)} />
     </div>
   );
 }

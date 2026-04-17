@@ -5,6 +5,11 @@
       "id": "elegoo-printer-profiles",
       "folder": "elegoo",
       "manifestPath": "dragonfruit-plugin.json"
+    },
+    {
+      "id": "sirayatech-material-profiles",
+      "folder": "sirayatech",
+      "manifestPath": "dragonfruit-plugin.json"
     }
   ]
 }

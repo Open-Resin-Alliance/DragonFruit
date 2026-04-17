@@ -382,6 +382,11 @@ export type MaterialTemplate = Omit<MaterialProfile, 'id' | 'printerProfileId'> 
   profileVersion?: number;
 };
 
+export type MaterialPreset = MaterialTemplate & {
+  /** presetId values (or glob patterns with `*`) that this preset applies to. */
+  validForPresets?: string[];
+};
+
 export type OfficialPrinterProfileUpdateInfo = {
   printerProfileId: string;
   printerName: string;
@@ -1631,6 +1636,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
 
   const materialProfiles = state.materialProfiles.map((profile) => {
     if (profile.id !== id) return profile;
+    // Official template materials are read-only; only internal update paths (applyOfficialMaterialProfileUpdate) may change them.
+    const isOfficial = typeof profile.officialTemplateId === 'string' && profile.officialTemplateId.trim().length > 0;
+    if (isOfficial) return profile;
     changed = true;
     return {
       ...profile,
