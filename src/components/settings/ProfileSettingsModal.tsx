@@ -5297,133 +5297,262 @@ export function ProfileSettingsModal({
         )}
 
         {showOfficialLockDialog && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               setShowOfficialLockDialog(false);
               setOfficialLockedProfileId(null);
             }
           }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Official Profile Locked
-                </h3>
-              </div>
-              <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                For safety reasons, official slicer profiles cannot be modified directly.
-                You can create a copy and customize that profile instead.
-                <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <strong style={{ color: 'var(--text-strong)' }}>Warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury.
+            <div
+              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+              style={{
+                background: 'var(--surface-0)',
+                borderColor: 'var(--border-subtle)',
+                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Official profile locked"
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                    style={{
+                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                      color: '#f59e0b',
+                    }}
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                  </span>
+
+                  <div className="min-w-0 pr-2">
+                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                      Official Profile Locked
+                    </h3>
+                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                      Official slicer profiles can’t be edited directly.
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="px-4 pb-4 flex items-center justify-end gap-2">
+
                 <button
                   type="button"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+                  aria-label="Close official profile lock dialog"
                   onClick={() => {
                     setShowOfficialLockDialog(false);
                     setOfficialLockedProfileId(null);
                   }}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
                 >
-                  Cancel
+                  <X className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={handleDuplicateOfficialProfile}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  Make Custom Copy
-                </button>
+              </div>
+
+              <div className="space-y-3.5 p-5">
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  For safety reasons, official slicer profiles cannot be modified directly.
+                  <br />
+                  Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
+                  <br />
+                  <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                    onClick={() => {
+                      setShowOfficialLockDialog(false);
+                      setOfficialLockedProfileId(null);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDuplicateOfficialProfile}
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    Make Custom Copy
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {showOfficialMaterialLockDialog && selectedMaterial && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowOfficialMaterialLockDialog(false);
           }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Official Profile Locked
-                </h3>
-              </div>
-              <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                Official material profiles cannot be edited directly. Create a custom copy to adjust exposure times and settings.
-                <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <strong style={{ color: 'var(--text-strong)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+            <div
+              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+              style={{
+                background: 'var(--surface-0)',
+                borderColor: 'var(--border-subtle)',
+                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Official material profile locked"
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                    style={{
+                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                      color: '#f59e0b',
+                    }}
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                  </span>
+
+                  <div className="min-w-0 pr-2">
+                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                      Official Profile Locked
+                    </h3>
+                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                      Official material profiles can’t be edited directly.
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="px-4 pb-4 flex items-center justify-end gap-2">
+
                 <button
                   type="button"
-                  onClick={() => setShowOfficialMaterialLockDialog(false)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDuplicateMaterialAsCustom}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
                   style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
                   }}
+                  aria-label="Close official material profile lock dialog"
+                  onClick={() => setShowOfficialMaterialLockDialog(false)}
                 >
-                  <Lock className="w-3.5 h-3.5" />
-                  Make Custom Copy
+                  <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              <div className="space-y-3.5 p-5">
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  Official material profiles cannot be edited directly.
+                  <br />
+                  Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
+                  <br />
+                  <br />
+                  <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                    onClick={() => setShowOfficialMaterialLockDialog(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDuplicateMaterialAsCustom}
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    Make Custom Copy
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {deleteConfirmTarget && (
-          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               setDeleteConfirmTarget(null);
             }
           }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Confirm Delete
-                </h3>
-              </div>
-              <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                {deleteConfirmTarget.kind === 'printer'
-                  ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all material profiles bound to it?</>
-                  : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
-              </div>
-              <div className="px-4 pb-4 flex items-center justify-end gap-2">
+            <div
+              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+              style={{
+                background: 'var(--surface-0)',
+                borderColor: 'var(--border-subtle)',
+                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirm delete"
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                    style={{
+                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                      color: '#f59e0b',
+                    }}
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                  </span>
+
+                  <div className="min-w-0 pr-2">
+                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                      Confirm Delete
+                    </h3>
+                  </div>
+                </div>
+
                 <button
                   type="button"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+                  aria-label="Close delete confirmation dialog"
                   onClick={() => setDeleteConfirmTarget(null)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
                 >
-                  Cancel
+                  <X className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmDelete}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{ color: '#fca5a5' }}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Delete
-                </button>
+              </div>
+
+              <div className="space-y-3.5 p-5">
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  {deleteConfirmTarget.kind === 'printer'
+                    ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all material profiles bound to it?</>
+                    : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
+                  <br />
+                  <br />
+                  <strong style={{ color: 'var(--danger)' }}>Warning:</strong> This action cannot be undone.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                    onClick={() => setDeleteConfirmTarget(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    className="ui-button ui-button-danger !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </button>
+                </div>
               </div>
             </div>
           </div>
