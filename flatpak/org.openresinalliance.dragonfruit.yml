@@ -1,20 +1,15 @@
 # flatpak-builder manifest — fast-path packaging.
 #
-# This manifest consumes pre-built artifacts from src-tauri/target/release/
-# rather than rebuilding from source inside the flatpak sandbox. Run the
-# Linux Tauri build beforehand:
+# This manifest consumes pre-built artifacts staged into flatpak/staging/
+# rather than rebuilding from source inside the flatpak sandbox.
 #
-#     node scripts/tauri-build.mjs   # Linux path appends --features tauri-cef
-#     bash scripts/bundle-cef-libs.sh
+# Staging is handled automatically by tauri-build.mjs when flatpak-builder
+# is detected on PATH:
 #
-# Those two commands leave dragonfruit-desktop, libcef.so, *.pak, icudtl.dat,
-# v8_context_snapshot.bin, chrome-sandbox, and locales/ all in
-# src-tauri/target/release/. This manifest picks them up from there.
+#     node scripts/tauri-build.mjs   # auto-stages CEF + builds Flatpak
 #
-# Rationale: the full workspace + CEF rebuild inside flatpak-builder is
-# multi-GB of crates + ~20 minutes of linker time; for iteration and for
-# self-hosted distribution this is wasted work. The hermetic-build variant
-# (required for Flathub) is tracked separately in flatpak/FLATHUB.md.
+# The hermetic-build variant (required for Flathub) is tracked separately
+# in flatpak/FLATHUB.md.
 
 app-id: org.openresinalliance.dragonfruit
 runtime: org.freedesktop.Platform
