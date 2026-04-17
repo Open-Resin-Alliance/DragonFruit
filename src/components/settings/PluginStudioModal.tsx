@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Archive, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Square, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Archive, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Search, Square, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css';
@@ -2444,6 +2444,24 @@ function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, h
     [activeEditorTabId, editorTabs],
   );
   const useReplacementMetaOnly = Boolean(localSettingsAdapter?.replacesDefaultMaterialSettings);
+  const [targetQuery, setTargetQuery] = React.useState('');
+  const [isTargetSuggestionsOpen, setIsTargetSuggestionsOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    setTargetQuery(selectedTarget?.label ?? '');
+  }, [selectedTarget?.label, template.targetPresetId]);
+
+  const filteredTargetOptions = React.useMemo(() => {
+    const query = targetQuery.trim().toLowerCase();
+    if (!query) return targetOptions.slice(0, 12);
+
+    return targetOptions
+      .filter((option) => {
+        const haystack = `${option.label} ${option.presetId} ${option.manufacturer} ${option.description}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .slice(0, 12);
+  }, [targetOptions, targetQuery]);
 
   const label = template.draft.brand || template.draft.name
     ? [template.draft.brand, template.draft.name].filter(Boolean).join(' — ')
@@ -2469,18 +2487,91 @@ function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, h
             </span>
           )}
         </div>
-        <SelectDropdown
-          label=""
-          value={template.targetPresetId}
-          onChange={(presetId) => onChange({ ...template, targetPresetId: presetId })}
-          options={[{ value: '', label: '— select printer preset —' }, ...targetOptions.map((option) => ({
-            value: option.presetId,
-            label: `${option.label} · ${option.presetId}`,
-          }))]}
-          className="space-y-0 block"
-          labelClassName="hidden"
-          selectClassName="w-full h-[32px] px-2 pr-8 leading-tight text-xs"
-        />
+
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none" style={{ color: 'var(--text-muted)' }} />
+          <input
+            value={targetQuery}
+            placeholder="Search machines…"
+            onFocus={() => setIsTargetSuggestionsOpen(true)}
+            onBlur={() => {
+              // defer close so click handlers can run
+              window.setTimeout(() => setIsTargetSuggestionsOpen(false), 120);
+            }}
+            onChange={(event) => {
+              setTargetQuery(event.target.value);
+              if (!isTargetSuggestionsOpen) setIsTargetSuggestionsOpen(true);
+            }}
+            className="ui-input w-full h-[32px] text-xs"
+            style={{ paddingLeft: '2rem', paddingRight: '0.625rem' }}
+          />
+
+          {isTargetSuggestionsOpen && (
+            <div
+              className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-30 rounded-lg border overflow-hidden"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 55%)',
+                background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 32%)',
+                boxShadow: '0 14px 34px rgba(0,0,0,0.38), 0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 72%) inset',
+              }}
+            >
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange({ ...template, targetPresetId: '' });
+                  setTargetQuery('');
+                  setIsTargetSuggestionsOpen(false);
+                }}
+                className="w-full text-left px-2.5 py-2 text-[11px] border-b"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--surface-2), transparent 10%)' }}
+              >
+                — clear target selection —
+              </button>
+
+              {filteredTargetOptions.length === 0 ? (
+                <div className="px-2.5 py-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  No machines match your search.
+                </div>
+              ) : (
+                <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                  {filteredTargetOptions.map((option) => {
+                    const active = option.presetId === template.targetPresetId;
+                    return (
+                      <button
+                        key={option.presetId}
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          onChange({ ...template, targetPresetId: option.presetId });
+                          setTargetQuery(option.label);
+                          setIsTargetSuggestionsOpen(false);
+                        }}
+                        className="w-full text-left px-2.5 py-2 border-b last:border-b-0"
+                        style={active
+                          ? {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)',
+                          }
+                          : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'transparent',
+                          }}
+                      >
+                        <div className="text-xs font-medium truncate" style={{ color: active ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
+                          {option.label}
+                        </div>
+                        <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
+                          {option.presetId}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="rounded-xl border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
