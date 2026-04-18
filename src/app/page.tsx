@@ -12727,6 +12727,13 @@ export default function Home() {
         onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
         view3dSettings={scene.view3dSettings}
         onView3dSettingsChange={scene.setView3dSettings}
+        slicingThumbnailRenderSettings={exportThumbnailRenderOptions}
+        onSlicingThumbnailRenderSettingsChange={(next) => {
+          setExportThumbnailRenderOptions((previous) => ({
+            ...previous,
+            ...next,
+          }));
+        }}
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
@@ -13068,15 +13075,6 @@ export default function Home() {
               activeModel={scene.activeModel}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
-              thumbnailIncludeGradient={exportThumbnailRenderOptions.includeGradient}
-              thumbnailIncludeBuildPlate={exportThumbnailRenderOptions.includeBuildPlate}
-              thumbnailIncludeGrid={exportThumbnailRenderOptions.includeGrid}
-              onThumbnailRenderOptionsChange={(next) => {
-                setExportThumbnailRenderOptions((previous) => ({
-                  ...previous,
-                  ...next,
-                }));
-              }}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}

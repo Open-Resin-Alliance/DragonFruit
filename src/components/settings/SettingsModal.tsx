@@ -12,7 +12,7 @@ import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
-import { PerformanceSettingsTab } from '@/components/settings/PerformanceSettingsTab';
+import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { Check, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
@@ -99,6 +99,11 @@ const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
 const ORA_LOGO_DARK_URL = '/dragonfruit_assets/branding/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
+const DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS: SlicingThumbnailRenderSettings = {
+  includeGradient: false,
+  includeBuildPlate: false,
+  includeGrid: false,
+};
 
 type SettingsModalProps = {
   isOpen: boolean;
@@ -141,6 +146,8 @@ type SettingsModalProps = {
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
+  slicingThumbnailRenderSettings: SlicingThumbnailRenderSettings;
+  onSlicingThumbnailRenderSettingsChange: (settings: SlicingThumbnailRenderSettings) => void;
   activeOutputFormat?: string | null;
 };
 
@@ -188,6 +195,8 @@ export function SettingsModal({
   onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
   onView3dSettingsChange,
+  slicingThumbnailRenderSettings,
+  onSlicingThumbnailRenderSettingsChange,
   activeOutputFormat,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>('general');
@@ -225,6 +234,7 @@ export function SettingsModal({
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
+  const [draftSlicingThumbnailRenderSettings, setDraftSlicingThumbnailRenderSettings] = useState<SlicingThumbnailRenderSettings>(() => slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
   const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
@@ -263,6 +273,7 @@ export function SettingsModal({
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
     setDraftSlicingPerformanceSettings(getSavedSlicingPerformanceSettings());
+    setDraftSlicingThumbnailRenderSettings(slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
     setDraftLogLevel(getSavedLogLevel());
   }, [
     ambientIntensity,
@@ -280,6 +291,7 @@ export function SettingsModal({
     hoverColor,
     debugPrimitivesPanelVisible,
     view3dSettings,
+    slicingThumbnailRenderSettings,
     shaderType,
     xrayOpacity,
     heatmapBlend,
@@ -346,6 +358,7 @@ export function SettingsModal({
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
     setDraftSlicingPerformanceSettings(DEFAULT_SLICING_PERFORMANCE_SETTINGS);
+    setDraftSlicingThumbnailRenderSettings(DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
   }, []);
 
   const handleRestoreDefaults = React.useCallback(() => {
@@ -399,6 +412,7 @@ export function SettingsModal({
       selectionHighlightDefaults: getSavedWorkspaceCameraSettings().selectionHighlightDefaults,
     });
     saveSlicingPerformanceSettings(draftSlicingPerformanceSettings);
+    onSlicingThumbnailRenderSettingsChange(draftSlicingThumbnailRenderSettings);
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
     saveView3DSettings(normalized3dView);
     onView3dSettingsChange(normalized3dView);
@@ -441,6 +455,7 @@ export function SettingsModal({
     draftCameraTrackpadOrbitAcceleration,
     draftWorkspaceCameraDefaults,
     draftSlicingPerformanceSettings,
+    draftSlicingThumbnailRenderSettings,
     draftView3dSettings,
     draftXrayOpacity,
     draftHeatmapBlend,
@@ -460,6 +475,7 @@ export function SettingsModal({
     onSelectionColorChange,
     onHoverColorChange,
     onDebugPrimitivesPanelVisibleChange,
+    onSlicingThumbnailRenderSettingsChange,
     onView3dSettingsChange,
     onShaderTypeChange,
     onToonStepsChange,
@@ -857,6 +873,8 @@ export function SettingsModal({
                 <PerformanceSettingsTab
                   settings={draftSlicingPerformanceSettings}
                   onChange={setDraftSlicingPerformanceSettings}
+                  thumbnailSettings={draftSlicingThumbnailRenderSettings}
+                  onThumbnailSettingsChange={setDraftSlicingThumbnailRenderSettings}
                   showPngCompressionControls={showPngCompressionControls}
                 />
               )}
