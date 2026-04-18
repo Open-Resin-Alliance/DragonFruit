@@ -83,4 +83,26 @@ describe('processGeometry color normalization', () => {
     assert.equal(result.geometry.getAttribute('color'), undefined, 'expected processed geometry color attribute to be removed');
     assert.ok(source.getAttribute('color'), 'expected source geometry to remain unchanged');
   });
+
+  it('falls back to in-place processing if geometry copy allocation fails', async () => {
+    const source = buildTriangleGeometryWithVertexColors();
+    const originalCopy = THREE.BufferGeometry.prototype.copy;
+    let copyCallCount = 0;
+
+    THREE.BufferGeometry.prototype.copy = function copyThatThrowsAllocationFailure(_source: THREE.BufferGeometry): THREE.BufferGeometry {
+      void _source;
+      copyCallCount += 1;
+      throw new RangeError('Array buffer allocation failed');
+    };
+
+    try {
+      const result = await processGeometry(source);
+
+      assert.ok(copyCallCount > 0, 'expected copy to be attempted before fallback');
+      assert.equal(result.geometry, source, 'expected in-place fallback to return original geometry instance');
+      assert.equal(result.geometry.getAttribute('color'), undefined, 'expected fallback path to still strip vertex colors');
+    } finally {
+      THREE.BufferGeometry.prototype.copy = originalCopy;
+    }
+  });
 });

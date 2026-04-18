@@ -87,17 +87,6 @@ export function CameraIntroController({
     const modelDistance = (radius / Math.sin(minFov * 0.5));
     const modelDistanceByTan = radius / Math.tan(minFov * 0.5);
 
-    const hasPlateDims = Number.isFinite(plateWidthMm) && Number.isFinite(plateDepthMm)
-      && (plateWidthMm ?? 0) > 0
-      && (plateDepthMm ?? 0) > 0;
-
-    const plateHalfDiagonal = hasPlateDims
-      ? 0.5 * Math.hypot(plateWidthMm as number, plateDepthMm as number)
-      : 0;
-    const plateDistance = hasPlateDims
-      ? (plateHalfDiagonal / Math.sin(minFov * 0.5))
-      : 0;
-
     const yawRad = THREE.MathUtils.degToRad(20);
     // Adaptive support framing: smaller models get a tighter fit, larger models get more margin.
     const supportFitMargin = THREE.MathUtils.clamp(1.08 + (radius * 0.0012), 1.08, 1.26);
@@ -148,41 +137,67 @@ export function CameraIntroController({
 
     if (preserveCurrentViewDirection) {
       orbitControls.target.copy(center);
-      orbitControls.update();
+      camera.lookAt(orbitControls.target);
+      camera.updateMatrixWorld();
     }
 
     animatingRef.current = true;
-    const prevEnableDamping = orbitControls.enableDamping;
-    const prevEnabled = orbitControls.enabled;
-    const prevEnableRotate = orbitControls.enableRotate;
-    const prevEnablePan = orbitControls.enablePan;
-    const prevEnableZoom = orbitControls.enableZoom;
-
-    if (typeof prevEnableDamping === 'boolean') {
-      orbitControls.enableDamping = false;
-    }
-    if (typeof prevEnabled === 'boolean') {
-      orbitControls.enabled = false;
-    }
-    if (typeof prevEnableRotate === 'boolean') {
-      orbitControls.enableRotate = false;
-    }
-    if (typeof prevEnablePan === 'boolean') {
-      orbitControls.enablePan = false;
-    }
-    if (typeof prevEnableZoom === 'boolean') {
-      orbitControls.enableZoom = false;
-    }
 
     const duration = 1000;
-    let startTime: number | null = null;
+    const maxStepMs = 1000 / 60;
+    const stallPauseThresholdMs = 100;
+    const warmupStableDeltaMs = 24;
+    const warmupStableFramesRequired = 3;
+    const warmupMaxWaitMs = 420;
+    let warmupStartNow: number | null = null;
+    let warmupStableFrames = 0;
+    let warmupActive = true;
+    let lastFrameNow: number | null = null;
+    let elapsedMs = 0;
 
     const animate = (now: number) => {
       if (!animatingRef.current) return;
-      if (startTime === null) startTime = now;
 
-      const elapsed = now - startTime;
-      const t = Math.min(elapsed / duration, 1);
+      if (warmupActive) {
+        if (warmupStartNow === null) {
+          warmupStartNow = now;
+          lastFrameNow = now;
+          rafRef.current = requestAnimationFrame(animate);
+          return;
+        }
+
+        const warmupDeltaMs = Math.max(0, now - (lastFrameNow ?? now));
+        lastFrameNow = now;
+
+        if (warmupDeltaMs <= warmupStableDeltaMs) {
+          warmupStableFrames += 1;
+        } else {
+          warmupStableFrames = 0;
+        }
+
+        const warmupElapsedMs = now - warmupStartNow;
+        if (warmupStableFrames < warmupStableFramesRequired && warmupElapsedMs < warmupMaxWaitMs) {
+          rafRef.current = requestAnimationFrame(animate);
+          return;
+        }
+
+        warmupActive = false;
+        lastFrameNow = now;
+      }
+
+      if (lastFrameNow !== null) {
+        const rawFrameDeltaMs = Math.max(0, now - lastFrameNow);
+        // Large uploads/compiles can block the main thread for >1s; if we use
+        // raw wall-clock elapsed time the animation appears to instantly finish.
+        // Cap simulation step and pause advancement on long stalls so the
+        // camera resumes smoothly instead of jumping forward.
+        const shouldPauseForStall = rawFrameDeltaMs > stallPauseThresholdMs;
+        const frameStepMs = shouldPauseForStall ? 0 : Math.min(rawFrameDeltaMs, maxStepMs);
+        elapsedMs += frameStepMs;
+      }
+      lastFrameNow = now;
+
+      const t = Math.min(elapsedMs / duration, 1);
       const smoothStep = THREE.MathUtils.smootherstep(t, 0, 1);
       const eased = THREE.MathUtils.lerp(smoothStep, easeInOutQuint(t), 0.72);
 
@@ -199,7 +214,8 @@ export function CameraIntroController({
       } else {
         orbitControls.target.lerpVectors(startTarget, endTarget, eased);
       }
-      orbitControls.update();
+      camera.lookAt(orbitControls.target);
+      camera.updateMatrixWorld();
 
       if (t < 1) {
         rafRef.current = requestAnimationFrame(animate);
@@ -208,24 +224,13 @@ export function CameraIntroController({
         rafRef.current = null;
         activeRunIdRef.current = 0;
         completedRunIdRef.current = runId;
-        if (typeof prevEnableDamping === 'boolean') {
-          orbitControls.enableDamping = prevEnableDamping;
-        }
-        if (typeof prevEnabled === 'boolean') {
-          orbitControls.enabled = prevEnabled;
-        }
-        if (typeof prevEnableRotate === 'boolean') {
-          orbitControls.enableRotate = prevEnableRotate;
-        }
-        if (typeof prevEnablePan === 'boolean') {
-          orbitControls.enablePan = prevEnablePan;
-        }
-        if (typeof prevEnableZoom === 'boolean') {
-          orbitControls.enableZoom = prevEnableZoom;
-        }
 
         camera.position.copy(endPos);
         orbitControls.target.copy(endTarget);
+        camera.lookAt(orbitControls.target);
+        camera.updateMatrixWorld();
+        // Single sync call at completion to refresh OrbitControls internals
+        // without causing per-frame change churn during the scripted intro.
         orbitControls.update();
 
         onComplete?.(runId);
@@ -239,21 +244,6 @@ export function CameraIntroController({
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
-      }
-      if (typeof prevEnableDamping === 'boolean') {
-        orbitControls.enableDamping = prevEnableDamping;
-      }
-      if (typeof prevEnabled === 'boolean') {
-        orbitControls.enabled = prevEnabled;
-      }
-      if (typeof prevEnableRotate === 'boolean') {
-        orbitControls.enableRotate = prevEnableRotate;
-      }
-      if (typeof prevEnablePan === 'boolean') {
-        orbitControls.enablePan = prevEnablePan;
-      }
-      if (typeof prevEnableZoom === 'boolean') {
-        orbitControls.enableZoom = prevEnableZoom;
       }
       if (activeRunIdRef.current === runId && completedRunIdRef.current !== runId) {
         activeRunIdRef.current = 0;

@@ -66,6 +66,12 @@ export interface ProcessGeometryOptions {
   center?: boolean;
 }
 
+// Cloning extremely large position buffers can require hundreds of MB and can
+// fail with `RangeError: Array buffer allocation failed` on constrained heaps.
+// Above this threshold we process the source geometry in place to avoid
+// allocating a second full copy before normals/BVH work begins.
+const IN_PLACE_PROCESSING_VERTEX_THRESHOLD = 12_000_000;
+
 function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
   // DragonFruit controls model tinting centrally via mesh settings.
   // Ignore per-file embedded colors (e.g. binary STL color extension).
@@ -90,8 +96,32 @@ function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
 export async function processGeometry(bufferGeometry: THREE.BufferGeometry, options: ProcessGeometryOptions = { center: true }): Promise<GeometryWithBounds> {
   console.log(`[${new Date().toISOString()}] [processGeometry] Starting Geometry Prep`);
   const startPrep = performance.now();
-  const geometry = new THREE.BufferGeometry();
-  geometry.copy(bufferGeometry);
+  const sourcePosition = bufferGeometry.getAttribute('position') as THREE.BufferAttribute | null;
+  const sourceVertexCount = sourcePosition?.count ?? 0;
+
+  let geometry: THREE.BufferGeometry;
+  if (sourceVertexCount >= IN_PLACE_PROCESSING_VERTEX_THRESHOLD) {
+    console.warn(
+      `[processGeometry] Large geometry detected (${sourceVertexCount.toLocaleString()} vertices).` +
+      ' Processing in place to avoid copy-time allocation spikes.',
+    );
+    geometry = bufferGeometry;
+  } else {
+    geometry = new THREE.BufferGeometry();
+    try {
+      geometry.copy(bufferGeometry);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        console.warn(
+          '[processGeometry] Geometry copy allocation failed; falling back to in-place processing.',
+          error,
+        );
+        geometry = bufferGeometry;
+      } else {
+        throw error;
+      }
+    }
+  }
 
   stripEmbeddedColorAttributes(geometry);
 

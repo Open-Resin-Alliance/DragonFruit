@@ -522,6 +522,7 @@ export function SceneCanvas({
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
+  const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
   const cameraProjectionMode = React.useSyncExternalStore(
@@ -3102,7 +3103,7 @@ export function SceneCanvas({
   const [modeExitRestoreRunId, setModeExitRestoreRunId] = React.useState(0);
   const knownModelIdsRef = React.useRef<Set<string>>(new Set());
   const prevTransformModeRef = React.useRef<TransformMode | undefined>(transformMode);
-  const entryAnimRef = React.useRef<Record<string, { startMs: number; fromZ: number; skipBounce: boolean }>>({});
+  const entryAnimRef = React.useRef<Record<string, { startMs: number | null; fromZ: number; skipBounce: boolean }>>({});
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
@@ -3151,6 +3152,7 @@ export function SceneCanvas({
   React.useEffect(() => {
     const currentIds = new Set(models.map((model) => model.id));
     const initialDropOffsets: Record<string, number> = {};
+    const shouldDeferLargeModelDrop = cameraIntroRunId > cameraIntroCompletedRunId;
 
     // Start animation for newly added mesh files
     for (const model of models) {
@@ -3163,16 +3165,29 @@ export function SceneCanvas({
       if (!isMeshFile) continue;
 
       const dropFrom = Math.max(16, Math.min(64, model.geometry.size.z * 0.45));
+      const disableDropAnimation = model.polygonCount >= LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS;
+      if (disableDropAnimation) continue;
 
       const skipBounce = model.polygonCount >= LARGE_MODEL_BOUNCE_THRESHOLD_POLYS;
+      const deferDrop = shouldDeferLargeModelDrop && model.polygonCount >= LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS;
 
-      // Run drop immediately so it happens concurrently with camera intro zoom.
-      entryAnimRef.current[model.id] = {
-        startMs: performance.now(),
-        fromZ: dropFrom,
-        skipBounce,
-      };
-      initialDropOffsets[model.id] = dropFrom;
+      if (deferDrop) {
+        pendingEntryAnimRef.current[model.id] = {
+          fromZ: dropFrom,
+          runId: cameraIntroRunId,
+          skipBounce,
+        };
+      } else {
+        // Start timer on the first rendered animation frame.
+        // This keeps the drop motion intact even if initial GPU upload blocks
+        // the main thread for hundreds of milliseconds.
+        entryAnimRef.current[model.id] = {
+          startMs: null,
+          fromZ: dropFrom,
+          skipBounce,
+        };
+        initialDropOffsets[model.id] = dropFrom;
+      }
     }
 
     // Cleanup removed models
@@ -3204,12 +3219,11 @@ export function SceneCanvas({
     const pendingEntries = Object.entries(pendingEntryAnimRef.current).filter(([, pending]) => pending.runId <= cameraIntroCompletedRunId);
     if (pendingEntries.length === 0) return;
 
-    const now = performance.now();
     const activatedOffsets: Record<string, number> = {};
 
     for (const [id, pending] of pendingEntries) {
       entryAnimRef.current[id] = {
-        startMs: now,
+        startMs: null,
         fromZ: pending.fromZ,
         skipBounce: pending.skipBounce,
       };
@@ -3234,6 +3248,12 @@ export function SceneCanvas({
       const nextOffsets: Record<string, number> = {};
 
       for (const [id, animation] of entries) {
+        if (animation.startMs == null) {
+          animation.startMs = now;
+          nextOffsets[id] = animation.fromZ;
+          continue;
+        }
+
         const t = Math.min(1, (now - animation.startMs) / DROP_ANIMATION_DURATION_MS);
 
         // Drop -> impact -> optional rebound -> settle
