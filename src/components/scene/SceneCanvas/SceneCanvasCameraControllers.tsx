@@ -212,6 +212,7 @@ export function CameraModeEntryFramingController({
   plateDepthMm: number;
 }) {
   const { camera, controls, size } = useThree();
+  const sizeRef = React.useRef(size);
 
   const activeRunIdRef = React.useRef<number | null>(null);
   const completedFrameRunIdRef = React.useRef(0);
@@ -228,6 +229,10 @@ export function CameraModeEntryFramingController({
     target: THREE.Vector3;
     zoom: number | null;
   } | null>(null);
+
+  React.useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
 
   const cancelAnimation = React.useCallback(() => {
     animatingRef.current = false;
@@ -371,7 +376,8 @@ export function CameraModeEntryFramingController({
     const fov = camera instanceof THREE.PerspectiveCamera
       ? THREE.MathUtils.degToRad(camera.fov)
       : THREE.MathUtils.degToRad(50);
-    const aspect = size.width / Math.max(1, size.height);
+    const viewport = sizeRef.current;
+    const aspect = viewport.width / Math.max(1, viewport.height);
     const hFov = 2 * Math.atan(Math.tan(fov * 0.5) * aspect);
     const minFov = Math.max(0.0001, Math.min(fov, hFov));
 
@@ -412,7 +418,7 @@ export function CameraModeEntryFramingController({
         activeRunIdRef.current = null;
       }
     };
-  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, size.height, size.width, target]);
+  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, target]);
 
   React.useLayoutEffect(() => {
     if (!restoreRunId) return;
