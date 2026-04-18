@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Cpu, Download, Gauge, Layers3, Minus, Play, Plus, Printer, Timer } from 'lucide-react';
+import { ChevronDown, Cpu, Download, Edit3, Layers3, Minus, Play, Plus, Printer, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -165,6 +166,44 @@ function formatElapsedClock(ms: number): string {
   }
 
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function formatResinFamilyLabel(resinFamily: string | null | undefined): string {
+  const normalized = (resinFamily ?? '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'standard') return 'Standard';
+  if (normalized === 'abs-like') return 'ABS-like';
+  if (normalized === 'tough') return 'Tough';
+  if (normalized === 'flexible') return 'Flexible';
+  if (normalized === 'engineering') return 'Engineering';
+  if (normalized === 'other') return 'Other';
+  return normalized;
+}
+
+function resolveCompositeMaterialLabel(material: {
+  brand?: string;
+  resinFamily?: string;
+  name?: string;
+} | null | undefined): string | null {
+  if (!material) return null;
+
+  const brand = (material.brand ?? '').trim();
+  const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
+  const name = (material.name ?? '').trim();
+
+  const parts: string[] = [];
+  const pushUnique = (value: string) => {
+    if (!value) return;
+    if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
+    parts.push(value);
+  };
+
+  pushUnique(brand);
+  pushUnique(resinFamilyLabel);
+  pushUnique(name);
+
+  if (parts.length === 0) return null;
+  return parts.join(' ');
 }
 
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
@@ -762,10 +801,10 @@ export function SlicingPanel({
       return `${selectedRemoteMaterialId} (Remote ID)`;
     }
 
-    return effectiveMaterialProfile?.name ?? 'No material selected';
+    return resolveCompositeMaterialLabel(effectiveMaterialProfile) ?? effectiveMaterialProfile?.name ?? 'No material selected';
   }, [
     activePrinterProfile?.networkConnection?.selectedMaterialName,
-    effectiveMaterialProfile?.name,
+    effectiveMaterialProfile,
     isLoadingRemoteMaterial,
     isRemoteMaterialSyncConnected,
     networkUiAdapter?.displayName,
@@ -1334,50 +1373,69 @@ export function SlicingPanel({
 
       {isExpanded && (
         <div className="px-3 pt-2 pb-3 space-y-2.5">
-          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Gauge className="w-3.5 h-3.5" />
-              <span>Print Profile</span>
-            </div>
-
+          <div className="space-y-1.5">
             <div className="grid grid-cols-2 gap-1.5">
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <button
+                type="button"
+                className="col-span-2 relative rounded border px-1.5 py-1 pr-7 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--surface-1),white_4%)]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                onClick={() => openProfileSettingsModal('printer')}
+                aria-label="Edit printer profile"
+                title="Open printer profiles"
+              >
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Printer</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
+                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
                   {activePrinterProfile?.name ?? 'No printer selected'}
                 </div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <Edit3
+                  className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-hidden="true"
+                />
+              </button>
+              <button
+                type="button"
+                className="col-span-2 relative rounded border px-1.5 py-1 pr-7 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--surface-1),white_4%)]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                onClick={() => openProfileSettingsModal('material')}
+                aria-label="Edit material profile"
+                title="Open material profiles"
+              >
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Material</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
+                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
                   {resolvedMaterialLabel}
                 </div>
+                <Edit3
+                  className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-hidden="true"
+                />
+              </button>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layers</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                  {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
-                </div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {effectiveLayerHeightMm != null ? `${effectiveLayerHeightMm.toFixed(3)} mm` : '—'}
                 </div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Layers</div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                  {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
+                </div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Engine</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {slicerEngineVersion ? `v${slicerEngineVersion}` : 'Slicer V3'}
@@ -1457,11 +1515,6 @@ export function SlicingPanel({
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Cpu className="w-3.5 h-3.5" />
-              <span>Quality Settings</span>
-            </div>
-
             <div className="space-y-1">
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
               <div className="grid grid-cols-5 gap-1">
