@@ -2226,12 +2226,12 @@ fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
 
     let normalized = category.trim().to_ascii_lowercase();
     dialog = match normalized.as_str() {
-        "mesh" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf"]),
-        "scene" => dialog.add_filter("Scene Files", &["voxl", "lys"]),
+        "mesh" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf", "zip"]),
+        "scene" => dialog.add_filter("Scene Files", &["voxl", "lys", "zip"]),
         "bundle" => dialog.add_filter("JSON Files", &["json"]),
         _ => dialog
-            .add_filter("Mesh Files", &["stl", "obj", "3mf"])
-            .add_filter("Scene Files", &["voxl", "lys"]),
+            .add_filter("Mesh Files", &["stl", "obj", "3mf", "zip"])
+            .add_filter("Scene Files", &["voxl", "lys", "zip"]),
     };
 
     dialog

@@ -1674,8 +1674,10 @@ export function useSceneCollectionManager() {
       } catch { }
     }
 
-    const newModels: LoadedModel[] = [];
+    const stagedNewModels: LoadedModel[] = [];
     const defectiveModels: { name: string; defects: MeshDefects }[] = [];
+    const hadActiveModelAtStart = Boolean(activeModelIdRef.current);
+    let firstLoadedModelId: string | null = null;
 
     try {
       // Process sequentially to avoid freezing UI too much
@@ -1764,7 +1766,18 @@ export function useSceneCollectionManager() {
             polygonCount: geom.geometry.getAttribute('position').count / 3
           };
 
-          newModels.push(model);
+          const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
+          if (assignedCenter) {
+            model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
+          }
+
+          stagedNewModels.push(model);
+          if (!firstLoadedModelId) {
+            firstLoadedModelId = model.id;
+          }
+
+          setModels((prev) => [...prev, model]);
+
           if (geom.meshDefects?.hasDefects) {
             defectiveModels.push({ name: file.name, defects: geom.meshDefects });
           }
@@ -1784,19 +1797,18 @@ export function useSceneCollectionManager() {
         });
       }
 
-      if (newModels.length > 0) {
-        const assignedCenters = findFreeSpotCentersForModels(newModels, 5);
-        newModels.forEach((model, index) => {
-          const center = assignedCenters[index];
-          if (!center) return;
-          model.transform.position.set(center.x, center.y, model.transform.position.z);
-        });
+      if (firstLoadedModelId) {
+        const importedIds = stagedNewModels.map((model) => model.id);
 
-        setModels(prev => [...prev, ...newModels]);
-        // If no active model, select the first new one
-        if (!activeModelId) {
-          setActiveModelId(newModels[0].id);
-          setSelectedModelIds([newModels[0].id]);
+        if (importedIds.length > 1) {
+          // For multi-file mesh imports, select all imported models so tinting and
+          // immediate transform actions apply uniformly.
+          setActiveModelId(importedIds[0]);
+          setSelectedModelIds(importedIds);
+        } else if (!hadActiveModelAtStart) {
+          // Preserve prior single-file behavior when plate was empty.
+          setActiveModelId(firstLoadedModelId);
+          setSelectedModelIds([firstLoadedModelId]);
         }
 
         if (defectiveModels.length > 0) {
@@ -1829,7 +1841,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {

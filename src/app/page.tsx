@@ -47,6 +47,8 @@ import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
+import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
+import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -794,6 +796,15 @@ export default function Home() {
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
+
+  // ZIP file picker modal
+  const [zipPickerState, setZipPickerState] = React.useState<{
+    zipName: string;
+    files: File[];
+    category: 'mesh' | 'scene' | 'mixed';
+    defaultSelectionCategory: 'mesh' | 'scene';
+  } | null>(null);
+  const zipPickerResolveRef = React.useRef<((files: File[]) => void) | null>(null);
   const hasUnsavedSceneChangesRef = React.useRef(false);
   const allowProgrammaticWindowCloseRef = React.useRef(false);
   const sceneSaveBaselineRef = React.useRef<{
@@ -1467,12 +1478,147 @@ export default function Home() {
     return imported;
   }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
 
+  // ── ZIP import helpers ───────────────────────────────────────────────────
+
+  const resolveZipFiles = React.useCallback(async (
+    zip: File,
+    requestedCategory: 'mesh' | 'scene',
+  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
+    const meshExts = new Set(['.stl', '.obj', '.3mf']);
+    const sceneExts = new Set(['.voxl', '.lys']);
+    const oppositeCategory = requestedCategory === 'mesh' ? 'scene' : 'mesh';
+
+    const readingLabel = 'Loading Archive…';
+    setNativePickerPreparationState({
+      active: true,
+      label: readingLabel,
+      detail: `Reading ${zip.name}…`,
+      progress: null,
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    let extracted: File[];
+    try {
+      extracted = await extractFilesFromZip(zip);
+    } catch (err) {
+      console.error('[ZIP] Failed to read ZIP archive:', err);
+      setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
+      return { meshFiles: [], sceneFiles: [] };
+    }
+
+    const meshCandidates = extracted.filter((f) => meshExts.has(getFileExtensionLower(f.name)));
+    const sceneCandidates = extracted.filter((f) => sceneExts.has(getFileExtensionLower(f.name)));
+
+    // Clear spinner before potentially showing the picker modal (or returning nothing)
+    setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
+
+    const hasMeshCandidates = meshCandidates.length > 0;
+    const hasSceneCandidates = sceneCandidates.length > 0;
+
+    let targetCategory: 'mesh' | 'scene' | 'mixed';
+    let targetCandidates: File[];
+
+    if (hasMeshCandidates && hasSceneCandidates) {
+      // Fully mixed ZIP: allow user to choose any combination of mesh/scene files.
+      targetCategory = 'mixed';
+      targetCandidates = [...meshCandidates, ...sceneCandidates];
+    } else {
+      const primaryCandidates = requestedCategory === 'mesh' ? meshCandidates : sceneCandidates;
+      const oppositeCandidates = requestedCategory === 'mesh' ? sceneCandidates : meshCandidates;
+      targetCategory = primaryCandidates.length === 0 && oppositeCandidates.length > 0
+        ? oppositeCategory
+        : requestedCategory;
+      targetCandidates = targetCategory === 'mesh' ? meshCandidates : sceneCandidates;
+    }
+
+    if (targetCandidates.length === 0) {
+      return { meshFiles: [], sceneFiles: [] };
+    }
+
+    const uniqueExts = new Set(targetCandidates.map((f) => getFileExtensionLower(f.name)));
+    const selectedCandidates = (targetCategory !== 'mixed' && uniqueExts.size === 1)
+      ? targetCandidates
+      : await new Promise<File[]>((resolve) => {
+          zipPickerResolveRef.current = resolve;
+          setZipPickerState({
+            zipName: zip.name,
+            files: targetCandidates,
+            category: targetCategory,
+            defaultSelectionCategory: requestedCategory,
+          });
+        });
+
+    const selectedMeshFiles = selectedCandidates.filter((file) => meshExts.has(getFileExtensionLower(file.name)));
+    const selectedSceneFiles = selectedCandidates.filter((file) => sceneExts.has(getFileExtensionLower(file.name)));
+
+    return {
+      meshFiles: selectedMeshFiles,
+      sceneFiles: selectedSceneFiles,
+    };
+  }, []);
+
+  const expandPickedFilesWithZip = React.useCallback(async (
+    files: File[],
+    requestedCategory: 'mesh' | 'scene',
+  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
+    const meshExts = new Set(['.stl', '.obj', '.3mf']);
+    const sceneExts = new Set(['.voxl', '.lys']);
+
+    const meshFiles: File[] = [];
+    const sceneFiles: File[] = [];
+
+    for (const file of files) {
+      const ext = getFileExtensionLower(file.name);
+      if (ext === '.zip') {
+        const expanded = await resolveZipFiles(file, requestedCategory);
+        if (expanded.meshFiles.length > 0) meshFiles.push(...expanded.meshFiles);
+        if (expanded.sceneFiles.length > 0) sceneFiles.push(...expanded.sceneFiles);
+      } else if (meshExts.has(ext)) {
+        meshFiles.push(file);
+      } else if (sceneExts.has(ext)) {
+        sceneFiles.push(file);
+      }
+    }
+
+    return { meshFiles, sceneFiles };
+  }, [resolveZipFiles]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
     void importSceneFilesWithLysWarning(files);
     e.target.value = '';
   }, [importSceneFilesWithLysWarning]);
+
+  const handleLoadMeshChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    const processed = await expandPickedFilesWithZip(files, 'mesh');
+    if (processed.meshFiles.length > 0) {
+      void scene.loadFiles(processed.meshFiles);
+    }
+    if (processed.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+    }
+  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+
+  const handleImportSceneChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    const processed = await expandPickedFilesWithZip(files, 'scene');
+    if (processed.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+    }
+    if (processed.meshFiles.length > 0) {
+      void scene.loadFiles(processed.meshFiles);
+    }
+  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
@@ -6896,7 +7042,7 @@ export default function Home() {
       const core = await import('@tauri-apps/api/core');
       const files: File[] = [];
 
-      const readingLabel = category === 'scene' ? 'Importing scene…' : 'Loading mesh…';
+      const readingLabel = category === 'scene' ? 'Loading Scene…' : 'Loading Mesh…';
       const singleNoun = category === 'scene' ? 'scene file' : 'mesh file';
       const pluralNoun = category === 'scene' ? 'scene files' : 'mesh files';
 
@@ -6989,7 +7135,7 @@ export default function Home() {
 
       setNativePickerPreparationState({
         active: true,
-        label: 'Importing scene…',
+        label: 'Loading Scene…',
         detail: picked.length > 1
           ? `Reading 0/${picked.length} selected scene files…`
           : 'Reading selected scene file…',
@@ -7007,7 +7153,7 @@ export default function Home() {
           const resolvedName = entry.name || getFileNameFromPath(sourcePath);
           setNativePickerPreparationState({
             active: true,
-            label: 'Importing scene…',
+            label: 'Loading Scene…',
             detail: picked.length > 1
               ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
               : `Reading ${resolvedName}…`,
@@ -7051,33 +7197,67 @@ export default function Home() {
     const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      scene.onFileChange(buildSyntheticFileChangeEvent(nativeFiles));
+      const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
+      if (expanded.meshFiles.length > 0) {
+        scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+      }
+      if (expanded.sceneFiles.length > 0) {
+        await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      }
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf', true);
+    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf,.zip', true);
     if (webFiles.length === 0) return;
-    scene.onFileChange(buildSyntheticFileChangeEvent(webFiles));
-  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    const expanded = await expandPickedFilesWithZip(webFiles, 'mesh');
+    if (expanded.meshFiles.length > 0) {
+      scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+    }
+    if (expanded.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+    }
+  }, [buildSyntheticFileChangeEvent, importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
     const nativeFiles = await pickSceneFilesWithNativeDialog();
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      await importSceneFilesWithLysWarning(
-        nativeFiles.map((entry) => entry.file),
-        {
-          resultingScenePath: nativeFiles.length === 1 ? nativeFiles[0]?.sourcePath ?? null : null,
-          sourcePaths: nativeFiles.map((entry) => entry.sourcePath),
-        },
-      );
+      const nonZip = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) !== '.zip');
+      const zips = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) === '.zip');
+      const expandedFromZips = await expandPickedFilesWithZip(zips.map((e) => e.file), 'scene');
+      const sceneFiles = [...nonZip.map((e) => e.file), ...expandedFromZips.sceneFiles];
+
+      if (sceneFiles.length > 0) {
+        await importSceneFilesWithLysWarning(
+          sceneFiles,
+          {
+            resultingScenePath: nonZip.length === 1 && expandedFromZips.sceneFiles.length === 0
+              ? nativeFiles[0]?.sourcePath ?? null
+              : null,
+            sourcePaths: [
+              ...nonZip.map((e) => e.sourcePath),
+              ...Array.from({ length: expandedFromZips.sceneFiles.length }, () => null),
+            ],
+          },
+        );
+      }
+
+      if (expandedFromZips.meshFiles.length > 0) {
+        void scene.loadFiles(expandedFromZips.meshFiles);
+      }
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys,.zip', true);
     if (webFiles.length === 0) return;
-    await importSceneFilesWithLysWarning(webFiles, { resultingScenePath: null });
-  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput]);
+    const expanded = await expandPickedFilesWithZip(webFiles, 'scene');
+    if (expanded.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+    }
+    if (expanded.meshFiles.length > 0) {
+      void scene.loadFiles(expanded.meshFiles);
+    }
+  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -11507,7 +11687,7 @@ export default function Home() {
     if (scene.importProgress.active) {
       return {
         active: true,
-        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Importing scene…' : 'Loading mesh…'),
+        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Loading Scene…' : 'Loading Mesh…'),
         detail: scene.importProgress.detail,
         progress: scene.importProgress.progress,
       };
@@ -11516,7 +11696,7 @@ export default function Home() {
     if (scene.isLysLoading) {
       return {
         active: true,
-        label: 'Importing scene…',
+        label: 'Loading Scene…',
         detail: 'Parsing and applying scene transforms',
         progress: null as number | null,
       };
@@ -11525,7 +11705,7 @@ export default function Home() {
     if (scene.lycheeImportPhase === 'processing') {
       return {
         active: true,
-        label: 'Importing Lychee scene…',
+        label: 'Loading Lychee Scene…',
         detail: 'Converting support data and model metadata',
         progress: null as number | null,
       };
@@ -11544,7 +11724,8 @@ export default function Home() {
 
   React.useEffect(() => {
     const isSceneImportActive =
-      (scene.importProgress.active && scene.importProgress.type === 'scene')
+      (scene.importProgress.active
+        && (scene.importProgress.type === 'scene' || scene.importProgress.type === 'mesh'))
       || scene.isLysLoading
       || scene.lycheeImportPhase === 'processing';
 
@@ -12791,9 +12972,9 @@ export default function Home() {
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onLoadMeshChange={scene.onFileChange}
+              onLoadMeshChange={handleLoadMeshChangeWithZip}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneInputChange}
+              onImportSceneChange={handleImportSceneChangeWithZip}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -13413,9 +13594,9 @@ export default function Home() {
           {showEmptyStatePanel && (
             <EmptySceneState
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onFileChange={scene.onFileChange}
+              onFileChange={handleLoadMeshChangeWithZip}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneInputChange}
+              onImportSceneChange={handleImportSceneChangeWithZip}
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={handleReopenRecentFile}
@@ -14078,6 +14259,27 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {zipPickerState && (
+        <ZipFilePickerModal
+          zipName={zipPickerState.zipName}
+          files={zipPickerState.files}
+          category={zipPickerState.category}
+          defaultSelectionCategory={zipPickerState.defaultSelectionCategory}
+          onConfirm={(selected) => {
+            const resolve = zipPickerResolveRef.current;
+            zipPickerResolveRef.current = null;
+            setZipPickerState(null);
+            resolve?.(selected);
+          }}
+          onCancel={() => {
+            const resolve = zipPickerResolveRef.current;
+            zipPickerResolveRef.current = null;
+            setZipPickerState(null);
+            resolve?.([]);
+          }}
+        />
       )}
 
       {showCloseUnsavedChangesModal && (
