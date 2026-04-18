@@ -6833,6 +6833,22 @@ export default function Home() {
     return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
   }, []);
 
+  const [nativePickerPreparationState, setNativePickerPreparationState] = React.useState<{
+    active: boolean;
+    label: string;
+    detail: string;
+    progress: number | null;
+  }>({
+    active: false,
+    label: '',
+    detail: '',
+    progress: null,
+  });
+
+  const waitForUiTick = React.useCallback(() => new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  }), []);
+
   const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
     if (!isDesktopRuntime()) return null;
 
@@ -6843,13 +6859,39 @@ export default function Home() {
       const core = await import('@tauri-apps/api/core');
       const files: File[] = [];
 
-      for (const entry of picked) {
+      const readingLabel = category === 'scene' ? 'Importing scene…' : 'Loading mesh…';
+      const singleNoun = category === 'scene' ? 'scene file' : 'mesh file';
+      const pluralNoun = category === 'scene' ? 'scene files' : 'mesh files';
+
+      setNativePickerPreparationState({
+        active: true,
+        label: readingLabel,
+        detail: picked.length > 1
+          ? `Reading 0/${picked.length} selected ${pluralNoun}…`
+          : `Reading selected ${singleNoun}…`,
+        progress: null,
+      });
+      await waitForUiTick();
+
+      try {
+        for (let i = 0; i < picked.length; i += 1) {
+          const entry = picked[i];
         try {
           const sourcePath = entry.path.trim();
           if (!sourcePath) continue;
 
+          const resolvedName = entry.name || getFileNameFromPath(sourcePath);
+          setNativePickerPreparationState({
+            active: true,
+            label: readingLabel,
+            detail: picked.length > 1
+              ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
+              : `Reading ${resolvedName}…`,
+            progress: null,
+          });
+
           const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-          const name = entry.name || getFileNameFromPath(sourcePath);
+          const name = resolvedName;
 
           files.push(new File([new Uint8Array(bytes)], name, {
             type: getDroppedFileMimeType(name),
@@ -6860,7 +6902,15 @@ export default function Home() {
         }
       }
 
-      return files;
+        return files;
+      } finally {
+        setNativePickerPreparationState({
+          active: false,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? '');
       const cancelled = message.toLowerCase().includes('cancel');
@@ -6868,7 +6918,7 @@ export default function Home() {
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [isDesktopRuntime]);
+  }, [isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -6900,13 +6950,35 @@ export default function Home() {
       const core = await import('@tauri-apps/api/core');
       const files: Array<{ file: File; sourcePath: string }> = [];
 
-      for (const entry of picked) {
+      setNativePickerPreparationState({
+        active: true,
+        label: 'Importing scene…',
+        detail: picked.length > 1
+          ? `Reading 0/${picked.length} selected scene files…`
+          : 'Reading selected scene file…',
+        progress: null,
+      });
+      await waitForUiTick();
+
+      try {
+        for (let i = 0; i < picked.length; i += 1) {
+          const entry = picked[i];
         try {
           const sourcePath = entry.path.trim();
           if (!sourcePath) continue;
 
+          const resolvedName = entry.name || getFileNameFromPath(sourcePath);
+          setNativePickerPreparationState({
+            active: true,
+            label: 'Importing scene…',
+            detail: picked.length > 1
+              ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
+              : `Reading ${resolvedName}…`,
+            progress: null,
+          });
+
           const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-          const name = entry.name || getFileNameFromPath(sourcePath);
+          const name = resolvedName;
 
           files.push({
             file: new File([new Uint8Array(bytes)], name, {
@@ -6920,7 +6992,15 @@ export default function Home() {
         }
       }
 
-      return files;
+        return files;
+      } finally {
+        setNativePickerPreparationState({
+          active: false,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? '');
       const cancelled = message.toLowerCase().includes('cancel');
@@ -6928,7 +7008,7 @@ export default function Home() {
       console.warn('[Picker] Native scene picker failed, falling back to web input.', error);
       return null;
     }
-  }, [isDesktopRuntime]);
+  }, [isDesktopRuntime, waitForUiTick]);
 
   const handleOpenMeshDialog = React.useCallback(async () => {
     const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
@@ -11366,6 +11446,15 @@ export default function Home() {
   ]);
 
   const importOverlayState = React.useMemo(() => {
+    if (nativePickerPreparationState.active) {
+      return {
+        active: true,
+        label: nativePickerPreparationState.label,
+        detail: nativePickerPreparationState.detail,
+        progress: nativePickerPreparationState.progress,
+      };
+    }
+
     if (scene.importProgress.active) {
       return {
         active: true,
@@ -11399,7 +11488,7 @@ export default function Home() {
       detail: '',
       progress: null as number | null,
     };
-  }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
+  }, [nativePickerPreparationState, scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
