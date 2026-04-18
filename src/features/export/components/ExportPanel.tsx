@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { Download } from 'lucide-react';
+import { Download, Files } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
@@ -488,10 +488,10 @@ export function ExportPanel({
 
             <Button
               onClick={() => { void handleExportIndividually(); }}
-              disabled={isAnyExportInProgress || models.length === 0}
+              disabled={isAnyExportInProgress || models.length <= 1}
               variant="secondary"
               className={`w-full !h-8 inline-flex items-center justify-center gap-1.5 ${isExportingIndividually ? 'cursor-wait opacity-70' : ''}`}
-              title="Export each visible model and its supports into separate files in a folder"
+              title={models.length <= 1 ? 'Add more models to use Batch Export' : 'Export each visible model and its supports into separate files in a folder'}
             >
               {isExportingIndividually ? (
                 <>
@@ -500,7 +500,7 @@ export function ExportPanel({
                 </>
               ) : (
                 <>
-                  <Download className="h-4 w-4" />
+                  <Files className="h-4 w-4" />
                   <span>Batch Export</span>
                 </>
               )}
