@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { Download, FileType2, Layers3, Settings2 } from 'lucide-react';
+import { Download } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
@@ -248,11 +248,6 @@ export function ExportPanel({
       {isExpanded && (
       <div className="px-3 pt-2 pb-3 space-y-2.5">
         <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-            <Layers3 className="w-3.5 h-3.5" />
-            <span>{exportScope === 'active_model' ? 'Model' : 'Plate'}</span>
-          </div>
-
           {exportScope === 'active_model' ? (
             <Select
               value={activeModelId ?? ''}
@@ -280,11 +275,6 @@ export function ExportPanel({
         ) : (
           <>
             <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                <FileType2 className="w-3.5 h-3.5" />
-                <span>Output</span>
-              </div>
-
               <div className="space-y-1.5">
                 <div className="space-y-0.5">
                   <label className="text-xs" style={{ color: 'var(--text-muted)' }}>Filename</label>
@@ -344,85 +334,74 @@ export function ExportPanel({
             </div>
 
             {options.format !== 'voxl' ? (
-              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                  <Settings2 className="w-3.5 h-3.5" />
-                  <span>Include</span>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Model mesh</div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Export model geometry for the chosen scope</div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={options.includeModel}
-                      onClick={() => setOptions(prev => ({ ...prev, includeModel: !prev.includeModel }))}
-                      className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                      style={{ background: options.includeModel ? 'var(--accent)' : 'var(--surface-2)' }}
-                    >
-                      <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeModel ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </button>
-                  </label>
-                  <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Supports</div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Include generated supports in the export</div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={options.includeSupports}
-                      onClick={() => setOptions(prev => ({ ...prev, includeSupports: !prev.includeSupports }))}
-                      className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                      style={{ background: options.includeSupports ? 'var(--accent)' : 'var(--surface-2)' }}
-                    >
-                      <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeSupports ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </button>
-                  </label>
-                  <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Raft</div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Include raft geometry when enabled</div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={options.includeRaft}
-                      onClick={() => setOptions(prev => ({ ...prev, includeRaft: !prev.includeRaft }))}
-                      className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                      style={{ background: options.includeRaft ? 'var(--accent)' : 'var(--surface-2)' }}
-                    >
-                      <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeRaft ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </button>
-                  </label>
-                  <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Separate files</div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Reserved for split export workflow</div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={options.separateFiles}
-                      onClick={() => setOptions(prev => ({ ...prev, separateFiles: !prev.separateFiles }))}
-                      className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                      style={{ background: options.separateFiles ? 'var(--accent)' : 'var(--surface-2)' }}
-                    >
-                      <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.separateFiles ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </button>
-                  </label>
-                </div>
+              <div className="space-y-1.5">
+                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Model mesh</div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Export model geometry for the chosen scope</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={options.includeModel}
+                    onClick={() => setOptions(prev => ({ ...prev, includeModel: !prev.includeModel }))}
+                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                    style={{ background: options.includeModel ? 'var(--accent)' : 'var(--surface-2)' }}
+                  >
+                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeModel ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Supports</div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Include generated supports in the export</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={options.includeSupports}
+                    onClick={() => setOptions(prev => ({ ...prev, includeSupports: !prev.includeSupports }))}
+                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                    style={{ background: options.includeSupports ? 'var(--accent)' : 'var(--surface-2)' }}
+                  >
+                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeSupports ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Raft</div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Include raft geometry when enabled</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={options.includeRaft}
+                    onClick={() => setOptions(prev => ({ ...prev, includeRaft: !prev.includeRaft }))}
+                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                    style={{ background: options.includeRaft ? 'var(--accent)' : 'var(--surface-2)' }}
+                  >
+                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.includeRaft ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Separate files</div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Reserved for split export workflow</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={options.separateFiles}
+                    onClick={() => setOptions(prev => ({ ...prev, separateFiles: !prev.separateFiles }))}
+                    className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                    style={{ background: options.separateFiles ? 'var(--accent)' : 'var(--surface-2)' }}
+                  >
+                    <span className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${options.separateFiles ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </label>
               </div>
             ) : (
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                  <Settings2 className="w-3.5 h-3.5" />
-                  <span>VOXL includes</span>
-                </div>
                 <div className="rounded-md border px-2.5 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
                   Scene export always includes mesh models and supports.
                 </div>

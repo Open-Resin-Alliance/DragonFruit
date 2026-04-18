@@ -3777,9 +3777,43 @@ export default function Home() {
       return selectedName;
     }
 
-    return activeMaterialProfile?.name ?? 'No resin selected';
+    const formatResinFamilyLabel = (resinFamily: string | null | undefined): string => {
+      const normalized = (resinFamily ?? '').trim().toLowerCase();
+      if (!normalized) return '';
+      if (normalized === 'standard') return 'Standard';
+      if (normalized === 'abs-like') return 'ABS-like';
+      if (normalized === 'tough') return 'Tough';
+      if (normalized === 'flexible') return 'Flexible';
+      if (normalized === 'engineering') return 'Engineering';
+      if (normalized === 'other') return 'Other';
+      return normalized;
+    };
+
+    const compositeLocalMaterialName = (() => {
+      if (!activeMaterialProfile) return null;
+
+      const brand = (activeMaterialProfile.brand ?? '').trim();
+      const resinFamilyLabel = formatResinFamilyLabel(activeMaterialProfile.resinFamily);
+      const name = (activeMaterialProfile.name ?? '').trim();
+
+      const parts: string[] = [];
+      const pushUnique = (value: string) => {
+        if (!value) return;
+        if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
+        parts.push(value);
+      };
+
+      pushUnique(brand);
+      pushUnique(resinFamilyLabel);
+      pushUnique(name);
+
+      if (parts.length === 0) return null;
+      return parts.join(' ');
+    })();
+
+    return compositeLocalMaterialName ?? activeMaterialProfile?.name ?? 'No resin selected';
   }, [
-    activeMaterialProfile?.name,
+    activeMaterialProfile,
     activeNetworkUiAdapter,
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
