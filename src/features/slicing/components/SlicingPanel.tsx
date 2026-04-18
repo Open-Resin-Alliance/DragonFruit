@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Cpu, Download, Edit3, Layers3, Minus, Play, Plus, Printer, Timer } from 'lucide-react';
+import { ChevronDown, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
   getActiveMaterialProfile,
@@ -211,6 +212,10 @@ const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPerc
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
+const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
+const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
+const REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM = 0.01;
+const MICRONS_PER_MM = 1000;
 
 function readSliceIntentByPrinterProfile(): Record<string, SliceIntent> {
   if (typeof window === 'undefined') return {};
@@ -244,6 +249,22 @@ function clampLayerHeightMm(value: number, fallback = 0.05): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   const clamped = Math.max(0.001, Math.min(1, numeric));
+  return Math.round(clamped * 1000) / 1000;
+}
+
+function clampRemoteOfflineLayerHeightMm(value: number, fallback = 0.05): number {
+  const fallbackClamped = Math.max(
+    REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM,
+    Math.min(REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM, fallback),
+  );
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallbackClamped;
+
+  const clamped = Math.max(
+    REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM,
+    Math.min(REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM, numeric),
+  );
   return Math.round(clamped * 1000) / 1000;
 }
 
@@ -341,9 +362,8 @@ export function SlicingPanel({
       ?? window.sessionStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
     if (raw == null || raw.trim().length === 0) return 0.05;
     const parsed = Number(raw);
-    return (Number.isFinite(parsed) && parsed > 0) ? clampLayerHeightMm(parsed) : 0.05;
+    return (Number.isFinite(parsed) && parsed > 0) ? clampRemoteOfflineLayerHeightMm(parsed) : 0.05;
   });
-  const [remoteOfflineLayerHeightDraft, setRemoteOfflineLayerHeightDraft] = useState<string | null>(null);
   const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
   const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
@@ -563,7 +583,10 @@ export function SlicingPanel({
 
   const effectiveLayerHeightMm = useMemo(() => {
     if (showRemoteOfflineLayerHeightOverride) {
-      return clampLayerHeightMm(remoteOfflineLayerHeightMm, clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05));
+      return clampRemoteOfflineLayerHeightMm(
+        remoteOfflineLayerHeightMm,
+        clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      );
     }
     if (!effectiveMaterialProfile) return null;
     return clampLayerHeightMm(effectiveMaterialProfile.layerHeightMm, 0.05);
@@ -574,7 +597,7 @@ export function SlicingPanel({
     if (!showRemoteOfflineLayerHeightOverride) return effectiveMaterialProfile;
     return {
       ...effectiveMaterialProfile,
-      layerHeightMm: effectiveLayerHeightMm ?? clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      layerHeightMm: effectiveLayerHeightMm ?? clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
     };
   }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
 
@@ -618,7 +641,6 @@ export function SlicingPanel({
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
-  const minimumAlphaLabel = 'Minimum Alpha';
 
   const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
@@ -695,40 +717,18 @@ export function SlicingPanel({
   const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
     if (typeof window === 'undefined') return;
 
-    const serialized = String(clampLayerHeightMm(value));
+    const serialized = String(clampRemoteOfflineLayerHeightMm(value));
     window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
   }, []);
 
   const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
     setRemoteOfflineLayerHeightMm((previous) => {
-      const next = clampLayerHeightMm(value, previous);
+      const next = clampRemoteOfflineLayerHeightMm(value, previous);
       persistRemoteOfflineLayerHeight(next);
       return next;
     });
   }, [persistRemoteOfflineLayerHeight]);
-
-  const beginRemoteOfflineLayerHeightEdit = useCallback(() => {
-    setRemoteOfflineLayerHeightDraft(String(remoteOfflineLayerHeightMm));
-  }, [remoteOfflineLayerHeightMm]);
-
-  const cancelRemoteOfflineLayerHeightEdit = useCallback(() => {
-    setRemoteOfflineLayerHeightDraft(null);
-  }, []);
-
-  const commitRemoteOfflineLayerHeightEdit = useCallback(() => {
-    if (remoteOfflineLayerHeightDraft == null) return;
-
-    const trimmed = remoteOfflineLayerHeightDraft.trim();
-    if (trimmed.length > 0) {
-      const parsed = Number(trimmed);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        setClampedRemoteOfflineLayerHeightMm(parsed);
-      }
-    }
-
-    setRemoteOfflineLayerHeightDraft(null);
-  }, [remoteOfflineLayerHeightDraft, setClampedRemoteOfflineLayerHeightMm]);
 
   useEffect(() => {
     void getSlicerEngineVersion().then((v) => {
@@ -787,7 +787,7 @@ export function SlicingPanel({
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const serialized = String(clampLayerHeightMm(remoteOfflineLayerHeightMm));
+    const serialized = String(clampRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm));
     window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
   }, [remoteOfflineLayerHeightMm]);
@@ -1444,71 +1444,32 @@ export function SlicingPanel({
             </div>
 
             {showRemoteOfflineLayerHeightOverride && (
-              <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="space-y-0.5 text-center">
                   <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
                     Offline Layer Height
                   </div>
                   <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    No remote material profile is loaded right now.
+                    Remote material unavailable.
                   </div>
                 </div>
 
-                <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="flex min-w-0 items-center gap-1">
-                    <IconButton
-                      className="!h-8 !w-8 shrink-0 !p-0"
-                      onClick={() => setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm - 0.005)}
-                      disabled={remoteOfflineLayerHeightMm <= 0.001}
-                      title="Decrease offline layer height"
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                    </IconButton>
-
-                    <input
-                      type="number"
-                      min={0.001}
-                      max={1}
-                      step={0.005}
-                      value={remoteOfflineLayerHeightDraft ?? String(remoteOfflineLayerHeightMm)}
-                      onFocus={beginRemoteOfflineLayerHeightEdit}
-                      onChange={(event) => setRemoteOfflineLayerHeightDraft(event.target.value)}
-                      onBlur={commitRemoteOfflineLayerHeightEdit}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          commitRemoteOfflineLayerHeightEdit();
-                          event.currentTarget.blur();
-                          return;
-                        }
-
-                        if (event.key === 'Escape') {
-                          event.preventDefault();
-                          cancelRemoteOfflineLayerHeightEdit();
-                          event.currentTarget.blur();
-                        }
-                      }}
-                      onWheel={(event) => {
-                        event.preventDefault();
-                        setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + (event.deltaY < 0 ? 0.005 : -0.005));
-                      }}
-                      className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                      aria-label="Offline layer height override in millimeters"
-                    />
-
-                    <IconButton
-                      className="!h-8 !w-8 shrink-0 !p-0"
-                      onClick={() => setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + 0.005)}
-                      disabled={remoteOfflineLayerHeightMm >= 1}
-                      title="Increase offline layer height"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </IconButton>
-                  </div>
-                </div>
+                <ScrollableNumberField
+                  value={remoteOfflineLayerHeightMm * MICRONS_PER_MM}
+                  onChange={(nextMicrons) => setClampedRemoteOfflineLayerHeightMm(nextMicrons / MICRONS_PER_MM)}
+                  min={REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM * MICRONS_PER_MM}
+                  max={REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM * MICRONS_PER_MM}
+                  step={REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM * MICRONS_PER_MM}
+                  unit="µm"
+                  ariaLabel="Offline layer height override in micrometers"
+                  decreaseTitle="Decrease offline layer height"
+                  increaseTitle="Increase offline layer height"
+                  commitOnBlur
+                />
 
                 <div className="text-[11px] leading-snug text-center" style={{ color: 'var(--text-muted)' }}>
-                  Networking is currently unavailable, so this slice will use offline import. Set the layer height here, then choose the matching resin profile on the machine before printing.
+                  Network unavailable. <br />
+                  Select a matching material during import instead.
                 </div>
               </div>
             )}
@@ -1516,54 +1477,46 @@ export function SlicingPanel({
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="space-y-1">
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
-              <div className="grid grid-cols-5 gap-1">
-                {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
-                  const active = antiAliasingLevel === level;
-                  return (
-                    <button
-                      key={level}
-                      type="button"
-                      disabled={!antiAliasingAvailable}
-                      aria-disabled={!antiAliasingAvailable}
-                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                      style={!antiAliasingAvailable
-                        ? {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                            color: 'color-mix(in srgb, var(--text-muted), black 18%)',
-                            cursor: 'not-allowed',
-                            opacity: 0.68,
-                          }
-                        : active
-                          ? {
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                              color: 'var(--text-strong)',
-                            }
-                          : {
-                              borderColor: 'var(--border-subtle)',
-                              background: 'var(--surface-0)',
-                              color: 'var(--text-muted)',
-                            }}
-                      onClick={() => setAntiAliasingLevel(level)}
-                    >
-                      {level}
-                    </button>
-                  );
-                })}
-              </div>
-              {!antiAliasingAvailable && (
-                <div
-                  className="mt-2 px-1 text-[11px] leading-snug font-mono text-center"
-                  style={{
-                    color: 'color-mix(in srgb, #fca5a5, var(--text-muted) 38%)',
-                  }}
-                >
-                  The selected Machine does not support AA at this time.
-                </div>
-              )}
-                {antiAliasingAvailable && (
+              {antiAliasingAvailable ? (
+                <>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
+                  <div className="grid grid-cols-5 gap-1">
+                    {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
+                      const active = antiAliasingLevel === level;
+                      return (
+                        <button
+                          key={level}
+                          type="button"
+                          disabled={!antiAliasingAvailable}
+                          aria-disabled={!antiAliasingAvailable}
+                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          style={!antiAliasingAvailable
+                            ? {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+                                color: 'color-mix(in srgb, var(--text-muted), black 18%)',
+                                cursor: 'not-allowed',
+                                opacity: 0.68,
+                              }
+                            : active
+                              ? {
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                  color: 'var(--text-strong)',
+                                }
+                              : {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--surface-0)',
+                                  color: 'var(--text-muted)',
+                                }}
+                          onClick={() => setAntiAliasingLevel(level)}
+                        >
+                          {level}
+                        </button>
+                      );
+                    })}
+                  </div>
+
                   <div className="space-y-1">
                     <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Alpha</div>
                     {hasProfileMinimumAaAlpha && (
@@ -1629,48 +1582,32 @@ export function SlicingPanel({
                       </div>
                     )}
                     {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
-                      <div className="mt-1 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                        <div className="flex min-w-0 items-center gap-1">
-                          <IconButton
-                            className="!h-8 !w-8 shrink-0 !p-0"
-                            onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent - 1)}
-                            disabled={minimumAaControlsDisabled || minimumAaAlphaPercent <= 0}
-                            title="Decrease minimum alpha"
-                          >
-                            <Minus className="h-3.5 w-3.5" />
-                          </IconButton>
-
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            step={1}
-                            value={minimumAaAlphaPercent}
-                            disabled={minimumAaControlsDisabled}
-                            aria-disabled={minimumAaControlsDisabled}
-                            onChange={(event) => setClampedMinimumAaAlphaPercent(Number(event.target.value))}
-                            onWheel={(event) => {
-                              if (minimumAaControlsDisabled) return;
-                              event.preventDefault();
-                              setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + (event.deltaY < 0 ? 1 : -1));
-                            }}
-                            className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                            aria-label="Minimum alpha percent override"
-                          />
-
-                          <IconButton
-                            className="!h-8 !w-8 shrink-0 !p-0"
-                            onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + 1)}
-                            disabled={minimumAaControlsDisabled || minimumAaAlphaPercent >= 100}
-                            title="Increase minimum alpha"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </IconButton>
-                        </div>
-                      </div>
+                      <ScrollableNumberField
+                        className="mt-1"
+                        value={minimumAaAlphaPercent}
+                        onChange={setClampedMinimumAaAlphaPercent}
+                        min={0}
+                        max={100}
+                        step={1}
+                        unit="%"
+                        disabled={minimumAaControlsDisabled}
+                        ariaLabel="Minimum alpha percent override"
+                        decreaseTitle="Decrease minimum alpha"
+                        increaseTitle="Increase minimum alpha"
+                      />
                     )}
                   </div>
-                )}
+                </>
+              ) : (
+                <div
+                  className="px-1 text-[11px] leading-snug font-mono text-center"
+                  style={{
+                    color: 'color-mix(in srgb, #fca5a5, var(--text-muted) 38%)',
+                  }}
+                >
+                  The selected Machine does not support AA at this time.
+                </div>
+              )}
             </div>
           </div>
 
