@@ -704,9 +704,10 @@ type ModelClipboardEntry = {
 };
 
 export function useSceneCollectionManager() {
-  const getMeshExtension = useCallback((name: string): '.stl' | '.3mf' | null => {
+  const getMeshExtension = useCallback((name: string): '.stl' | '.obj' | '.3mf' | null => {
     const normalized = name.trim().toLowerCase();
     if (normalized.endsWith('.stl')) return '.stl';
+    if (normalized.endsWith('.obj')) return '.obj';
     if (normalized.endsWith('.3mf')) return '.3mf';
     return null;
   }, []);
@@ -1645,6 +1646,16 @@ export function useSceneCollectionManager() {
       return;
     }
 
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
+      progress: null,
+    });
+
+    await waitForUiYield();
+
     trackRecentOpenedFiles(files, 'mesh');
 
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
@@ -1665,16 +1676,6 @@ export function useSceneCollectionManager() {
 
     const newModels: LoadedModel[] = [];
     const defectiveModels: { name: string; defects: MeshDefects }[] = [];
-
-    setImportProgress({
-      active: true,
-      type: 'mesh',
-      label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
-      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
-      progress: null,
-    });
-
-    await waitForUiYield();
 
     try {
       // Process sequentially to avoid freezing UI too much

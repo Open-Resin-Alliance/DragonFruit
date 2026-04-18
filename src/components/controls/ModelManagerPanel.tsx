@@ -333,7 +333,7 @@ export function ModelManagerPanel({
               <input
                 id="models-card-mesh-input"
                 type="file"
-                accept=".stl,.3mf"
+                accept=".stl,.obj,.3mf"
                 multiple
                 onChange={onLoadMeshChange}
                 className="hidden"
@@ -362,7 +362,7 @@ export function ModelManagerPanel({
 
             <div className={`mt-1.5 grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                Mesh Files (.stl, .3mf)
+                Mesh Files (.stl, .obj, .3mf)
               </div>
               {onImportSceneChange && (
                 <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
