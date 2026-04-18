@@ -58,23 +58,15 @@ export function CameraClipPlaneStabilizer() {
   return null;
 }
 
-function CameraHeadlight({ intensity }: { intensity: number }) {
-  const { camera } = useThree();
-  const lightRef = React.useRef<THREE.PointLight | null>(null);
-
-  useFrame(() => {
-    if (!lightRef.current) return;
-    lightRef.current.position.copy(camera.position);
-  });
-
+function FillLight({ intensity }: { intensity: number }) {
+  // Fixed-position fill light that mimics a frontal fill without tracking the
+  // camera. Camera movement (orbit, zoom, F-focus) will never change the
+  // model's illumination.
   return (
-    <pointLight
-      ref={lightRef}
-      name="camera-headlight"
-      userData={{ followCaptureCamera: true }}
+    <directionalLight
+      name="fill-light"
+      position={[0, -80, 60]}
       intensity={intensity}
-      decay={0}
-      distance={0}
       color="#ffffff"
     />
   );
@@ -97,7 +89,7 @@ export function Lights({
       <directionalLight position={[0, 0, 12]} intensity={directionalIntensity} color="#ffffff" />
       <directionalLight position={[0, 0, -12]} intensity={directionalIntensity * 0.15} color="#90a7ff" />
       <hemisphereLight args={['#f6e8ff', '#3e415c', ambientIntensity * 0.6]} />
-      <CameraHeadlight intensity={clampedHeadlightIntensity} />
+      <FillLight intensity={clampedHeadlightIntensity} />
     </>
   );
 }

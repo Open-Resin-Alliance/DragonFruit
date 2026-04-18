@@ -49,10 +49,15 @@ export function CameraIntroController({
   plateDepthMm,
 }: CameraIntroControllerProps) {
   const { camera, controls, size } = useThree();
+  const sizeRef = React.useRef(size);
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
   const activeRunIdRef = React.useRef<number>(0);
   const completedRunIdRef = React.useRef<number>(0);
+
+  React.useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
 
   React.useLayoutEffect(() => {
     if (!runId) return;
@@ -74,7 +79,8 @@ export function CameraIntroController({
     const vFov = isPerspective
       ? THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov)
       : THREE.MathUtils.degToRad(50);
-    const aspect = size.width / Math.max(1, size.height);
+    const viewport = sizeRef.current;
+    const aspect = viewport.width / Math.max(1, viewport.height);
 
     const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * aspect);
     const minFov = Math.max(0.0001, Math.min(vFov, hFov));
@@ -253,7 +259,7 @@ export function CameraIntroController({
         activeRunIdRef.current = 0;
       }
     };
-  }, [bounds, camera, controls, mode, onComplete, plateDepthMm, plateWidthMm, preserveCurrentViewDirection, runId, size.height, size.width]);
+  }, [bounds, camera, controls, mode, onComplete, plateDepthMm, plateWidthMm, preserveCurrentViewDirection, runId]);
 
   return null;
 }
