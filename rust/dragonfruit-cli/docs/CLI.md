@@ -38,9 +38,9 @@ Every command produces JSON output (`--json`) and reports timing metrics.
 
 ## Rust CLI — `dragonfruit-cli`
 
-Binary: `rust/dragonfruit-slicer-v3/target/release/dragonfruit-cli`
+Binary: `rust/dragonfruit-cli/target/release/dragonfruit-cli`
 
-Build: `cargo build --release` (from `rust/dragonfruit-slicer-v3/`)
+Build: `cargo build --release` (from `rust/dragonfruit-cli/`)
 
 Every command prints `[command] Xms` timing to stderr.
 
@@ -353,7 +353,7 @@ Comprehensive audit of every data-producing operation across Rust, Tauri IPC, an
 
 **Summary:** 12/19 covered, 5 N/A (GUI-only), 1 implicit, 1 gap (plugin dispatch).
 
-### Rust Public API (dragonfruit-slicer-v3)
+### Rust Public API (dragonfruit-slicing-engine)
 
 | Module | Public Functions | Used in CLI | Not in CLI |
 |--------|-----------------|-------------|------------|

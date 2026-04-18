@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use dragonfruit_cli::io::*;
-use dragonfruit_slicer_v3::geometry::parse_triangles;
+use dragonfruit_slicing_engine::geometry::parse_triangles;
 use dragonfruit_islands::model::*;
 use dragonfruit_islands::rasterize::rasterize_for_island_scan;
 use dragonfruit_islands::rle;
@@ -1019,8 +1019,8 @@ fn cmd_slice_run(
     metadata_json: &str,
     json_output: bool,
 ) -> Result<(), String> {
-    use dragonfruit_slicer_v3::engine::slice_with_progress_v3_to_path;
-    use dragonfruit_slicer_v3::types::SliceJobV3;
+    use dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path;
+    use dragonfruit_slicing_engine::types::SliceJobV3;
 
     // Same flow as Tauri's slice_solid_native_to_temp_path:
     // load STL or positions.bin → build SliceJobV3 → dispatch to engine
@@ -1059,6 +1059,7 @@ fn cmd_slice_run(
         source_height_px,
         width_px: source_width_px,
         height_px: source_height_px,
+        x_packing_mode: "none".to_string(),
         build_width_mm,
         build_depth_mm,
         layer_height_mm: layer_height,
@@ -1147,7 +1148,7 @@ fn extract_layer_png(archive_path: &PathBuf, layer: u32, output: &PathBuf) -> Re
 }
 
 fn cmd_slice_formats() {
-    use dragonfruit_slicer_v3::encoders::registry::{find_encoder, supported_output_formats};
+    use dragonfruit_slicing_engine::encoders::registry::{find_encoder, supported_output_formats};
 
     let format_names = supported_output_formats();
     let mut formats = Vec::new();
@@ -1324,7 +1325,7 @@ fn cmd_island_batch(
 }
 
 fn cmd_slice_info() {
-    use dragonfruit_slicer_v3::encoders::registry::supported_output_formats;
+    use dragonfruit_slicing_engine::encoders::registry::supported_output_formats;
     let formats = supported_output_formats();
 
     let info = serde_json::json!({
@@ -1470,7 +1471,7 @@ fn cmd_benchmark(
     build_width_mm: f32, build_depth_mm: f32, layer_height: f32,
     cube_count: u32, json_output: bool,
 ) -> Result<(), String> {
-    use dragonfruit_slicer_v3::benchmark::{run_benchmark_v3, BenchmarkConfigV3};
+    use dragonfruit_slicing_engine::benchmark::{run_benchmark_v3, BenchmarkConfigV3};
 
     let cfg = BenchmarkConfigV3 {
         layers,
@@ -1518,7 +1519,7 @@ fn cmd_benchmark(
 }
 
 fn cmd_info() {
-    use dragonfruit_slicer_v3::encoders::registry::supported_output_formats;
+    use dragonfruit_slicing_engine::encoders::registry::supported_output_formats;
     let formats = supported_output_formats();
 
     let info = serde_json::json!({
