@@ -316,6 +316,13 @@ enum SliceCommands {
         /// Anti-aliasing level (Off, 2x, 4x, 8x)
         #[arg(long, default_value = "Off")]
         anti_aliasing: String,
+        /// X-axis sub-pixel packing mode.
+        ///
+        /// - `none` (default): raw grayscale at source resolution; width_px = source_width_px.
+        /// - `rgb8_div3`: 3 sub-pixels packed into 1 RGB pixel; width_px = source_width_px / 3.
+        /// - `gray3_div2`: 2 sub-pixels packed into 1 grayscale pixel; width_px = source_width_px / 2.
+        #[arg(long, default_value = "none")]
+        x_packing_mode: String,
         /// Mirror X
         #[arg(long)]
         mirror_x: bool,
@@ -1012,6 +1019,7 @@ fn cmd_slice_run(
     source_height_px: u32,
     png_compression: &str,
     anti_aliasing: &str,
+    x_packing_mode: &str,
     mirror_x: bool,
     mirror_y: bool,
     format_version: &Option<String>,
@@ -1019,6 +1027,30 @@ fn cmd_slice_run(
     metadata_json: &str,
     json_output: bool,
 ) -> Result<(), String> {
+    let width_px = match x_packing_mode {
+        "none" => source_width_px,
+        "rgb8_div3" => {
+            if source_width_px % 3 != 0 {
+                return Err(format!(
+                    "source_width_px ({source_width_px}) must be divisible by 3 for x_packing_mode=rgb8_div3"
+                ));
+            }
+            source_width_px / 3
+        }
+        "gray3_div2" => {
+            if source_width_px % 2 != 0 {
+                return Err(format!(
+                    "source_width_px ({source_width_px}) must be divisible by 2 for x_packing_mode=gray3_div2"
+                ));
+            }
+            source_width_px / 2
+        }
+        other => {
+            return Err(format!(
+                "Invalid x_packing_mode '{other}': expected one of none, rgb8_div3, gray3_div2"
+            ));
+        }
+    };
     use dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path;
     use dragonfruit_slicing_engine::types::SliceJobV3;
 
@@ -1057,9 +1089,9 @@ fn cmd_slice_run(
         output_format: ext.clone(),
         source_width_px,
         source_height_px,
-        width_px: source_width_px,
+        width_px,
         height_px: source_height_px,
-        x_packing_mode: "none".to_string(),
+        x_packing_mode: x_packing_mode.to_string(),
         build_width_mm,
         build_depth_mm,
         layer_height_mm: layer_height,
@@ -1633,10 +1665,10 @@ fn main() {
         Commands::Slice { command } => match command {
             SliceCommands::Run { input, output, layer_height, build_width_mm, build_depth_mm,
                 source_width_px, source_height_px, png_compression, anti_aliasing,
-                mirror_x, mirror_y, format_version, min_aa_alpha, metadata_json, json } =>
+                x_packing_mode, mirror_x, mirror_y, format_version, min_aa_alpha, metadata_json, json } =>
                 cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
                     source_width_px, source_height_px, &png_compression, &anti_aliasing,
-                    mirror_x, mirror_y, &format_version, min_aa_alpha, &metadata_json, json),
+                    &x_packing_mode, mirror_x, mirror_y, &format_version, min_aa_alpha, &metadata_json, json),
             SliceCommands::Formats => { cmd_slice_formats(); Ok(()) },
             SliceCommands::PreviewLayer { input, layer, output } =>
                 extract_layer_png(&input, layer, &output),
