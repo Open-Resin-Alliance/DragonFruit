@@ -382,7 +382,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
-const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.obj', '.3mf', '.lys', '.voxl']);
 const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
@@ -444,6 +444,7 @@ function isSupportedPrepareDropName(name: string): boolean {
 function getDroppedFileMimeType(name: string): string {
   const ext = getFileExtension(name);
   if (ext === '.stl') return 'model/stl';
+  if (ext === '.obj') return 'model/obj';
   if (ext === '.3mf') return 'model/3mf';
   if (ext === '.voxl') return 'application/json';
   if (ext === '.lys') return 'application/octet-stream';
@@ -6937,7 +6938,7 @@ export default function Home() {
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.stl,.3mf', true);
+    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf', true);
     if (webFiles.length === 0) return;
     scene.onFileChange(buildSyntheticFileChangeEvent(webFiles));
   }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
@@ -8079,7 +8080,7 @@ export default function Home() {
 
     const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
     if (supportedFiles.length === 0) {
-      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .3mf, .lys, .voxl');
+      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .obj, .3mf, .lys, .voxl');
       return;
     }
 
@@ -8095,7 +8096,7 @@ export default function Home() {
 
     const meshFiles = supportedFiles.filter((file) => {
       const ext = getFileExtension(file.name);
-      return ext === '.stl' || ext === '.3mf';
+      return ext === '.stl' || ext === '.obj' || ext === '.3mf';
     });
     const sceneFiles = supportedFiles.filter((file) => {
       const ext = getFileExtension(file.name);
@@ -13303,7 +13304,7 @@ export default function Home() {
                   Drop supported files to import
                 </div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Supported: STL, 3MF, LYS, VOXL
+                  Supported: STL, OBJ, 3MF, LYS, VOXL
                 </div>
               </div>
             </div>

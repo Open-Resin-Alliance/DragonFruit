@@ -704,9 +704,10 @@ type ModelClipboardEntry = {
 };
 
 export function useSceneCollectionManager() {
-  const getMeshExtension = useCallback((name: string): '.stl' | '.3mf' | null => {
+  const getMeshExtension = useCallback((name: string): '.stl' | '.obj' | '.3mf' | null => {
     const normalized = name.trim().toLowerCase();
     if (normalized.endsWith('.stl')) return '.stl';
+    if (normalized.endsWith('.obj')) return '.obj';
     if (normalized.endsWith('.3mf')) return '.3mf';
     return null;
   }, []);

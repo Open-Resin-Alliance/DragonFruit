@@ -290,7 +290,7 @@ export function EmptySceneState({
                     <span>Load Mesh</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                    Mesh Files (.stl, .3mf)
+                    Mesh Files (.stl, .obj, .3mf)
                   </div>
                 </button>
 
@@ -429,7 +429,7 @@ export function EmptySceneState({
                       border: '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
                     }}
                   >
-                    STL • 3MF • VOXL • LYS
+                    STL • OBJ • 3MF • VOXL • LYS
                   </span>
                 </div>
               </div>
@@ -440,7 +440,7 @@ export function EmptySceneState({
         <input
           id="empty-state-stl-file-input"
           type="file"
-          accept=".stl,.3mf"
+          accept=".stl,.obj,.3mf"
           multiple
           onChange={onFileChange}
           className="hidden"

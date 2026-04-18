@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
@@ -65,11 +66,34 @@ export interface ProcessGeometryOptions {
   center?: boolean;
 }
 
+function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
+  // DragonFruit controls model tinting centrally via mesh settings.
+  // Ignore per-file embedded colors (e.g. binary STL color extension).
+  if (geometry.getAttribute('color')) {
+    geometry.deleteAttribute('color');
+  }
+
+  const withLoaderMetadata = geometry as THREE.BufferGeometry & {
+    hasColors?: boolean;
+    alpha?: number;
+  };
+
+  if ('hasColors' in withLoaderMetadata) {
+    delete withLoaderMetadata.hasColors;
+  }
+
+  if ('alpha' in withLoaderMetadata) {
+    delete withLoaderMetadata.alpha;
+  }
+}
+
 export async function processGeometry(bufferGeometry: THREE.BufferGeometry, options: ProcessGeometryOptions = { center: true }): Promise<GeometryWithBounds> {
   console.log(`[${new Date().toISOString()}] [processGeometry] Starting Geometry Prep`);
   const startPrep = performance.now();
   const geometry = new THREE.BufferGeometry();
   geometry.copy(bufferGeometry);
+
+  stripEmbeddedColorAttributes(geometry);
 
   // Sanitize any non-finite position values before any Three.js computation
   // to prevent NaN bbox/sphere and subsequent renderer crashes.
@@ -163,7 +187,7 @@ export async function loadStlGeometry(fileUrl: string): Promise<GeometryWithBoun
   });
 }
 
-function collectMergedGeometryFromObject3d(root: THREE.Object3D): THREE.BufferGeometry {
+function collectMergedGeometryFromObject3d(root: THREE.Object3D, sourceLabel: '3MF' | 'OBJ'): THREE.BufferGeometry {
   root.updateMatrixWorld(true);
 
   const geometries: THREE.BufferGeometry[] = [];
@@ -174,7 +198,7 @@ function collectMergedGeometryFromObject3d(root: THREE.Object3D): THREE.BufferGe
     if (!(mesh.geometry instanceof THREE.BufferGeometry)) return;
 
     const cloned = mesh.geometry.clone();
-    // DragonFruit controls mesh tinting centrally; ignore per-file 3MF vertex colors.
+    // DragonFruit controls mesh tinting centrally; ignore per-file vertex colors.
     if (cloned.getAttribute('color')) {
       cloned.deleteAttribute('color');
     }
@@ -183,7 +207,7 @@ function collectMergedGeometryFromObject3d(root: THREE.Object3D): THREE.BufferGe
   });
 
   if (geometries.length === 0) {
-    throw new Error('3MF contains no mesh geometry.');
+    throw new Error(`${sourceLabel} contains no mesh geometry.`);
   }
 
   if (geometries.length === 1) {
@@ -202,7 +226,7 @@ function collectMergedGeometryFromObject3d(root: THREE.Object3D): THREE.BufferGe
   });
 
   if (!merged) {
-    throw new Error('Failed to merge 3MF meshes.');
+    throw new Error(`Failed to merge ${sourceLabel} meshes.`);
   }
 
   return merged;
@@ -220,7 +244,35 @@ export async function load3mfGeometry(fileUrl: string): Promise<GeometryWithBoun
         console.log(`[${new Date().toISOString()}] [load3mfGeometry] ThreeMFLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
 
         try {
-          const mergedGeometry = collectMergedGeometryFromObject3d(object);
+          const mergedGeometry = collectMergedGeometryFromObject3d(object, '3MF');
+          void processGeometry(mergedGeometry)
+            .then(resolve)
+            .catch(reject);
+        } catch (error) {
+          reject(error);
+        }
+      },
+      undefined,
+      (error) => {
+        reject(error);
+      }
+    );
+  });
+}
+
+export async function loadObjGeometry(fileUrl: string): Promise<GeometryWithBounds> {
+  return new Promise((resolve, reject) => {
+    const loader = new OBJLoader();
+    console.log(`[${new Date().toISOString()}] [loadObjGeometry] OBJLoader load for ${fileUrl}`);
+    const startLoad = performance.now();
+
+    loader.load(
+      fileUrl,
+      (object) => {
+        console.log(`[${new Date().toISOString()}] [loadObjGeometry] OBJLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
+
+        try {
+          const mergedGeometry = collectMergedGeometryFromObject3d(object, 'OBJ');
           void processGeometry(mergedGeometry)
             .then(resolve)
             .catch(reject);
@@ -240,6 +292,9 @@ export async function loadMeshGeometry(fileUrl: string, fileName?: string): Prom
   const ext = (fileName ?? '').trim().toLowerCase();
   if (ext.endsWith('.3mf')) {
     return load3mfGeometry(fileUrl);
+  }
+  if (ext.endsWith('.obj')) {
+    return loadObjGeometry(fileUrl);
   }
   return loadStlGeometry(fileUrl);
 }

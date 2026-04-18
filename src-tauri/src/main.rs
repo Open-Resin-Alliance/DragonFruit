@@ -113,7 +113,7 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
 
     if let Some(ext) = maybe_ext.as_deref() {
         dialog = match ext {
-            "stl" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
+            "stl" | "obj" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf"]),
             "voxl" => dialog.add_filter("Scene Files", &["voxl"]),
             "lys" => dialog.add_filter("Scene Files", &["lys"]),
             "json" => dialog.add_filter("JSON Files", &["json"]),
@@ -2226,11 +2226,11 @@ fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
 
     let normalized = category.trim().to_ascii_lowercase();
     dialog = match normalized.as_str() {
-        "mesh" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
+        "mesh" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf"]),
         "scene" => dialog.add_filter("Scene Files", &["voxl", "lys"]),
         "bundle" => dialog.add_filter("JSON Files", &["json"]),
         _ => dialog
-            .add_filter("Mesh Files", &["stl", "3mf"])
+            .add_filter("Mesh Files", &["stl", "obj", "3mf"])
             .add_filter("Scene Files", &["voxl", "lys"]),
     };
 
