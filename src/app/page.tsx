@@ -774,6 +774,8 @@ export default function Home() {
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
+  const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
+  const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
@@ -814,6 +816,7 @@ export default function Home() {
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
   const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const exportErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
   const saveToastHideTimeoutRef = React.useRef<number | null>(null);
   const saveToastClearTimeoutRef = React.useRef<number | null>(null);
   const saveToastEnterRafRef = React.useRef<number | null>(null);
@@ -8782,6 +8785,18 @@ export default function Home() {
     }, 3800);
   }, []);
 
+  const handleExportError = React.useCallback((message: string) => {
+    setExportErrorToast({ id: Date.now(), text: message });
+    setIsExportErrorToastVisible(true);
+    if (exportErrorToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(exportErrorToastFadeTimeoutRef.current);
+    }
+    exportErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsExportErrorToastVisible(false);
+      exportErrorToastFadeTimeoutRef.current = null;
+    }, 4500);
+  }, []);
+
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
       window.cancelAnimationFrame(historyTransformResyncRafRef.current);
@@ -13067,6 +13082,7 @@ export default function Home() {
               supportsRef={supportsRef}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onExportSuccess={handleExportSuccess}
+              onExportError={handleExportError}
             />
 
             <SlicingPanel
@@ -16686,6 +16702,15 @@ export default function Home() {
           <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
             Saved to: {exportSuccessToast.path}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {exportErrorToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            {exportErrorToast.text}
           </Toast>
         </ToastViewport>
       )}

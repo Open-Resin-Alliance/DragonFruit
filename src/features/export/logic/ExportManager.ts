@@ -86,6 +86,56 @@ export class ExportManager {
     return btoa(binary);
   }
 
+  private static readModelIdFromUserData(node: THREE.Object3D, inheritedModelId: string | null): string | null {
+    const rawModelId = (node.userData as { modelId?: unknown } | undefined)?.modelId;
+    if (typeof rawModelId === 'string' && rawModelId.trim().length > 0) {
+      return rawModelId;
+    }
+
+    return inheritedModelId;
+  }
+
+  private static cloneObjectTreeForModelScope(
+    node: THREE.Object3D,
+    allowedModelIds: Set<string>,
+    inheritedModelId: string | null,
+  ): THREE.Object3D | null {
+    const currentModelId = this.readModelIdFromUserData(node, inheritedModelId);
+    const clonedChildren: THREE.Object3D[] = [];
+
+    for (const child of node.children) {
+      const clonedChild = this.cloneObjectTreeForModelScope(child, allowedModelIds, currentModelId);
+      if (clonedChild) {
+        clonedChildren.push(clonedChild);
+      }
+    }
+
+    const includeSelf = currentModelId === null || allowedModelIds.has(currentModelId);
+    if (!includeSelf && clonedChildren.length === 0) {
+      return null;
+    }
+
+    const clone = node.clone(false);
+    for (const child of clonedChildren) {
+      clone.add(child);
+    }
+
+    return clone;
+  }
+
+  private static buildScopedSupportsGroup(
+    supportsGroup: THREE.Object3D,
+    allowedModelIds: Set<string>,
+  ): THREE.Object3D | null {
+    if (allowedModelIds.size === 0) return null;
+
+    const scopedClone = this.cloneObjectTreeForModelScope(supportsGroup, allowedModelIds, null);
+    if (!scopedClone) return null;
+
+    scopedClone.updateMatrixWorld(true);
+    return scopedClone;
+  }
+
   private static exportModelAsEmbeddedBinaryStlBytes(model: LoadedModel): Uint8Array {
     const localGroup = new THREE.Group();
     const mesh = new THREE.Mesh(model.geometry.geometry);
@@ -823,6 +873,9 @@ export class ExportManager {
   ): Promise<string | null> {
     console.log('[ExportManager] Starting export...', options);
 
+    const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
+    const hasScopedModelFilter = scopedModelIds.size > 0;
+
     // Ask for the save destination FIRST so the user doesn't wait through
     // geometry serialization before seeing the dialog.
     const base = this.normalizeExportFilenameBase(options.filename || 'export');
@@ -862,8 +915,15 @@ export class ExportManager {
     // Supports: use the live R3F ref directly — its matrixWorld is already current.
     // Hitbox meshes are filtered per-node inside the serializers via isMaterialHitbox().
     if (options.includeSupports && supportsGroup) {
-      supportsGroup.updateMatrixWorld(true);
-      exportObjects.push(supportsGroup);
+      if (hasScopedModelFilter) {
+        const scopedSupports = this.buildScopedSupportsGroup(supportsGroup, scopedModelIds);
+        if (scopedSupports) {
+          exportObjects.push(scopedSupports);
+        }
+      } else {
+        supportsGroup.updateMatrixWorld(true);
+        exportObjects.push(supportsGroup);
+      }
     }
 
     // 4. Add Raft (if requested and enabled) — per-model so each model gets its own raft
@@ -876,7 +936,14 @@ export class ExportManager {
         // Group roots by modelId so each model gets a separate raft
         const rootsByModel = new Map<string, typeof allRoots>();
         for (const root of allRoots) {
-          const mid = root.modelId ?? '__orphan__';
+          const rootModelId = root.modelId ?? null;
+          if (hasScopedModelFilter) {
+            if (!rootModelId || !scopedModelIds.has(rootModelId)) {
+              continue;
+            }
+          }
+
+          const mid = rootModelId ?? '__orphan__';
           let arr = rootsByModel.get(mid);
           if (!arr) { arr = []; rootsByModel.set(mid, arr); }
           arr.push(root);
@@ -1090,6 +1157,16 @@ export class ExportManager {
       'dragonfruit-voxl-export',
     );
 
+    const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
+    const hasScopedModelFilter = scopedModelIds.size > 0;
+
+    const belongsToScopedModel = (candidate: unknown): boolean => {
+      if (!hasScopedModelFilter) return true;
+      if (!candidate || typeof candidate !== 'object') return false;
+      const modelId = (candidate as { modelId?: unknown }).modelId;
+      return typeof modelId === 'string' && scopedModelIds.has(modelId);
+    };
+
     if (!options.includeSupports) {
       supports.roots = [];
       supports.trunks = [];
@@ -1100,6 +1177,16 @@ export class ExportManager {
       supports.braces = [];
       supports.knots = [];
       supports.kickstands = [];
+    } else if (hasScopedModelFilter) {
+      supports.roots = supports.roots.filter((item) => belongsToScopedModel(item));
+      supports.trunks = supports.trunks.filter((item) => belongsToScopedModel(item));
+      supports.branches = supports.branches.filter((item) => belongsToScopedModel(item));
+      supports.leaves = supports.leaves.filter((item) => belongsToScopedModel(item));
+      supports.twigs = supports.twigs.filter((item) => belongsToScopedModel(item));
+      supports.sticks = supports.sticks.filter((item) => belongsToScopedModel(item));
+      supports.braces = supports.braces.filter((item) => belongsToScopedModel(item));
+      supports.knots = supports.knots.filter((item) => belongsToScopedModel(item));
+      supports.kickstands = supports.kickstands.filter((item) => belongsToScopedModel(item));
     }
 
     const meshBytesMap = new Map<number, Uint8Array>();
