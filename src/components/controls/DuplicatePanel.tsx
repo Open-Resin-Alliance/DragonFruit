@@ -1,7 +1,7 @@
 import React from 'react';
-import { CopyPlus, Loader2, Minus, Plus } from 'lucide-react';
-import { NumberInput } from '@/components/ui/NumberInput';
+import { CopyPlus, Loader2 } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export type DuplicateLayoutMode = 'auto' | 'array';
 
@@ -29,43 +29,6 @@ interface DuplicatePanelProps {
   onFillPlate: () => void;
   previewCount: number;
   isApplying?: boolean;
-}
-
-type MiniStepperFieldProps = {
-  value: number;
-  onChange: (value: number) => void;
-  min: number;
-  max: number;
-  disabled?: boolean;
-};
-
-function MiniStepperField({ value, onChange, min, max, disabled = false }: MiniStepperFieldProps) {
-  const safe = Number.isFinite(value) ? value : min;
-  const clamped = Math.min(max, Math.max(min, Math.round(safe)));
-
-  const apply = React.useCallback((next: number) => {
-    const normalized = Math.min(max, Math.max(min, Math.round(Number.isFinite(next) ? next : min)));
-    onChange(normalized);
-  }, [max, min, onChange]);
-
-  return (
-    <div className="min-w-0" onWheel={(e) => {
-      if (disabled) return;
-      e.preventDefault();
-      const delta = e.deltaY < 0 ? 1 : -1;
-      apply(clamped + delta);
-    }}>
-      <NumberInput
-        value={clamped}
-        onChange={apply}
-        min={min}
-        max={max}
-        step={1}
-        disabled={disabled}
-        className="ui-input h-8 w-full min-w-0 pl-1.5 pr-5 text-xs text-center no-spinners"
-      />
-    </div>
-  );
 }
 
 export function DuplicatePanel({
@@ -208,14 +171,14 @@ export function DuplicatePanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Selected model</div>
+            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Selected Model</div>
             <div className="mt-0.5 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
               {activeModelName ?? 'Select a model first'}
             </div>
           </div>
 
           <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
-            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
+            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout Mode</div>
             <div className="grid grid-cols-2 gap-1 min-w-0">
               <button
                 type="button"
@@ -224,7 +187,7 @@ export function DuplicatePanel({
                 disabled={panelDisabled}
                 style={panelDisabled ? undefined : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
-                Auto layout
+                Auto Layout 
               </button>
               <button
                 type="button"
@@ -241,75 +204,36 @@ export function DuplicatePanel({
           {layoutMode === 'auto' ? (
             <>
               <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
-                <div className="mt-1 flex min-w-0 items-center gap-1">
-                  <IconButton
-                    className="!h-8 !w-8 shrink-0 !p-0"
-                    onClick={() => setClampedCopies(totalCopies - 1)}
-                    disabled={totalCopies <= 1 || panelDisabled}
-                    title="Decrease total copies"
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </IconButton>
-
-                  <NumberInput
-                    value={totalCopies}
-                    onChange={setClampedCopies}
-                    showStepper={false}
-                    onWheel={(e) => {
-                      if (panelDisabled) return;
-                      e.preventDefault();
-                      setClampedCopies(totalCopies + (e.deltaY < 0 ? 1 : -1));
-                    }}
-                    disabled={panelDisabled}
-                    className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                  />
-
-                  <IconButton
-                    className="!h-8 !w-8 shrink-0 !p-0"
-                    onClick={() => setClampedCopies(totalCopies + 1)}
-                    disabled={totalCopies >= 128 || panelDisabled}
-                    title="Increase total copies"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </IconButton>
-                </div>
+                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total Copies</label>
+                <ScrollableNumberField
+                  className="mt-1"
+                  value={totalCopies}
+                  onChange={setClampedCopies}
+                  min={1}
+                  max={128}
+                  step={1}
+                  disabled={panelDisabled}
+                  ariaLabel="Total copies"
+                  decreaseTitle="Decrease total copies"
+                  increaseTitle="Increase total copies"
+                />
               </div>
 
               <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
-                <div className="mt-1 flex min-w-0 items-center gap-1">
-                  <IconButton
-                    className="!h-8 !w-8 shrink-0 !p-0"
-                    onClick={() => setClampedSpacing(spacingMm - 0.1)}
-                    disabled={spacingMm <= 0 || panelDisabled}
-                    title="Decrease spacing"
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </IconButton>
-
-                  <NumberInput
-                    value={spacingMm}
-                    onChange={setClampedSpacing}
-                    showStepper={false}
-                    onWheel={(e) => {
-                      if (panelDisabled) return;
-                      e.preventDefault();
-                      setClampedSpacing(spacingMm + (e.deltaY < 0 ? 0.1 : -0.1));
-                    }}
-                    disabled={panelDisabled}
-                    className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                  />
-
-                  <IconButton
-                    className="!h-8 !w-8 shrink-0 !p-0"
-                    onClick={() => setClampedSpacing(spacingMm + 0.1)}
-                    disabled={spacingMm >= 5 || panelDisabled}
-                    title="Increase spacing"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </IconButton>
-                </div>
+                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange Distance</label>
+                <ScrollableNumberField
+                  className="mt-1"
+                  value={spacingMm}
+                  onChange={setClampedSpacing}
+                  min={0}
+                  max={5}
+                  step={0.1}
+                  unit="mm"
+                  disabled={panelDisabled}
+                  ariaLabel="Arrange distance"
+                  decreaseTitle="Decrease spacing"
+                  increaseTitle="Increase spacing"
+                />
               </div>
             </>
           ) : (
@@ -327,31 +251,33 @@ export function DuplicatePanel({
               ] as const).map(([axis, countValue, onCountChange, gapValue, onGapChange]) => (
                 <div key={axis} className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center mb-1 last:mb-0 min-w-0">
                   <span className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{axis}:</span>
-                  <MiniStepperField
+                  <ScrollableNumberField
                     value={countValue}
                     onChange={(next) => setClampedArrayCount(onCountChange, next)}
                     min={1}
                     max={32}
+                    step={1}
                     disabled={panelDisabled}
+                    ariaLabel={`${axis} array count`}
+                    decreaseTitle={`Decrease ${axis} count`}
+                    increaseTitle={`Increase ${axis} count`}
                   />
-                  <MiniStepperField
+                  <ScrollableNumberField
                     value={gapValue}
                     onChange={(next) => setClampedArrayGap(onGapChange, next)}
                     min={0}
                     max={120}
+                    step={1}
+                    unit="mm"
                     disabled={panelDisabled}
+                    ariaLabel={`${axis} array gap`}
+                    decreaseTitle={`Decrease ${axis} gap`}
+                    increaseTitle={`Increase ${axis} gap`}
                   />
                 </div>
               ))}
             </div>
           )}
-
-          <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
-            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
-            <div className="mt-0.5 text-center text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-              {displayTotalCopies}
-            </div>
-          </div>
 
           <Button
             onClick={onConfirm}
