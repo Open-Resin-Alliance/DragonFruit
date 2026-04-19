@@ -569,7 +569,7 @@ export function SettingsModal({
       label: 'Hotkeys',
       description: 'Keyboard bindings and presets',
       icon: Keyboard,
-      tone: 'secondary',
+      tone: 'primary',
     },
     spacemouse: {
       label: '3D Mouse',
@@ -615,6 +615,7 @@ export function SettingsModal({
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
   const isAboutTab = activeTab === 'about';
+  const usesInternalTabScrollLayout = isAboutTab || activeTab === 'hotkeys';
   const isBetaBuildChannel = DRAGONFRUIT_BUILD_CHANNEL.includes('beta');
   const buildStatusLabel = isBetaBuildChannel
     ? 'BETA VERSION'
@@ -796,7 +797,7 @@ export function SettingsModal({
             </div>
           </div>
 
-          <div className={isAboutTab ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
+          <div className={usesInternalTabScrollLayout ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
             <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div className="flex items-center gap-2">
                 <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
@@ -805,7 +806,7 @@ export function SettingsModal({
               <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{tabMeta[activeTab].description}</p>
             </div>
 
-            <div key={activeTab} className={isAboutTab ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
+            <div key={activeTab} className={usesInternalTabScrollLayout ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
               {activeTab === 'general' && (
                 <GeneralSettingsTab
                   floatingLayoutPersistence={draftFloatingLayoutPersistence}
