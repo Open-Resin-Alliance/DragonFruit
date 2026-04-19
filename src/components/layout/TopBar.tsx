@@ -660,6 +660,7 @@ export function TopBar({
             alt="DragonFruit"
             className="h-7 w-7 object-contain"
             draggable={false}
+            style={isLightTheme ? { filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } : undefined}
           />
         </button>
 
