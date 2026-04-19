@@ -160,6 +160,13 @@ export function TopBar({
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
+  const [isLightTheme, setIsLightTheme] = useState(() => {
+    if (typeof document === 'undefined') return false;
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'light') return true;
+    if (attr === 'dark') return false;
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
+  });
   const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
   const [windowMetrics, setWindowMetrics] = useState(() => ({
     innerWidth: 0,
@@ -194,6 +201,18 @@ export function TopBar({
     }
 
     applyThemeCustomColors(getSavedThemeCustomColors());
+
+    const updateLightTheme = () => {
+      const attr = document.documentElement.getAttribute('data-theme');
+      if (attr === 'light') { setIsLightTheme(true); return; }
+      if (attr === 'dark') { setIsLightTheme(false); return; }
+      setIsLightTheme(window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false);
+    };
+    const themeObserver = new MutationObserver(updateLightTheme);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    const mq = window.matchMedia?.('(prefers-color-scheme: light)');
+    mq?.addEventListener('change', updateLightTheme);
+    return () => { themeObserver.disconnect(); mq?.removeEventListener('change', updateLightTheme); };
   }, []);
 
   React.useEffect(() => {
@@ -641,6 +660,7 @@ export function TopBar({
             alt="DragonFruit"
             className="h-7 w-7 object-contain"
             draggable={false}
+            style={isLightTheme ? { filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } : undefined}
           />
         </button>
 
@@ -966,7 +986,7 @@ export function TopBar({
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
                     style={active
                       ? {
-                        color: 'var(--accent-contrast)',
+                        color: 'var(--text-strong)',
                         background: 'color-mix(in srgb, var(--accent), white 10%)',
                       }
                       : {
@@ -980,7 +1000,7 @@ export function TopBar({
 
                   <span
                     className="text-xs font-bold leading-none tracking-[0.01em]"
-                    style={{ color: active ? 'var(--accent-contrast)' : 'var(--text-strong)' }}
+                    style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}
                   >
                     {item.label}
                   </span>
@@ -1029,7 +1049,7 @@ export function TopBar({
               >
                 <AlertTriangle
                   className="w-4 h-4"
-                  style={{ color: 'color-mix(in srgb, #ff6b6b, white 8%)' }}
+                  style={{ color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)' }}
                 />
               </Button>
 
@@ -1087,10 +1107,14 @@ export function TopBar({
               type="button"
               onClick={handleDesktopWindowMinimize}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              style={{
+              style={isLightTheme ? {
+                borderColor: 'color-mix(in srgb, #c8920a, var(--border-subtle) 35%)',
+                background: 'color-mix(in srgb, #c8920a, var(--surface-1) 50%)',
+                color: 'var(--text-strong)',
+              } : {
                 borderColor: 'color-mix(in srgb, #f4bf4f, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #f4bf4f, transparent 86%)',
-                color: 'color-mix(in srgb, #f4bf4f, white 16%)',
+                background: 'color-mix(in srgb, #f4bf4f, var(--surface-1) 86%)',
+                color: 'color-mix(in srgb, #f4bf4f, var(--text-strong) 16%)',
               }}
               title="Minimize"
               aria-label="Minimize window"
@@ -1101,10 +1125,14 @@ export function TopBar({
               type="button"
               onClick={handleDesktopWindowToggleMaximize}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              style={{
+              style={isLightTheme ? {
+                borderColor: 'color-mix(in srgb, #1a7a3a, var(--border-subtle) 35%)',
+                background: 'color-mix(in srgb, #1a7a3a, var(--surface-1) 50%)',
+                color: 'var(--text-strong)',
+              } : {
                 borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #40c463, transparent 86%)',
-                color: 'color-mix(in srgb, #40c463, white 16%)',
+                background: 'color-mix(in srgb, #40c463, var(--surface-1) 86%)',
+                color: 'color-mix(in srgb, #40c463, var(--text-strong) 16%)',
               }}
               title={isDesktopWindowMaximized ? 'Restore' : 'Maximize'}
               aria-label={isDesktopWindowMaximized ? 'Restore window' : 'Maximize window'}
@@ -1119,10 +1147,14 @@ export function TopBar({
               type="button"
               onClick={handleDesktopWindowClose}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              style={{
+              style={isLightTheme ? {
+                borderColor: 'color-mix(in srgb, #c0160a, var(--border-subtle) 35%)',
+                background: 'color-mix(in srgb, #c0160a, var(--surface-1) 50%)',
+                color: 'var(--text-strong)',
+              } : {
                 borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #ff6b6b, transparent 88%)',
-                color: 'color-mix(in srgb, #ff6b6b, white 18%)',
+                background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 88%)',
+                color: 'color-mix(in srgb, #ff6b6b, var(--text-strong) 18%)',
               }}
               title="Close"
               aria-label="Close window"
@@ -1151,9 +1183,9 @@ export function TopBar({
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -1202,7 +1234,7 @@ export function TopBar({
                   style={{
                     borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
                     background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: '#fde68a',
+                    color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                   }}
                   onClick={() => {
                     setShowProfileChangeWarning(false);

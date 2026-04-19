@@ -1,7 +1,8 @@
 "use client";
 
 
-import React, { useState, useEffect, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
+import ReactDOM from 'react-dom';
 import { Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import {
@@ -75,6 +76,9 @@ const KIND_META: Record<SupportKind, { label: string; icon: typeof Pickaxe }> = 
     grid: { label: 'Grid', icon: Grid3X3 },
     stick: { label: 'Bracing', icon: WandSparkles },
 };
+
+const OVERFLOW_COMPACT_KIND_SET = new Set<SupportKind>(['trunk', 'raft', 'grid', 'stick']);
+const POPUP_PREVIEW_KIND_SET = new Set<SupportKind>(['trunk']);
 
 function normalizeTabKind(kind: SupportKind): SupportKind {
     if (kind === 'branch' || kind === 'leaf' || kind === 'twig') {
@@ -206,6 +210,102 @@ export function SupportSidebar() {
     const editSessionLatestSettingsRef = React.useRef<SupportSettings | null>(null);
     const globalSettingsBeforeSupportEditRef = React.useRef<SupportSettings | null>(null);
     const supportEditSessionDirtyRef = React.useRef(false);
+    const scrollViewportRef = React.useRef<HTMLDivElement | null>(null);
+    const scrollContentRef = React.useRef<HTMLDivElement | null>(null);
+    const supportSidebarAnchorRef = React.useRef<HTMLDivElement | null>(null);
+    const [trunkCompactByOverflow, setTrunkCompactByOverflow] = React.useState(false);
+    const [floatingTrunkPreviewPlacement, setFloatingTrunkPreviewPlacement] = React.useState<{ top: number; left: number; width: number; height: number } | null>(null);
+    const floatingTrunkPreviewHideTimeoutRef = React.useRef<number | null>(null);
+    const floatingTrunkPreviewFadeTimeoutRef = React.useRef<number | null>(null);
+    const [floatingTrunkPreviewHeldOpen, setFloatingTrunkPreviewHeldOpen] = React.useState(false);
+    const [floatingTrunkPreviewFadingOut, setFloatingTrunkPreviewFadingOut] = React.useState(false);
+    const compactEnteredWindowHeightRef = React.useRef<number | null>(null);
+
+    useEffect(() => {
+        if (!OVERFLOW_COMPACT_KIND_SET.has(activeKind) || !trunkCompactByOverflow) {
+            compactEnteredWindowHeightRef.current = null;
+            return;
+        }
+
+        compactEnteredWindowHeightRef.current = window.innerHeight;
+    }, [activeKind, trunkCompactByOverflow]);
+
+    useLayoutEffect(() => {
+        if (!expanded || showCurvePage || !OVERFLOW_COMPACT_KIND_SET.has(activeKind)) return;
+        const viewport = scrollViewportRef.current;
+        if (!viewport) return;
+
+        const OVERFLOW_EPSILON = 1;
+        const PREVIEW_RESTORE_HEADROOM_PX = 8;
+        const PREVIEW_RESTORE_WINDOW_GROWTH_PX = 24;
+        let rafId: number | null = null;
+
+        const evaluate = () => {
+            rafId = null;
+            const contentHeight = Math.ceil(
+                scrollContentRef.current?.getBoundingClientRect().height
+                ?? viewport.scrollHeight,
+            );
+            const wouldOverflow = (contentHeight - viewport.clientHeight) > OVERFLOW_EPSILON;
+
+            setTrunkCompactByOverflow((prev) => {
+                if (!prev) {
+                    return wouldOverflow;
+                }
+
+                if (wouldOverflow) {
+                    return true;
+                }
+
+                const compactHeadroom = viewport.clientHeight - contentHeight;
+                if (compactHeadroom >= PREVIEW_RESTORE_HEADROOM_PX) {
+                    return false;
+                }
+
+                const compactEnteredWindowHeight = compactEnteredWindowHeightRef.current;
+                if (
+                    compactEnteredWindowHeight !== null
+                    && window.innerHeight >= compactEnteredWindowHeight + PREVIEW_RESTORE_WINDOW_GROWTH_PX
+                ) {
+                    return false;
+                }
+
+                return true;
+            });
+        };
+
+        const scheduleEvaluate = () => {
+            if (rafId !== null) {
+                window.cancelAnimationFrame(rafId);
+            }
+            rafId = window.requestAnimationFrame(evaluate);
+        };
+
+        scheduleEvaluate();
+
+        const observer = new ResizeObserver(() => {
+            scheduleEvaluate();
+        });
+        observer.observe(viewport);
+        if (scrollContentRef.current) {
+            observer.observe(scrollContentRef.current);
+        }
+        window.addEventListener('resize', scheduleEvaluate);
+
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', scheduleEvaluate);
+            if (rafId !== null) {
+                window.cancelAnimationFrame(rafId);
+            }
+        };
+    }, [expanded, showCurvePage, activeKind]);
+
+    useEffect(() => {
+        if (!OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow) {
+            setTrunkCompactByOverflow(false);
+        }
+    }, [activeKind, trunkCompactByOverflow]);
 
     const makeRowFocusHandlers = React.useCallback((key: string) => {
         return {
@@ -510,12 +610,172 @@ export function SupportSidebar() {
         </div>
     );
 
-    const sectionScrollClass = 'max-h-[calc(100vh-var(--topbar-height)-190px)] overflow-y-auto custom-scrollbar pr-1';
-    const compactFieldLabelClass = 'text-[11px] font-medium leading-tight';
-    const supportGeometryFields = (
+    const sectionScrollClass = 'flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1';
+    const shouldUseOverflowCompactMode = OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow;
+    const shouldUseCompactTrunkLayout = activeKind === 'trunk' && shouldUseOverflowCompactMode;
+    const hasFloatingTrunkPreviewTrigger = POPUP_PREVIEW_KIND_SET.has(activeKind)
+        && (Boolean(activeKey) || Boolean(previewState.hoveredPresetSettings));
+    const shouldShowFloatingTrunkPreview = expanded
+        && POPUP_PREVIEW_KIND_SET.has(activeKind)
+        && shouldUseOverflowCompactMode
+        && floatingTrunkPreviewHeldOpen;
+
+    useEffect(() => {
+        const supportsFloatingPreview = expanded
+            && POPUP_PREVIEW_KIND_SET.has(activeKind)
+            && shouldUseOverflowCompactMode;
+        if (!supportsFloatingPreview) {
+            if (floatingTrunkPreviewHideTimeoutRef.current !== null) {
+                window.clearTimeout(floatingTrunkPreviewHideTimeoutRef.current);
+                floatingTrunkPreviewHideTimeoutRef.current = null;
+            }
+            if (floatingTrunkPreviewFadeTimeoutRef.current !== null) {
+                window.clearTimeout(floatingTrunkPreviewFadeTimeoutRef.current);
+                floatingTrunkPreviewFadeTimeoutRef.current = null;
+            }
+            setFloatingTrunkPreviewFadingOut(false);
+            setFloatingTrunkPreviewHeldOpen(false);
+            return;
+        }
+
+        if (hasFloatingTrunkPreviewTrigger) {
+            if (floatingTrunkPreviewHideTimeoutRef.current !== null) {
+                window.clearTimeout(floatingTrunkPreviewHideTimeoutRef.current);
+                floatingTrunkPreviewHideTimeoutRef.current = null;
+            }
+            if (floatingTrunkPreviewFadeTimeoutRef.current !== null) {
+                window.clearTimeout(floatingTrunkPreviewFadeTimeoutRef.current);
+                floatingTrunkPreviewFadeTimeoutRef.current = null;
+            }
+            setFloatingTrunkPreviewFadingOut(false);
+            setFloatingTrunkPreviewHeldOpen(true);
+            return;
+        }
+
+        if (!floatingTrunkPreviewHeldOpen) {
+            return;
+        }
+
+        if (floatingTrunkPreviewHideTimeoutRef.current !== null || floatingTrunkPreviewFadeTimeoutRef.current !== null) {
+            return;
+        }
+
+        floatingTrunkPreviewHideTimeoutRef.current = window.setTimeout(() => {
+            floatingTrunkPreviewHideTimeoutRef.current = null;
+            setFloatingTrunkPreviewFadingOut(true);
+
+            floatingTrunkPreviewFadeTimeoutRef.current = window.setTimeout(() => {
+                floatingTrunkPreviewFadeTimeoutRef.current = null;
+                setFloatingTrunkPreviewHeldOpen(false);
+                setFloatingTrunkPreviewFadingOut(false);
+            }, 240);
+        }, 2000);
+    }, [expanded, activeKind, shouldUseOverflowCompactMode, hasFloatingTrunkPreviewTrigger, floatingTrunkPreviewHeldOpen]);
+
+    useEffect(() => {
+        return () => {
+            if (floatingTrunkPreviewHideTimeoutRef.current !== null) {
+                window.clearTimeout(floatingTrunkPreviewHideTimeoutRef.current);
+                floatingTrunkPreviewHideTimeoutRef.current = null;
+            }
+            if (floatingTrunkPreviewFadeTimeoutRef.current !== null) {
+                window.clearTimeout(floatingTrunkPreviewFadeTimeoutRef.current);
+                floatingTrunkPreviewFadeTimeoutRef.current = null;
+            }
+        };
+    }, []);
+
+    useLayoutEffect(() => {
+        if (!shouldShowFloatingTrunkPreview) {
+            setFloatingTrunkPreviewPlacement(null);
+            return;
+        }
+
+        const anchor = supportSidebarAnchorRef.current;
+        if (!anchor) return;
+
+        const MARGIN = 12;
+        const GAP = 10;
+        let rafId: number | null = null;
+
+        const updatePlacement = () => {
+            rafId = null;
+            const rect = anchor.getBoundingClientRect();
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+
+            const MIN_PREVIEW_HEIGHT = 220;
+            const preferredTop = rect.top + 2;
+            const top = Math.max(MARGIN, Math.min(preferredTop, viewportHeight - MARGIN - MIN_PREVIEW_HEIGHT));
+
+            const maxHeightForTop = Math.max(MIN_PREVIEW_HEIGHT, viewportHeight - top - MARGIN);
+            const height = Math.max(MIN_PREVIEW_HEIGHT, Math.min(Math.floor(rect.height), maxHeightForTop));
+
+            const desiredWidth = Math.floor(height * 0.30);
+            const width = Math.max(150, Math.min(230, desiredWidth));
+
+            const rightLeft = rect.right + GAP;
+            const leftLeft = rect.left - GAP - width;
+            const fitsRight = rightLeft + width <= (viewportWidth - MARGIN);
+            const fitsLeft = leftLeft >= MARGIN;
+
+            let left = rightLeft;
+            if (!fitsRight && fitsLeft) {
+                left = leftLeft;
+            } else if (!fitsRight && !fitsLeft) {
+                left = Math.max(MARGIN, viewportWidth - width - MARGIN);
+            }
+
+            setFloatingTrunkPreviewPlacement((prev) => {
+                if (
+                    prev
+                    && prev.top === top
+                    && prev.left === left
+                    && prev.width === width
+                    && prev.height === height
+                ) {
+                    return prev;
+                }
+                return { top, left, width, height };
+            });
+        };
+
+        const schedulePlacement = () => {
+            if (rafId !== null) {
+                window.cancelAnimationFrame(rafId);
+            }
+            rafId = window.requestAnimationFrame(updatePlacement);
+        };
+
+        schedulePlacement();
+
+        const observer = new ResizeObserver(() => {
+            schedulePlacement();
+        });
+        observer.observe(anchor);
+
+        window.addEventListener('resize', schedulePlacement);
+        window.addEventListener('scroll', schedulePlacement, true);
+
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', schedulePlacement);
+            window.removeEventListener('scroll', schedulePlacement, true);
+            if (rafId !== null) {
+                window.cancelAnimationFrame(rafId);
+            }
+        };
+    }, [shouldShowFloatingTrunkPreview]);
+
+    const compactFieldLabelClass = shouldUseCompactTrunkLayout
+        ? 'text-[11px] font-medium leading-tight truncate whitespace-nowrap'
+        : 'text-[11px] font-medium leading-tight';
+    const compactTrunkPairClass = 'grid grid-cols-2 gap-1.5 items-start';
+
+    const supportGeometryFieldsDefault = (
         <div className="space-y-2.5">
             <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
-                <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact Diameter (mm)</div>
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Diameter (mm)">Contact Diameter (mm)</div>
                 <NumberInput
                     value={settings.tip.contactDiameterMm}
                     onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
@@ -526,7 +786,7 @@ export function SupportSidebar() {
 
             {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
-                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact Cone Length (mm)</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Cone Length (mm)">Contact Cone Length (mm)</div>
                     <NumberInput
                         value={settings.tip.lengthMm}
                         onChange={(val) => updateTipProfile({ lengthMm: val })}
@@ -545,9 +805,9 @@ export function SupportSidebar() {
                     <div
                         className={isAdaptiveConeAngle ? 'grid grid-cols-[1fr_82px] gap-1 items-center' : 'flex items-center'}
                     >
-                        <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Cone Angle</div>
+                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Angle">Cone Angle</div>
                         {isAdaptiveConeAngle && (
-                            <div className="justify-self-start text-[11px] text-left" style={{ color: 'var(--text-muted)' }}>Offset</div>
+                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Offset">Offset</div>
                         )}
                     </div>
                     <div
@@ -591,7 +851,7 @@ export function SupportSidebar() {
 
             {(activeKind === 'trunk' || activeKind === 'branch') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
-                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Trunk Diameter (mm)</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Trunk Diameter (mm)">Trunk Diameter (mm)</div>
                     <NumberInput
                         value={settings.shaft.diameterMm}
                         onChange={(val) => updateShaftProfile({ diameterMm: val })}
@@ -607,7 +867,7 @@ export function SupportSidebar() {
                     <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Roots</div>
 
                     <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
-                        <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Roots Diameter (mm)</div>
+                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Roots Diameter (mm)">Roots Diameter (mm)</div>
                         <NumberInput
                             value={settings.roots.diameterMm}
                             onChange={(val) => updateRootsProfile({ diameterMm: val })}
@@ -642,11 +902,138 @@ export function SupportSidebar() {
         </div>
     );
 
+    const supportGeometryFieldsCompactTrunk = (
+        <div className="space-y-2.5">
+            <div className={compactTrunkPairClass}>
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Diameter (mm)">Contact Diameter (mm)</div>
+                    <NumberInput
+                        value={settings.tip.contactDiameterMm}
+                        onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
+                        step={0.1}
+                        {...getInputProps('tip.contactDiameterMm', compactInputClass)}
+                    />
+                </div>
+
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Cone Length (mm)">Contact Cone Length (mm)</div>
+                    <NumberInput
+                        value={settings.tip.lengthMm}
+                        onChange={(val) => updateTipProfile({ lengthMm: val })}
+                        step={0.1}
+                        {...getInputProps('tip.lengthMm', compactInputClass)}
+                    />
+                </div>
+            </div>
+
+            <div className="space-y-1 min-w-0" {...fieldFocusProps('tip.coneAngleMode', () => setAnatomyPreviewActiveSettingKey('tip.coneAngleMode'), (e) => {
+                const next = e.relatedTarget as Node | null;
+                if (next && e.currentTarget.contains(next)) return;
+                setAnatomyPreviewActiveSettingKey(null);
+            })}>
+                <div
+                    className={isAdaptiveConeAngle ? 'grid grid-cols-2 gap-1.5 items-center' : 'flex items-center'}
+                >
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Angle">Cone Angle</div>
+                    {isAdaptiveConeAngle && (
+                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Offset">Offset</div>
+                    )}
+                </div>
+                <div
+                    className={isAdaptiveConeAngle ? 'grid grid-cols-2 gap-1.5 items-center' : 'flex items-center gap-1'}
+                >
+                    <SelectDropdown
+                        value={settings.tip.coneAngleMode ?? 'normal'}
+                        onChange={(value) => updateTipProfile({ coneAngleMode: value as 'normal' | 'locked' | 'adaptive' })}
+                        options={[
+                            { value: 'normal', label: 'Normal' },
+                            { value: 'locked', label: 'Locked' },
+                            { value: 'adaptive', label: 'Adaptive' },
+                        ]}
+                        className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 space-y-0`}
+                        selectClassName={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate`}
+                        menuClassName="!min-w-[9.5rem]"
+                        selectedDisplay={useAdaptiveIconCompactDisplay ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
+                        hideSelectedText={useAdaptiveIconCompactDisplay}
+                        selectedDisplayAlignment={useAdaptiveIconCompactDisplay ? 'center' : 'left'}
+                        selectedDisplayOffsetX={useAdaptiveIconCompactDisplay ? -7 : 0}
+                        selectStyle={activeKey === 'tip.coneAngleMode'
+                            ? {
+                                borderColor: 'var(--accent)',
+                                boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), white 8%) inset, 0 0 0 2px color-mix(in srgb, var(--accent), transparent 72%)',
+                            }
+                            : undefined}
+                    />
+
+                    {isAdaptiveConeAngle && (
+                        <NumberInput
+                            value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
+                            onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
+                            aria-label="Adaptive offset (deg)"
+                            title="Adaptive offset (deg)"
+                            {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
+                        />
+                    )}
+                </div>
+            </div>
+
+            <div className={compactTrunkPairClass}>
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Trunk Diameter (mm)">Trunk Diameter (mm)</div>
+                    <NumberInput
+                        value={settings.shaft.diameterMm}
+                        onChange={(val) => updateShaftProfile({ diameterMm: val })}
+                        step={0.1}
+                        {...getInputProps('shaft.diameterMm', compactInputClass)}
+                    />
+                </div>
+
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Roots Diameter (mm)">Roots Diameter (mm)</div>
+                    <NumberInput
+                        value={settings.roots.diameterMm}
+                        onChange={(val) => updateRootsProfile({ diameterMm: val })}
+                        step={0.1}
+                        {...getInputProps('roots.diameterMm', compactInputClass)}
+                    />
+                </div>
+            </div>
+
+            <div className={compactTrunkPairClass}>
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Disk Height (mm)">Disk Height (mm)</div>
+                    <NumberInput
+                        value={settings.roots.diskHeightMm}
+                        onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
+                        step={0.1}
+                        {...getInputProps('roots.diskHeightMm', compactInputClass)}
+                    />
+                </div>
+
+                <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.coneHeightMm')}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Height (mm)">Cone Height (mm)</div>
+                    <NumberInput
+                        value={settings.roots.coneHeightMm}
+                        onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
+                        step={0.1}
+                        {...getInputProps('roots.coneHeightMm', compactInputClass)}
+                    />
+                </div>
+            </div>
+        </div>
+    );
+
+    const supportGeometryFields = shouldUseCompactTrunkLayout && activeKind === 'trunk'
+        ? supportGeometryFieldsCompactTrunk
+        : supportGeometryFieldsDefault;
+
     const activeKindIcon = activeKindMeta.icon;
     const ActiveKindIcon = activeKindIcon;
 
     return (
-        <Card>
+        <>
+        <div ref={supportSidebarAnchorRef}>
+        <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
             <CardHeader
                 left={(
                     <>
@@ -681,9 +1068,9 @@ export function SupportSidebar() {
             />
 
             {expanded && (
-                <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
-                    <div className={sectionScrollClass}>
-                        <div className="space-y-2">
+                <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5 flex flex-col flex-1 min-h-0">
+                    <div ref={scrollViewportRef} className={sectionScrollClass}>
+                        <div ref={scrollContentRef} className="space-y-2">
                             {showCurvePage ? (
                                 <>
                                     <Section title="Curves" accent>
@@ -692,21 +1079,21 @@ export function SupportSidebar() {
                                 </>
                             ) : (
                                 <>
-                                    <Section title="Support type" accent>
-                                        <SupportKindTabs
-                                            value={tabKind}
-                                            onChange={(kind) => {
-                                                setAnatomyPreviewActiveSettingKey(null);
-                                                setActiveSupportKind(kind);
-                                            }}
-                                        />
-                                    </Section>
+                                    <SupportKindTabs
+                                        value={tabKind}
+                                        onChange={(kind) => {
+                                            setAnatomyPreviewActiveSettingKey(null);
+                                            setActiveSupportKind(kind);
+                                        }}
+                                    />
 
                                     {activeKind === 'raft' ? (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[220px]')}
-                                            </Section>
+                                            {!shouldUseOverflowCompactMode ? (
+                                                <Section title="Anatomy preview">
+                                                    {renderPreviewBox('h-[220px]')}
+                                                </Section>
+                                            ) : null}
                                             <Section title="Raft settings">
                                                 <RaftSettingsCard
                                                     settings={raftSettings}
@@ -716,9 +1103,11 @@ export function SupportSidebar() {
                                         </>
                                     ) : activeKind === 'grid' ? (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[220px]')}
-                                            </Section>
+                                            {!shouldUseOverflowCompactMode ? (
+                                                <Section title="Anatomy preview">
+                                                    {renderPreviewBox('h-[220px]')}
+                                                </Section>
+                                            ) : null}
                                             <Section title="Grid settings">
                                                 <GridSettingsCard
                                                     grid={settings.grid}
@@ -728,9 +1117,11 @@ export function SupportSidebar() {
                                         </>
                                     ) : activeKind === 'stick' ? (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[250px]')}
-                                            </Section>
+                                            {!shouldUseOverflowCompactMode ? (
+                                                <Section title="Anatomy preview">
+                                                    {renderPreviewBox('h-[250px]')}
+                                                </Section>
+                                            ) : null}
                                             <Section title="Auto bracing">
                                                 <AutoBracingSettingsCard
                                                     settings={settings.autoBracing}
@@ -742,21 +1133,30 @@ export function SupportSidebar() {
                                         </>
                                     ) : activeKind === 'trunk' ? (
                                         <>
-                                            <div className="flex gap-2 items-stretch">
-                                                <div className="flex-1 min-w-0 rounded-md border p-2 flex flex-col" style={SECTION_CARD_STYLE}>
-                                                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                        Anatomy preview
-                                                    </div>
-                                                    {renderPreviewBox('flex-1 min-h-[340px]')}
-                                                </div>
-
-                                                <div className="flex-1 min-w-0 rounded-md border p-2" style={SECTION_CARD_STYLE}>
+                                            {shouldUseCompactTrunkLayout ? (
+                                                <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                     <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                                                         Support geometry
                                                     </div>
                                                     {supportGeometryFields}
                                                 </div>
-                                            </div>
+                                            ) : (
+                                                <div className="flex gap-2 items-stretch">
+                                                    <div className="flex-1 min-w-0 rounded-md border p-2 flex flex-col" style={SECTION_CARD_STYLE}>
+                                                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                                            Anatomy preview
+                                                        </div>
+                                                        {renderPreviewBox('flex-1 min-h-[340px]')}
+                                                    </div>
+
+                                                    <div className="flex-1 min-w-0 rounded-md border p-2" style={SECTION_CARD_STYLE}>
+                                                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                                            Support geometry
+                                                        </div>
+                                                        {supportGeometryFields}
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <PresetSelector
@@ -821,10 +1221,10 @@ export function SupportSidebar() {
                     </div>
 
                     {activeKind !== 'trunk' ? (
-                        <Section title="Actions" accent>
+                        <div className="space-y-1.5 px-0.5">
                             {saveStatus !== 'idle' && (
                                 <div
-                                    className="mb-2 text-[10px]"
+                                    className="text-[10px]"
                                     style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
                                 >
                                     {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
@@ -854,10 +1254,39 @@ export function SupportSidebar() {
                                     <span>Defaults</span>
                                 </Button>
                             </div>
-                        </Section>
+                        </div>
                     ) : null}
                 </div>
             )}
         </Card>
+        </div>
+
+        {shouldShowFloatingTrunkPreview && floatingTrunkPreviewPlacement && typeof document !== 'undefined' && ReactDOM.createPortal(
+            <div
+                className="fixed z-[115] pointer-events-none rounded-lg border p-2 shadow-2xl flex flex-col"
+                style={{
+                    top: floatingTrunkPreviewPlacement.top,
+                    left: floatingTrunkPreviewPlacement.left,
+                    width: floatingTrunkPreviewPlacement.width,
+                    height: floatingTrunkPreviewPlacement.height,
+                    opacity: floatingTrunkPreviewFadingOut ? 0 : 1,
+                    transform: floatingTrunkPreviewFadingOut ? 'translateY(6px)' : 'translateY(0px)',
+                    transition: 'opacity 240ms ease, transform 240ms ease',
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 70%)',
+                    background: 'color-mix(in srgb, var(--surface-0), #000 12%)',
+                    boxShadow: '0 18px 34px color-mix(in srgb, var(--surface-0), black 44%)',
+                }}
+                aria-hidden="true"
+            >
+                <div
+                    className="w-full flex-1 min-h-0 rounded-md border overflow-hidden"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                >
+                    <SupportAnatomyPreviewSlot />
+                </div>
+            </div>,
+            document.body,
+        )}
+        </>
     );
 }

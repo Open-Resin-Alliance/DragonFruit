@@ -32,6 +32,13 @@ export type SelectDropdownProps<T extends string | number = string> = {
   menuClassName?: string;
   menuAlign?: 'left' | 'right';
   optionClassName?: string;
+  menuFooterAction?: {
+    label: string;
+    onClick: () => void;
+    icon?: React.ReactNode;
+    tone?: 'default' | 'accent' | 'danger';
+  };
+  menuFooterDivider?: boolean;
   onFocus?: React.FocusEventHandler<HTMLElement>;
   onBlur?: React.FocusEventHandler<HTMLElement>;
 };
@@ -63,6 +70,8 @@ export function SelectDropdown<T extends string | number = string>({
   menuClassName = '',
   menuAlign = 'left',
   optionClassName = '',
+  menuFooterAction,
+  menuFooterDivider = true,
   onFocus,
   onBlur,
 }: SelectDropdownProps<T>) {
@@ -72,6 +81,7 @@ export function SelectDropdown<T extends string | number = string>({
   const [isOpen, setIsOpen] = React.useState(false);
   const [isFocused, setIsFocused] = React.useState(false);
   const [hoveredOptionKey, setHoveredOptionKey] = React.useState<string | null>(null);
+  const [isFooterActionHovered, setIsFooterActionHovered] = React.useState(false);
   const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number; minWidth: number; maxHeight: number; visibility: 'hidden' | 'visible' } | null>(null);
 
   const selectedOption = React.useMemo(
@@ -163,6 +173,7 @@ export function SelectDropdown<T extends string | number = string>({
   React.useEffect(() => {
     if (!isOpen) {
       setHoveredOptionKey(null);
+      setIsFooterActionHovered(false);
       setMenuPosition(null);
       return;
     }
@@ -291,7 +302,7 @@ export function SelectDropdown<T extends string | number = string>({
           <div
             ref={menuRef}
             role="listbox"
-            className={`fixed z-[9999] overflow-y-auto rounded-[4px] border shadow-xl custom-scrollbar ${menuClassName}`}
+            className={`fixed z-[9999] rounded-[4px] border shadow-xl ${menuClassName}`}
             style={{
               top: menuPosition?.top ?? 0,
               left: menuPosition?.left ?? 0,
@@ -306,80 +317,139 @@ export function SelectDropdown<T extends string | number = string>({
               boxShadow: '0 14px 34px rgba(0, 0, 0, 0.46), 0 4px 12px rgba(0, 0, 0, 0.32)',
             }}
           >
-            {options.map((option, index) => {
-              const optionKey = String(option.value);
-              const isSelected = optionKey === String(value);
-              const isHovered = hoveredOptionKey === optionKey;
-              const optionTone = option.tone ?? 'default';
-              const isAccentTone = optionTone === 'accent';
+            <div className="flex max-h-full flex-col">
+              <div className="overflow-y-auto custom-scrollbar" style={{ maxHeight: menuPosition?.maxHeight }}>
+                {options.map((option, index) => {
+                  const optionKey = String(option.value);
+                  const isSelected = optionKey === String(value);
+                  const isHovered = hoveredOptionKey === optionKey;
+                  const optionTone = option.tone ?? 'default';
+                  const isAccentTone = optionTone === 'accent';
 
-              return (
-                <button
-                  key={optionKey}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  disabled={option.disabled}
-                  onMouseEnter={() => setHoveredOptionKey(optionKey)}
-                  onMouseLeave={() => setHoveredOptionKey((prev) => (prev === optionKey ? null : prev))}
-                  onClick={() => {
-                    if (option.disabled) return;
-                    onChange(option.value);
-                    setIsOpen(false);
-                    setIsFocused(false);
-                    clearActiveFocus();
-                    window.requestAnimationFrame(() => {
-                      clearActiveFocus();
-                    });
-                  }}
-                  className={`group w-full px-3 py-2 text-left text-sm transition-colors inline-flex items-center gap-2 border-b last:border-b-0 ${optionClassName}`}
-                  style={
-                    option.disabled
-                      ? {
-                          opacity: 0.55,
-                          cursor: 'not-allowed',
-                          borderBottomColor: 'var(--border-subtle)',
-                        }
-                      : {
-                          borderBottomColor: index === options.length - 1 ? 'transparent' : 'color-mix(in srgb, var(--border-subtle), transparent 16%)',
-                          background: isSelected
-                            ? 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)'
-                            : (isHovered
-                              ? (isAccentTone
-                                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
-                                : 'color-mix(in srgb, var(--surface-2), transparent 18%)')
-                              : 'transparent'),
-                          color: isAccentTone
-                            ? 'var(--accent-secondary)'
-                            : ((isSelected || isHovered) ? 'var(--text-strong)' : 'var(--text-muted)'),
-                        }
-                  }
-                >
-                  {option.icon ? (
-                    <span
-                      className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center"
-                      style={{
-                        color: isAccentTone
-                          ? 'var(--accent-secondary)'
-                          : (isSelected
-                            ? 'var(--accent)'
-                            : (isHovered ? 'var(--text-strong)' : 'var(--text-muted)')),
+                  return (
+                    <button
+                      key={optionKey}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      disabled={option.disabled}
+                      onMouseEnter={() => setHoveredOptionKey(optionKey)}
+                      onMouseLeave={() => setHoveredOptionKey((prev) => (prev === optionKey ? null : prev))}
+                      onClick={() => {
+                        if (option.disabled) return;
+                        onChange(option.value);
+                        setIsOpen(false);
+                        setIsFocused(false);
+                        clearActiveFocus();
+                        window.requestAnimationFrame(() => {
+                          clearActiveFocus();
+                        });
                       }}
+                      className={`group w-full px-3 py-2 text-left text-sm transition-colors inline-flex items-center gap-2 border-b last:border-b-0 ${optionClassName}`}
+                      style={
+                        option.disabled
+                          ? {
+                              opacity: 0.55,
+                              cursor: 'not-allowed',
+                              borderBottomColor: 'var(--border-subtle)',
+                            }
+                          : {
+                              borderBottomColor: index === options.length - 1 ? 'transparent' : 'color-mix(in srgb, var(--border-subtle), transparent 16%)',
+                              background: isSelected
+                                ? 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)'
+                                : (isHovered
+                                  ? (isAccentTone
+                                    ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
+                                    : 'color-mix(in srgb, var(--surface-2), transparent 18%)')
+                                  : 'transparent'),
+                              color: isAccentTone
+                                ? 'var(--accent-secondary)'
+                                : ((isSelected || isHovered) ? 'var(--text-strong)' : 'var(--text-muted)'),
+                            }
+                      }
                     >
-                      {option.icon}
-                    </span>
-                  ) : null}
-                  <span className="truncate text-[0.95em]">
-                    {option.label}
-                  </span>
-                  {option.rightContent ? (
-                    <span className="ml-auto inline-flex shrink-0 items-center justify-end text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      {option.rightContent}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+                      {option.icon ? (
+                        <span
+                          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+                          style={{
+                            color: isAccentTone
+                              ? 'var(--accent-secondary)'
+                              : (isSelected
+                                ? 'var(--accent)'
+                                : (isHovered ? 'var(--text-strong)' : 'var(--text-muted)')),
+                          }}
+                        >
+                          {option.icon}
+                        </span>
+                      ) : null}
+                      <span className="truncate text-[0.95em]">
+                        {option.label}
+                      </span>
+                      {option.rightContent ? (
+                        <span className="ml-auto inline-flex shrink-0 items-center justify-end text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          {option.rightContent}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {menuFooterAction ? (
+                <div
+                  className="py-0"
+                  style={{
+                    borderTop: menuFooterDivider ? '1px solid color-mix(in srgb, var(--border-subtle), transparent 14%)' : 'none',
+                    background: 'transparent',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onMouseEnter={() => setIsFooterActionHovered(true)}
+                    onMouseLeave={() => setIsFooterActionHovered(false)}
+                    onClick={() => {
+                      menuFooterAction.onClick();
+                      setIsOpen(false);
+                      setIsFocused(false);
+                      clearActiveFocus();
+                      window.requestAnimationFrame(() => {
+                        clearActiveFocus();
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm inline-flex items-center gap-2 transition-colors"
+                    style={
+                      menuFooterAction.tone === 'danger'
+                        ? {
+                            color: 'var(--danger)',
+                            background: isFooterActionHovered
+                              ? 'color-mix(in srgb, var(--danger), var(--surface-0) 92%)'
+                              : 'transparent',
+                          }
+                        : menuFooterAction.tone === 'accent'
+                          ? {
+                              color: 'var(--accent-secondary-action-color)',
+                              background: isFooterActionHovered
+                                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)'
+                                : 'transparent',
+                            }
+                          : {
+                              color: isFooterActionHovered ? 'var(--text-strong)' : 'var(--text-muted)',
+                              background: isFooterActionHovered
+                                ? 'color-mix(in srgb, var(--surface-2), transparent 18%)'
+                                : 'transparent',
+                            }
+                    }
+                  >
+                    {menuFooterAction.icon ? (
+                      <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                        {menuFooterAction.icon}
+                      </span>
+                    ) : null}
+                    <span className="truncate">{menuFooterAction.label}</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>,
           document.body,
         )}

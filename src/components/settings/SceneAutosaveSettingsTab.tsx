@@ -141,7 +141,7 @@ export function SceneAutosaveSettingsTab() {
                 ? {
                     borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                     background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'var(--accent-contrast)',
+                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                   }
                 : {
                     borderColor: 'var(--border-subtle)',
@@ -224,8 +224,8 @@ export function SceneAutosaveSettingsTab() {
 
       <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <div className="flex items-start gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)' }}>
-            <AlertTriangle className="h-4 w-4" style={{ color: '#f59e0b' }} />
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)' }}>
+            <AlertTriangle className="h-4 w-4" style={{ color: '#d97706' }} />
           </span>
           <div className="flex-1">
             <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Crash Recovery</h4>
@@ -246,7 +246,7 @@ export function SceneAutosaveSettingsTab() {
               ? {
                   borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                   background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                  color: 'var(--accent-contrast)',
+                  color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                 }
               : {
                   borderColor: 'var(--border-subtle)',

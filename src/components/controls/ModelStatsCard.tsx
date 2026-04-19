@@ -434,7 +434,7 @@ export function ModelStatsCard({
   const frontHeader = connectedHostName || activePrinterProfile?.name || 'No printer connected';
   const frontHeaderColor = isNetworkPrinterOffline
     ? 'color-mix(in srgb, #f87171, var(--text-strong) 58%)'
-    : (connectedHostName ? '#86efac' : 'var(--text-strong)');
+    : (connectedHostName ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' : 'var(--text-strong)');
 
   const handleToggleFlip = React.useCallback(() => {
     setIsFlipped((prev) => !prev);
@@ -573,7 +573,9 @@ export function ModelStatsCard({
                   background: model.geometry.meshDefects.repairedByManifold
                     ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
                     : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
-                  color: model.geometry.meshDefects.repairedByManifold ? '#86efac' : '#fde68a',
+                  color: model.geometry.meshDefects.repairedByManifold
+                    ? 'color-mix(in srgb, #22c55e, var(--text-strong) 20%)'
+                    : 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                   border: model.geometry.meshDefects.repairedByManifold
                     ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
                     : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',

@@ -1037,6 +1037,7 @@ type ReplacementMaterialEditorShellProps = {
   onActiveTabChange: (tabId: string) => void;
   draft: MaterialDraft;
   onDraftChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+  activeTabStyle?: React.CSSProperties;
   outputFormat: string;
   settingsMode?: string;
   adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
@@ -1051,6 +1052,7 @@ export function ReplacementMaterialEditorShell({
   draft,
   onDraftChange,
   outputFormat,
+  activeTabStyle,
   settingsMode,
   adapter,
   localSettingsByOutput,
@@ -1102,7 +1104,7 @@ export function ReplacementMaterialEditorShell({
               onClick={() => onActiveTabChange(tab.id)}
               className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
               style={active
-                ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                ? (activeTabStyle ?? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' })
                 : { color: 'var(--text-muted)' }}
             >
               {tab.title}

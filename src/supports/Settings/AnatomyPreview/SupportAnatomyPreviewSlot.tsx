@@ -71,7 +71,8 @@ export function SupportAnatomyPreviewSlot() {
     return (
         <div
             data-no-drag="true"
-            className="w-full h-full relative rounded-lg overflow-hidden bg-neutral-900/50"
+            className="w-full h-full relative rounded-lg overflow-hidden"
+            style={{ background: 'var(--surface-1)' }}
             onContextMenuCapture={(event) => {
                 event.preventDefault();
                 setContextMenuPos({ x: event.clientX, y: event.clientY });

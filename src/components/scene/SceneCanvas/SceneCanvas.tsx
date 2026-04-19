@@ -525,6 +525,32 @@ export function SceneCanvas({
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
+
+  const [isLightTheme, setIsLightTheme] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    const html = document.documentElement;
+    return (
+      html.classList.contains('dragonfruit-light') ||
+      html.getAttribute('data-theme') === 'light' ||
+      (window.matchMedia('(prefers-color-scheme: light)').matches && !html.classList.contains('dragonfruit-dark'))
+    );
+  });
+  React.useEffect(() => {
+    const check = () => {
+      const html = document.documentElement;
+      setIsLightTheme(
+        html.classList.contains('dragonfruit-light') ||
+        html.getAttribute('data-theme') === 'light' ||
+        (window.matchMedia('(prefers-color-scheme: light)').matches && !html.classList.contains('dragonfruit-dark')),
+      );
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    mq.addEventListener('change', check);
+    return () => { observer.disconnect(); mq.removeEventListener('change', check); };
+  }, []);
+
   const cameraProjectionMode = React.useSyncExternalStore(
     subscribeToCameraProjectionSettings,
     () => getSavedCameraProjectionSettings().mode,
@@ -4643,7 +4669,7 @@ export function SceneCanvas({
     >
       <Canvas
         key={`scene-canvas-${canvasRecoveryNonce}`}
-        style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
+        style={{ width: '100%', height: '100%', backgroundColor: 'var(--surface-0)', display: 'block' }}
         camera={defaultCamera}
         shadows={!isLinux}
         dpr={dynamicDpr}
@@ -4873,9 +4899,9 @@ export function SceneCanvas({
                   <GhostPreviewInstances
                     geometry={duplicatePreviewModel.geometry.geometry}
                     center={duplicatePreviewModel.geometry.center}
-                    color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                    color={isLightTheme ? '#3a3a3a' : (duplicatePreviewModel.color ?? '#a3a3a3')}
                     transforms={effectiveDuplicatePreviewTransforms}
-                    opacity={0.22}
+                    opacity={isLightTheme ? 0.45 : 0.22}
                     renderOrder={2}
                   />
                 )
@@ -4956,9 +4982,9 @@ export function SceneCanvas({
                     key={`arrange-array-preview-${group.model.id}`}
                     geometry={group.model.geometry.geometry}
                     center={group.model.geometry.center}
-                    color={group.model.color ?? '#a3a3a3'}
+                    color={isLightTheme ? '#3a3a3a' : (group.model.color ?? '#a3a3a3')}
                     transforms={group.transforms}
-                    opacity={0.22}
+                    opacity={isLightTheme ? 0.45 : 0.22}
                     renderOrder={2}
                   />
                 ))
@@ -6009,7 +6035,7 @@ export function SceneCanvas({
             inset: 0,
             zIndex: 55,
             pointerEvents: 'none',
-            background: '#181a22',
+            background: 'var(--surface-0)',
           }}
           aria-hidden="true"
         >

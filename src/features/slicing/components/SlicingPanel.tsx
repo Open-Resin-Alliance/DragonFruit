@@ -1594,7 +1594,7 @@ export function SlicingPanel({
                 <div
                   className="px-1 text-[11px] leading-snug font-mono text-center"
                   style={{
-                    color: 'color-mix(in srgb, #fca5a5, var(--text-muted) 38%)',
+                    color: 'color-mix(in srgb, var(--danger), var(--text-muted) 38%)',
                   }}
                 >
                   The selected Machine does not support AA at this time.
@@ -1738,11 +1738,11 @@ export function SlicingPanel({
                       ? 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)'
                       : 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
                   color: slicingModalStage === 'failed'
-                    ? '#fca5a5'
+                    ? 'var(--danger)'
                     : slicingModalStage === 'cancelled'
-                      ? '#fcd34d'
+                      ? 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)'
                     : slicingModalStage === 'finished'
-                      ? '#86efac'
+                      ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)'
                       : 'var(--text-strong)',
                   background: 'var(--surface-1)',
                 }}

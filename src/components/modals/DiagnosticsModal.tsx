@@ -557,7 +557,7 @@ export function DiagnosticsModal({
               </div>
             </div>
 
-            <div className="mt-2 text-[11px]" style={{ color: benchmarkRunState.error ? '#fca5a5' : 'var(--text-muted)' }}>
+            <div className="mt-2 text-[11px]" style={{ color: benchmarkRunState.error ? 'var(--danger)' : 'var(--text-muted)' }}>
               {benchmarkRunState.error
                 ? benchmarkRunState.error
                 : benchmarkRunState.message || 'No benchmark run yet.'}

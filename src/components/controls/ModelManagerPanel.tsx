@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Eye,
   EyeOff,
@@ -16,6 +16,7 @@ import {
   FolderMinus,
   PanelsTopLeft,
   Info,
+  Crosshair,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
@@ -95,6 +96,8 @@ export function ModelManagerPanel({
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
+  const [useCompactQuickActionLabels, setUseCompactQuickActionLabels] = useState(false);
+  const quickActionsGridRef = useRef<HTMLDivElement | null>(null);
 
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
 
@@ -238,6 +241,33 @@ export function ModelManagerPanel({
     };
   }, [contextMenu]);
 
+  useEffect(() => {
+    const grid = quickActionsGridRef.current;
+    if (!grid) return;
+
+    const computeCompactMode = (width: number) => {
+      const compactThreshold = onImportSceneChange ? 312 : 184;
+      const nextCompact = width < compactThreshold;
+      setUseCompactQuickActionLabels((prev) => (prev === nextCompact ? prev : nextCompact));
+    };
+
+    computeCompactMode(grid.clientWidth);
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (typeof width === 'number') {
+        computeCompactMode(width);
+      }
+    });
+
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [onImportSceneChange]);
+
   const triggerMeshPicker = React.useCallback(() => {
     if (onLoadMeshClick) {
       onLoadMeshClick();
@@ -317,18 +347,18 @@ export function ModelManagerPanel({
             className="rounded-md border p-2"
             style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
           >
-            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Quick Actions
-            </div>
-
-            <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <div
+              ref={quickActionsGridRef}
+              className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}
+            >
               <button
                 type="button"
                 onClick={triggerMeshPicker}
                 className="ui-button ui-button-primary inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
+                title="Load Mesh"
               >
                 <Upload className="w-3.5 h-3.5 shrink-0" />
-                <span className="whitespace-nowrap">Load Mesh</span>
+                <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Mesh' : 'Load Mesh'}</span>
               </button>
               <input
                 id="models-card-mesh-input"
@@ -345,9 +375,10 @@ export function ModelManagerPanel({
                     type="button"
                     onClick={triggerScenePicker}
                     className="ui-button ui-button-accent inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
+                    title="Import Scene"
                   >
                     <FolderInput className="w-3.5 h-3.5 shrink-0" />
-                    <span className="whitespace-nowrap">Import Scene</span>
+                    <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Scene' : 'Import Scene'}</span>
                   </button>
                   <input
                     id="models-card-scene-input"
@@ -360,16 +391,6 @@ export function ModelManagerPanel({
               )}
             </div>
 
-            <div className={`mt-1.5 grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                Mesh Files (.stl, .obj, .3mf)
-              </div>
-              {onImportSceneChange && (
-                <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                  Scene Files (.voxl, .lys)
-                </div>
-              )}
-            </div>
           </div>
 
           <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 flex-1 min-h-0">
@@ -396,34 +417,36 @@ export function ModelManagerPanel({
                         }
                       : undefined}
                   >
-                    {showHeader && (
-                      <div
-                        className={`px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors ${
-                          isGroupFullySelected
-                            ? 'bg-blue-500/12 border-blue-500/45'
-                            : isGroupPartiallySelected
-                              ? 'bg-blue-500/8 border-blue-500/30'
-                              : 'hover:bg-neutral-700/60'
-                        }`}
-                        style={isGroupFullySelected || isGroupPartiallySelected
-                          ? undefined
-                          : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                        onClick={(e) => {
-                          const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
-                          selectFolder(group, mode);
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setContextMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                            groupId: group.id,
-                            groupName: group.name,
-                            isSystemGroup: group.isSystemGroup,
-                          });
-                        }}
-                      >
+                        {showHeader && (
+                          <div
+                            className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                            style={isGroupFullySelected
+                              ? {
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                                }
+                              : isGroupPartiallySelected
+                                ? {
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                                  }
+                                : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                            onClick={(e) => {
+                              const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                              selectFolder(group, mode);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                groupId: group.id,
+                                groupName: group.name,
+                                isSystemGroup: group.isSystemGroup,
+                              });
+                            }}
+                          >
                         <button
                           type="button"
                           className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
@@ -492,17 +515,16 @@ export function ModelManagerPanel({
                       return (
                         <div
                           key={model.id}
-                          className={`p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer ${
-                            isSelected
-                              ? 'bg-blue-500/10 border-blue-500/50'
-                              : 'hover:bg-neutral-700/70'
-                          }`}
-                          style={!isSelected
-                            ? {
-                                background: 'var(--surface-1)',
-                                borderColor: 'var(--border-subtle)',
-                              }
-                            : undefined}
+                            className="p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer"
+                            style={isSelected
+                              ? {
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+                                }
+                              : {
+                                  background: 'var(--surface-1)',
+                                  borderColor: 'var(--border-subtle)',
+                                }}
                           onClick={(e) => {
                             if (e.shiftKey) {
                               const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
@@ -544,14 +566,20 @@ export function ModelManagerPanel({
                             });
                           }}
                         >
-                          <div className={`p-1 rounded ${isSelected ? 'bg-blue-500/20 text-blue-300' : ''}`} style={!isSelected ? { background: 'var(--surface-2)', color: 'var(--text-muted)' } : undefined}>
-                            <Box className="w-3.5 h-3.5" />
-                          </div>
+                          {isActive
+                            ? (
+                              <div className="p-1 rounded" style={{ background: 'color-mix(in srgb, var(--accent), var(--surface-2) 72%)', color: 'var(--accent)' }}>
+                                <Crosshair className="w-3.5 h-3.5" />
+                              </div>
+                            ) : (
+                              <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                                <Box className="w-3.5 h-3.5" />
+                              </div>
+                            )}
 
                           <div className="flex-1 min-w-0">
-                            <div className={`text-xs font-medium truncate ${isSelected ? 'text-blue-100' : ''}`} style={!isSelected ? { color: 'var(--text-strong)' } : undefined}>
+                            <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
                               {model.name}
-                              {isActive && <span className="ml-1 text-[10px] uppercase" style={{ color: 'var(--accent)' }}>Active</span>}
                             </div>
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                               {model.polygonCount.toLocaleString()} polys
@@ -581,16 +609,7 @@ export function ModelManagerPanel({
                             >
                               {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                             </IconButton>
-                            <IconButton
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDelete(model.id);
-                              }}
-                              className="!p-1.5 text-red-300 hover:text-red-200"
-                              title="Delete model"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </IconButton>
+
                           </div>
                         </div>
                       );

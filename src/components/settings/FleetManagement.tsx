@@ -218,7 +218,7 @@ export function FleetManagement({
                             type="button"
                             onClick={() => onRemoveManagedPrinter(device)}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-[11px] rounded-md"
-                            style={{ color: '#fca5a5' }}
+                            style={{ color: 'var(--danger)' }}
                             title="Remove saved printer"
                           >
                             Remove
@@ -281,7 +281,7 @@ export function FleetManagement({
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                       }
                     : {
                         borderColor: 'var(--border-subtle)',

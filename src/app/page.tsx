@@ -42,6 +42,7 @@ import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
@@ -503,6 +504,75 @@ function isLikelyFileDragPayload(dataTransfer: DataTransfer | null): boolean {
   return true;
 }
 
+function getPrepareDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
+  if (!dataTransfer) return 'unknown';
+
+  const fileNames = new Set<string>();
+
+  const directFiles = Array.from(dataTransfer.files ?? []);
+  for (const file of directFiles) {
+    if (typeof file.name === 'string' && file.name.trim().length > 0) {
+      fileNames.add(file.name.trim());
+    }
+  }
+
+  const items = Array.from(dataTransfer.items ?? []);
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    try {
+      const file = item.getAsFile();
+      if (file && typeof file.name === 'string' && file.name.trim().length > 0) {
+        fileNames.add(file.name.trim());
+      }
+
+      const webkitEntry = (item as DataTransferItem & {
+        webkitGetAsEntry?: () => { isFile?: boolean; name?: string } | null;
+      }).webkitGetAsEntry?.();
+      if (webkitEntry?.isFile && typeof webkitEntry.name === 'string' && webkitEntry.name.trim().length > 0) {
+        fileNames.add(webkitEntry.name.trim());
+      }
+    } catch {
+      // Some runtimes throw here during drag hover metadata probing.
+    }
+  }
+
+  const maybeExtractNameFromTextPath = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
+    if (!firstLine) return;
+
+    let normalized = firstLine;
+    if (normalized.startsWith('file://')) {
+      try {
+        normalized = decodeURIComponent(normalized.replace(/^file:\/\//, ''));
+      } catch {
+        normalized = normalized.replace(/^file:\/\//, '');
+      }
+    }
+
+    const name = getFileNameFromPath(normalized);
+    if (name.trim().length > 0) {
+      fileNames.add(name.trim());
+    }
+  };
+
+  try {
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/uri-list'));
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/plain'));
+  } catch {
+    // Ignore dataTransfer text extraction failures on restricted drag payloads.
+  }
+
+  if (fileNames.size === 0) {
+    return 'unknown';
+  }
+
+  const hasSupported = Array.from(fileNames).some((name) => isSupportedPrepareDropName(name));
+  return hasSupported ? 'supported' : 'unsupported';
+}
+
 function buildDroppedFilesSignature(files: File[]): string {
   return files
     .map((file) => `${file.name.trim().toLowerCase()}::${Number.isFinite(file.size) ? file.size : -1}`)
@@ -929,6 +999,7 @@ export default function Home() {
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
   const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
@@ -8393,7 +8464,10 @@ export default function Home() {
     usePrintingSettledHiResCanvas,
   ]);
 
-  const handleDroppedPrepareFiles = React.useCallback(async (files: File[]) => {
+  const handleDroppedPrepareFiles = React.useCallback(async (
+    files: File[],
+    options?: { prearmedLoadingUi?: boolean },
+  ) => {
     if (scene.mode !== 'prepare') return;
 
     const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
@@ -8432,7 +8506,33 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      await importSceneFilesWithLysWarning(sceneFiles);
+      const shouldPrearmLoadingUi = !options?.prearmedLoadingUi;
+
+      if (shouldPrearmLoadingUi) {
+        setNativePickerPreparationState({
+          active: true,
+          label: sceneFiles.length > 1 ? 'Loading dropped scenes…' : 'Loading dropped scene…',
+          detail: sceneFiles.length > 1
+            ? `Preparing ${sceneFiles.length} dropped scene files…`
+            : 'Preparing dropped scene file…',
+          progress: null,
+        });
+
+        await waitForUiTick();
+      }
+
+      try {
+        await importSceneFilesWithLysWarning(sceneFiles);
+      } finally {
+        if (shouldPrearmLoadingUi) {
+          setNativePickerPreparationState({
+            active: false,
+            label: '',
+            detail: '',
+            progress: null,
+          });
+        }
+      }
       return;
     }
 
@@ -8441,7 +8541,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [importSceneFilesWithLysWarning, scene]);
+  }, [importSceneFilesWithLysWarning, scene, waitForUiTick]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -8473,6 +8573,22 @@ export default function Home() {
       return [] as File[];
     }
   }, []);
+
+  const sceneModeRef = React.useRef(scene.mode);
+  const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
+  const handleDroppedPrepareFilesRef = React.useRef(handleDroppedPrepareFiles);
+
+  React.useEffect(() => {
+    sceneModeRef.current = scene.mode;
+  }, [scene.mode]);
+
+  React.useEffect(() => {
+    createFilesFromTauriDroppedPathsRef.current = createFilesFromTauriDroppedPaths;
+  }, [createFilesFromTauriDroppedPaths]);
+
+  React.useEffect(() => {
+    handleDroppedPrepareFilesRef.current = handleDroppedPrepareFiles;
+  }, [handleDroppedPrepareFiles]);
 
   React.useEffect(() => {
     if (scene.mode !== 'prepare') return;
@@ -8515,15 +8631,27 @@ export default function Home() {
       try {
         const { listen } = await import('@tauri-apps/api/event');
 
-        const unlistenDragOver = await listen('tauri://drag-over', () => {
-          if (disposed || scene.mode !== 'prepare') return;
+        const unlistenDragOver = await listen<unknown>('tauri://drag-over', (event) => {
+          if (disposed || sceneModeRef.current !== 'prepare') return;
           setIsPrepareDragActive(true);
+
+          const paths = extractTauriDroppedPaths(event.payload);
+          if (paths.length === 0) {
+            return;
+          }
+
+          const hasSupportedPath = paths.some((path) => {
+            const fileName = getFileNameFromPath(path);
+            return isSupportedPrepareDropName(fileName);
+          });
+          setIsPrepareDragUnsupported(!hasSupportedPath);
         });
         registerUnlisten(unlistenDragOver);
 
         const hideOverlay = () => {
           dragDepthRef.current = 0;
           setIsPrepareDragActive(false);
+          setIsPrepareDragUnsupported(false);
         };
 
         const unlistenDragLeave = await listen('tauri://drag-leave', () => {
@@ -8539,17 +8667,48 @@ export default function Home() {
         registerUnlisten(unlistenDragCancelled);
 
         const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
-          if (disposed || scene.mode !== 'prepare') return;
+          if (disposed || sceneModeRef.current !== 'prepare') return;
 
           hideOverlay();
 
           const paths = extractTauriDroppedPaths(event.payload);
           if (paths.length === 0) return;
 
+          const supportedPathCount = paths.filter((path) => {
+            const fileName = getFileNameFromPath(path);
+            return isSupportedPrepareDropName(fileName);
+          }).length;
+
           void (async () => {
-            const files = await createFilesFromTauriDroppedPaths(paths);
-            if (files.length === 0) return;
-            await handleDroppedPrepareFiles(files);
+            if (supportedPathCount > 0) {
+              setNativePickerPreparationState({
+                active: true,
+                label: 'Loading dropped files…',
+                detail: supportedPathCount > 1
+                  ? `Reading 0/${supportedPathCount} dropped files…`
+                  : 'Reading dropped file…',
+                progress: null,
+              });
+
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+              });
+            }
+
+            try {
+              const files = await createFilesFromTauriDroppedPathsRef.current(paths);
+              if (files.length === 0) return;
+              await handleDroppedPrepareFilesRef.current(files, { prearmedLoadingUi: true });
+            } finally {
+              if (supportedPathCount > 0) {
+                setNativePickerPreparationState({
+                  active: false,
+                  label: '',
+                  detail: '',
+                  progress: null,
+                });
+              }
+            }
           })();
         });
         registerUnlisten(unlistenDragDrop);
@@ -8565,7 +8724,7 @@ export default function Home() {
         invokeUnlistenSafely(remove);
       }
     };
-  }, [createFilesFromTauriDroppedPaths, handleDroppedPrepareFiles, scene.mode]);
+  }, [scene.mode]);
 
   const handlePrepareDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (scene.mode !== 'prepare') return;
@@ -8573,6 +8732,12 @@ export default function Home() {
     e.preventDefault();
     e.stopPropagation();
     dragDepthRef.current += 1;
+    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsPrepareDragUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsPrepareDragUnsupported(false);
+    }
     setIsPrepareDragActive(true);
   }, [scene.mode]);
 
@@ -8581,7 +8746,13 @@ export default function Home() {
     if (!isLikelyFileDragPayload(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
+    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsPrepareDragUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsPrepareDragUnsupported(false);
+    }
+    e.dataTransfer.dropEffect = supportState === 'unsupported' ? 'none' : 'copy';
     setIsPrepareDragActive(true);
   }, [scene.mode]);
 
@@ -8592,6 +8763,7 @@ export default function Home() {
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
     if (dragDepthRef.current === 0) {
       setIsPrepareDragActive(false);
+      setIsPrepareDragUnsupported(false);
     }
   }, [scene.mode]);
 
@@ -8601,8 +8773,41 @@ export default function Home() {
     e.stopPropagation();
     dragDepthRef.current = 0;
     setIsPrepareDragActive(false);
+    setIsPrepareDragUnsupported(false);
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
+
+    const supportedFileCount = files.filter((file) => isSupportedPrepareDropName(file.name)).length;
+
+    if (supportedFileCount > 0) {
+      void (async () => {
+        setNativePickerPreparationState({
+          active: true,
+          label: 'Loading dropped files…',
+          detail: supportedFileCount > 1
+            ? `Preparing ${supportedFileCount} dropped files…`
+            : 'Preparing dropped file…',
+          progress: null,
+        });
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+
+        try {
+          await handleDroppedPrepareFiles(files, { prearmedLoadingUi: true });
+        } finally {
+          setNativePickerPreparationState({
+            active: false,
+            label: '',
+            detail: '',
+            progress: null,
+          });
+        }
+      })();
+      return;
+    }
+
     void handleDroppedPrepareFiles(files);
   }, [handleDroppedPrepareFiles, scene.mode]);
 
@@ -13102,7 +13307,7 @@ export default function Home() {
                     </svg>
                   </IconButton>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Mesh Smoothing Settings
+                    Mesh Smoothing
                   </h3>
                 </div>
                 {prepareSmoothingSettingsExpanded && (
@@ -13633,17 +13838,30 @@ export default function Home() {
           {scene.mode === 'prepare' && isPrepareDragActive && (
             <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center">
               <div
-                className="rounded-lg border border-dashed px-6 py-4 text-center"
+                className="absolute inset-0"
                 style={{
-                  borderColor: 'var(--accent)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                  background: isPrepareDragUnsupported
+                    ? 'color-mix(in srgb, var(--danger), transparent 90%)'
+                    : 'color-mix(in srgb, black, transparent 86%)',
+                  backdropFilter: 'blur(1px)',
+                }}
+              />
+              <div
+                className="relative min-w-[380px] max-w-[min(92vw,640px)] rounded-xl border border-dashed px-8 py-6 text-center"
+                style={{
+                  borderColor: isPrepareDragUnsupported ? 'var(--danger)' : 'var(--accent)',
+                  background: isPrepareDragUnsupported
+                    ? 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)'
+                    : 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
                 }}
               >
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Drop supported files to import
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {isPrepareDragUnsupported ? 'Unsupported file format' : 'Drop supported files to import'}
                 </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Supported: STL, OBJ, 3MF, LYS, VOXL
+                <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                  {isPrepareDragUnsupported
+                    ? 'Please use: STL, OBJ, 3MF, LYS, VOXL'
+                    : 'Supported: STL, OBJ, 3MF, LYS, VOXL'}
                 </div>
               </div>
             </div>
@@ -14205,9 +14423,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14303,98 +14521,56 @@ export default function Home() {
         />
       )}
 
-      {showCloseUnsavedChangesModal && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && closeUnsavedChangesBusy === 'none') {
-              setShowCloseUnsavedChangesModal(false);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Unsaved changes"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Unsaved Scene Changes
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {hasUnsavedSceneChanges
-                      ? 'There are unsaved changes to this scene.'
-                      : 'This scene is already saved.'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close unsaved changes modal"
-                disabled={closeUnsavedChangesBusy !== 'none'}
-                onClick={() => setShowCloseUnsavedChangesModal(false)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3.5 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Are you sure you want to close?
-                <br />
-                Choose <strong>Save &amp; Close</strong> to keep your latest edits.
-                <br />
-                Choose <strong>Close Without Saving</strong> to discard them.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={closeUnsavedChangesBusy !== 'none'}
-                  onClick={handleDiscardAndCloseProgram}
-                >
-                  Close Without Saving
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={closeUnsavedChangesBusy !== 'none'}
-                  onClick={handleSaveAndCloseProgram}
-                >
-                  Save &amp; Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={showCloseUnsavedChangesModal}
+        ariaLabel="Unsaved changes"
+        title="Unsaved Scene Changes"
+        subtitle={hasUnsavedSceneChanges
+          ? 'You have unsaved edits in this scene.'
+          : 'This scene is already saved.'}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[220]"
+        closeAriaLabel="Close unsaved changes modal"
+        closeDisabled={closeUnsavedChangesBusy !== 'none'}
+        onClose={() => {
+          if (closeUnsavedChangesBusy !== 'none') return;
+          setShowCloseUnsavedChangesModal(false);
+        }}
+        onBackdropClick={() => {
+          if (closeUnsavedChangesBusy !== 'none') return;
+          setShowCloseUnsavedChangesModal(false);
+        }}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="ui-button ui-button-danger !h-9 px-3 text-xs"
+              disabled={closeUnsavedChangesBusy !== 'none'}
+              onClick={handleDiscardAndCloseProgram}
+            >
+              Close Without Saving
+            </button>
+            <button
+              type="button"
+              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              disabled={closeUnsavedChangesBusy !== 'none'}
+              onClick={handleSaveAndCloseProgram}
+            >
+              Save &amp; Close
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {hasUnsavedSceneChanges
+            ? 'You’re about to close DragonFruit with unsaved scene changes.'
+            : 'Close DragonFruit now?'}
+        </p>
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <strong>Save &amp; Close</strong> keeps your latest edits. <strong>Close Without Saving</strong> discards them.
+        </p>
+      </StructuredDialogModal>
 
       {showSceneSaveChoiceModal && (
         <div
@@ -14423,7 +14599,7 @@ export default function Home() {
                   style={{
                     borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 55%)',
                     background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
-                    color: '#86efac',
+                    color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                   }}
                 >
                   <CheckCircle2 className="h-4 w-4" />
@@ -14524,9 +14700,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14617,12 +14793,12 @@ export default function Home() {
                           ? {
                               borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                               background: 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)',
-                              color: '#bbf7d0',
+                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
                             }
                           : {
                               borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                               background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: '#fee2e2',
+                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
                             }
                       )
                       : (
@@ -14630,12 +14806,12 @@ export default function Home() {
                           ? {
                               borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
                               background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                              color: '#fde68a',
+                              color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                             }
                           : {
                               borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                               background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: '#fee2e2',
+                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
                             }
                       )
                   }
@@ -14707,9 +14883,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14752,15 +14928,15 @@ export default function Home() {
               </div>
               <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Build plate and resin vat are properly seated and secured.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Resin is mixed, sufficient for the print, and at operating temperature.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Build plate is clean and clear, and the printer cover is fully closed.</span>
                 </div>
               </div>
@@ -14899,7 +15075,7 @@ export default function Home() {
                             <div
                               className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
                               style={{
-                                color: '#86efac',
+                                color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                                 background: 'color-mix(in srgb, #22c55e, transparent 84%)',
                               }}
                               aria-label="Selected printer"
@@ -14978,7 +15154,7 @@ export default function Home() {
                                       <div
                                         className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
                                         style={{
-                                          color: '#86efac',
+                                          color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                                           background: 'color-mix(in srgb, #22c55e, transparent 84%)',
                                         }}
                                         aria-label="Selected material"
@@ -15283,7 +15459,7 @@ export default function Home() {
                   <div className="inline-flex h-7 w-7 items-center justify-center rounded-sm shrink-0" style={{
                     background: 'color-mix(in srgb, #baf72e, var(--surface-1) 90%)',
                     border: '1px solid color-mix(in srgb, #baf72e, var(--border-subtle) 45%)',
-                    color: '#baf72e',
+                    color: 'var(--accent-secondary)',
                   }}>
                     <LayoutGrid className="h-3.5 w-3.5" />
                   </div>
@@ -15728,7 +15904,7 @@ export default function Home() {
                       <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
                         borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 52%)',
                         background: 'color-mix(in srgb, #f59e0b, transparent 84%)',
-                        color: '#fde68a',
+                        color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                       }}>
                         <RefreshCw className="h-5 w-5 animate-spin" />
                       </div>
@@ -15770,7 +15946,7 @@ export default function Home() {
                       <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
                         borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 52%)',
                         background: 'color-mix(in srgb, #f87171, transparent 84%)',
-                        color: '#fecaca',
+                        color: 'var(--danger)',
                       }}>
                         <AlertTriangle className="h-5 w-5" />
                       </div>
@@ -15945,7 +16121,7 @@ export default function Home() {
                                             style={{
                                               borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                                               background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
-                                              color: '#bbf7d0',
+                                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
                                             }}
                                             title={`Start plate #${plate.plateId}`}
                                             disabled={printingMonitorAnyActionBusy || printingMonitorHasActivePrint}
@@ -16378,8 +16554,8 @@ export default function Home() {
                         className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
                         style={printingMonitorWebcamStatusPresentation.tone === 'warning'
                             ? {
-                                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)',
-                                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)',
+                                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                                background: 'color-mix(in srgb, #d97706, var(--surface-1) 90%)',
                               }
                             : printingMonitorWebcamStatusPresentation.tone === 'error'
                               ? {
@@ -16392,7 +16568,7 @@ export default function Home() {
                                 }}
                       >
                         {printingMonitorWebcamStatusPresentation.tone === 'warning' ? (
-                          <AlertTriangle className="w-5 h-5" style={{ color: '#f59e0b' }} />
+                          <AlertTriangle className="w-5 h-5" style={{ color: '#d97706' }} />
                         ) : printingMonitorWebcamStatusPresentation.tone === 'error' ? (
                           <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
                         ) : (

@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ClipboardCopy,
   ExternalLink,
+  Filter,
   FolderOpen,
   Info,
   Loader2,
@@ -289,15 +290,21 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
         className="rounded-xl border p-4"
         style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
       >
-        <div className="flex items-center gap-2 mb-3">
-          <ScrollText className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Log File</h4>
+        <div className="flex items-start gap-2 mb-3">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <ScrollText className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Log File</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              DragonFruit writes structured logs to a platform-specific directory.
+              Share this file when reporting startup or network issues.
+            </p>
+          </div>
         </div>
-
-        <p className="text-[12px] mb-3" style={{ color: 'var(--text-muted)' }}>
-          DragonFruit writes structured logs to a platform-specific directory.
-          Share this file when reporting startup or network issues.
-        </p>
 
         <div
           className="rounded-lg border flex items-stretch overflow-hidden"
@@ -361,13 +368,20 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
         className="rounded-xl border p-4"
         style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
       >
-        <div className="flex items-center gap-2 mb-1">
-          <RefreshCcw className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Minimum Log Level</h4>
+        <div className="flex items-start gap-2 mb-3">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <Filter className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Minimum Log Level</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Controls the least-significant event written to the log file. Changes apply immediately and persist across restarts.
+            </p>
+          </div>
         </div>
-        <p className="text-[12px] mb-3" style={{ color: 'var(--text-muted)' }}>
-          Controls the least-significant event written to the log file. Changes apply immediately and persist across restarts.
-        </p>
 
         <div className="flex flex-col gap-1.5">
           {LEVEL_OPTIONS.map((value) => {
@@ -588,7 +602,7 @@ function LogLineRow({ line }: { line: ParsedLogLine }) {
           {line.target}
         </span>
       )}
-      <span className="flex-1 min-w-0 break-all" style={{ color: line.level === 'error' ? '#fca5a5' : line.level === 'warn' ? '#fdba74' : '#d1d5db' }}>
+      <span className="flex-1 min-w-0 break-all" style={{ color: line.level === 'error' ? 'var(--danger)' : line.level === 'warn' ? 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)' : 'var(--text-strong)' }}>
         {line.message || line.raw}
       </span>
     </div>

@@ -24,6 +24,14 @@ const EXT_COLORS: Record<string, string> = {
   '.lys': '#f59e0b',
 };
 
+const EXT_COLORS_LIGHT: Record<string, string> = {
+  '.stl': '#1d4ed8',
+  '.3mf': '#047857',
+  '.obj': '#6d28d9',
+  '.voxl': '#3f6212',
+  '.lys': '#b45309',
+};
+
 const FILE_SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
 function formatFileSize(bytes: number): string {
@@ -78,6 +86,25 @@ export function ZipFilePickerModal({
   );
 
   const [selectedIndices, setSelectedIndices] = React.useState<Set<number>>(() => defaultSelectedIndices);
+  const [isLightTheme, setIsLightTheme] = React.useState(false);
+
+  React.useEffect(() => {
+    const check = () => {
+      const html = document.documentElement;
+      const light =
+        html.classList.contains('dragonfruit-light') ||
+        html.getAttribute('data-theme') === 'light' ||
+        (window.matchMedia('(prefers-color-scheme: light)').matches &&
+          !html.classList.contains('dragonfruit-dark'));
+      setIsLightTheme(light);
+    };
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    mq.addEventListener('change', check);
+    return () => { observer.disconnect(); mq.removeEventListener('change', check); };
+  }, []);
 
   const extensionGroups = React.useMemo(() => {
     const groups = new Map<string, { label: string; color: string; indices: number[] }>();
@@ -91,9 +118,10 @@ export function ZipFilePickerModal({
         return;
       }
 
+      const colorMap = isLightTheme ? EXT_COLORS_LIGHT : EXT_COLORS;
       groups.set(ext, {
         label,
-        color: EXT_COLORS[ext] ?? 'var(--accent)',
+        color: colorMap[ext] ?? 'var(--accent)',
         indices: [index],
       });
     });
@@ -102,7 +130,7 @@ export function ZipFilePickerModal({
       ext,
       ...group,
     }));
-  }, [files]);
+  }, [files, isLightTheme]);
 
   React.useEffect(() => {
     setSelectedIndices(defaultSelectedIndices);
@@ -231,7 +259,7 @@ export function ZipFilePickerModal({
             className="rounded-lg border px-3 py-2.5"
             style={{
               borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+              background: 'color-mix(in srgb, var(--surface-1), var(--surface-0) 30%)',
             }}
           >
             <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -261,7 +289,7 @@ export function ZipFilePickerModal({
                     : 'var(--border-subtle)',
                   background: allSelected
                     ? 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)'
-                    : 'color-mix(in srgb, var(--surface-1), black 6%)',
+                    : 'var(--surface-2)',
                   color: allSelected ? 'var(--accent)' : 'var(--text-muted)',
                 }}
                 onClick={toggleAll}
@@ -288,8 +316,8 @@ export function ZipFilePickerModal({
                         ? `color-mix(in srgb, ${group.color}, var(--border-subtle) 35%)`
                         : 'var(--border-subtle)',
                       background: hasAnySelected
-                        ? `color-mix(in srgb, ${group.color}, var(--surface-0) 88%)`
-                        : 'color-mix(in srgb, var(--surface-1), black 6%)',
+                        ? `color-mix(in srgb, ${group.color}, var(--surface-0) ${isLightTheme ? '84%' : '88%'})`
+                        : 'var(--surface-2)',
                       color: allOfTypeSelected ? group.color : 'var(--text-muted)',
                     }}
                     onClick={() => toggleExtension(group.indices)}
@@ -309,12 +337,12 @@ export function ZipFilePickerModal({
             className="max-h-72 overflow-y-auto rounded-lg border"
             style={{
               borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-1), black 10%)',
+              background: 'color-mix(in srgb, var(--surface-1), var(--surface-0) 40%)',
             }}
           >
             {files.map((file, index) => {
               const ext = getFileExtensionLower(file.name);
-              const extColor = EXT_COLORS[ext] ?? 'var(--text-muted)';
+              const extColor = (isLightTheme ? EXT_COLORS_LIGHT[ext] : EXT_COLORS[ext]) ?? 'var(--accent)';
               const isChecked = selectedIndices.has(index);
               const sizeLabel = formatFileSize(file.size);
 
@@ -339,8 +367,8 @@ export function ZipFilePickerModal({
                     className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
                     style={{
                       color: extColor,
-                      background: `color-mix(in srgb, ${extColor}, var(--surface-0) 86%)`,
-                      border: `1px solid color-mix(in srgb, ${extColor}, var(--border-subtle) 55%)`,
+                      background: `color-mix(in srgb, ${extColor}, var(--surface-0) ${isLightTheme ? '84%' : '86%'})`,
+                      border: `1px solid color-mix(in srgb, ${extColor}, var(--border-subtle) ${isLightTheme ? '38%' : '55%'})`,
                     }}
                   >
                     {ext.slice(1)}
@@ -369,12 +397,14 @@ export function ZipFilePickerModal({
               className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
               style={{
                 borderColor: selectedIndices.size > 0
-                  ? 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)'
+                  ? `color-mix(in srgb, ${isLightTheme ? '#16a34a' : '#22c55e'}, var(--border-subtle) 45%)`
                   : 'var(--border-subtle)',
                 background: selectedIndices.size > 0
-                  ? 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)'
-                  : 'color-mix(in srgb, var(--surface-1), black 8%)',
-                color: selectedIndices.size > 0 ? '#86efac' : 'var(--text-muted)',
+                  ? `color-mix(in srgb, ${isLightTheme ? '#16a34a' : '#22c55e'}, var(--surface-1) 86%)`
+                  : 'var(--surface-2)',
+                color: selectedIndices.size > 0
+                  ? `color-mix(in srgb, ${isLightTheme ? '#16a34a' : '#22c55e'}, var(--text-strong) 18%)`
+                  : 'var(--text-muted)',
                 opacity: selectedIndices.size > 0 ? 1 : 0.65,
                 cursor: selectedIndices.size > 0 ? 'pointer' : 'not-allowed',
               }}

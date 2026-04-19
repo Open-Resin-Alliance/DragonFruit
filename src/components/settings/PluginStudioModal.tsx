@@ -234,6 +234,18 @@ const DEFAULT_MATERIAL_DRAFT: MaterialDraft = {
   minimumAaAlphaPercent: 35,
 };
 
+const ACCENT_SECONDARY_BUTTON_STYLE_92: React.CSSProperties = {
+  color: 'var(--accent-secondary-action-color)',
+  borderColor: 'var(--accent-secondary-action-border)',
+  background: 'var(--accent-secondary-action-bg-92)',
+};
+
+const ACCENT_SECONDARY_BUTTON_STYLE_90: React.CSSProperties = {
+  color: 'var(--accent-secondary-action-color)',
+  borderColor: 'var(--accent-secondary-action-border)',
+  background: 'var(--accent-secondary-action-bg-90)',
+};
+
 function normalizeOutputFormatKey(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return '';
@@ -1173,13 +1185,7 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                   type="button"
                   onClick={() => switchEditMode('installed')}
                   className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
-                  style={editSourceMode === 'installed'
-                    ? {
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-                    }
-                    : undefined}
+                  style={editSourceMode === 'installed' ? ACCENT_SECONDARY_BUTTON_STYLE_90 : undefined}
                 >
                   Installed
                 </button>
@@ -1187,13 +1193,7 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                   type="button"
                   onClick={() => switchEditMode('json')}
                   className="ui-button ui-button-ghost !h-7 !px-2.5 text-[11px]"
-                  style={editSourceMode === 'json'
-                    ? {
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-                    }
-                    : undefined}
+                  style={editSourceMode === 'json' ? ACCENT_SECONDARY_BUTTON_STYLE_90 : undefined}
                 >
                   JSON
                 </button>
@@ -1222,10 +1222,7 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                       onClick={handleImportInstalledPlugin}
                       disabled={!selectedInstalledPluginId}
                       className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs disabled:opacity-50"
-                      style={{
-                        color: 'var(--accent-secondary)',
-                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      }}
+                      style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                     >
                       Load Plugin
                     </button>
@@ -1263,10 +1260,7 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                       onClick={handleImport}
                       disabled={importManifestText.trim().length === 0}
                       className="ui-button ui-button-secondary !h-8 !px-3 text-xs disabled:opacity-50"
-                      style={{
-                        color: 'var(--accent-secondary)',
-                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      }}
+                      style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                     >
                       Import into Studio
                     </button>
@@ -1291,14 +1285,14 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
                 className="rounded-lg border px-2.5 py-2 text-xs"
                 style={importFeedback.type === 'success'
                   ? {
-                    borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #40c463, var(--surface-2) 92%)',
-                    color: '#c7f9d3',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-2) 92%)',
+                    color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 24%)',
                   }
                   : {
-                    borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #ff6b6b, var(--surface-2) 93%)',
-                    color: '#ffd0d0',
+                    borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--danger), var(--surface-2) 92%)',
+                    color: 'color-mix(in srgb, var(--danger), var(--text-strong) 24%)',
                   }}
               >
                 {importFeedback.message}
@@ -1307,8 +1301,8 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
           </div>
 
           {incompleteFields.length > 0 && (
-            <div className="rounded-xl border px-3 py-2.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 93%)' }}>
-              <div className="text-xs font-semibold" style={{ color: '#f4bf4f' }}>
+            <div className="rounded-xl border px-3 py-2.5" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)', background: 'color-mix(in srgb, #d97706, var(--surface-2) 92%)' }}>
+              <div className="text-xs font-semibold" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 20%)' }}>
                 Complete Plugin Details to unlock the next steps
               </div>
               <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
@@ -1331,13 +1325,13 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
       <div
         className="mt-3 shrink-0 rounded-xl border px-4 py-3"
         style={{
-          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)',
-          background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)',
-          boxShadow: '0 -1px 0 color-mix(in srgb, #f59e0b, transparent 84%)',
+          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)',
+          background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+          boxShadow: '0 -1px 0 color-mix(in srgb, #d97706, transparent 84%)',
         }}
       >
         <div className="flex items-start gap-2.5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: '#f59e0b' }} />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: '#d97706' }} />
           <div className="min-w-0">
             <div className="text-[13px] font-semibold leading-5" style={{ color: 'var(--text-strong)' }}>
               Development Build Warning
@@ -1432,7 +1426,7 @@ function StepRepo({ meta }: StepRepoProps) {
             type="button"
             onClick={() => { void copyRepoLink(); }}
             className="ui-button ui-button-secondary !h-8 !px-3 text-xs inline-flex items-center gap-1.5 shrink-0"
-            style={{ color: 'var(--accent-secondary)' }}
+            style={ACCENT_SECONDARY_BUTTON_STYLE_92}
           >
             <Copy className="h-3.5 w-3.5" />
             {copiedRepoLink ? 'Copied!' : 'Copy GitHub Link'}
@@ -1488,7 +1482,7 @@ function StepRepo({ meta }: StepRepoProps) {
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Git Submodule</div>
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>From your DragonFruit directory:</div>
             <code className="block font-mono text-[11px] mt-1 break-all" style={{ color: 'var(--accent-secondary)' }}>{submoduleCmd}</code>
-            <div className="mt-2 rounded-md border px-2 py-1.5 text-[11px]" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 94%)', color: 'var(--text-muted)' }}>
+            <div className="mt-2 rounded-md border px-2 py-1.5 text-[11px]" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)', background: 'color-mix(in srgb, #d97706, var(--surface-2) 92%)', color: 'var(--text-muted)' }}>
               If you use the submodule route, also register the plugin in{' '}
               <code className="font-mono">src/config/builtin-simple-plugin-allowlist.json</code>{' '}
               so it is included in generated built-in plugin manifests.
@@ -1550,7 +1544,13 @@ function CodeBlock({ label, content }: { label: string; content: string }) {
           {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
-      <pre className="text-xs font-mono px-3 py-2 overflow-x-auto leading-relaxed hljs" style={{ background: '#282c34' }}><code dangerouslySetInnerHTML={{ __html: highlightedHtml }} /></pre>
+      <pre
+        className="text-xs font-mono px-3 py-2 overflow-x-auto leading-relaxed hljs"
+        style={{
+          background: '#282c34',
+          color: '#abb2bf',
+        }}
+      ><code dangerouslySetInnerHTML={{ __html: highlightedHtml }} /></pre>
     </div>
   );
 }
@@ -1615,7 +1615,7 @@ function StepContent({ includesPrinters, setIncludesPrinters, includesMaterials,
                   background: checked ? 'var(--accent-secondary)' : 'transparent',
                 }}
               >
-                {checked && <Check className="h-3 w-3 text-black" />}
+                {checked && <Check className="h-3 w-3" style={{ color: 'var(--accent-secondary-contrast)' }} />}
               </span>
 
               <span
@@ -1644,7 +1644,7 @@ function StepContent({ includesPrinters, setIncludesPrinters, includesMaterials,
                 <span
                   className="text-[10px] font-bold uppercase tracking-widest shrink-0 px-1.5 py-0.5 rounded"
                   style={{
-                    color: 'color-mix(in srgb, var(--accent-secondary), black 20%)',
+                    color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 28%)',
                     background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-2) 82%)',
                   }}
                 >
@@ -1660,9 +1660,9 @@ function StepContent({ includesPrinters, setIncludesPrinters, includesMaterials,
         <div
           className="rounded-xl border px-3 py-2.5 text-xs"
           style={{
-            borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-            background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 93%)',
-            color: '#f4bf4f',
+            borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+            background: 'color-mix(in srgb, #d97706, var(--surface-2) 92%)',
+            color: 'color-mix(in srgb, #d97706, var(--text-strong) 20%)',
           }}
         >
           Select at least one content type to continue.
@@ -1732,10 +1732,7 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
             type="button"
             onClick={() => onChange({ ...preset, imageAssetPath: suggestedAssetPath })}
             className="ui-button ui-button-secondary !h-[36px] !px-3 text-xs"
-            style={{
-              color: 'var(--accent-secondary)',
-              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-            }}
+            style={ACCENT_SECONDARY_BUTTON_STYLE_92}
           >
             Use Suggested
           </button>
@@ -1840,13 +1837,7 @@ function PrinterPresetEditor({ preset, onChange }: PrinterPresetEditorProps) {
             aria-checked={preset.autoBuildWidthDepth}
             onClick={() => onChange({ ...preset, autoBuildWidthDepth: !preset.autoBuildWidthDepth })}
             className="ui-button ui-button-secondary !h-7 !px-2.5 text-[11px]"
-            style={preset.autoBuildWidthDepth
-              ? {
-                color: 'var(--accent-secondary)',
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-              }
-              : undefined}
+            style={preset.autoBuildWidthDepth ? ACCENT_SECONDARY_BUTTON_STYLE_90 : undefined}
           >
             {preset.autoBuildWidthDepth ? 'Auto' : 'Manual'}
           </button>
@@ -1904,9 +1895,9 @@ function DeleteConfirmDialog({ isOpen, title, message, confirmLabel, onCancel, o
             <span
               className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
               style={{
-                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 88%)',
-                color: '#ff8f8f',
+                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 55%)',
+                background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
+                color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
               }}
             >
               <AlertTriangle className="h-4 w-4" />
@@ -1945,9 +1936,9 @@ function DeleteConfirmDialog({ isOpen, title, message, confirmLabel, onCancel, o
               type="button"
               className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
               style={{
-                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 86%)',
-                color: '#ffd1d1',
+                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--danger), var(--surface-1) 86%)',
+                color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
               }}
               onClick={onConfirm}
             >
@@ -2109,7 +2100,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
                         aria-label="Delete preset"
                         title="Delete preset"
                       >
-                        <Trash2 className="h-3 w-3" style={{ color: '#ff8f8f' }} />
+                        <Trash2 className="h-3 w-3" style={{ color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' }} />
                       </button>
                     </div>
                   );
@@ -2124,10 +2115,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
             type="button"
             onClick={addPreset}
             className="ui-button ui-button-secondary w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
-            style={{
-              color: 'var(--accent-secondary)',
-              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-            }}
+            style={ACCENT_SECONDARY_BUTTON_STYLE_92}
           >
             <Plus className="h-3.5 w-3.5" />
             Add Printer
@@ -2168,7 +2156,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
                 type="button"
                 onClick={() => requestDeletePreset(clampedIndex)}
                 className="ui-button ui-button-ghost !h-7 !px-2 text-[11px] flex items-center gap-1.5"
-                style={{ color: '#ff8f8f', borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 60%)' }}
+                style={{ color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)', borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 60%)' }}
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Delete
@@ -2383,7 +2371,7 @@ function StepAssets({ presets, onPresetsChange, uploadedAssets, onUploadedAssets
                           type="button"
                           onClick={() => clearUpload(index)}
                           className="ui-button ui-button-secondary !h-8 !px-2.5 text-[11px]"
-                          style={{ color: uploaded ? '#ff8f8f' : 'var(--text-muted)' }}
+                          style={{ color: uploaded ? 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' : 'var(--text-muted)' }}
                           disabled={!uploaded}
                         >
                           Clear
@@ -2610,7 +2598,7 @@ function MaterialTemplateEditor({ template, targetOptions, onChange, onDelete, h
                 onClick={() => setActiveEditorTabId(tab.id)}
                 className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
                 style={active
-                  ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                  ? ACCENT_SECONDARY_BUTTON_STYLE_90
                   : { color: 'var(--text-muted)' }}
               >
                 {tab.title}
@@ -2940,7 +2928,7 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                                       aria-label="Delete material"
                                       title="Delete material"
                                     >
-                                      <Trash2 className="h-3 w-3" style={{ color: '#ff8f8f' }} />
+                                      <Trash2 className="h-3 w-3" style={{ color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' }} />
                                     </button>
                                   </div>
                                 );
@@ -2961,10 +2949,7 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
               type="button"
               onClick={addTemplate}
               className="ui-button ui-button-secondary w-full !h-8 text-[11px] flex items-center justify-center gap-1.5"
-              style={{
-                color: 'var(--accent-secondary)',
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-              }}
+              style={ACCENT_SECONDARY_BUTTON_STYLE_92}
               title="Add Material"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -2999,7 +2984,7 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                     type="button"
                     onClick={() => addPrinterVariantFromTemplate(clampedIndex)}
                     className="ui-button ui-button-secondary !h-7 !px-2 text-[11px] flex items-center gap-1.5"
-                    style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 60%)' }}
+                    style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                     title="Duplicate this material core profile into a new printer variant"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -3009,7 +2994,7 @@ function StepMaterials({ templates, onChange }: StepMaterialsProps) {
                     type="button"
                     onClick={() => requestDeleteMaterialTemplate(clampedIndex)}
                     className="ui-button ui-button-ghost !h-7 !px-2 text-[11px] flex items-center gap-1.5"
-                    style={{ color: '#ff8f8f', borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 60%)' }}
+                    style={{ color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)', borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 60%)' }}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
@@ -3189,7 +3174,7 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
       )}
 
       {writeStatus.kind !== 'idle' && (
-        <div className="text-xs" style={{ color: writeStatus.kind === 'error' ? '#fca5a5' : '#86efac' }}>
+        <div className="text-xs" style={{ color: writeStatus.kind === 'error' ? 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)' : 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 24%)' }}>
           {writeStatus.message}
         </div>
       )}
@@ -3217,9 +3202,9 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: 'color-mix(in srgb, #d97706, var(--text-strong) 20%)',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -3270,11 +3255,7 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
                 <button
                   type="button"
                   className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={ACCENT_SECONDARY_BUTTON_STYLE_92}
                   onClick={() => { void handleConfirmOverwriteWrite(); }}
                 >
                   <Archive className="w-3.5 h-3.5" />
@@ -3307,7 +3288,7 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
             onClick={() => { void handleWriteToPluginsDirectory(); }}
             disabled={isWritingToPluginsDir}
             className="ui-button ui-button-secondary !h-8 !px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
-            style={{ color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }}
+            style={ACCENT_SECONDARY_BUTTON_STYLE_92}
             title="Write files directly into plugins/<slug> in this dev workspace"
           >
             <Archive className="h-3.5 w-3.5" />
@@ -3338,6 +3319,7 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
   const [isEditingImportedPlugin, setIsEditingImportedPlugin] = React.useState(false);
   const [currentStep, setCurrentStep] = React.useState<StepId>('details');
   const [showExitConfirm, setShowExitConfirm] = React.useState(false);
+  const [isLightTheme, setIsLightTheme] = React.useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = React.useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = React.useState(false);
   const readmeLoadRunRef = React.useRef(0);
@@ -3375,6 +3357,46 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     wasOpenRef.current = false;
     resetStudioState();
   }, [isOpen, resetStudioState]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const evaluateTheme = () => {
+      const root = document.documentElement;
+      const explicitTheme = root.getAttribute('data-theme');
+      if (explicitTheme === 'light') {
+        setIsLightTheme(true);
+        return;
+      }
+      if (explicitTheme === 'dark') {
+        setIsLightTheme(false);
+        return;
+      }
+      setIsLightTheme(window.matchMedia('(prefers-color-scheme: light)').matches);
+    };
+
+    evaluateTheme();
+
+    const observer = new MutationObserver(evaluateTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const handleMediaChange = () => evaluateTheme();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleMediaChange);
+    } else {
+      mediaQuery.addListener(handleMediaChange);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleMediaChange);
+      } else {
+        mediaQuery.removeListener(handleMediaChange);
+      }
+    };
+  }, []);
 
   const orderedSteps = React.useMemo((): StepId[] => {
     const steps: StepId[] = ['details', 'content'];
@@ -3761,10 +3783,14 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   type="button"
                   onClick={handleDesktopWindowMinimize}
                   className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-                  style={{
+                  style={isLightTheme ? {
+                    borderColor: 'color-mix(in srgb, #c8920a, var(--border-subtle) 35%)',
+                    background: 'color-mix(in srgb, #c8920a, var(--surface-1) 50%)',
+                    color: 'var(--text-strong)',
+                  } : {
                     borderColor: 'color-mix(in srgb, #f4bf4f, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f4bf4f, transparent 86%)',
-                    color: 'color-mix(in srgb, #f4bf4f, white 16%)',
+                    background: 'color-mix(in srgb, #f4bf4f, var(--surface-1) 86%)',
+                    color: 'color-mix(in srgb, #f4bf4f, var(--text-strong) 16%)',
                   }}
                   title="Minimize"
                   aria-label="Minimize window"
@@ -3775,10 +3801,14 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   type="button"
                   onClick={handleDesktopWindowToggleMaximize}
                   className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-                  style={{
+                  style={isLightTheme ? {
+                    borderColor: 'color-mix(in srgb, #1a7a3a, var(--border-subtle) 35%)',
+                    background: 'color-mix(in srgb, #1a7a3a, var(--surface-1) 50%)',
+                    color: 'var(--text-strong)',
+                  } : {
                     borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #40c463, transparent 86%)',
-                    color: 'color-mix(in srgb, #40c463, white 16%)',
+                    background: 'color-mix(in srgb, #40c463, var(--surface-1) 86%)',
+                    color: 'color-mix(in srgb, #40c463, var(--text-strong) 16%)',
                   }}
                   title={isDesktopWindowMaximized ? 'Restore' : 'Maximize'}
                   aria-label={isDesktopWindowMaximized ? 'Restore window' : 'Maximize window'}
@@ -3793,12 +3823,16 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   type="button"
                   onClick={handleDesktopWindowClose}
                   className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-                  style={{
+                  style={isLightTheme ? {
+                    borderColor: 'color-mix(in srgb, #c0160a, var(--border-subtle) 35%)',
+                    background: 'color-mix(in srgb, #c0160a, var(--surface-1) 50%)',
+                    color: 'var(--text-strong)',
+                  } : {
                     borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #ff6b6b, transparent 88%)',
-                    color: 'color-mix(in srgb, #ff6b6b, white 18%)',
+                    background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 88%)',
+                    color: 'color-mix(in srgb, #ff6b6b, var(--text-strong) 18%)',
                   }}
-                  title="Close App"
+                  title="Close"
                   aria-label="Close window"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -3954,8 +3988,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
               onClick={requestExitStudio}
               className="ui-button ui-button-secondary !h-8 !px-3 text-xs shrink-0"
               style={{
-                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
-                color: '#ff8f8f',
+                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 55%)',
+                color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
               }}
             >
               Exit Plugin Creation Studio
@@ -4027,9 +4061,9 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   <span
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                     style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
+                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                      color: 'color-mix(in srgb, #d97706, var(--text-strong) 20%)',
                     }}
                   >
                     <AlertTriangle className="h-4 w-4" />
@@ -4076,9 +4110,9 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                     type="button"
                     className="ui-button !h-9 px-3 text-xs"
                     style={{
-                      borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 86%)',
-                      color: '#ffd1d1',
+                      borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--danger), var(--surface-1) 86%)',
+                      color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
                     }}
                     onClick={confirmExitStudio}
                   >

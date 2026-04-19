@@ -1178,15 +1178,15 @@ export class ExportManager {
       supports.knots = [];
       supports.kickstands = [];
     } else if (hasScopedModelFilter) {
-      supports.roots = supports.roots.filter((item) => belongsToScopedModel(item));
-      supports.trunks = supports.trunks.filter((item) => belongsToScopedModel(item));
-      supports.branches = supports.branches.filter((item) => belongsToScopedModel(item));
-      supports.leaves = supports.leaves.filter((item) => belongsToScopedModel(item));
-      supports.twigs = supports.twigs.filter((item) => belongsToScopedModel(item));
-      supports.sticks = supports.sticks.filter((item) => belongsToScopedModel(item));
-      supports.braces = supports.braces.filter((item) => belongsToScopedModel(item));
-      supports.knots = supports.knots.filter((item) => belongsToScopedModel(item));
-      supports.kickstands = supports.kickstands.filter((item) => belongsToScopedModel(item));
+      supports.roots = (supports.roots ?? []).filter((item) => belongsToScopedModel(item));
+      supports.trunks = (supports.trunks ?? []).filter((item) => belongsToScopedModel(item));
+      supports.branches = (supports.branches ?? []).filter((item) => belongsToScopedModel(item));
+      supports.leaves = (supports.leaves ?? []).filter((item) => belongsToScopedModel(item));
+      supports.twigs = (supports.twigs ?? []).filter((item) => belongsToScopedModel(item));
+      supports.sticks = (supports.sticks ?? []).filter((item) => belongsToScopedModel(item));
+      supports.braces = (supports.braces ?? []).filter((item) => belongsToScopedModel(item));
+      supports.knots = (supports.knots ?? []).filter((item) => belongsToScopedModel(item));
+      supports.kickstands = (supports.kickstands ?? []).filter((item) => belongsToScopedModel(item));
     }
 
     const meshBytesMap = new Map<number, Uint8Array>();

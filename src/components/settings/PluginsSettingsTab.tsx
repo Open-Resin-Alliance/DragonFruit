@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Loader2, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Loader2, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -90,6 +90,7 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 export function PluginsSettingsTab() {
   React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
+  const [isLightTheme, setIsLightTheme] = React.useState(false);
   const [repoUrl, setRepoUrl] = React.useState('');
   const [studioOpen, setStudioOpen] = React.useState(false);
   const [isInstalling, setIsInstalling] = React.useState(false);
@@ -281,16 +282,81 @@ export function PluginsSettingsTab() {
     setStudioOpen(false);
   }, [isDevRuntime]);
 
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const evaluateTheme = () => {
+      const root = document.documentElement;
+      const explicitTheme = root.getAttribute('data-theme');
+      if (explicitTheme === 'light') {
+        setIsLightTheme(true);
+        return;
+      }
+      if (explicitTheme === 'dark') {
+        setIsLightTheme(false);
+        return;
+      }
+      setIsLightTheme(window.matchMedia('(prefers-color-scheme: light)').matches);
+    };
+
+    evaluateTheme();
+
+    const observer = new MutationObserver(evaluateTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const handleMediaChange = () => evaluateTheme();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleMediaChange);
+    } else {
+      mediaQuery.addListener(handleMediaChange);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleMediaChange);
+      } else {
+        mediaQuery.removeListener(handleMediaChange);
+      }
+    };
+  }, []);
+
+  const accentSecondaryActionColor = isLightTheme
+    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
+    : 'var(--accent-secondary)';
+  const accentSecondaryActionBorderColor = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
+  const accentSecondaryActionBackground92 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground92,
+  };
+  const builtinShieldIconColor = isLightTheme
+    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 28%)'
+    : '#86efac';
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-        <div className="flex items-center gap-2">
-          <Plug className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h4>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
+            </p>
+          </div>
         </div>
-        <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-          Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
-        </p>
         <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
           Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
         </p>
@@ -308,7 +374,7 @@ export function PluginsSettingsTab() {
             onClick={() => { void handleInstall(); }}
             disabled={isInstalling}
             className="ui-button ui-button-secondary !h-[34px] !px-3 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
-            style={{ color: 'var(--accent-secondary)' }}
+            style={accentSecondaryActionStyle92}
           >
             {isInstalling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             {isInstalling ? 'Installing…' : 'Install Plugin'}
@@ -330,9 +396,9 @@ export function PluginsSettingsTab() {
             <div className="flex items-start gap-2.5">
               <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border leading-none"
                 style={{
-                  borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
-                  color: '#fbbf24',
+                  borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                  background: 'color-mix(in srgb, #d97706, var(--surface-2) 86%)',
+                  color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
                 }}
               >
                 <AlertTriangle className="h-4.5 w-4.5" />
@@ -371,7 +437,7 @@ export function PluginsSettingsTab() {
               <button
                 type="button"
                 className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
-                style={{ color: '#fbbf24' }}
+                style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }}
                 disabled={isInstalling}
                 onClick={() => { void handleConfirmLiabilityInstall(); }}
               >
@@ -423,11 +489,11 @@ export function PluginsSettingsTab() {
                       style={{
                         borderColor: pendingInstallPreview.trust === 'allowlisted'
                           ? 'color-mix(in srgb, #86efac, var(--border-subtle) 45%)'
-                          : 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                        color: pendingInstallPreview.trust === 'allowlisted' ? '#86efac' : '#fbbf24',
+                          : 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                        color: pendingInstallPreview.trust === 'allowlisted' ? '#86efac' : 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
                         background: pendingInstallPreview.trust === 'allowlisted'
                           ? 'color-mix(in srgb, #86efac, var(--surface-2) 92%)'
-                          : 'color-mix(in srgb, #f59e0b, var(--surface-2) 92%)',
+                          : 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                       }}
                     >
                       {pendingInstallPreview.trust === 'allowlisted' ? 'Allowlisted Source' : 'Unverified Source'}
@@ -547,7 +613,20 @@ export function PluginsSettingsTab() {
       )}
 
       <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h4>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Manage built-in and user-installed plugin packs.
+            </p>
+          </div>
+        </div>
 
         <div className="mt-2 space-y-2">
           {installedPlugins.map((plugin) => {
@@ -568,7 +647,7 @@ export function PluginsSettingsTab() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       {isBuiltin ? (
-                        <ShieldCheck className="h-3.5 w-3.5" style={{ color: '#86efac' }} />
+                        <ShieldCheck className="h-3.5 w-3.5" style={{ color: builtinShieldIconColor }} />
                       ) : (
                         <Github className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
                       )}
@@ -583,9 +662,9 @@ export function PluginsSettingsTab() {
                     {isUnverifiedGithubPlugin && (
                       <div className="text-[11px] mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
                         style={{
-                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)',
-                          color: '#fbbf24',
-                          background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 90%)',
+                          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                          color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                          background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                         }}
                         title={plugin.liabilityAcceptedAt ? `Liability accepted at ${plugin.liabilityAcceptedAt}` : 'Installed with liability acknowledgement'}
                       >
@@ -622,9 +701,9 @@ export function PluginsSettingsTab() {
                     <span
                       className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold"
                       style={{
-                        borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 40%)',
-                        color: '#f59e0b',
-                        background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
+                        borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
+                        color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
+                        background: 'color-mix(in srgb, #d97706, var(--surface-2) 86%)',
                       }}
                       title="Built-in and hosted by Open Resin Alliance"
                     >

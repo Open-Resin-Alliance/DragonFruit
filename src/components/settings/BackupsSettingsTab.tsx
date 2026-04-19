@@ -1045,7 +1045,7 @@ export function BackupsSettingsTab() {
               Loading backup status…
             </div>
           ) : !status?.configured ? (
-            <div className="text-xs" style={{ color: '#fca5a5' }}>
+            <div className="text-xs" style={{ color: 'var(--danger)' }}>
               Backups are not configured on this build yet. Add GitHub OAuth env values to enable this tab.
             </div>
           ) : (
@@ -1053,7 +1053,7 @@ export function BackupsSettingsTab() {
               <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Connection</div>
                 <div className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
-                  {authenticated ? <CheckCircle2 className="h-3.5 w-3.5" style={{ color: '#86efac' }} /> : <ShieldX className="h-3.5 w-3.5" style={{ color: '#fca5a5' }} />}
+                  {authenticated ? <CheckCircle2 className="h-3.5 w-3.5" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} /> : <ShieldX className="h-3.5 w-3.5" style={{ color: 'var(--danger)' }} />}
                   {authenticated ? `@${status.user?.login ?? 'unknown'}` : 'Not connected'}
                 </div>
               </div>
@@ -1063,7 +1063,7 @@ export function BackupsSettingsTab() {
                 <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
                   {status.repository?.name ?? 'dragonfruit-backups'}
                 </div>
-                <div className="text-[11px]" style={{ color: repoExists ? '#86efac' : 'var(--text-muted)' }}>
+                <div className="text-[11px]" style={{ color: repoExists ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' : 'var(--text-muted)' }}>
                   {repoExists ? 'Private repo ready' : 'Not created yet'}
                 </div>
               </div>
@@ -1161,7 +1161,7 @@ export function BackupsSettingsTab() {
                   onClick={() => { void runSync(true); }}
                   disabled={busy !== 'none'}
                   className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
-                  style={{ color: '#fca5a5' }}
+                  style={{ color: 'var(--danger)' }}
                 >
                   <RefreshCcw className="h-4 w-4" />
                   Force Push Local
@@ -1187,7 +1187,7 @@ export function BackupsSettingsTab() {
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                       }
                     : {
                         borderColor: 'var(--border-subtle)',
@@ -1287,7 +1287,7 @@ export function BackupsSettingsTab() {
                             type="button"
                             onClick={() => { void handleDeleteHistory(item.id); }}
                             className="inline-flex h-7 w-7 items-center justify-center rounded border"
-                            style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)', color: '#fca5a5' }}
+                            style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)', color: 'var(--danger)' }}
                             title="Delete snapshot"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -1650,7 +1650,7 @@ export function BackupsSettingsTab() {
         <div className="rounded-md border px-3 py-2 text-xs" style={{
           borderColor: message.kind === 'error' ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)' : 'color-mix(in srgb, #22c55e, var(--border-subtle) 40%)',
           background: 'var(--surface-1)',
-          color: message.kind === 'error' ? '#fca5a5' : '#86efac',
+          color: message.kind === 'error' ? 'var(--danger)' : 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
         }}>
           {message.text}
         </div>

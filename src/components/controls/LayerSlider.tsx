@@ -1055,7 +1055,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             onKeyDown={handleInputKeyDown}
             className="mt-2 w-full rounded border px-1.5 py-1 text-center text-xs shadow tabular-nums focus:outline-none transition-colors"
             style={showError
-              ? { borderColor: '#ef4444', background: 'rgba(127, 29, 29, 0.5)', color: '#fecaca' }
+              ? { borderColor: 'var(--danger)', background: 'color-mix(in srgb, #ef4444, var(--surface-0) 88%)', color: 'var(--danger)' }
               : { borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-0), transparent 10%)', color: 'var(--text-strong)' }
             }
           />

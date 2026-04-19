@@ -187,6 +187,11 @@ function isDragBlockedByTarget(target: EventTarget | null) {
   );
 }
 
+function isPanelHeaderDragHandleTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest('[data-panel-drag-handle="true"]'));
+}
+
 function getEdgeHint(position: PanelPosition, size: PanelSize, bounds: PanelSize, threshold: number): EdgeHint {
   const rightEdgeX = Math.max(PANEL_MARGIN, bounds.width - size.width - PANEL_MARGIN);
   const bottomEdgeY = Math.max(PANEL_MARGIN, bounds.height - size.height - PANEL_MARGIN);
@@ -1287,6 +1292,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     if (LOCKED_PANEL_IDS.has(panelId)) return;
+    if (!isPanelHeaderDragHandleTarget(event.target)) return;
     if (isDragBlockedByTarget(event.target)) return;
 
     const containerRect = containerRef.current?.getBoundingClientRect();

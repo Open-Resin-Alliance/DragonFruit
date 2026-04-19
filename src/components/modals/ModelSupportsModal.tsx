@@ -36,10 +36,6 @@ const EMPTY_GROUPS: ModelSupportGroups = {
   kickstands: [],
 };
 
-function pluralize(label: string, count: number) {
-  return `${count.toLocaleString()} ${label}${count === 1 ? '' : 's'}`;
-}
-
 function sortIds(ids: string[]): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b));
 }
@@ -105,7 +101,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
 
   React.useEffect(() => {
     if (!isOpen) return;
-    setCollapsedGroups({});
+    setCollapsedGroups({ roots: true, trunks: true, branches: true, leaves: true, twigs: true, sticks: true, braces: true, knots: true, kickstands: true });
   }, [isOpen, model?.id]);
 
   const summaryStats = React.useMemo(() => {
@@ -210,7 +206,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
               Total
             </div>
             <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {pluralize('support entity', totalSupportEntities)}
+              {totalSupportEntities === 1 ? '1 support entity' : `${totalSupportEntities.toLocaleString()} support entities`}
             </div>
           </div>
 

@@ -5,6 +5,7 @@ import { AlertTriangle, Box, Check, ChevronLeft, ChevronRight, Download, Edit3, 
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   applyOfficialMaterialProfileUpdate,
   applyOfficialPrinterProfileUpdate,
@@ -366,6 +367,54 @@ export function ProfileSettingsModal({
     getPrinterReachabilitySnapshot,
     getPrinterReachabilityServerSnapshot,
   );
+  const [isLightTheme, setIsLightTheme] = React.useState<boolean>(() => {
+    if (typeof document === 'undefined') return false;
+    const explicitTheme = document.documentElement.getAttribute('data-theme');
+    if (explicitTheme === 'light') return true;
+    if (explicitTheme === 'dark') return false;
+    return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches;
+  });
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const resolveLightTheme = () => {
+      const explicitTheme = document.documentElement.getAttribute('data-theme');
+      if (explicitTheme === 'light') return true;
+      if (explicitTheme === 'dark') return false;
+      return window.matchMedia('(prefers-color-scheme: light)').matches;
+    };
+
+    const syncTheme = () => setIsLightTheme(resolveLightTheme());
+    syncTheme();
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          syncTheme();
+          return;
+        }
+      }
+    });
+
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncTheme);
+    } else {
+      mediaQuery.addListener(syncTheme);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', syncTheme);
+      } else {
+        mediaQuery.removeListener(syncTheme);
+      }
+    };
+  }, []);
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
   const officialPrinterUpdates = React.useMemo(() => getOfficialPrinterProfileUpdates(profileState), [profileState]);
@@ -1104,6 +1153,31 @@ export function ProfileSettingsModal({
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 0 ? 'Manage Fleet' : 'Network Settings';
   const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 0;
   const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
+  const accentSecondaryActionColor = isLightTheme
+    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
+    : 'var(--accent-secondary)';
+  const accentSecondaryActionBorderColor = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
+  const accentSecondaryActionBackground92 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
+  const accentSecondaryActionBackground93 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 82%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)';
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground92,
+  };
+  const accentSecondaryActionStyle93: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground93,
+  };
+  const printerImageWellBackground = isLightTheme
+    ? 'color-mix(in srgb, var(--surface-2), white 20%)'
+    : '#1c2027';
   const printerSectionTitle = shouldRenderFleetRail
     ? `${selectedPrinter?.name ?? 'Printer'} Fleet`
     : '3D Printer';
@@ -1195,7 +1269,7 @@ export function ProfileSettingsModal({
             className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-lg border overflow-hidden relative"
             style={{
               borderColor: 'var(--border-subtle)',
-              background: '#1c2027',
+              background: printerImageWellBackground,
               height: 128,
               minHeight: 128,
               maxHeight: 128,
@@ -1245,7 +1319,7 @@ export function ProfileSettingsModal({
         </div>
       </div>
     );
-  }, []);
+  }, [printerImageWellBackground]);
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
@@ -1493,13 +1567,105 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     if (!isOpen) return;
 
+    const handleTopMostDialogEscape = (): boolean => {
+      if (deleteConfirmTarget) {
+        setDeleteConfirmTarget(null);
+        return true;
+      }
+
+      if (showOfficialMaterialLockDialog) {
+        setShowOfficialMaterialLockDialog(false);
+        return true;
+      }
+
+      if (showOfficialLockDialog) {
+        setShowOfficialLockDialog(false);
+        setOfficialLockedProfileId(null);
+        return true;
+      }
+
+      if (showPrinterUpdateDiffModal) {
+        setShowPrinterUpdateDiffModal(false);
+        return true;
+      }
+
+      if (isEditFleetUnitModalOpen) {
+        setIsEditFleetUnitModalOpen(false);
+        return true;
+      }
+
+      if (isRemoteMaterialEditDialogOpen) {
+        if (!isSavingRemoteMaterialEdit) {
+          setIsRemoteMaterialEditDialogOpen(false);
+        }
+        return true;
+      }
+
+      if (isNetworkSettingsOpen) {
+        setIsNetworkSettingsOpen(false);
+        return true;
+      }
+
+      if (showPresetPicker) {
+        setShowPresetPicker(false);
+        return true;
+      }
+
+      if (showMaterialPresetPicker) {
+        setShowMaterialPresetPicker(false);
+        return true;
+      }
+
+      if (isMaterialEditorOpen) {
+        setIsMaterialEditorOpen(false);
+        return true;
+      }
+
+      if (isCreateMaterialOpen) {
+        setIsCreateMaterialOpen(false);
+        return true;
+      }
+
+      if (isEditingPrinter) {
+        setIsEditingPrinter(false);
+        return true;
+      }
+
+      return false;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented) return;
+
+      if (handleTopMostDialogEscape()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      onClose();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose]);
+  }, [
+    deleteConfirmTarget,
+    isCreateMaterialOpen,
+    isEditFleetUnitModalOpen,
+    isEditingPrinter,
+    isMaterialEditorOpen,
+    isNetworkSettingsOpen,
+    isOpen,
+    isRemoteMaterialEditDialogOpen,
+    isSavingRemoteMaterialEdit,
+    onClose,
+    showMaterialPresetPicker,
+    showOfficialLockDialog,
+    showOfficialMaterialLockDialog,
+    showPresetPicker,
+    showPrinterUpdateDiffModal,
+  ]);
 
   React.useEffect(() => {
     if (!selectedPrinter) {
@@ -3066,12 +3232,12 @@ export function ProfileSettingsModal({
             <div
               className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
               style={{
-                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 30%)',
-                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)',
+                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 30%)',
+                background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
                 color: 'var(--text-muted)',
               }}
             >
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#f59e0b' }} />
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#d97706' }} />
               <span>
                 <strong style={{ color: 'var(--text-strong)' }}>Safety warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury. Verify all settings carefully before printing.
               </span>
@@ -3107,11 +3273,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleAddPrinter}
                   className="ui-button ui-button-secondary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Plus className="w-4 h-4" />
                   Add Printer
@@ -3173,16 +3335,8 @@ export function ProfileSettingsModal({
                       onClick={handleAddPrinter}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
                       style={shouldShowFleetSwitchAction
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                          }}
+                        ? accentSecondaryActionStyle92
+                        : accentSecondaryActionStyle93}
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Add Printer
@@ -3426,11 +3580,7 @@ export function ProfileSettingsModal({
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
                               background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                             }
-                          : {
-                              color: 'var(--accent-secondary)',
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                            }}
+                          : accentSecondaryActionStyle93}
                         title={fleetCount > 0 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                       >
                         {fleetCount > 0 ? (
@@ -3470,11 +3620,7 @@ export function ProfileSettingsModal({
                       setIsNetworkSettingsOpen(true);
                     }}
                     className="ui-button ui-button-secondary mt-2 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                    style={{
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                    }}
+                    style={accentSecondaryActionStyle93}
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Add First Device
@@ -3491,11 +3637,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => setPrinterRailViewMode('profiles')}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         Return to Printers
                       </button>
@@ -3535,11 +3677,7 @@ export function ProfileSettingsModal({
                           disabled={!hasPrinters || !selectedPrinter}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                           style={shouldShowFleetSwitchAction
-                            ? {
-                                color: 'var(--accent-secondary)',
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                              }
+                            ? accentSecondaryActionStyle92
                             : { color: 'var(--text-strong)' }}
                         >
                           {shouldShowFleetSwitchAction ? <LayoutGrid className="w-3.5 h-3.5" /> : <Search className="w-3.5 h-3.5" />}
@@ -3551,11 +3689,7 @@ export function ProfileSettingsModal({
                           type="button"
                           onClick={() => setShowPrinterUpdateDiffModal(true)}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                          style={{
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }}
+                          style={accentSecondaryActionStyle92}
                           title={`Update v${selectedPrinterUpdate.currentVersion} to v${selectedPrinterUpdate.latestVersion}`}
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -3599,7 +3733,7 @@ export function ProfileSettingsModal({
                         onClick={requestDeleteSelectedPrinter}
                         disabled={!hasPrinters}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                        style={{ color: !hasPrinters ? 'var(--text-muted)' : '#fca5a5' }}
+                        style={{ color: !hasPrinters ? 'var(--text-muted)' : 'var(--danger)' }}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         Delete Printer
@@ -3688,11 +3822,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleAddMaterial}
                         className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Plus className="w-3.5 h-3.5" />
                         New
@@ -3785,11 +3915,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleOpenNetworkSettings}
                         className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
                         Open Fleet Management
@@ -3819,11 +3945,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleOpenNetworkSettings}
                         className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
                         Connect Now
@@ -4007,7 +4129,7 @@ export function ProfileSettingsModal({
                     onClick={requestDeleteSelectedMaterial}
                     disabled={!selectedMaterial || printerMaterials.length <= 1}
                     className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     Delete
@@ -4087,7 +4209,7 @@ export function ProfileSettingsModal({
 
                   <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Card Thumbnail</div>
-                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                       {editingFleetUnitImageDataUrl ? (
                         <AutoTrimmedImage src={editingFleetUnitImageDataUrl} alt={editingFleetUnitNickname || editingFleetUnit.displayName || 'Fleet unit'} className="h-full w-full object-cover" />
                       ) : (
@@ -4110,7 +4232,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => setEditingFleetUnitImageDataUrl(null)}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                        style={{ color: editingFleetUnitImageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                        style={{ color: editingFleetUnitImageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                         disabled={!editingFleetUnitImageDataUrl}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -4126,7 +4248,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleResetFleetUnitDraft}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{ color: '#fca5a5' }}
+                  style={{ color: 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Reset Unit
@@ -4271,7 +4393,8 @@ export function ProfileSettingsModal({
                   type="button"
                   aria-disabled={selectedLibraryPresetIds.size === 0}
                   onClick={selectedLibraryPresetIds.size > 0 ? handleAddSelectedPrinterPresets : undefined}
-                  className={`ui-button !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed ${selectedLibraryPresetIds.size > 0 ? 'ui-button-accent' : 'ui-button-secondary aria-disabled:opacity-45'}`}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+                  style={selectedLibraryPresetIds.size > 0 ? accentSecondaryActionStyle92 : undefined}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   {selectedLibraryPresetIds.size > 0
@@ -4314,6 +4437,7 @@ export function ProfileSettingsModal({
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
                     onActiveTabChange={setMaterialEditorTab}
+                    activeTabStyle={accentSecondaryActionStyle92}
                     draft={editMaterialDraft}
                     onDraftChange={setEditMaterialDraft}
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
@@ -4346,7 +4470,7 @@ export function ProfileSettingsModal({
                   }}
                   disabled={!selectedMaterial || printerMaterials.length <= 1}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-45"
-                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Delete Material
@@ -4363,7 +4487,7 @@ export function ProfileSettingsModal({
                     type="button"
                     onClick={handleSaveMaterialEdits}
                     className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                    style={{ color: 'var(--accent-secondary)' }}
+                    style={accentSecondaryActionStyle92}
                   >
                     <Check className="w-3.5 h-3.5" />
                     Save Material
@@ -4399,11 +4523,11 @@ export function ProfileSettingsModal({
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 {isSelectedPrinterOfficial && (
-                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)' }}>
+                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-sm font-semibold inline-flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
-                          <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
+                          <AlertTriangle className="w-4 h-4" style={{ color: '#d97706' }} />
                           Official Profile — Edits Limited!
                         </div>
                         <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -4419,7 +4543,7 @@ export function ProfileSettingsModal({
                           void handleDuplicateSelectedPrinterAsCustom();
                         }}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                        style={{ color: 'var(--accent-secondary)' }}
+                        style={accentSecondaryActionStyle92}
                       >
                         <Plus className="w-3.5 h-3.5" />
                         Create Custom Copy
@@ -4467,7 +4591,7 @@ export function ProfileSettingsModal({
                             }}
                             disabled={isSelectedPrinterOfficial || !selectedPrinter.imageDataUrl}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                            style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                            style={{ color: selectedPrinter.imageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             Clear Image
@@ -4480,7 +4604,7 @@ export function ProfileSettingsModal({
                     </div>
 
                     <div className="rounded-lg border p-2.5 h-full min-h-0 flex" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                         {selectedPrinter.imageDataUrl ? (
                           <AutoTrimmedImage src={selectedPrinter.imageDataUrl} alt={selectedPrinter.name} className="h-full w-full object-contain" />
                         ) : (
@@ -4519,11 +4643,7 @@ export function ProfileSettingsModal({
                       disabled={isSelectedPrinterOfficial}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md disabled:opacity-55 disabled:cursor-not-allowed"
                       style={selectedBuildDimensionMode === 'auto'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
+                        ? accentSecondaryActionStyle92
                         : { color: 'var(--text-strong)' }}
                     >
                       {selectedBuildDimensionMode === 'auto' ? 'Auto' : 'Manual'}
@@ -4752,7 +4872,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={() => setIsEditingPrinter(false)}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                  style={{ color: 'var(--accent-secondary)' }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
                   Done
@@ -4968,7 +5088,8 @@ export function ProfileSettingsModal({
                   type="button"
                   aria-disabled={selectedLibraryMaterialKeys.size === 0}
                   onClick={selectedLibraryMaterialKeys.size > 0 ? handleAddSelectedMaterialPresets : undefined}
-                  className={`ui-button !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed ${selectedLibraryMaterialKeys.size > 0 ? 'ui-button-accent' : 'ui-button-secondary aria-disabled:opacity-45'}`}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+                  style={selectedLibraryMaterialKeys.size > 0 ? accentSecondaryActionStyle92 : undefined}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   {selectedLibraryMaterialKeys.size > 0
@@ -5011,6 +5132,7 @@ export function ProfileSettingsModal({
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
                     onActiveTabChange={setMaterialEditorTab}
+                    activeTabStyle={accentSecondaryActionStyle92}
                     draft={newMaterialDraft}
                     onDraftChange={setNewMaterialDraft}
                     outputFormat={selectedPrinter.display.outputFormat}
@@ -5046,7 +5168,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleCreateMaterial}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                  style={{ color: 'var(--accent)' }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
                   Save Material
@@ -5209,11 +5331,7 @@ export function ProfileSettingsModal({
                     setShowPrinterUpdateDiffModal(false);
                   }}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Download className="w-3.5 h-3.5" />
                   Apply Update
@@ -5224,266 +5342,137 @@ export function ProfileSettingsModal({
         )}
 
         {showOfficialLockDialog && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
+          <StructuredDialogModal
+            open={showOfficialLockDialog}
+            ariaLabel="Official profile locked"
+            title="Official Profile Locked"
+            subtitle="Official slicer profiles can't be edited directly."
+            icon={<Lock className="h-4 w-4" />}
+            iconTone="warning"
+            zIndexClassName="z-[75]"
+            closeAriaLabel="Close official profile lock dialog"
+            onClose={() => {
               setShowOfficialLockDialog(false);
               setOfficialLockedProfileId(null);
-            }
-          }}>
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Official profile locked"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-
-                  <div className="min-w-0 pr-2">
-                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Official Profile Locked
-                    </h3>
-                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      Official slicer profiles can’t be edited directly.
-                    </p>
-                  </div>
-                </div>
-
+            }}
+            actions={(
+              <>
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close official profile lock dialog"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
                   onClick={() => {
                     setShowOfficialLockDialog(false);
                     setOfficialLockedProfileId(null);
                   }}
                 >
-                  <X className="w-4 h-4" />
+                  Cancel
                 </button>
-              </div>
-
-              <div className="space-y-3.5 p-5">
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  For safety reasons, official slicer profiles cannot be modified directly.
-                  <br />
-                  Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
-                  <br />
-                  <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                    onClick={() => {
-                      setShowOfficialLockDialog(false);
-                      setOfficialLockedProfileId(null);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDuplicateOfficialProfile}
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    Make Custom Copy
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showOfficialMaterialLockDialog && selectedMaterial && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setShowOfficialMaterialLockDialog(false);
-          }}>
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Official material profile locked"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-
-                  <div className="min-w-0 pr-2">
-                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Official Profile Locked
-                    </h3>
-                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      Official material profiles can’t be edited directly.
-                    </p>
-                  </div>
-                </div>
-
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close official material profile lock dialog"
-                  onClick={() => setShowOfficialMaterialLockDialog(false)}
+                  onClick={handleDuplicateOfficialProfile}
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  style={accentSecondaryActionStyle92}
                 >
-                  <X className="w-4 h-4" />
+                  <Lock className="w-3.5 h-3.5" />
+                  Make Custom Copy
                 </button>
-              </div>
-
-              <div className="space-y-3.5 p-5">
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  Official material profiles cannot be edited directly.
-                  <br />
-                  Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
-                  <br />
-                  <br />
-                  <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                    onClick={() => setShowOfficialMaterialLockDialog(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDuplicateMaterialAsCustom}
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    Make Custom Copy
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+              </>
+            )}
+          >
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              For safety reasons, official slicer profiles cannot be modified directly.
+              <br />
+              Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
+              <br />
+              <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
+            </p>
+          </StructuredDialogModal>
         )}
 
-        {deleteConfirmTarget && (
-          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setDeleteConfirmTarget(null);
-            }
-          }}>
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Confirm delete"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
+        <StructuredDialogModal
+          open={showOfficialMaterialLockDialog && Boolean(selectedMaterial)}
+          ariaLabel="Official material profile locked"
+          title="Official Profile Locked"
+          subtitle="Official material profiles can't be edited directly."
+          icon={<Lock className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[75]"
+          closeAriaLabel="Close official material profile lock dialog"
+          onClose={() => setShowOfficialMaterialLockDialog(false)}
+          actions={(
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                onClick={() => setShowOfficialMaterialLockDialog(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDuplicateMaterialAsCustom}
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                style={accentSecondaryActionStyle92}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Make Custom Copy
+              </button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            Official material profiles cannot be edited directly.
+            <br />
+            Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
+            <br />
+            <br />
+            <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+          </p>
+        </StructuredDialogModal>
 
-                  <div className="min-w-0 pr-2">
-                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Confirm Delete
-                    </h3>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close delete confirmation dialog"
-                  onClick={() => setDeleteConfirmTarget(null)}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-3.5 p-5">
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  {deleteConfirmTarget.kind === 'printer'
-                    ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all material profiles bound to it?</>
-                    : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
-                  <br />
-                  <br />
-                  <strong style={{ color: 'var(--danger)' }}>Warning:</strong> This action cannot be undone.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                    onClick={() => setDeleteConfirmTarget(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleConfirmDelete}
-                    className="ui-button ui-button-danger !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <StructuredDialogModal
+          open={Boolean(deleteConfirmTarget)}
+          ariaLabel="Confirm delete"
+          title={deleteConfirmTarget?.kind === 'printer' ? 'Delete Printer Profile' : 'Delete Material Profile'}
+          subtitle="This action cannot be undone."
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[76]"
+          onClose={() => setDeleteConfirmTarget(null)}
+          closeAriaLabel="Close delete confirmation dialog"
+          actions={(
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                onClick={() => setDeleteConfirmTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                style={{
+                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                  background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                  color: 'var(--danger)',
+                }}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </>
+          )}
+        >
+          {deleteConfirmTarget ? (
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {deleteConfirmTarget.kind === 'printer'
+                ? <>Delete <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and remove all material profiles linked to it?</>
+                : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
+            </p>
+          ) : null}
+        </StructuredDialogModal>
       </div>
     </div>
   );
@@ -5592,9 +5581,9 @@ function RemoteMaterialEditDialog({
                       <span
                         className="text-[10px] rounded-full border px-2 py-0.5 normal-case tracking-normal"
                         style={{
-                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
-                          color: '#fbbf24',
+                          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+                          color: '#d97706',
                         }}
                         title="Dynamic Wait is controlling Wait Before Print fields"
                       >
