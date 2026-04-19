@@ -160,6 +160,13 @@ export function TopBar({
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
+  const [isLightTheme, setIsLightTheme] = useState(() => {
+    if (typeof document === 'undefined') return false;
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'light') return true;
+    if (attr === 'dark') return false;
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
+  });
   const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
   const [windowMetrics, setWindowMetrics] = useState(() => ({
     innerWidth: 0,
@@ -194,6 +201,18 @@ export function TopBar({
     }
 
     applyThemeCustomColors(getSavedThemeCustomColors());
+
+    const updateLightTheme = () => {
+      const attr = document.documentElement.getAttribute('data-theme');
+      if (attr === 'light') { setIsLightTheme(true); return; }
+      if (attr === 'dark') { setIsLightTheme(false); return; }
+      setIsLightTheme(window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false);
+    };
+    const themeObserver = new MutationObserver(updateLightTheme);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    const mq = window.matchMedia?.('(prefers-color-scheme: light)');
+    mq?.addEventListener('change', updateLightTheme);
+    return () => { themeObserver.disconnect(); mq?.removeEventListener('change', updateLightTheme); };
   }, []);
 
   React.useEffect(() => {
@@ -1087,10 +1106,14 @@ export function TopBar({
               type="button"
               onClick={handleDesktopWindowMinimize}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              style={{
+              style={isLightTheme ? {
+                borderColor: 'color-mix(in srgb, #c8920a, var(--border-subtle) 40%)',
+                background: 'color-mix(in srgb, #c8920a, var(--surface-1) 70%)',
+                color: '#7a5500',
+              } : {
                 borderColor: 'color-mix(in srgb, #f4bf4f, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #f4bf4f, transparent 86%)',
-                color: 'color-mix(in srgb, #f4bf4f, white 16%)',
+                background: 'color-mix(in srgb, #f4bf4f, var(--surface-1) 86%)',
+                color: 'color-mix(in srgb, #f4bf4f, var(--text-strong) 16%)',
               }}
               title="Minimize"
               aria-label="Minimize window"
@@ -1101,10 +1124,14 @@ export function TopBar({
               type="button"
               onClick={handleDesktopWindowToggleMaximize}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              style={{
+              style={isLightTheme ? {
+                borderColor: 'color-mix(in srgb, #1a7a3a, var(--border-subtle) 40%)',
+                background: 'color-mix(in srgb, #1a7a3a, var(--surface-1) 70%)',
+                color: '#0d4d22',
+              } : {
                 borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #40c463, transparent 86%)',
-                color: 'color-mix(in srgb, #40c463, white 16%)',
+                background: 'color-mix(in srgb, #40c463, var(--surface-1) 86%)',
+                color: 'color-mix(in srgb, #40c463, var(--text-strong) 16%)',
               }}
               title={isDesktopWindowMaximized ? 'Restore' : 'Maximize'}
               aria-label={isDesktopWindowMaximized ? 'Restore window' : 'Maximize window'}
@@ -1119,10 +1146,14 @@ export function TopBar({
               type="button"
               onClick={handleDesktopWindowClose}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              style={{
+              style={isLightTheme ? {
+                borderColor: 'color-mix(in srgb, #c0160a, var(--border-subtle) 40%)',
+                background: 'color-mix(in srgb, #c0160a, var(--surface-1) 70%)',
+                color: '#7a0a05',
+              } : {
                 borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #ff6b6b, transparent 88%)',
-                color: 'color-mix(in srgb, #ff6b6b, white 18%)',
+                background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 88%)',
+                color: 'color-mix(in srgb, #ff6b6b, var(--text-strong) 18%)',
               }}
               title="Close"
               aria-label="Close window"

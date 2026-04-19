@@ -3692,7 +3692,7 @@ export function ProfileSettingsModal({
                         onClick={requestDeleteSelectedPrinter}
                         disabled={!hasPrinters}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                        style={{ color: !hasPrinters ? 'var(--text-muted)' : '#fca5a5' }}
+                        style={{ color: !hasPrinters ? 'var(--text-muted)' : 'var(--danger)' }}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         Delete Printer
@@ -4100,7 +4100,7 @@ export function ProfileSettingsModal({
                     onClick={requestDeleteSelectedMaterial}
                     disabled={!selectedMaterial || printerMaterials.length <= 1}
                     className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     Delete
@@ -4203,7 +4203,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => setEditingFleetUnitImageDataUrl(null)}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                        style={{ color: editingFleetUnitImageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                        style={{ color: editingFleetUnitImageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                         disabled={!editingFleetUnitImageDataUrl}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -4219,7 +4219,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleResetFleetUnitDraft}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{ color: '#fca5a5' }}
+                  style={{ color: 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Reset Unit
@@ -4439,7 +4439,7 @@ export function ProfileSettingsModal({
                   }}
                   disabled={!selectedMaterial || printerMaterials.length <= 1}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-45"
-                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Delete Material
@@ -4560,7 +4560,7 @@ export function ProfileSettingsModal({
                             }}
                             disabled={isSelectedPrinterOfficial || !selectedPrinter.imageDataUrl}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                            style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                            style={{ color: selectedPrinter.imageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             Clear Image
@@ -5520,7 +5520,7 @@ export function ProfileSettingsModal({
                 style={{
                   borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
                   background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                  color: '#fca5a5',
+                  color: 'var(--danger)',
                 }}
               >
                 <Trash2 className="w-3.5 h-3.5" />
