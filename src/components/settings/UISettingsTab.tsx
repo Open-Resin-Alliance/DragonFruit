@@ -96,12 +96,14 @@ interface UISettingsTabProps {
 	themeColors: ThemeCustomColors;
 	onThemeColorChange: (key: keyof ThemeCustomColors, value: string) => void;
 	isBuiltInThemePreset: boolean;
+	isCustomThemeDirty: boolean;
+	isThemeResetDirty: boolean;
 	onCreateCustomThemeFromPreset: () => void;
 	onRequestSaveCustomTheme: () => void;
 	onRequestRenameCustomTheme: () => void;
 	onRequestDeleteCustomTheme: () => void;
 	onExportTheme: () => void;
-	onImportTheme: (file: File) => void | Promise<void>;
+	onImportTheme: (file?: File) => void | Promise<void>;
 	onResetThemeColors: () => void;
 }
 
@@ -114,6 +116,8 @@ export function UISettingsTab({
 	themeColors,
 	onThemeColorChange,
 	isBuiltInThemePreset,
+	isCustomThemeDirty,
+	isThemeResetDirty,
 	onCreateCustomThemeFromPreset,
 	onRequestSaveCustomTheme,
 	onRequestRenameCustomTheme,
@@ -123,6 +127,7 @@ export function UISettingsTab({
 	onResetThemeColors,
 }: UISettingsTabProps) {
 	const importInputRef = React.useRef<HTMLInputElement | null>(null);
+	const [pendingPickerColors, setPendingPickerColors] = React.useState<Partial<Record<keyof ThemeCustomColors, string>>>({});
 
 	const builtInProfiles = themeProfiles.filter((profile) => profile.isBuiltIn);
 	const customProfiles = themeProfiles.filter((profile) => !profile.isBuiltIn);
@@ -135,6 +140,11 @@ export function UISettingsTab({
 		color: 'var(--danger)',
 		borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
 		background: 'color-mix(in srgb, var(--danger), var(--surface-1) 92%)',
+	};
+	const mutedActionStyle92: React.CSSProperties = {
+		color: 'var(--text-muted)',
+		borderColor: 'var(--border-subtle)',
+		background: 'var(--surface-1)',
 	};
 
 	const themePresetOptions = [
@@ -157,6 +167,45 @@ export function UISettingsTab({
 		void onImportTheme(file);
 	};
 
+	const handleImportTheme = React.useCallback(() => {
+		if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+			void onImportTheme();
+			return;
+		}
+		importInputRef.current?.click();
+	}, [onImportTheme]);
+
+	const clearPendingThemeColorPicker = React.useCallback((key: keyof ThemeCustomColors) => {
+		setPendingPickerColors((prev) => {
+			if (!(key in prev)) return prev;
+			const next = { ...prev };
+			delete next[key];
+			return next;
+		});
+	}, []);
+
+	const handleThemeColorPickerDraftChange = React.useCallback((key: keyof ThemeCustomColors, value: string) => {
+		setPendingPickerColors((prev) => ({
+			...prev,
+			[key]: value,
+		}));
+	}, []);
+
+	const commitThemeColorPickerChange = React.useCallback((key: keyof ThemeCustomColors) => {
+		const pendingValue = pendingPickerColors[key];
+		if (!pendingValue) return;
+
+		if (pendingValue !== themeColors[key]) {
+			onThemeColorChange(key, pendingValue);
+		}
+
+		clearPendingThemeColorPicker(key);
+	}, [clearPendingThemeColorPicker, onThemeColorChange, pendingPickerColors, themeColors]);
+
+	const getDisplayThemeColor = React.useCallback((key: keyof ThemeCustomColors) => {
+		return pendingPickerColors[key] ?? themeColors[key];
+	}, [pendingPickerColors, themeColors]);
+
 	const renderColorField = (row: ThemeColorField) => (
 		<div
 			key={row.key}
@@ -176,15 +225,19 @@ export function UISettingsTab({
 				<div className="flex min-w-0 items-center gap-1.5">
 					<input
 						type="color"
-						value={themeColors[row.key]}
-						onChange={(event) => onThemeColorChange(row.key, event.target.value)}
+						value={getDisplayThemeColor(row.key)}
+						onChange={(event) => handleThemeColorPickerDraftChange(row.key, event.target.value)}
+						onBlur={() => commitThemeColorPickerChange(row.key)}
 						className="h-7 w-8 shrink-0 rounded border"
 						style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
 					/>
 					<input
 						type="text"
-						value={themeColors[row.key]}
-						onChange={(event) => onThemeColorChange(row.key, event.target.value)}
+						value={getDisplayThemeColor(row.key)}
+						onChange={(event) => {
+							clearPendingThemeColorPicker(row.key);
+							onThemeColorChange(row.key, event.target.value);
+						}}
 						className="ui-input h-7 min-w-0 flex-1 text-[11px]"
 						placeholder={row.placeholder}
 					/>
@@ -231,7 +284,7 @@ export function UISettingsTab({
 							value={themePreset}
 							options={themePresetOptions}
 							onChange={(nextPreset) => onThemePresetChange(nextPreset)}
-							selectClassName="!h-8 text-[11px]"
+							selectClassName="!h-8 text-[11px] !leading-none"
 							menuClassName="max-w-[28rem]"
 							menuFooterDivider
 							menuFooterAction={{
@@ -265,70 +318,86 @@ export function UISettingsTab({
 						onChange={handleImportInputChange}
 						className="hidden"
 					/>
-					<div className="flex flex-wrap items-center gap-1.5">
+					<div className="flex flex-wrap items-center justify-between gap-2">
 						{isBuiltInThemePreset ? (
 							<>
-								<button
-									type="button"
-									onClick={() => importInputRef.current?.click()}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-								>
-									Import
-								</button>
-								<button
-									type="button"
-									onClick={onResetThemeColors}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-								>
-									Reset
-								</button>
+								<div className="flex flex-wrap items-center gap-1.5">
+									<button
+										type="button"
+										onClick={handleImportTheme}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+									>
+										Import
+									</button>
+								</div>
+								<div className="ml-auto flex flex-wrap items-center gap-1.5">
+									<button
+										type="button"
+										onClick={onResetThemeColors}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+										style={isThemeResetDirty ? undefined : mutedActionStyle92}
+										disabled={!isThemeResetDirty}
+										title={isThemeResetDirty ? 'Reset current theme edits to selected preset values' : 'No theme changes to reset'}
+									>
+										Reset
+									</button>
+								</div>
 							</>
 						) : (
 							<>
-								<button
-									type="button"
-									onClick={onRequestSaveCustomTheme}
-									className="ui-button !h-8 !px-2.5 !py-0 text-[11px]"
-									style={accentSecondaryActionStyle92}
-								>
-									Save
-								</button>
-								<button
-									type="button"
-									onClick={onRequestRenameCustomTheme}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-								>
-									Rename
-								</button>
-								<button
-									type="button"
-									onClick={onExportTheme}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-								>
-									Export
-								</button>
-								<button
-									type="button"
-									onClick={() => importInputRef.current?.click()}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-								>
-									Import
-								</button>
-								<button
-									type="button"
-									onClick={onResetThemeColors}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-								>
-									Reset
-								</button>
-								<button
-									type="button"
-									onClick={onRequestDeleteCustomTheme}
-									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
-									style={dangerActionStyle92}
-								>
-									Delete
-								</button>
+								<div className="flex flex-wrap items-center gap-1.5">
+									<button
+										type="button"
+										onClick={onRequestSaveCustomTheme}
+										className="ui-button !h-8 !px-2.5 !py-0 text-[11px]"
+										style={isCustomThemeDirty ? accentSecondaryActionStyle92 : mutedActionStyle92}
+										disabled={!isCustomThemeDirty}
+										title={isCustomThemeDirty ? 'Save current custom theme changes' : 'No unsaved custom theme changes'}
+									>
+										Save
+									</button>
+									<button
+										type="button"
+										onClick={onRequestRenameCustomTheme}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+									>
+										Rename
+									</button>
+									<button
+										type="button"
+										onClick={onExportTheme}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+									>
+										Export
+									</button>
+									<button
+										type="button"
+										onClick={handleImportTheme}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+									>
+										Import
+									</button>
+								</div>
+								<div className="ml-auto flex flex-wrap items-center gap-1.5">
+									<button
+										type="button"
+										onClick={onResetThemeColors}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+										style={isThemeResetDirty ? undefined : mutedActionStyle92}
+										disabled={!isThemeResetDirty}
+										title={isThemeResetDirty ? 'Reset current theme edits to selected preset values' : 'No theme changes to reset'}
+									>
+										Reset
+									</button>
+									<button
+										type="button"
+										onClick={onRequestDeleteCustomTheme}
+										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+										style={dangerActionStyle92}
+									>
+										Delete
+									</button>
+								</div>
 							</>
 						)}
 					</div>

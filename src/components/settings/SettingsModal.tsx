@@ -10,7 +10,7 @@ import { LocalBackupsSettingsTab } from '@/components/settings/LocalBackupsSetti
 import { SceneAutosaveSettingsTab } from '@/components/settings/SceneAutosaveSettingsTab';
 import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
-import { UISettingsTab } from '@/components/settings/UISettingsTab';
+import { UISettingsTab } from './UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { AlertTriangle, Check, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
@@ -73,6 +73,11 @@ import {
   type CameraScopeMode,
   type WorkspaceCameraDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
+import {
+  pickOpenFilesWithNativeDialog,
+  readPrintArtifactBytesFromPath,
+  savePrintArtifactWithNativeDialog,
+} from '@/features/slicing/tauri/nativeSlicerBridge';
 import {
   DEFAULT_VIEW3D_SETTINGS,
   getSavedView3DSettings,
@@ -398,7 +403,8 @@ export function SettingsModal({
   const handleExportTheme = React.useCallback(() => {
     if (typeof window === 'undefined') return;
 
-    try {
+    void (async () => {
+      try {
       const exportName = getThemeExportName();
       const exportJson = exportThemeProfileToJson({
         name: exportName,
@@ -415,6 +421,23 @@ export function SettingsModal({
         .replace(/^-+|-+$/g, '') || 'dragonfruit-theme';
 
       const fileName = `${safeName}.dragonfruit-theme.json`;
+      const bytes = new TextEncoder().encode(exportJson);
+
+      try {
+        await savePrintArtifactWithNativeDialog(bytes, fileName);
+        return;
+      } catch (nativeError) {
+        const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError ?? '');
+        const loweredNativeMessage = nativeMessage.toLowerCase();
+        if (loweredNativeMessage.includes('cancel')) return;
+
+        const nativeUnavailable = loweredNativeMessage.includes('only available in dragonfruit desktop')
+          || loweredNativeMessage.includes('tauri runtime');
+        if (!nativeUnavailable) {
+          throw nativeError;
+        }
+      }
+
       const blob = new Blob([exportJson], { type: 'application/json;charset=utf-8' });
       const blobUrl = window.URL.createObjectURL(blob);
 
@@ -430,11 +453,24 @@ export function SettingsModal({
       const message = error instanceof Error ? error.message : 'Unknown export error';
       window.alert(`Failed to export theme profile. ${message}`);
     }
+    })();
   }, [draftThemeColors, draftThemePreference, draftThemePreset, getThemeExportName]);
 
-  const handleImportTheme = React.useCallback(async (file: File) => {
+  const handleImportTheme = React.useCallback(async (file?: File) => {
     try {
-      const rawJson = await file.text();
+      let rawJson = '';
+
+      if (file) {
+        rawJson = await file.text();
+      } else {
+        const picked = await pickOpenFilesWithNativeDialog('bundle', false);
+        const sourcePath = picked[0]?.path?.trim();
+        if (!sourcePath) return;
+
+        const bytes = await readPrintArtifactBytesFromPath(sourcePath);
+        rawJson = new TextDecoder().decode(bytes);
+      }
+
       const imported = importThemeProfileFromJson(rawJson);
 
       const createdProfile = createCustomThemeProfile(imported.name, imported.preference, imported.colors);
@@ -444,6 +480,7 @@ export function SettingsModal({
       setThemeDraftFromProfile(createdProfile.id, nextProfiles);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown import error';
+      if (message.toLowerCase().includes('cancel')) return;
       if (typeof window !== 'undefined') {
         window.alert(`Failed to import theme profile. ${message}`);
       }
@@ -882,6 +919,26 @@ export function SettingsModal({
   if (!isOpen) return null;
 
   const isCreatingCustomThemeName = themeNameDialogMode === 'create';
+  const isThemeDraftDirty = (() => {
+    const profile = getThemeProfile(draftThemePreset, draftThemeProfiles);
+    const preferenceChanged = profile.preference !== draftThemePreference;
+    const colorsChanged = (Object.keys(profile.colors) as Array<keyof ThemeCustomColors>)
+      .some((key) => profile.colors[key] !== draftThemeColors[key]);
+
+    return preferenceChanged || colorsChanged;
+  })();
+  const isCustomThemeDirty = (() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return false;
+
+    const profile = getThemeProfile(draftThemePreset, draftThemeProfiles);
+    if (profile.isBuiltIn) return false;
+
+    const preferenceChanged = profile.preference !== draftThemePreference;
+    const colorsChanged = (Object.keys(profile.colors) as Array<keyof ThemeCustomColors>)
+      .some((key) => profile.colors[key] !== draftThemeColors[key]);
+
+    return preferenceChanged || colorsChanged;
+  })();
 
   const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
     general: {
@@ -1266,6 +1323,8 @@ export function SettingsModal({
                   themeColors={draftThemeColors}
                   onThemeColorChange={handleThemeColorChange}
                   isBuiltInThemePreset={isBuiltInThemePreset(draftThemePreset)}
+                  isCustomThemeDirty={isCustomThemeDirty}
+                  isThemeResetDirty={isThemeDraftDirty}
                   onCreateCustomThemeFromPreset={handleCreateCustomThemeFromPreset}
                   onRequestSaveCustomTheme={handleRequestSaveCurrentCustomTheme}
                   onRequestRenameCustomTheme={handleRequestRenameCurrentCustomTheme}
