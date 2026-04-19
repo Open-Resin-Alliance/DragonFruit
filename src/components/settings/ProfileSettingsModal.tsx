@@ -1494,13 +1494,105 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     if (!isOpen) return;
 
+    const handleTopMostDialogEscape = (): boolean => {
+      if (deleteConfirmTarget) {
+        setDeleteConfirmTarget(null);
+        return true;
+      }
+
+      if (showOfficialMaterialLockDialog) {
+        setShowOfficialMaterialLockDialog(false);
+        return true;
+      }
+
+      if (showOfficialLockDialog) {
+        setShowOfficialLockDialog(false);
+        setOfficialLockedProfileId(null);
+        return true;
+      }
+
+      if (showPrinterUpdateDiffModal) {
+        setShowPrinterUpdateDiffModal(false);
+        return true;
+      }
+
+      if (isEditFleetUnitModalOpen) {
+        setIsEditFleetUnitModalOpen(false);
+        return true;
+      }
+
+      if (isRemoteMaterialEditDialogOpen) {
+        if (!isSavingRemoteMaterialEdit) {
+          setIsRemoteMaterialEditDialogOpen(false);
+        }
+        return true;
+      }
+
+      if (isNetworkSettingsOpen) {
+        setIsNetworkSettingsOpen(false);
+        return true;
+      }
+
+      if (showPresetPicker) {
+        setShowPresetPicker(false);
+        return true;
+      }
+
+      if (showMaterialPresetPicker) {
+        setShowMaterialPresetPicker(false);
+        return true;
+      }
+
+      if (isMaterialEditorOpen) {
+        setIsMaterialEditorOpen(false);
+        return true;
+      }
+
+      if (isCreateMaterialOpen) {
+        setIsCreateMaterialOpen(false);
+        return true;
+      }
+
+      if (isEditingPrinter) {
+        setIsEditingPrinter(false);
+        return true;
+      }
+
+      return false;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented) return;
+
+      if (handleTopMostDialogEscape()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      onClose();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose]);
+  }, [
+    deleteConfirmTarget,
+    isCreateMaterialOpen,
+    isEditFleetUnitModalOpen,
+    isEditingPrinter,
+    isMaterialEditorOpen,
+    isNetworkSettingsOpen,
+    isOpen,
+    isRemoteMaterialEditDialogOpen,
+    isSavingRemoteMaterialEdit,
+    onClose,
+    showMaterialPresetPicker,
+    showOfficialLockDialog,
+    showOfficialMaterialLockDialog,
+    showPresetPicker,
+    showPrinterUpdateDiffModal,
+  ]);
 
   React.useEffect(() => {
     if (!selectedPrinter) {
