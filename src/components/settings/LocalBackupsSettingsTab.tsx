@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, ArchiveRestore, CheckCircle2, CircleHelp, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -670,6 +670,16 @@ export function LocalBackupsSettingsTab() {
   }
 
   const hasAnySync = Boolean(stateUpdatedAt || lastLocalSyncAt);
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: 'var(--accent-secondary-action-color)',
+    borderColor: 'var(--accent-secondary-action-border)',
+    background: 'var(--accent-secondary-action-bg-92)',
+  };
+  const dangerActionStyle92: React.CSSProperties = {
+    color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
+    borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+    background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
+  };
 
   return (
     <div className="space-y-3">
@@ -679,27 +689,7 @@ export function LocalBackupsSettingsTab() {
             <HardDrive className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Local On-Disk Backups</h3>
-              <div className="relative group">
-                <button
-                  type="button"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-secondary)' }}
-                  aria-label="View local backup details"
-                >
-                  <CircleHelp className="h-3.5 w-3.5" />
-                </button>
-                <div
-                  className="pointer-events-none absolute left-0 top-[calc(100%+8px)] z-20 w-[min(420px,calc(100vw-32px))] rounded-md border p-3 text-xs leading-relaxed opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-strong)' }}
-                >
-                  <p>
-                    Backups are written directly to your machine. DragonFruit stores `state.json` and timestamped snapshots in `history/*.json` inside your selected backup directory.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Local On-Disk Backups</h3>
             <p className="mt-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
               Automatically saves snapshots of your settings and profiles to a folder on your computer.
             </p>
@@ -930,7 +920,7 @@ export function LocalBackupsSettingsTab() {
                           type="button"
                           onClick={() => { void handleViewHistory(item.id); }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border transition-colors"
-                          style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-secondary)' }}
+                          style={accentSecondaryActionStyle92}
                           title="View snapshot"
                         >
                           <Eye className="h-3.5 w-3.5" />
@@ -939,7 +929,7 @@ export function LocalBackupsSettingsTab() {
                           type="button"
                           onClick={() => { setConfirmDeleteId(item.id); }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border"
-                          style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)', color: '#fca5a5' }}
+                          style={dangerActionStyle92}
                           title="Delete snapshot"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -976,11 +966,7 @@ export function LocalBackupsSettingsTab() {
             <button
               type="button"
               className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: '#fca5a5',
-              }}
+              style={dangerActionStyle92}
               disabled={busy !== 'none'}
               onClick={() => {
                 const id = confirmDeleteId;
@@ -1073,11 +1059,7 @@ export function LocalBackupsSettingsTab() {
                 <button
                   type="button"
                   className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: '#fde68a',
-                  }}
+                  style={accentSecondaryActionStyle92}
                   disabled={busy !== 'none'}
                   onClick={() => {
                     const id = confirmRestoreId;
@@ -1123,7 +1105,7 @@ export function LocalBackupsSettingsTab() {
                     onClick={() => { setConfirmRestoreId(selectedHistoryId); }}
                     disabled={busy !== 'none'}
                     className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
-                    style={{ color: 'var(--accent-secondary)' }}
+                    style={accentSecondaryActionStyle92}
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
                     Restore to App
@@ -1237,7 +1219,14 @@ export function LocalBackupsSettingsTab() {
                           <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>
                             {selectedStorageKey ?? 'Select a key'}
                           </div>
-                          <pre className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                          <pre
+                            className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre"
+                            style={{
+                              borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
+                              background: '#282c34',
+                              color: '#abb2bf',
+                            }}
+                          >
                             {selectedStorageKey
                               ? renderHighlightedJson(stringifyReadable((selectedHistoryDocument.snapshot.localStorage ?? {})[selectedStorageKey]))
                               : 'Select a LocalStorage key from the left to view its value.'}
@@ -1348,14 +1337,29 @@ export function LocalBackupsSettingsTab() {
                           </div>
                         </div>
                       ) : (
-                        <pre className="rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)', maxHeight: '56vh' }}>
+                        <pre
+                          className="rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar"
+                          style={{
+                            borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
+                            background: '#282c34',
+                            color: '#abb2bf',
+                            maxHeight: '56vh',
+                          }}
+                        >
                           {stringifyReadable(selectedHistoryDocument.snapshot.profiles ?? null)}
                         </pre>
                       )
                     )}
 
                     {snapshotModalTab === 'raw' && (
-                      <pre className="flex-1 min-h-0 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
+                      <pre
+                        className="flex-1 min-h-0 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre"
+                        style={{
+                          borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
+                          background: '#282c34',
+                          color: '#abb2bf',
+                        }}
+                      >
                         {renderHighlightedJson(stringifyReadable(selectedHistoryDocument))}
                       </pre>
                     )}
