@@ -23,6 +23,8 @@ interface CameraSettingsTabProps {
   onCameraTrackpadPanAccelerationChange: (value: number) => void;
   cameraTrackpadOrbitAcceleration: number;
   onCameraTrackpadOrbitAccelerationChange: (value: number) => void;
+  cameraTrackpadZoomAcceleration: number;
+  onCameraTrackpadZoomAccelerationChange: (value: number) => void;
   workspaceCameraDefaults: WorkspaceCameraDefaults;
   onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
 }
@@ -49,6 +51,8 @@ export function CameraSettingsTab({
   onCameraTrackpadPanAccelerationChange,
   cameraTrackpadOrbitAcceleration,
   onCameraTrackpadOrbitAccelerationChange,
+  cameraTrackpadZoomAcceleration,
+  onCameraTrackpadZoomAccelerationChange,
   workspaceCameraDefaults,
   onWorkspaceCameraModeChange,
 }: CameraSettingsTabProps) {
@@ -485,6 +489,23 @@ export function CameraSettingsTab({
                       step="0.05"
                       value={cameraTrackpadOrbitAcceleration}
                       onChange={(e) => onCameraTrackpadOrbitAccelerationChange(parseFloat(e.target.value))}
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                      style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
+                    />
+                  </div>
+
+                  <div className="space-y-0.5">
+                    <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
+                      <span>Zoom acceleration</span>
+                      <span style={{ color: 'var(--text-strong)' }}>{cameraTrackpadZoomAcceleration.toFixed(2)}x</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="0.4"
+                      max="4"
+                      step="0.05"
+                      value={cameraTrackpadZoomAcceleration}
+                      onChange={(e) => onCameraTrackpadZoomAccelerationChange(parseFloat(e.target.value))}
                       className="w-full h-2 rounded-lg appearance-none cursor-pointer"
                       style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
                     />

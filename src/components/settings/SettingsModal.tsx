@@ -224,6 +224,7 @@ export function SettingsModal({
   const [draftCameraTrackpadModifierKey, setDraftCameraTrackpadModifierKey] = useState<CameraTrackpadModifierKey>(() => getSavedCameraTrackpadSettings().modifierKey);
   const [draftCameraTrackpadPanAcceleration, setDraftCameraTrackpadPanAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().panAcceleration);
   const [draftCameraTrackpadOrbitAcceleration, setDraftCameraTrackpadOrbitAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().orbitAcceleration);
+  const [draftCameraTrackpadZoomAcceleration, setDraftCameraTrackpadZoomAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().zoomAcceleration);
   const [draftCameraScope, setDraftCameraScope] = useState<CameraScopeMode>(() => getSavedWorkspaceCameraSettings().scope);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
@@ -263,6 +264,7 @@ export function SettingsModal({
     setDraftCameraTrackpadModifierKey(getSavedCameraTrackpadSettings().modifierKey);
     setDraftCameraTrackpadPanAcceleration(getSavedCameraTrackpadSettings().panAcceleration);
     setDraftCameraTrackpadOrbitAcceleration(getSavedCameraTrackpadSettings().orbitAcceleration);
+    setDraftCameraTrackpadZoomAcceleration(getSavedCameraTrackpadSettings().zoomAcceleration);
     setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(getSavedThemePreset());
@@ -348,6 +350,7 @@ export function SettingsModal({
     setDraftCameraTrackpadModifierKey(DEFAULT_CAMERA_TRACKPAD_SETTINGS.modifierKey);
     setDraftCameraTrackpadPanAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.panAcceleration);
     setDraftCameraTrackpadOrbitAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration);
+    setDraftCameraTrackpadZoomAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration);
     setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
     setDraftThemePreference('system');
     setDraftThemePreset('dragonfruit-dark');
@@ -405,6 +408,7 @@ export function SettingsModal({
       modifierKey: draftCameraTrackpadModifierKey,
       panAcceleration: draftCameraTrackpadPanAcceleration,
       orbitAcceleration: draftCameraTrackpadOrbitAcceleration,
+      zoomAcceleration: draftCameraTrackpadZoomAcceleration,
     });
     saveWorkspaceCameraSettings({
       scope: draftCameraScope,
@@ -832,6 +836,8 @@ export function SettingsModal({
                   onCameraTrackpadPanAccelerationChange={setDraftCameraTrackpadPanAcceleration}
                   cameraTrackpadOrbitAcceleration={draftCameraTrackpadOrbitAcceleration}
                   onCameraTrackpadOrbitAccelerationChange={setDraftCameraTrackpadOrbitAcceleration}
+                  cameraTrackpadZoomAcceleration={draftCameraTrackpadZoomAcceleration}
+                  onCameraTrackpadZoomAccelerationChange={setDraftCameraTrackpadZoomAcceleration}
                   workspaceCameraDefaults={draftWorkspaceCameraDefaults}
                   onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
                 />
