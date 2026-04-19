@@ -700,13 +700,19 @@ export function SettingsModal({
       ? 'Mainline Build'
       : `${DRAGONFRUIT_BUILD_CHANNEL.toUpperCase()} Build`;
   const buildStatusStyle: React.CSSProperties = isBetaBuildChannel
-    ? {
-      color: '#fdba74',
-      borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 16%)',
-      background: 'color-mix(in srgb, #f97316, transparent 96%)',
-      textShadow: '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
-      boxShadow: '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
-    }
+    ? isLightTheme
+      ? {
+        color: '#9a3412',
+        borderColor: 'color-mix(in srgb, #ea580c, var(--border-subtle) 30%)',
+        background: 'color-mix(in srgb, #fed7aa, var(--surface-0) 14%)',
+      }
+      : {
+        color: '#fdba74',
+        borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 16%)',
+        background: 'color-mix(in srgb, #f97316, transparent 96%)',
+        textShadow: '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
+        boxShadow: '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
+      }
     : {
       color: 'var(--text-strong)',
       borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
@@ -1012,6 +1018,7 @@ export function SettingsModal({
                               src="/dragonfruit_assets/branding/text_logo.svg"
                               alt="DragonFruit"
                               className="h-8 w-auto object-contain"
+                              style={isLightTheme ? { filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } : undefined}
                             />
                             <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                               DragonFruit is an open-source slicer for resin 3D printing.
@@ -1269,6 +1276,7 @@ export function SettingsModal({
                         src={ORA_LOGO_DARK_URL}
                         alt="Open Resin Alliance"
                         className="h-24 w-auto object-contain shrink-0"
+                        style={isLightTheme ? { filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.3))' } : undefined}
                       />
 
                       <div className="min-w-0 flex-1 space-y-1.5">
