@@ -468,7 +468,8 @@ export function CameraSettingsTab({
                       step="0.05"
                       value={cameraTrackpadPanAcceleration}
                       onChange={(e) => onCameraTrackpadPanAccelerationChange(parseFloat(e.target.value))}
-                      className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                      style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
                     />
                   </div>
 
@@ -484,7 +485,8 @@ export function CameraSettingsTab({
                       step="0.05"
                       value={cameraTrackpadOrbitAcceleration}
                       onChange={(e) => onCameraTrackpadOrbitAccelerationChange(parseFloat(e.target.value))}
-                      className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                      style={{ accentColor: 'var(--accent)', background: 'color-mix(in srgb, var(--text-muted), transparent 72%)' }}
                     />
                   </div>
                 </div>
