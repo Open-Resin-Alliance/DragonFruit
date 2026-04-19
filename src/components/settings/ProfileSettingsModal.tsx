@@ -5,6 +5,7 @@ import { AlertTriangle, Box, Check, ChevronLeft, ChevronRight, Download, Edit3, 
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   applyOfficialMaterialProfileUpdate,
   applyOfficialPrinterProfileUpdate,
@@ -5401,89 +5402,49 @@ export function ProfileSettingsModal({
           </div>
         )}
 
-        {deleteConfirmTarget && (
-          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setDeleteConfirmTarget(null);
-            }
-          }}>
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Confirm delete"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-
-                  <div className="min-w-0 pr-2">
-                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Confirm Delete
-                    </h3>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close delete confirmation dialog"
-                  onClick={() => setDeleteConfirmTarget(null)}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-3.5 p-5">
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  {deleteConfirmTarget.kind === 'printer'
-                    ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all material profiles bound to it?</>
-                    : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
-                  <br />
-                  <br />
-                  <strong style={{ color: 'var(--danger)' }}>Warning:</strong> This action cannot be undone.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                    onClick={() => setDeleteConfirmTarget(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleConfirmDelete}
-                    className="ui-button ui-button-danger !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <StructuredDialogModal
+          open={Boolean(deleteConfirmTarget)}
+          ariaLabel="Confirm delete"
+          title={deleteConfirmTarget?.kind === 'printer' ? 'Delete Printer Profile' : 'Delete Material Profile'}
+          subtitle="This action cannot be undone."
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[76]"
+          onClose={() => setDeleteConfirmTarget(null)}
+          closeAriaLabel="Close delete confirmation dialog"
+          actions={(
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                onClick={() => setDeleteConfirmTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                style={{
+                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                  background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                  color: '#fca5a5',
+                }}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </>
+          )}
+        >
+          {deleteConfirmTarget ? (
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {deleteConfirmTarget.kind === 'printer'
+                ? <>Delete <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and remove all material profiles linked to it?</>
+                : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
+            </p>
+          ) : null}
+        </StructuredDialogModal>
       </div>
     </div>
   );

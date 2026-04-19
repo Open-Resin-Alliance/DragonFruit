@@ -4,6 +4,7 @@ import React from 'react';
 import { AlertTriangle, ArchiveRestore, CheckCircle2, CircleHelp, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { generateUuid } from '@/utils/uuid';
 
 type BackupSnapshot = {
@@ -946,97 +947,52 @@ export function LocalBackupsSettingsTab() {
         </div>
       </section>
 
-      {confirmDeleteId && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setConfirmDeleteId(null);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm delete snapshot"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
-                    color: '#fca5a5',
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Delete Snapshot
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {confirmDeleteId ? new Date(Number(confirmDeleteId)).toLocaleString() : ''}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Cancel delete"
-                onClick={() => { setConfirmDeleteId(null); }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                This snapshot will be permanently deleted from disk. This action cannot be undone.
-              </p>
-              <div className="flex shrink-0 items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => { setConfirmDeleteId(null); }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                    color: '#fca5a5',
-                  }}
-                  disabled={busy !== 'none'}
-                  onClick={() => {
-                    const id = confirmDeleteId;
-                    setConfirmDeleteId(null);
-                    void handleDeleteHistory(id);
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={Boolean(confirmDeleteId)}
+        ariaLabel="Confirm delete snapshot"
+        title="Delete Backup Snapshot"
+        subtitle="This action cannot be undone."
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[100]"
+        onClose={() => { setConfirmDeleteId(null); }}
+        closeAriaLabel="Cancel delete"
+        actions={(
+          <>
+            <button
+              type="button"
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              onClick={() => { setConfirmDeleteId(null); }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                color: '#fca5a5',
+              }}
+              disabled={busy !== 'none'}
+              onClick={() => {
+                const id = confirmDeleteId;
+                setConfirmDeleteId(null);
+                void handleDeleteHistory(id);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {confirmDeleteId
+            ? `Backup snapshot from ${new Date(Number(confirmDeleteId)).toLocaleString()} will be permanently removed from disk.`
+            : 'This backup snapshot will be permanently removed from disk.'}
+        </p>
+      </StructuredDialogModal>
 
       {confirmRestoreId && (
         <div

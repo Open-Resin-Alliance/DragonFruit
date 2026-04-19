@@ -42,6 +42,7 @@ import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
@@ -14303,98 +14304,56 @@ export default function Home() {
         />
       )}
 
-      {showCloseUnsavedChangesModal && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && closeUnsavedChangesBusy === 'none') {
-              setShowCloseUnsavedChangesModal(false);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Unsaved changes"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Unsaved Scene Changes
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {hasUnsavedSceneChanges
-                      ? 'There are unsaved changes to this scene.'
-                      : 'This scene is already saved.'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close unsaved changes modal"
-                disabled={closeUnsavedChangesBusy !== 'none'}
-                onClick={() => setShowCloseUnsavedChangesModal(false)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3.5 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Are you sure you want to close?
-                <br />
-                Choose <strong>Save &amp; Close</strong> to keep your latest edits.
-                <br />
-                Choose <strong>Close Without Saving</strong> to discard them.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={closeUnsavedChangesBusy !== 'none'}
-                  onClick={handleDiscardAndCloseProgram}
-                >
-                  Close Without Saving
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={closeUnsavedChangesBusy !== 'none'}
-                  onClick={handleSaveAndCloseProgram}
-                >
-                  Save &amp; Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={showCloseUnsavedChangesModal}
+        ariaLabel="Unsaved changes"
+        title="Unsaved Scene Changes"
+        subtitle={hasUnsavedSceneChanges
+          ? 'You have unsaved edits in this scene.'
+          : 'This scene is already saved.'}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[220]"
+        closeAriaLabel="Close unsaved changes modal"
+        closeDisabled={closeUnsavedChangesBusy !== 'none'}
+        onClose={() => {
+          if (closeUnsavedChangesBusy !== 'none') return;
+          setShowCloseUnsavedChangesModal(false);
+        }}
+        onBackdropClick={() => {
+          if (closeUnsavedChangesBusy !== 'none') return;
+          setShowCloseUnsavedChangesModal(false);
+        }}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="ui-button ui-button-danger !h-9 px-3 text-xs"
+              disabled={closeUnsavedChangesBusy !== 'none'}
+              onClick={handleDiscardAndCloseProgram}
+            >
+              Close Without Saving
+            </button>
+            <button
+              type="button"
+              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              disabled={closeUnsavedChangesBusy !== 'none'}
+              onClick={handleSaveAndCloseProgram}
+            >
+              Save &amp; Close
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {hasUnsavedSceneChanges
+            ? 'You’re about to close DragonFruit with unsaved scene changes.'
+            : 'Close DragonFruit now?'}
+        </p>
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <strong>Save &amp; Close</strong> keeps your latest edits. <strong>Close Without Saving</strong> discards them.
+        </p>
+      </StructuredDialogModal>
 
       {showSceneSaveChoiceModal && (
         <div
