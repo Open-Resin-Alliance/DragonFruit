@@ -543,7 +543,7 @@ export function SettingsModal({
     },
     mesh: {
       label: 'Mesh',
-      description: 'Shader preview and render tuning',
+      description: 'Shader, rendering options, and selection behavior',
       icon: Grid3x3,
       tone: 'primary',
     },
@@ -561,7 +561,7 @@ export function SettingsModal({
     },
     ui: {
       label: 'UI & Theme',
-      description: 'Selection behavior, theme, and custom UI tokens',
+      description: 'Theme and custom UI token customization',
       icon: Palette,
       tone: 'primary',
     },
@@ -868,6 +868,16 @@ export function SettingsModal({
                   onHeatmapContrastChange={setDraftHeatmapContrast}
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
+                  selectionColor={draftSelectionColor}
+                  onSelectionColorChange={setDraftSelectionColor}
+                  hoverColor={draftHoverColor}
+                  onHoverColorChange={setDraftHoverColor}
+                  selectionHighlightMode={draftSelectionHighlightMode}
+                  onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
+                  hoverTintStrength={draftHoverTintStrength}
+                  onHoverTintStrengthChange={setDraftHoverTintStrength}
+                  selectedTintStrength={draftSelectedTintStrength}
+                  onSelectedTintStrengthChange={setDraftSelectedTintStrength}
                 />
               )}
               {activeTab === 'performance' && (
@@ -881,16 +891,6 @@ export function SettingsModal({
               )}
               {activeTab === 'ui' && (
                 <UISettingsTab
-                  selectionColor={draftSelectionColor}
-                  onSelectionColorChange={setDraftSelectionColor}
-                  hoverColor={draftHoverColor}
-                  onHoverColorChange={setDraftHoverColor}
-                  selectionHighlightMode={draftSelectionHighlightMode}
-                  onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
-                  hoverTintStrength={draftHoverTintStrength}
-                  onHoverTintStrengthChange={setDraftHoverTintStrength}
-                  selectedTintStrength={draftSelectedTintStrength}
-                  onSelectedTintStrengthChange={setDraftSelectedTintStrength}
                   themePreset={draftThemePreset}
                   onThemePresetChange={setDraftThemePreset}
                   themePreference={draftThemePreference}
