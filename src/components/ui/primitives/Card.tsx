@@ -25,6 +25,7 @@ interface CardHeaderProps {
 export function CardHeader({ className, left, right, hideDivider = false }: CardHeaderProps) {
   return (
     <div
+      data-panel-drag-handle="true"
       className={cn(
         'px-2.5 py-2.5 flex items-center justify-between',
         className,
