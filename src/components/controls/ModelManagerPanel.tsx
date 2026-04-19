@@ -16,6 +16,7 @@ import {
   FolderMinus,
   PanelsTopLeft,
   Info,
+  Crosshair,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
@@ -346,10 +347,6 @@ export function ModelManagerPanel({
             className="rounded-md border p-2"
             style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
           >
-            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Quick Actions
-            </div>
-
             <div
               ref={quickActionsGridRef}
               className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}
@@ -394,16 +391,6 @@ export function ModelManagerPanel({
               )}
             </div>
 
-            <div className={`mt-1.5 grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                Mesh Files (.stl, .obj, .3mf)
-              </div>
-              {onImportSceneChange && (
-                <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                  Scene Files (.voxl, .lys)
-                </div>
-              )}
-            </div>
           </div>
 
           <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 flex-1 min-h-0">
@@ -579,14 +566,20 @@ export function ModelManagerPanel({
                             });
                           }}
                         >
-                          <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-                            <Box className="w-3.5 h-3.5" />
-                          </div>
+                          {isActive
+                            ? (
+                              <div className="p-1 rounded" style={{ background: 'color-mix(in srgb, var(--accent), var(--surface-2) 72%)', color: 'var(--accent)' }}>
+                                <Crosshair className="w-3.5 h-3.5" />
+                              </div>
+                            ) : (
+                              <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                                <Box className="w-3.5 h-3.5" />
+                              </div>
+                            )}
 
                           <div className="flex-1 min-w-0">
                             <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
                               {model.name}
-                              {isActive && <span className="ml-1 text-[10px] uppercase" style={{ color: 'var(--accent)' }}>Active</span>}
                             </div>
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                               {model.polygonCount.toLocaleString()} polys
@@ -616,17 +609,7 @@ export function ModelManagerPanel({
                             >
                               {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                             </IconButton>
-                            <IconButton
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDelete(model.id);
-                              }}
-                                className="!p-1.5"
-                                style={{ color: 'var(--danger)' }}
-                              title="Delete model"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </IconButton>
+
                           </div>
                         </div>
                       );
