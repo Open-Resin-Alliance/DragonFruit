@@ -77,6 +77,9 @@ const KIND_META: Record<SupportKind, { label: string; icon: typeof Pickaxe }> = 
     stick: { label: 'Bracing', icon: WandSparkles },
 };
 
+const OVERFLOW_COMPACT_KIND_SET = new Set<SupportKind>(['trunk', 'raft', 'grid', 'stick']);
+const POPUP_PREVIEW_KIND_SET = new Set<SupportKind>(['trunk']);
+
 function normalizeTabKind(kind: SupportKind): SupportKind {
     if (kind === 'branch' || kind === 'leaf' || kind === 'twig') {
         return 'trunk';
@@ -219,7 +222,7 @@ export function SupportSidebar() {
     const compactEnteredWindowHeightRef = React.useRef<number | null>(null);
 
     useEffect(() => {
-        if (activeKind !== 'trunk' || !trunkCompactByOverflow) {
+        if (!OVERFLOW_COMPACT_KIND_SET.has(activeKind) || !trunkCompactByOverflow) {
             compactEnteredWindowHeightRef.current = null;
             return;
         }
@@ -228,7 +231,7 @@ export function SupportSidebar() {
     }, [activeKind, trunkCompactByOverflow]);
 
     useLayoutEffect(() => {
-        if (!expanded || showCurvePage || activeKind !== 'trunk') return;
+        if (!expanded || showCurvePage || !OVERFLOW_COMPACT_KIND_SET.has(activeKind)) return;
         const viewport = scrollViewportRef.current;
         if (!viewport) return;
 
@@ -299,7 +302,7 @@ export function SupportSidebar() {
     }, [expanded, showCurvePage, activeKind]);
 
     useEffect(() => {
-        if (activeKind !== 'trunk' && trunkCompactByOverflow) {
+        if (!OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow) {
             setTrunkCompactByOverflow(false);
         }
     }, [activeKind, trunkCompactByOverflow]);
@@ -608,15 +611,19 @@ export function SupportSidebar() {
     );
 
     const sectionScrollClass = 'flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1';
-    const shouldUseCompactTrunkLayout = activeKind === 'trunk' && trunkCompactByOverflow;
-    const hasFloatingTrunkPreviewTrigger = Boolean(activeKey) || Boolean(previewState.hoveredPresetSettings);
+    const shouldUseOverflowCompactMode = OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow;
+    const shouldUseCompactTrunkLayout = activeKind === 'trunk' && shouldUseOverflowCompactMode;
+    const hasFloatingTrunkPreviewTrigger = POPUP_PREVIEW_KIND_SET.has(activeKind)
+        && (Boolean(activeKey) || Boolean(previewState.hoveredPresetSettings));
     const shouldShowFloatingTrunkPreview = expanded
-        && activeKind === 'trunk'
-        && shouldUseCompactTrunkLayout
+        && POPUP_PREVIEW_KIND_SET.has(activeKind)
+        && shouldUseOverflowCompactMode
         && floatingTrunkPreviewHeldOpen;
 
     useEffect(() => {
-        const supportsFloatingPreview = expanded && activeKind === 'trunk' && shouldUseCompactTrunkLayout;
+        const supportsFloatingPreview = expanded
+            && POPUP_PREVIEW_KIND_SET.has(activeKind)
+            && shouldUseOverflowCompactMode;
         if (!supportsFloatingPreview) {
             if (floatingTrunkPreviewHideTimeoutRef.current !== null) {
                 window.clearTimeout(floatingTrunkPreviewHideTimeoutRef.current);
@@ -663,7 +670,7 @@ export function SupportSidebar() {
                 setFloatingTrunkPreviewFadingOut(false);
             }, 240);
         }, 2000);
-    }, [expanded, activeKind, shouldUseCompactTrunkLayout, hasFloatingTrunkPreviewTrigger, floatingTrunkPreviewHeldOpen]);
+    }, [expanded, activeKind, shouldUseOverflowCompactMode, hasFloatingTrunkPreviewTrigger, floatingTrunkPreviewHeldOpen]);
 
     useEffect(() => {
         return () => {
@@ -1082,9 +1089,11 @@ export function SupportSidebar() {
 
                                     {activeKind === 'raft' ? (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[220px]')}
-                                            </Section>
+                                            {!shouldUseOverflowCompactMode ? (
+                                                <Section title="Anatomy preview">
+                                                    {renderPreviewBox('h-[220px]')}
+                                                </Section>
+                                            ) : null}
                                             <Section title="Raft settings">
                                                 <RaftSettingsCard
                                                     settings={raftSettings}
@@ -1094,9 +1103,11 @@ export function SupportSidebar() {
                                         </>
                                     ) : activeKind === 'grid' ? (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[220px]')}
-                                            </Section>
+                                            {!shouldUseOverflowCompactMode ? (
+                                                <Section title="Anatomy preview">
+                                                    {renderPreviewBox('h-[220px]')}
+                                                </Section>
+                                            ) : null}
                                             <Section title="Grid settings">
                                                 <GridSettingsCard
                                                     grid={settings.grid}
@@ -1106,9 +1117,11 @@ export function SupportSidebar() {
                                         </>
                                     ) : activeKind === 'stick' ? (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[250px]')}
-                                            </Section>
+                                            {!shouldUseOverflowCompactMode ? (
+                                                <Section title="Anatomy preview">
+                                                    {renderPreviewBox('h-[250px]')}
+                                                </Section>
+                                            ) : null}
                                             <Section title="Auto bracing">
                                                 <AutoBracingSettingsCard
                                                     settings={settings.autoBracing}
@@ -1208,10 +1221,10 @@ export function SupportSidebar() {
                     </div>
 
                     {activeKind !== 'trunk' ? (
-                        <Section title="Actions" accent>
+                        <div className="space-y-1.5 px-0.5">
                             {saveStatus !== 'idle' && (
                                 <div
-                                    className="mb-2 text-[10px]"
+                                    className="text-[10px]"
                                     style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
                                 >
                                     {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
@@ -1241,7 +1254,7 @@ export function SupportSidebar() {
                                     <span>Defaults</span>
                                 </Button>
                             </div>
-                        </Section>
+                        </div>
                     ) : null}
                 </div>
             )}
