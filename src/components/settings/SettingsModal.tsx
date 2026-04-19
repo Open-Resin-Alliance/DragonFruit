@@ -323,8 +323,8 @@ export function SettingsModal({
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
     setDraftSelectionHighlightMode(selectionHighlightMode);
-    setDraftSelectionColor(selectionColor);
-    setDraftHoverColor(hoverColor);
+    setDraftSelectionColor(savedThemeProfile.colors.accent);
+    setDraftHoverColor(savedThemeProfile.colors.accentHover);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
     setDraftCameraTrackpadPrimaryAction(getSavedCameraTrackpadSettings().primaryAction);
@@ -358,8 +358,6 @@ export function SettingsModal({
     hoverTintStrength,
     selectedTintStrength,
     selectionHighlightMode,
-    selectionColor,
-    hoverColor,
     debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
@@ -658,8 +656,8 @@ export function SettingsModal({
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
     setDraftSelectionHighlightMode('tint');
-    setDraftSelectionColor('#ec2a77');
-    setDraftHoverColor('#ec2a77');
+    setDraftSelectionColor(DEFAULT_THEME_CUSTOM_COLORS.accent);
+    setDraftHoverColor(DEFAULT_THEME_CUSTOM_COLORS.accentHover);
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
     setDraftCameraTrackpadPrimaryAction(DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction);
@@ -737,8 +735,8 @@ export function SettingsModal({
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
     onSelectionHighlightModeChange(draftSelectionHighlightMode);
-    onSelectionColorChange(draftSelectionColor);
-    onHoverColorChange(draftHoverColor);
+    onSelectionColorChange(draftThemeColors.accent);
+    onHoverColorChange(draftThemeColors.accentHover);
 
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
@@ -786,8 +784,6 @@ export function SettingsModal({
     draftHoverTintStrength,
     draftSelectedTintStrength,
     draftSelectionHighlightMode,
-    draftSelectionColor,
-    draftHoverColor,
     draftCameraScope,
     draftThemePreset,
     draftShaderType,
@@ -863,6 +859,13 @@ export function SettingsModal({
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
   }, [draftThemeColors, draftThemePreference, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setDraftSelectionColor(draftThemeColors.accent);
+    setDraftHoverColor(draftThemeColors.accentHover);
+  }, [draftThemeColors.accent, draftThemeColors.accentHover, isOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1327,9 +1330,7 @@ export function SettingsModal({
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
                   selectionColor={draftSelectionColor}
-                  onSelectionColorChange={setDraftSelectionColor}
                   hoverColor={draftHoverColor}
-                  onHoverColorChange={setDraftHoverColor}
                   selectionHighlightMode={draftSelectionHighlightMode}
                   onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                   hoverTintStrength={draftHoverTintStrength}
