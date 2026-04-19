@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Loader2, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, Loader2, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -343,13 +343,20 @@ export function PluginsSettingsTab() {
   return (
     <div className="space-y-3">
       <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-        <div className="flex items-center gap-2">
-          <Plug className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h4>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
+            </p>
+          </div>
         </div>
-        <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-          Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
-        </p>
         <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
           Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
         </p>
@@ -606,7 +613,20 @@ export function PluginsSettingsTab() {
       )}
 
       <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h4>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Manage built-in and user-installed plugin packs.
+            </p>
+          </div>
+        </div>
 
         <div className="mt-2 space-y-2">
           {installedPlugins.map((plugin) => {

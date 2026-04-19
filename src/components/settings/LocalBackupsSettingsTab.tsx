@@ -779,13 +779,20 @@ export function LocalBackupsSettingsTab() {
       </section>
 
       <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="flex items-center gap-2">
-          <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h4>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app.
+            </p>
+          </div>
         </div>
-        <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-          Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app.
-        </p>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Quick actions</div>

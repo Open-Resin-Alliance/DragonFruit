@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { Keyboard, Lock, RotateCcw } from 'lucide-react';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { HotkeyBinding, UNIVERSAL_HOTKEYS } from '@/hotkeys/hotkeyConfig';
 import { getPresetList, subscribeToPresets } from '@/supports/Settings/presets';
@@ -263,8 +263,17 @@ export function HotkeysSettingsTab() {
         background: 'var(--surface-1)',
       }}
     >
-      <div className="flex items-center gap-1.5">
-        <div className="min-w-0">
+      <div className="flex items-start gap-2">
+        <span
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+          }}
+        >
+          <Keyboard className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+        </span>
+        <div className="min-w-0 flex-1">
           <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             {section.title}
           </h4>
@@ -339,10 +348,24 @@ export function HotkeysSettingsTab() {
                 background: 'var(--surface-1)',
               }}
             >
-              <div className="flex items-center gap-1.5">
-                <h4 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  System Standard (Read-only)
-                </h4>
+              <div className="flex items-start gap-2">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+                  }}
+                >
+                  <Lock className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    System Standard
+                  </h4>
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Fixed shortcuts shared across all configurations.
+                  </p>
+                </div>
               </div>
 
               <div className="mt-1.5 space-y-1">

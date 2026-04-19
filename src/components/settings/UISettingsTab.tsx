@@ -1,4 +1,5 @@
 import React from 'react';
+import { Palette } from 'lucide-react';
 import { Select } from '@/components/ui/primitives';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
@@ -76,12 +77,25 @@ export function UISettingsTab({
 					borderColor: 'var(--border-subtle)',
 				}}
 			>
-				<h3 className="text-sm font-semibold mb-1" style={{ color: 'var(--text-strong)' }}>
-					Theme
-				</h3>
-				<p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
-					Choose how DragonFruit appears across the app.
-				</p>
+				<div className="flex items-start gap-2 mb-2">
+					<span
+						className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+						style={{
+							borderColor: 'var(--border-subtle)',
+							background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+						}}
+					>
+						<Palette className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+					</span>
+					<div className="flex-1">
+						<h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+							Theme
+						</h3>
+						<p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+							Choose how DragonFruit appears across the app.
+						</p>
+					</div>
+				</div>
 
 				<div className="grid grid-cols-[120px_1fr] items-center gap-2">
 					<label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>

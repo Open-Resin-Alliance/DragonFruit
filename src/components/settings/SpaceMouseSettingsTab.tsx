@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Gamepad2, MousePointer2 } from 'lucide-react';
+import { ArrowLeftRight, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
 import type { SpaceMouseSettings } from '@/components/settings/spacemousePreferences';
 import { Select } from '@/components/ui/primitives';
 
@@ -143,9 +143,25 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           borderColor: 'var(--border-subtle)',
         }}
       >
-        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-          Motion tuning
-        </h3>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <SlidersHorizontal className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Motion Tuning
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Adjust sensitivity and movement behavior for translation, rotation, zoom, and deadzone.
+            </p>
+          </div>
+        </div>
 
         <div className="mt-2 grid grid-cols-2 gap-2">
           <div className="space-y-0.5">
@@ -256,9 +272,25 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           borderColor: 'var(--border-subtle)',
         }}
       >
-        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-          Axis inversion
-        </h3>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <ArrowLeftRight className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Axis Inversion
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Flip the direction of individual pan, zoom, pitch, yaw, and roll axes.
+            </p>
+          </div>
+        </div>
         <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
           {([
             ['invertTx', 'Invert X pan'],
