@@ -78,6 +78,25 @@ export function EmptySceneState({
   const [isDropActive, setIsDropActive] = React.useState(false);
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
   const [reopenError, setReopenError] = React.useState<string | null>(null);
+  const [isLightTheme, setIsLightTheme] = React.useState(false);
+
+  React.useEffect(() => {
+    const check = () => {
+      const html = document.documentElement;
+      const light =
+        html.classList.contains('dragonfruit-light') ||
+        html.getAttribute('data-theme') === 'light' ||
+        (window.matchMedia('(prefers-color-scheme: light)').matches &&
+          !html.classList.contains('dragonfruit-dark'));
+      setIsLightTheme(light);
+    };
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    mq.addEventListener('change', check);
+    return () => { observer.disconnect(); mq.removeEventListener('change', check); };
+  }, [])
 
   const isLikelyFileDrag = React.useCallback((dataTransfer: DataTransfer | null) => {
     if (!dataTransfer) return false;
@@ -162,11 +181,15 @@ export function EmptySceneState({
           <div
             className="mb-2 inline-flex rounded-full border-2 px-3.5 py-1 text-[13px] font-black uppercase tracking-[0.2em]"
             style={{
-              color: '#fdba74',
-              borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 16%)',
-              background: 'color-mix(in srgb, #f97316, transparent 96%)',
-              textShadow: '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
-              boxShadow: '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
+              color: isLightTheme ? '#9a3412' : '#fdba74',
+              borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 22%)',
+              background: isLightTheme
+                ? 'color-mix(in srgb, #f97316, var(--surface-1) 88%)'
+                : 'color-mix(in srgb, #f97316, transparent 96%)',
+              textShadow: isLightTheme ? 'none' : '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
+              boxShadow: isLightTheme
+                ? 'none'
+                : '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
             }}
           >
             BETA VERSION
@@ -350,7 +373,9 @@ export function EmptySceneState({
                   {recentOpenedFiles.slice().reverse().slice(0, 6).map((entry) => {
                     const sizeLabel = formatBytes(entry.sizeBytes);
                     const isBusy = reopeningEntryId === entry.id;
-                    const kindAccent = entry.kind === 'scene' ? '#fb923c' : '#a78bfa';
+                    const kindAccent = entry.kind === 'scene'
+                      ? (isLightTheme ? '#c2410c' : '#fb923c')
+                      : (isLightTheme ? '#6d28d9' : '#a78bfa');
 
                     return (
                       <button
@@ -372,8 +397,8 @@ export function EmptySceneState({
                             className="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
                             style={{
                               color: kindAccent,
-                              background: `color-mix(in srgb, ${kindAccent}, var(--surface-0) 88%)`,
-                              border: `1px solid color-mix(in srgb, ${kindAccent}, var(--border-subtle) 46%)`,
+                              background: `color-mix(in srgb, ${kindAccent}, var(--surface-0) ${isLightTheme ? '84%' : '88%'})`,
+                              border: `1px solid color-mix(in srgb, ${kindAccent}, var(--border-subtle) ${isLightTheme ? '38%' : '46%'})`,
                             }}
                           >
                             {entry.kind === 'scene' ? 'Scene' : 'Mesh'}
