@@ -103,6 +103,84 @@ function formatBytes(bytes?: number): string | null {
   return `${rounded} ${units[unitIndex]}`;
 }
 
+function getFileExtension(name: string): string {
+  const trimmed = name.trim().toLowerCase();
+  const dotIndex = trimmed.lastIndexOf('.');
+  if (dotIndex < 0 || dotIndex === trimmed.length - 1) return '';
+  return trimmed.slice(dotIndex);
+}
+
+function isSupportedDropName(name: string): boolean {
+  const ext = getFileExtension(name);
+  return ext === '.stl' || ext === '.obj' || ext === '.3mf' || ext === '.voxl' || ext === '.lys';
+}
+
+function getDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
+  if (!dataTransfer) return 'unknown';
+
+  const fileNames = new Set<string>();
+
+  const directFiles = Array.from(dataTransfer.files ?? []);
+  for (const file of directFiles) {
+    if (typeof file.name === 'string' && file.name.trim().length > 0) {
+      fileNames.add(file.name.trim());
+    }
+  }
+
+  const items = Array.from(dataTransfer.items ?? []);
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    try {
+      const file = item.getAsFile();
+      if (file && typeof file.name === 'string' && file.name.trim().length > 0) {
+        fileNames.add(file.name.trim());
+      }
+
+      const webkitEntry = (item as DataTransferItem & {
+        webkitGetAsEntry?: () => { isFile?: boolean; name?: string } | null;
+      }).webkitGetAsEntry?.();
+      if (webkitEntry?.isFile && typeof webkitEntry.name === 'string' && webkitEntry.name.trim().length > 0) {
+        fileNames.add(webkitEntry.name.trim());
+      }
+    } catch {
+      // noop
+    }
+  }
+
+  const maybeExtractNameFromTextPath = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
+    if (!firstLine) return;
+
+    let normalized = firstLine;
+    if (normalized.startsWith('file://')) {
+      try {
+        normalized = decodeURIComponent(normalized.replace(/^file:\/\//, ''));
+      } catch {
+        normalized = normalized.replace(/^file:\/\//, '');
+      }
+    }
+
+    const parts = normalized.replace(/\\/g, '/').split('/').filter(Boolean);
+    const name = parts[parts.length - 1] ?? normalized;
+    if (name.trim().length > 0) fileNames.add(name.trim());
+  };
+
+  try {
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/uri-list'));
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/plain'));
+  } catch {
+    // noop
+  }
+
+  if (fileNames.size === 0) return 'unknown';
+
+  const hasSupported = Array.from(fileNames).some((name) => isSupportedDropName(name));
+  return hasSupported ? 'supported' : 'unsupported';
+}
+
 export function EmptySceneState({
   onFileChange,
   onLoadMeshClick,
@@ -120,9 +198,12 @@ export function EmptySceneState({
 }: EmptySceneStateProps) {
   const [tagline] = React.useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
   const [isDropActive, setIsDropActive] = React.useState(false);
+  const [isDropUnsupported, setIsDropUnsupported] = React.useState(false);
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
   const [reopenError, setReopenError] = React.useState<string | null>(null);
   const [isLightTheme, setIsLightTheme] = React.useState(false);
+  const dragAutoClearTimeoutRef = React.useRef<number | null>(null);
+  const unsupportedDropTimeoutRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     const check = () => {
@@ -152,29 +233,129 @@ export function EmptySceneState({
     return true;
   }, []);
 
+  const clearDropActive = React.useCallback(() => {
+    setIsDropActive(false);
+    setIsDropUnsupported(false);
+    if (dragAutoClearTimeoutRef.current !== null) {
+      window.clearTimeout(dragAutoClearTimeoutRef.current);
+      dragAutoClearTimeoutRef.current = null;
+    }
+    if (unsupportedDropTimeoutRef.current !== null) {
+      window.clearTimeout(unsupportedDropTimeoutRef.current);
+      unsupportedDropTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleDropAutoClear = React.useCallback(() => {
+    if (dragAutoClearTimeoutRef.current !== null) {
+      window.clearTimeout(dragAutoClearTimeoutRef.current);
+    }
+
+    // Some drag-exit paths in desktop webviews can miss `dragleave`.
+    // Keep this short timeout refreshed while dragging over the zone so stale highlights clear quickly.
+    dragAutoClearTimeoutRef.current = window.setTimeout(() => {
+      dragAutoClearTimeoutRef.current = null;
+      setIsDropActive(false);
+      setIsDropUnsupported(false);
+    }, 220);
+  }, []);
+
+  React.useEffect(() => {
+    const handleWindowDropLikeEnd = () => {
+      clearDropActive();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        clearDropActive();
+      }
+    };
+
+    window.addEventListener('drop', handleWindowDropLikeEnd);
+    window.addEventListener('dragend', handleWindowDropLikeEnd);
+    window.addEventListener('blur', handleWindowDropLikeEnd);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('drop', handleWindowDropLikeEnd);
+      window.removeEventListener('dragend', handleWindowDropLikeEnd);
+      window.removeEventListener('blur', handleWindowDropLikeEnd);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (dragAutoClearTimeoutRef.current !== null) {
+        window.clearTimeout(dragAutoClearTimeoutRef.current);
+        dragAutoClearTimeoutRef.current = null;
+      }
+      if (unsupportedDropTimeoutRef.current !== null) {
+        window.clearTimeout(unsupportedDropTimeoutRef.current);
+        unsupportedDropTimeoutRef.current = null;
+      }
+    };
+  }, [clearDropActive]);
+
+  const handleDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!isLikelyFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsDropUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsDropUnsupported(false);
+    }
+    setIsDropActive(true);
+    scheduleDropAutoClear();
+  }, [isLikelyFileDrag, scheduleDropAutoClear]);
+
   const handleDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (!isLikelyFileDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
+    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsDropUnsupported(true);
+      e.dataTransfer.dropEffect = 'none';
+    } else {
+      if (supportState === 'supported') {
+        setIsDropUnsupported(false);
+      }
+      e.dataTransfer.dropEffect = 'copy';
+    }
     setIsDropActive(true);
-  }, [isLikelyFileDrag]);
+    scheduleDropAutoClear();
+  }, [isLikelyFileDrag, scheduleDropAutoClear]);
 
   const handleDragLeave = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDropActive(false);
-  }, []);
+    const relatedTarget = e.relatedTarget as Node | null;
+    if (relatedTarget && e.currentTarget.contains(relatedTarget)) return;
+    clearDropActive();
+  }, [clearDropActive]);
 
   const handleDrop = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDropActive(false);
-
-    if (!onDropMeshFiles) return;
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
+
+    const hasSupportedFiles = files.some((file) => isSupportedDropName(file.name));
+    if (!hasSupportedFiles) {
+      setIsDropActive(true);
+      setIsDropUnsupported(true);
+      if (unsupportedDropTimeoutRef.current !== null) {
+        window.clearTimeout(unsupportedDropTimeoutRef.current);
+      }
+      unsupportedDropTimeoutRef.current = window.setTimeout(() => {
+        unsupportedDropTimeoutRef.current = null;
+        clearDropActive();
+      }, 1600);
+      return;
+    }
+
+    clearDropActive();
+    if (!onDropMeshFiles) return;
     void onDropMeshFiles(files);
-  }, [onDropMeshFiles]);
+  }, [clearDropActive, onDropMeshFiles]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     if (!onReopenRecentFile) return;
@@ -472,35 +653,49 @@ export function EmptySceneState({
               )}
 
               <div
-                className="mt-2 block rounded-md border border-dashed px-2.5 py-2 transition-colors"
+                className="mt-2 block min-h-[92px] rounded-md border border-dashed px-4 py-3 transition-colors"
                 style={{
-                  borderColor: isDropActive ? 'var(--accent)' : 'var(--border-subtle)',
+                  borderColor: isDropActive
+                    ? (isDropUnsupported ? 'var(--danger)' : 'var(--accent)')
+                    : 'var(--border-subtle)',
                   background: isDropActive
-                    ? 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)'
+                    ? (isDropUnsupported
+                      ? 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)'
+                      : 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)')
                     : 'color-mix(in srgb, var(--surface-1), transparent 16%)',
                 }}
                 onDragOver={handleDragOver}
+                onDragEnter={handleDragEnter}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0 inline-flex items-center gap-1.5">
-                    <Upload className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
-                    <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Drop supported files
+                <div className="flex min-h-[64px] items-center justify-between gap-3">
+                  <div className="min-w-0 inline-flex items-center gap-2">
+                    <Upload className="h-4 w-4" style={{ color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)' }} />
+                    <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      {isDropUnsupported ? 'Unsupported File Type' : 'Drop supported files'}
                     </span>
                   </div>
                   <span
-                    className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+                    className="shrink-0 rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-wide"
                     style={{
-                      color: 'var(--accent)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
-                      border: '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
+                      color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)',
+                      background: isDropUnsupported
+                        ? 'color-mix(in srgb, var(--danger), var(--surface-0) 84%)'
+                        : 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                      border: isDropUnsupported
+                        ? '1px solid color-mix(in srgb, var(--danger), var(--border-subtle) 48%)'
+                        : '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
                     }}
                   >
                     STL • OBJ • 3MF • VOXL • LYS
                   </span>
                 </div>
+                {isDropUnsupported && (
+                  <div className="mt-1 text-[11px]" style={{ color: 'var(--danger)' }}>
+                    Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS files.
+                  </div>
+                )}
               </div>
             </div>
           </>

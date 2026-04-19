@@ -504,6 +504,75 @@ function isLikelyFileDragPayload(dataTransfer: DataTransfer | null): boolean {
   return true;
 }
 
+function getPrepareDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
+  if (!dataTransfer) return 'unknown';
+
+  const fileNames = new Set<string>();
+
+  const directFiles = Array.from(dataTransfer.files ?? []);
+  for (const file of directFiles) {
+    if (typeof file.name === 'string' && file.name.trim().length > 0) {
+      fileNames.add(file.name.trim());
+    }
+  }
+
+  const items = Array.from(dataTransfer.items ?? []);
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    try {
+      const file = item.getAsFile();
+      if (file && typeof file.name === 'string' && file.name.trim().length > 0) {
+        fileNames.add(file.name.trim());
+      }
+
+      const webkitEntry = (item as DataTransferItem & {
+        webkitGetAsEntry?: () => { isFile?: boolean; name?: string } | null;
+      }).webkitGetAsEntry?.();
+      if (webkitEntry?.isFile && typeof webkitEntry.name === 'string' && webkitEntry.name.trim().length > 0) {
+        fileNames.add(webkitEntry.name.trim());
+      }
+    } catch {
+      // Some runtimes throw here during drag hover metadata probing.
+    }
+  }
+
+  const maybeExtractNameFromTextPath = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
+    if (!firstLine) return;
+
+    let normalized = firstLine;
+    if (normalized.startsWith('file://')) {
+      try {
+        normalized = decodeURIComponent(normalized.replace(/^file:\/\//, ''));
+      } catch {
+        normalized = normalized.replace(/^file:\/\//, '');
+      }
+    }
+
+    const name = getFileNameFromPath(normalized);
+    if (name.trim().length > 0) {
+      fileNames.add(name.trim());
+    }
+  };
+
+  try {
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/uri-list'));
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/plain'));
+  } catch {
+    // Ignore dataTransfer text extraction failures on restricted drag payloads.
+  }
+
+  if (fileNames.size === 0) {
+    return 'unknown';
+  }
+
+  const hasSupported = Array.from(fileNames).some((name) => isSupportedPrepareDropName(name));
+  return hasSupported ? 'supported' : 'unsupported';
+}
+
 function buildDroppedFilesSignature(files: File[]): string {
   return files
     .map((file) => `${file.name.trim().toLowerCase()}::${Number.isFinite(file.size) ? file.size : -1}`)
@@ -930,6 +999,7 @@ export default function Home() {
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
   const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
@@ -8394,7 +8464,10 @@ export default function Home() {
     usePrintingSettledHiResCanvas,
   ]);
 
-  const handleDroppedPrepareFiles = React.useCallback(async (files: File[]) => {
+  const handleDroppedPrepareFiles = React.useCallback(async (
+    files: File[],
+    options?: { prearmedLoadingUi?: boolean },
+  ) => {
     if (scene.mode !== 'prepare') return;
 
     const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
@@ -8433,7 +8506,33 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      await importSceneFilesWithLysWarning(sceneFiles);
+      const shouldPrearmLoadingUi = !options?.prearmedLoadingUi;
+
+      if (shouldPrearmLoadingUi) {
+        setNativePickerPreparationState({
+          active: true,
+          label: sceneFiles.length > 1 ? 'Loading dropped scenes…' : 'Loading dropped scene…',
+          detail: sceneFiles.length > 1
+            ? `Preparing ${sceneFiles.length} dropped scene files…`
+            : 'Preparing dropped scene file…',
+          progress: null,
+        });
+
+        await waitForUiTick();
+      }
+
+      try {
+        await importSceneFilesWithLysWarning(sceneFiles);
+      } finally {
+        if (shouldPrearmLoadingUi) {
+          setNativePickerPreparationState({
+            active: false,
+            label: '',
+            detail: '',
+            progress: null,
+          });
+        }
+      }
       return;
     }
 
@@ -8442,7 +8541,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [importSceneFilesWithLysWarning, scene]);
+  }, [importSceneFilesWithLysWarning, scene, waitForUiTick]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -8474,6 +8573,22 @@ export default function Home() {
       return [] as File[];
     }
   }, []);
+
+  const sceneModeRef = React.useRef(scene.mode);
+  const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
+  const handleDroppedPrepareFilesRef = React.useRef(handleDroppedPrepareFiles);
+
+  React.useEffect(() => {
+    sceneModeRef.current = scene.mode;
+  }, [scene.mode]);
+
+  React.useEffect(() => {
+    createFilesFromTauriDroppedPathsRef.current = createFilesFromTauriDroppedPaths;
+  }, [createFilesFromTauriDroppedPaths]);
+
+  React.useEffect(() => {
+    handleDroppedPrepareFilesRef.current = handleDroppedPrepareFiles;
+  }, [handleDroppedPrepareFiles]);
 
   React.useEffect(() => {
     if (scene.mode !== 'prepare') return;
@@ -8516,15 +8631,27 @@ export default function Home() {
       try {
         const { listen } = await import('@tauri-apps/api/event');
 
-        const unlistenDragOver = await listen('tauri://drag-over', () => {
-          if (disposed || scene.mode !== 'prepare') return;
+        const unlistenDragOver = await listen<unknown>('tauri://drag-over', (event) => {
+          if (disposed || sceneModeRef.current !== 'prepare') return;
           setIsPrepareDragActive(true);
+
+          const paths = extractTauriDroppedPaths(event.payload);
+          if (paths.length === 0) {
+            return;
+          }
+
+          const hasSupportedPath = paths.some((path) => {
+            const fileName = getFileNameFromPath(path);
+            return isSupportedPrepareDropName(fileName);
+          });
+          setIsPrepareDragUnsupported(!hasSupportedPath);
         });
         registerUnlisten(unlistenDragOver);
 
         const hideOverlay = () => {
           dragDepthRef.current = 0;
           setIsPrepareDragActive(false);
+          setIsPrepareDragUnsupported(false);
         };
 
         const unlistenDragLeave = await listen('tauri://drag-leave', () => {
@@ -8540,17 +8667,48 @@ export default function Home() {
         registerUnlisten(unlistenDragCancelled);
 
         const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
-          if (disposed || scene.mode !== 'prepare') return;
+          if (disposed || sceneModeRef.current !== 'prepare') return;
 
           hideOverlay();
 
           const paths = extractTauriDroppedPaths(event.payload);
           if (paths.length === 0) return;
 
+          const supportedPathCount = paths.filter((path) => {
+            const fileName = getFileNameFromPath(path);
+            return isSupportedPrepareDropName(fileName);
+          }).length;
+
           void (async () => {
-            const files = await createFilesFromTauriDroppedPaths(paths);
-            if (files.length === 0) return;
-            await handleDroppedPrepareFiles(files);
+            if (supportedPathCount > 0) {
+              setNativePickerPreparationState({
+                active: true,
+                label: 'Loading dropped files…',
+                detail: supportedPathCount > 1
+                  ? `Reading 0/${supportedPathCount} dropped files…`
+                  : 'Reading dropped file…',
+                progress: null,
+              });
+
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+              });
+            }
+
+            try {
+              const files = await createFilesFromTauriDroppedPathsRef.current(paths);
+              if (files.length === 0) return;
+              await handleDroppedPrepareFilesRef.current(files, { prearmedLoadingUi: true });
+            } finally {
+              if (supportedPathCount > 0) {
+                setNativePickerPreparationState({
+                  active: false,
+                  label: '',
+                  detail: '',
+                  progress: null,
+                });
+              }
+            }
           })();
         });
         registerUnlisten(unlistenDragDrop);
@@ -8566,7 +8724,7 @@ export default function Home() {
         invokeUnlistenSafely(remove);
       }
     };
-  }, [createFilesFromTauriDroppedPaths, handleDroppedPrepareFiles, scene.mode]);
+  }, [scene.mode]);
 
   const handlePrepareDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (scene.mode !== 'prepare') return;
@@ -8574,6 +8732,12 @@ export default function Home() {
     e.preventDefault();
     e.stopPropagation();
     dragDepthRef.current += 1;
+    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsPrepareDragUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsPrepareDragUnsupported(false);
+    }
     setIsPrepareDragActive(true);
   }, [scene.mode]);
 
@@ -8582,7 +8746,13 @@ export default function Home() {
     if (!isLikelyFileDragPayload(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
+    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsPrepareDragUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsPrepareDragUnsupported(false);
+    }
+    e.dataTransfer.dropEffect = supportState === 'unsupported' ? 'none' : 'copy';
     setIsPrepareDragActive(true);
   }, [scene.mode]);
 
@@ -8593,6 +8763,7 @@ export default function Home() {
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
     if (dragDepthRef.current === 0) {
       setIsPrepareDragActive(false);
+      setIsPrepareDragUnsupported(false);
     }
   }, [scene.mode]);
 
@@ -8602,8 +8773,41 @@ export default function Home() {
     e.stopPropagation();
     dragDepthRef.current = 0;
     setIsPrepareDragActive(false);
+    setIsPrepareDragUnsupported(false);
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
+
+    const supportedFileCount = files.filter((file) => isSupportedPrepareDropName(file.name)).length;
+
+    if (supportedFileCount > 0) {
+      void (async () => {
+        setNativePickerPreparationState({
+          active: true,
+          label: 'Loading dropped files…',
+          detail: supportedFileCount > 1
+            ? `Preparing ${supportedFileCount} dropped files…`
+            : 'Preparing dropped file…',
+          progress: null,
+        });
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+
+        try {
+          await handleDroppedPrepareFiles(files, { prearmedLoadingUi: true });
+        } finally {
+          setNativePickerPreparationState({
+            active: false,
+            label: '',
+            detail: '',
+            progress: null,
+          });
+        }
+      })();
+      return;
+    }
+
     void handleDroppedPrepareFiles(files);
   }, [handleDroppedPrepareFiles, scene.mode]);
 
@@ -13634,17 +13838,30 @@ export default function Home() {
           {scene.mode === 'prepare' && isPrepareDragActive && (
             <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center">
               <div
-                className="rounded-lg border border-dashed px-6 py-4 text-center"
+                className="absolute inset-0"
                 style={{
-                  borderColor: 'var(--accent)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                  background: isPrepareDragUnsupported
+                    ? 'color-mix(in srgb, var(--danger), transparent 90%)'
+                    : 'color-mix(in srgb, black, transparent 86%)',
+                  backdropFilter: 'blur(1px)',
+                }}
+              />
+              <div
+                className="relative min-w-[380px] max-w-[min(92vw,640px)] rounded-xl border border-dashed px-8 py-6 text-center"
+                style={{
+                  borderColor: isPrepareDragUnsupported ? 'var(--danger)' : 'var(--accent)',
+                  background: isPrepareDragUnsupported
+                    ? 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)'
+                    : 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
                 }}
               >
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Drop supported files to import
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {isPrepareDragUnsupported ? 'Unsupported file format' : 'Drop supported files to import'}
                 </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Supported: STL, OBJ, 3MF, LYS, VOXL
+                <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                  {isPrepareDragUnsupported
+                    ? 'Please use: STL, OBJ, 3MF, LYS, VOXL'
+                    : 'Supported: STL, OBJ, 3MF, LYS, VOXL'}
                 </div>
               </div>
             </div>
