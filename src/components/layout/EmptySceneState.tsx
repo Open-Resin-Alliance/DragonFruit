@@ -81,7 +81,9 @@ const TAGLINES = [
   "Layer 0 of 0. Living dangerously.",
   "Anti-aliasing: nothing to anti-alias.",
   // Open Resin Alliance
-  "Join the Open Resin Alliance!"
+  "Join the Open Resin Alliance!",
+  // Origin story
+  "Not all slicers are created equal. This one's free!",
 ];
 
 function formatBytes(bytes?: number): string | null {
