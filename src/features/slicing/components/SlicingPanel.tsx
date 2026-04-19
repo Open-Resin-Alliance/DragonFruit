@@ -780,6 +780,10 @@ export function SlicingPanel({
   }, [remoteOfflineLayerHeightMm]);
 
   const resolvedMaterialLabel = useMemo(() => {
+    if (showRemoteOfflineLayerHeightOverride) {
+      return 'N/A';
+    }
+
     if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
       if (isLoadingRemoteMaterial) return 'Loading remote material…';
       if (selectedRemoteMaterialName) return `${selectedRemoteMaterialName} (${networkUiAdapter?.displayName ?? 'Remote'})`;
@@ -797,6 +801,7 @@ export function SlicingPanel({
     networkUiAdapter?.displayName,
     selectedRemoteMaterialName,
     selectedRemoteMaterialId,
+    showRemoteOfflineLayerHeightOverride,
   ]);
 
   useEffect(() => {

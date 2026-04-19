@@ -3679,6 +3679,9 @@ export default function Home() {
   const printableConnectedPrinterFleet = React.useMemo(() => {
     return connectedPrinterFleet;
   }, [connectedPrinterFleet]);
+  const reachablePrintableConnectedPrinterFleet = React.useMemo(() => {
+    return printableConnectedPrinterFleet.filter((device) => printerReachabilityByDeviceId[device.id] !== false);
+  }, [printableConnectedPrinterFleet, printerReachabilityByDeviceId]);
   const printingTargetDevice = React.useMemo(() => {
     if (printableConnectedPrinterFleet.length === 0) return null;
     return printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
@@ -3912,7 +3915,16 @@ export default function Home() {
     return Array.from(groups.entries()).map(([label, materials]) => ({ label, materials }));
   }, [printingTargetMaterialOptions]);
   const sendToPrinterTargetName = printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || null;
+  const shouldShowOfflineRemoteMaterialName = Boolean(
+    activeNetworkUiAdapter
+    && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false
+    && shouldUseRemoteOfflineLayerHeight,
+  );
   const printingResinName = React.useMemo(() => {
+    if (shouldShowOfflineRemoteMaterialName) {
+      return 'N/A';
+    }
+
     const targetName = printingTargetDevice?.selectedMaterialName?.trim();
     if (targetName && targetName.length > 0) return targetName;
 
@@ -3967,6 +3979,7 @@ export default function Home() {
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     printingTargetDevice?.selectedMaterialName,
+    shouldShowOfflineRemoteMaterialName,
   ]);
   const sendToPrinterButtonLabel = sendToPrinterTargetName
     ? `Upload to ${sendToPrinterTargetName.length > 26 ? `${sendToPrinterTargetName.slice(0, 24)}…` : sendToPrinterTargetName}`
@@ -3977,7 +3990,10 @@ export default function Home() {
     && printableConnectedPrinterFleet.length > 0,
   );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
-  const canSliceAndUpload = Boolean(activeNetworkUiAdapter && printableConnectedPrinterFleet.length > 0);
+  const canSliceAndUpload = Boolean(
+    activeNetworkUiAdapter
+    && reachablePrintableConnectedPrinterFleet.length > 0,
+  );
   const canSliceAndPrint = canSliceAndUpload && Boolean(printingMonitoringAdapter.operations?.start);
   const requiresRemoteMaterialSelectionForUpload = Boolean(
     activeNetworkUiAdapter
@@ -4033,12 +4049,12 @@ export default function Home() {
       }
     }
 
-    if (!activeNetworkUiAdapter || printableConnectedPrinterFleet.length === 0) {
-      setPrintingSendStatusText('No connected printer is available for upload.');
+    if (!activeNetworkUiAdapter || reachablePrintableConnectedPrinterFleet.length === 0) {
+      setPrintingSendStatusText('No online printer is available for upload.');
       return false;
     }
 
-    const shouldOpenTargetPicker = printableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
+    const shouldOpenTargetPicker = reachablePrintableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
     if (shouldOpenTargetPicker) {
       setPrintingTargetPickerMode(intent === 'print' ? 'pre-slice-print' : 'pre-slice-upload');
       setPrintingTargetPickerOpen(true);
@@ -4052,9 +4068,13 @@ export default function Home() {
       }
       preSliceUploadSelectionRef.current = selection;
     } else {
-      const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
+      const selectedTarget = (
+        printingTargetDevice && printerReachabilityByDeviceId[printingTargetDevice.id] !== false
+          ? printingTargetDevice
+          : reachablePrintableConnectedPrinterFleet[0]
+      ) ?? null;
       if (!selectedTarget) {
-        setPrintingSendStatusText('No connected printer is available for upload.');
+        setPrintingSendStatusText('No online printer is available for upload.');
         return false;
       }
       preSliceUploadSelectionRef.current = {
@@ -4080,7 +4100,8 @@ export default function Home() {
     return true;
   }, [
     activeNetworkUiAdapter,
-    printableConnectedPrinterFleet,
+    reachablePrintableConnectedPrinterFleet,
+    printerReachabilityByDeviceId,
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
     suggestedSliceOutputFilename,
