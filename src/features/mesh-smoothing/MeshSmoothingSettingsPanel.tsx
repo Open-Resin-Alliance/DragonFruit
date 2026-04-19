@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { HexColorPicker } from 'react-colorful';
-import { Button, Input } from '@/components/ui/primitives';
+import { RotateCcw } from 'lucide-react';
 import {
   DEFAULT_MESH_SMOOTHING_SETTINGS,
   MESH_SMOOTHING_BRUSH_SIZE_MM,
@@ -50,6 +50,7 @@ export function MeshSmoothingSettingsPanel() {
   return (
     <div className="h-full w-full flex flex-col">
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2 space-y-2">
+
         <div
           className="rounded-md border p-2 space-y-2"
           style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
@@ -61,7 +62,7 @@ export function MeshSmoothingSettingsPanel() {
           <div className="space-y-0.5">
             <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span>Brush Size</span>
-              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums" style={{ color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
                 {settings.brushSizeMm.toFixed(2)} mm
               </span>
             </label>
@@ -79,7 +80,7 @@ export function MeshSmoothingSettingsPanel() {
           <div className="space-y-0.5">
             <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span>Strength</span>
-              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums" style={{ color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
                 {settings.strength.toFixed(2)}
               </span>
             </label>
@@ -94,19 +95,26 @@ export function MeshSmoothingSettingsPanel() {
             />
           </div>
 
-          <div className="space-y-0.5">
-            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Falloff</label>
-            <div className="grid grid-cols-3 gap-1">
-              {(['linear', 'smooth', 'sharp'] as const).map((falloff) => (
-                <Button
+          <div className="space-y-1">
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Falloff</div>
+            <div
+              className="flex rounded-md overflow-hidden border"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              {(['linear', 'smooth', 'sharp'] as MeshSmoothingFalloff[]).map((falloff, i) => (
+                <button
                   key={falloff}
-                  onClick={() => updateMeshSmoothingSettings({ falloff: falloff as MeshSmoothingFalloff })}
-                  variant={settings.falloff === falloff ? 'primary' : 'secondary'}
-                  size="sm"
-                  className="capitalize !py-1"
+                  type="button"
+                  onClick={() => updateMeshSmoothingSettings({ falloff })}
+                  className={`flex-1 py-1 text-[11px] font-medium capitalize transition-colors${i > 0 ? ' border-l' : ''}`}
+                  style={
+                    settings.falloff === falloff
+                      ? { background: 'var(--accent)', color: 'var(--accent-fg)', borderColor: 'var(--border-subtle)' }
+                      : { background: 'var(--surface-1)', color: 'var(--text-muted)', borderColor: 'var(--border-subtle)' }
+                  }
                 >
                   {falloff}
-                </Button>
+                </button>
               ))}
             </div>
           </div>
@@ -114,7 +122,7 @@ export function MeshSmoothingSettingsPanel() {
           <div className="space-y-0.5">
             <label className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span>Iterations</span>
-              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums" style={{ color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
                 {settings.iterations}
               </span>
             </label>
@@ -146,11 +154,11 @@ export function MeshSmoothingSettingsPanel() {
                 borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
               }}
             />
-            <Input
+            <input
               type="text"
               value={clampedColorInput}
               onChange={(e) => updateMeshSmoothingSettings({ highlightColor: e.target.value })}
-              className="flex-1 uppercase"
+              className="ui-input flex-1 h-8 text-xs uppercase"
               placeholder="#269EFF"
             />
           </div>
@@ -167,18 +175,17 @@ export function MeshSmoothingSettingsPanel() {
               style={{ width: '100%', height: '100%' }}
             />
           </div>
-
-          <div className="pt-1 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              onClick={() => setMeshSmoothingSettings({ ...DEFAULT_MESH_SMOOTHING_SETTINGS })}
-            >
-              Reset Smoothing Defaults
-            </Button>
-          </div>
         </div>
+
+        <button
+          type="button"
+          className="ui-button ui-button-secondary w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+          onClick={() => setMeshSmoothingSettings({ ...DEFAULT_MESH_SMOOTHING_SETTINGS })}
+        >
+          <RotateCcw className="w-3 h-3" />
+          Reset Defaults
+        </button>
+
       </div>
     </div>
   );

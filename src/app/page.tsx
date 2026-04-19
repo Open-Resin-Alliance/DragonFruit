@@ -13103,7 +13103,7 @@ export default function Home() {
                     </svg>
                   </IconButton>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Mesh Smoothing Settings
+                    Mesh Smoothing
                   </h3>
                 </div>
                 {prepareSmoothingSettingsExpanded && (
