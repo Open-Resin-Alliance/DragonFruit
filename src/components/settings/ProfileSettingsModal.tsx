@@ -5342,184 +5342,93 @@ export function ProfileSettingsModal({
         )}
 
         {showOfficialLockDialog && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
+          <StructuredDialogModal
+            open={showOfficialLockDialog}
+            ariaLabel="Official profile locked"
+            title="Official Profile Locked"
+            subtitle="Official slicer profiles can't be edited directly."
+            icon={<Lock className="h-4 w-4" />}
+            iconTone="warning"
+            zIndexClassName="z-[75]"
+            closeAriaLabel="Close official profile lock dialog"
+            onClose={() => {
               setShowOfficialLockDialog(false);
               setOfficialLockedProfileId(null);
-            }
-          }}>
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Official profile locked"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                      color: '#d97706',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-
-                  <div className="min-w-0 pr-2">
-                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Official Profile Locked
-                    </h3>
-                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      Official slicer profiles can’t be edited directly.
-                    </p>
-                  </div>
-                </div>
-
+            }}
+            actions={(
+              <>
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close official profile lock dialog"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
                   onClick={() => {
                     setShowOfficialLockDialog(false);
                     setOfficialLockedProfileId(null);
                   }}
                 >
-                  <X className="w-4 h-4" />
+                  Cancel
                 </button>
-              </div>
-
-              <div className="space-y-3.5 p-5">
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  For safety reasons, official slicer profiles cannot be modified directly.
-                  <br />
-                  Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
-                  <br />
-                  <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                    onClick={() => {
-                      setShowOfficialLockDialog(false);
-                      setOfficialLockedProfileId(null);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDuplicateOfficialProfile}
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                    style={accentSecondaryActionStyle92}
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    Make Custom Copy
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showOfficialMaterialLockDialog && selectedMaterial && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setShowOfficialMaterialLockDialog(false);
-          }}>
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Official material profile locked"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                      color: '#d97706',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-
-                  <div className="min-w-0 pr-2">
-                    <h3 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Official Profile Locked
-                    </h3>
-                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      Official material profiles can’t be edited directly.
-                    </p>
-                  </div>
-                </div>
-
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close official material profile lock dialog"
-                  onClick={() => setShowOfficialMaterialLockDialog(false)}
+                  onClick={handleDuplicateOfficialProfile}
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  style={accentSecondaryActionStyle92}
                 >
-                  <X className="w-4 h-4" />
+                  <Lock className="w-3.5 h-3.5" />
+                  Make Custom Copy
                 </button>
-              </div>
-
-              <div className="space-y-3.5 p-5">
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  Official material profiles cannot be edited directly.
-                  <br />
-                  Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
-                  <br />
-                  <br />
-                  <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                    onClick={() => setShowOfficialMaterialLockDialog(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDuplicateMaterialAsCustom}
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                    style={accentSecondaryActionStyle92}
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    Make Custom Copy
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+              </>
+            )}
+          >
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              For safety reasons, official slicer profiles cannot be modified directly.
+              <br />
+              Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
+              <br />
+              <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
+            </p>
+          </StructuredDialogModal>
         )}
+
+        <StructuredDialogModal
+          open={showOfficialMaterialLockDialog && Boolean(selectedMaterial)}
+          ariaLabel="Official material profile locked"
+          title="Official Profile Locked"
+          subtitle="Official material profiles can't be edited directly."
+          icon={<Lock className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[75]"
+          closeAriaLabel="Close official material profile lock dialog"
+          onClose={() => setShowOfficialMaterialLockDialog(false)}
+          actions={(
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                onClick={() => setShowOfficialMaterialLockDialog(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDuplicateMaterialAsCustom}
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                style={accentSecondaryActionStyle92}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Make Custom Copy
+              </button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            Official material profiles cannot be edited directly.
+            <br />
+            Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
+            <br />
+            <br />
+            <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+          </p>
+        </StructuredDialogModal>
 
         <StructuredDialogModal
           open={Boolean(deleteConfirmTarget)}
