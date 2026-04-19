@@ -1,7 +1,8 @@
 import React from 'react';
 import { Palette } from 'lucide-react';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { Select } from '@/components/ui/primitives';
-import type { ThemeCustomColors, ThemePreference, ThemePreset } from '@/components/settings/themeCustomizations';
+import type { ThemeCustomColors, ThemePreference, ThemePreset, ThemeProfile } from '@/components/settings/themeCustomizations';
 
 type ThemeColorField = {
 	key: keyof ThemeCustomColors;
@@ -87,24 +88,75 @@ const THEME_COLOR_SECTIONS: ThemeColorSection[] = [
 ];
 
 interface UISettingsTabProps {
+	themeProfiles: ThemeProfile[];
 	themePreset: ThemePreset;
 	onThemePresetChange: (preset: ThemePreset) => void;
 	themePreference: ThemePreference;
 	onThemePreferenceChange: (preference: ThemePreference) => void;
 	themeColors: ThemeCustomColors;
 	onThemeColorChange: (key: keyof ThemeCustomColors, value: string) => void;
+	isBuiltInThemePreset: boolean;
+	onCreateCustomThemeFromPreset: () => void;
+	onRequestSaveCustomTheme: () => void;
+	onRequestRenameCustomTheme: () => void;
+	onRequestDeleteCustomTheme: () => void;
+	onExportTheme: () => void;
+	onImportTheme: (file: File) => void | Promise<void>;
 	onResetThemeColors: () => void;
 }
 
 export function UISettingsTab({
+	themeProfiles,
 	themePreset,
 	onThemePresetChange,
 	themePreference,
 	onThemePreferenceChange,
 	themeColors,
 	onThemeColorChange,
+	isBuiltInThemePreset,
+	onCreateCustomThemeFromPreset,
+	onRequestSaveCustomTheme,
+	onRequestRenameCustomTheme,
+	onRequestDeleteCustomTheme,
+	onExportTheme,
+	onImportTheme,
 	onResetThemeColors,
 }: UISettingsTabProps) {
+	const importInputRef = React.useRef<HTMLInputElement | null>(null);
+
+	const builtInProfiles = themeProfiles.filter((profile) => profile.isBuiltIn);
+	const customProfiles = themeProfiles.filter((profile) => !profile.isBuiltIn);
+	const accentSecondaryActionStyle92: React.CSSProperties = {
+		color: 'var(--accent-secondary-action-color)',
+		borderColor: 'var(--accent-secondary-action-border)',
+		background: 'var(--accent-secondary-action-bg-92)',
+	};
+	const dangerActionStyle92: React.CSSProperties = {
+		color: 'var(--danger)',
+		borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+		background: 'color-mix(in srgb, var(--danger), var(--surface-1) 92%)',
+	};
+
+	const themePresetOptions = [
+		...builtInProfiles.map((profile) => ({
+			value: profile.id as ThemePreset,
+			label: profile.name,
+			rightContent: 'Built-in',
+		})),
+		...customProfiles.map((profile) => ({
+			value: profile.id as ThemePreset,
+			label: profile.name,
+			rightContent: 'Custom',
+		})),
+	];
+
+	const handleImportInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		event.target.value = '';
+		if (!file) return;
+		void onImportTheme(file);
+	};
+
 	const renderColorField = (row: ThemeColorField) => (
 		<div
 			key={row.key}
@@ -175,16 +227,19 @@ export function UISettingsTab({
 						<label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
 							Theme preset
 						</label>
-						<Select
+						<SelectDropdown<ThemePreset>
 							value={themePreset}
-							onChange={(event) => onThemePresetChange(event.target.value as ThemePreset)}
-						>
-							<option value="dragonfruit-dark">Default DragonFruit Dark</option>
-							<option value="dragonfruit-light">Default DragonFruit Light</option>
-						</Select>
-						<p className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-							Switches the full palette instantly.
-						</p>
+							options={themePresetOptions}
+							onChange={(nextPreset) => onThemePresetChange(nextPreset)}
+							selectClassName="!h-8 text-[11px]"
+							menuClassName="max-w-[28rem]"
+							menuFooterDivider
+							menuFooterAction={{
+								label: '+ New Theme',
+								onClick: onCreateCustomThemeFromPreset,
+								tone: 'accent',
+							}}
+						/>
 					</div>
 
 					<div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
@@ -199,9 +254,83 @@ export function UISettingsTab({
 							<option value="dark">Dark</option>
 							<option value="light">Light</option>
 						</Select>
-						<p className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-							Controls system/dark/light resolution.
-						</p>
+					</div>
+				</div>
+
+				<div className="mt-2 rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+					<input
+						ref={importInputRef}
+						type="file"
+						accept=".json,application/json"
+						onChange={handleImportInputChange}
+						className="hidden"
+					/>
+					<div className="flex flex-wrap items-center gap-1.5">
+						{isBuiltInThemePreset ? (
+							<>
+								<button
+									type="button"
+									onClick={() => importInputRef.current?.click()}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+								>
+									Import
+								</button>
+								<button
+									type="button"
+									onClick={onResetThemeColors}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+								>
+									Reset
+								</button>
+							</>
+						) : (
+							<>
+								<button
+									type="button"
+									onClick={onRequestSaveCustomTheme}
+									className="ui-button !h-8 !px-2.5 !py-0 text-[11px]"
+									style={accentSecondaryActionStyle92}
+								>
+									Save
+								</button>
+								<button
+									type="button"
+									onClick={onRequestRenameCustomTheme}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+								>
+									Rename
+								</button>
+								<button
+									type="button"
+									onClick={onExportTheme}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+								>
+									Export
+								</button>
+								<button
+									type="button"
+									onClick={() => importInputRef.current?.click()}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+								>
+									Import
+								</button>
+								<button
+									type="button"
+									onClick={onResetThemeColors}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+								>
+									Reset
+								</button>
+								<button
+									type="button"
+									onClick={onRequestDeleteCustomTheme}
+									className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+									style={dangerActionStyle92}
+								>
+									Delete
+								</button>
+							</>
+						)}
 					</div>
 				</div>
 			</section>
@@ -229,19 +358,6 @@ export function UISettingsTab({
 						</div>
 					</section>
 				))}
-			</div>
-
-			<div className="flex items-center justify-between rounded-xl border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-				<div className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-					Reset the currently selected preset palette back to its default token values.
-				</div>
-				<button
-					type="button"
-					onClick={onResetThemeColors}
-					className="ui-button ui-button-secondary !px-2.5 !py-1.5 text-xs"
-				>
-					Reset Theme
-				</button>
 			</div>
 		</div>
 	);

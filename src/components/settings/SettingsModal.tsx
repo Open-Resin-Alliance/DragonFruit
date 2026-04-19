@@ -13,22 +13,33 @@ import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsT
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
   applyThemePreference,
+  createCustomThemeProfile,
   DEFAULT_THEME_CUSTOM_COLORS,
+  deleteCustomThemeProfile,
   getSavedThemeCustomColors,
+  getSavedCustomThemeProfiles,
+  getThemeProfile,
   getSavedThemePreset,
   getSavedThemePreference,
+  exportThemeProfileToJson,
   getThemePresetColors,
+  importThemeProfileFromJson,
+  isBuiltInThemePreset,
+  saveCustomThemeProfile,
   THEME_COLORS_STORAGE_KEY,
+  THEME_CUSTOM_PROFILES_STORAGE_KEY,
   THEME_PRESET_STORAGE_KEY,
   THEME_STORAGE_KEY,
   type ThemePreset,
   type ThemeCustomColors,
+  type SavedCustomThemeProfile,
 } from '@/components/settings/themeCustomizations';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   DEFAULT_SPACEMOUSE_SETTINGS,
   getSavedSpaceMouseSettings,
@@ -230,6 +241,12 @@ export function SettingsModal({
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
   const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(getSavedThemeCustomColors());
+  const [draftThemeProfiles, setDraftThemeProfiles] = useState<SavedCustomThemeProfile[]>(() => getSavedCustomThemeProfiles());
+  const [draftCustomThemeName, setDraftCustomThemeName] = useState<string>(() => {
+    const savedPreset = getSavedThemePreset();
+    const savedProfile = getThemeProfile(savedPreset, getSavedCustomThemeProfiles());
+    return savedProfile.isBuiltIn ? '' : savedProfile.name;
+  });
   const [draftFloatingLayoutPersistence, setDraftFloatingLayoutPersistence] = useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
@@ -239,6 +256,13 @@ export function SettingsModal({
   const [draftSlicingThumbnailRenderSettings, setDraftSlicingThumbnailRenderSettings] = useState<SlicingThumbnailRenderSettings>(() => slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
   const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
+  const [showThemeSaveConfirm, setShowThemeSaveConfirm] = useState(false);
+  const [showThemeRenameDialog, setShowThemeRenameDialog] = useState(false);
+  const [showThemeDeleteConfirm, setShowThemeDeleteConfirm] = useState(false);
+  const [draftThemeRenameName, setDraftThemeRenameName] = useState('');
+  const [themeNameDialogMode, setThemeNameDialogMode] = useState<'rename' | 'create'>('rename');
+  const [pendingCreatedThemePreset, setPendingCreatedThemePreset] = useState<ThemePreset | null>(null);
+  const [themeCreationFallbackPreset, setThemeCreationFallbackPreset] = useState<ThemePreset | null>(null);
   const [isLightTheme, setIsLightTheme] = useState(false);
   const didCommitThemeDraftRef = React.useRef(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
@@ -258,7 +282,19 @@ export function SettingsModal({
     background: accentSecondaryActionBackground92,
   };
 
+  const setThemeDraftFromProfile = React.useCallback((preset: ThemePreset, profiles: SavedCustomThemeProfile[]) => {
+    const profile = getThemeProfile(preset, profiles);
+    setDraftThemePreset(profile.id);
+    setDraftThemePreference(profile.preference);
+    setDraftThemeColors(profile.colors);
+    setDraftCustomThemeName(profile.isBuiltIn ? '' : profile.name);
+  }, []);
+
   const resetDraftFromProps = React.useCallback(() => {
+    const savedThemeProfiles = getSavedCustomThemeProfiles();
+    const savedThemePreset = getSavedThemePreset();
+    const savedThemeProfile = getThemeProfile(savedThemePreset, savedThemeProfiles);
+
     setDraftMeshColor(meshColor);
     setDraftShaderType(shaderType);
     setDraftMatcapVariant(matcapVariant);
@@ -285,8 +321,10 @@ export function SettingsModal({
     setDraftCameraTrackpadZoomAcceleration(getSavedCameraTrackpadSettings().zoomAcceleration);
     setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
     setDraftThemePreference(getSavedThemePreference());
-    setDraftThemePreset(getSavedThemePreset());
+    setDraftThemePreset(savedThemePreset);
     setDraftThemeColors(getSavedThemeCustomColors());
+    setDraftThemeProfiles(savedThemeProfiles);
+    setDraftCustomThemeName(savedThemeProfile.isBuiltIn ? '' : savedThemeProfile.name);
     setDraftFloatingLayoutPersistence(isFloatingLayoutPersistenceEnabled());
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
@@ -340,17 +378,190 @@ export function SettingsModal({
   }, []);
 
   const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
-    setDraftThemePreset(preset);
-    setDraftThemeColors(getThemePresetColors(preset));
-    setDraftThemePreference(preset === 'dragonfruit-light' ? 'light' : 'dark');
-  }, []);
+    setThemeDraftFromProfile(preset, draftThemeProfiles);
+  }, [draftThemeProfiles, setThemeDraftFromProfile]);
 
   const handleResetThemeColors = React.useCallback(() => {
-    setDraftThemeColors(getThemePresetColors(draftThemePreset));
+    const profile = getThemeProfile(draftThemePreset, draftThemeProfiles);
+    setDraftThemeColors(profile.colors);
+    setDraftThemePreference(profile.preference);
+    setDraftCustomThemeName(profile.isBuiltIn ? '' : profile.name);
+  }, [draftThemePreset, draftThemeProfiles]);
+
+  const getThemeExportName = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) {
+      return getThemeProfile(draftThemePreset, draftThemeProfiles).name;
+    }
+    return draftCustomThemeName.trim() || 'Custom Theme';
+  }, [draftCustomThemeName, draftThemePreset, draftThemeProfiles]);
+
+  const handleExportTheme = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const exportName = getThemeExportName();
+      const exportJson = exportThemeProfileToJson({
+        name: exportName,
+        preference: draftThemePreference,
+        colors: draftThemeColors,
+        sourcePresetId: draftThemePreset,
+        appVersion: DRAGONFRUIT_VERSION,
+      });
+
+      const safeName = exportName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'dragonfruit-theme';
+
+      const fileName = `${safeName}.dragonfruit-theme.json`;
+      const blob = new Blob([exportJson], { type: 'application/json;charset=utf-8' });
+      const blobUrl = window.URL.createObjectURL(blob);
+
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown export error';
+      window.alert(`Failed to export theme profile. ${message}`);
+    }
+  }, [draftThemeColors, draftThemePreference, draftThemePreset, getThemeExportName]);
+
+  const handleImportTheme = React.useCallback(async (file: File) => {
+    try {
+      const rawJson = await file.text();
+      const imported = importThemeProfileFromJson(rawJson);
+
+      const createdProfile = createCustomThemeProfile(imported.name, imported.preference, imported.colors);
+      const nextProfiles = [...draftThemeProfiles, createdProfile];
+
+      setDraftThemeProfiles(nextProfiles);
+      setThemeDraftFromProfile(createdProfile.id, nextProfiles);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown import error';
+      if (typeof window !== 'undefined') {
+        window.alert(`Failed to import theme profile. ${message}`);
+      }
+    }
+  }, [draftThemeProfiles, setThemeDraftFromProfile]);
+
+  const handleCreateCustomThemeFromPreset = React.useCallback(() => {
+    const previousPreset = draftThemePreset;
+    const profile = createCustomThemeProfile('', draftThemePreference, draftThemeColors);
+    const nextProfiles = [...draftThemeProfiles, profile];
+    setDraftThemeProfiles(nextProfiles);
+    setDraftThemePreset(profile.id);
+    setDraftCustomThemeName(profile.name);
+    setDraftThemeRenameName(profile.name);
+    setThemeNameDialogMode('create');
+    setPendingCreatedThemePreset(profile.id);
+    setThemeCreationFallbackPreset(previousPreset);
+    setShowThemeRenameDialog(true);
+  }, [draftThemeColors, draftThemePreference, draftThemePreset, draftThemeProfiles]);
+
+  const persistCurrentCustomTheme = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return;
+
+    const savedProfile = saveCustomThemeProfile(draftThemePreset, {
+      name: draftCustomThemeName,
+      preference: draftThemePreference,
+      colors: draftThemeColors,
+    });
+    if (!savedProfile) return;
+
+    const nextProfiles = draftThemeProfiles.map((profile) => (
+      profile.id === savedProfile.id ? savedProfile : profile
+    ));
+    setDraftThemeProfiles(nextProfiles);
+    setDraftCustomThemeName(savedProfile.name);
+  }, [draftCustomThemeName, draftThemeColors, draftThemePreference, draftThemePreset, draftThemeProfiles]);
+
+  const handleRequestSaveCurrentCustomTheme = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return;
+    setShowThemeSaveConfirm(true);
   }, [draftThemePreset]);
+
+  const handleConfirmSaveCurrentCustomTheme = React.useCallback(() => {
+    persistCurrentCustomTheme();
+    setShowThemeSaveConfirm(false);
+  }, [persistCurrentCustomTheme]);
+
+  const handleRequestRenameCurrentCustomTheme = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return;
+    const profile = getThemeProfile(draftThemePreset, draftThemeProfiles);
+    if (profile.isBuiltIn) return;
+    setDraftThemeRenameName(profile.name);
+    setThemeNameDialogMode('rename');
+    setPendingCreatedThemePreset(null);
+    setThemeCreationFallbackPreset(null);
+    setShowThemeRenameDialog(true);
+  }, [draftThemePreset, draftThemeProfiles]);
+
+  const handleConfirmRenameCurrentCustomTheme = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return;
+    const nextName = draftThemeRenameName.trim();
+    if (!nextName) return;
+
+    const selectedProfile = getThemeProfile(draftThemePreset, draftThemeProfiles);
+    if (selectedProfile.isBuiltIn) return;
+
+    const renamed = saveCustomThemeProfile(selectedProfile.id, {
+      name: nextName,
+      preference: selectedProfile.preference,
+      colors: selectedProfile.colors,
+    });
+    if (!renamed) return;
+
+    const nextProfiles = draftThemeProfiles.map((profile) => (
+      profile.id === renamed.id ? renamed : profile
+    ));
+    setDraftThemeProfiles(nextProfiles);
+    setDraftCustomThemeName(renamed.name);
+    setDraftThemeRenameName(renamed.name);
+    setThemeNameDialogMode('rename');
+    setPendingCreatedThemePreset(null);
+    setThemeCreationFallbackPreset(null);
+    setShowThemeRenameDialog(false);
+  }, [draftThemePreset, draftThemeProfiles, draftThemeRenameName]);
+
+  const performDeleteCurrentCustomTheme = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return;
+
+    const nextProfiles = deleteCustomThemeProfile(draftThemePreset);
+    setDraftThemeProfiles(nextProfiles);
+
+    if (typeof window !== 'undefined' && getSavedThemePreset() === draftThemePreset) {
+      const fallbackPreset: ThemePreset = draftThemePreference === 'light' ? 'dragonfruit-light' : 'dragonfruit-dark';
+      window.localStorage.setItem(THEME_PRESET_STORAGE_KEY, fallbackPreset);
+    }
+
+    const fallbackPreset: ThemePreset = draftThemePreference === 'light' ? 'dragonfruit-light' : 'dragonfruit-dark';
+    setThemeDraftFromProfile(fallbackPreset, nextProfiles);
+  }, [draftThemePreference, draftThemePreset, setThemeDraftFromProfile]);
+
+  const handleRequestDeleteCurrentCustomTheme = React.useCallback(() => {
+    if (isBuiltInThemePreset(draftThemePreset)) return;
+    setShowThemeDeleteConfirm(true);
+  }, [draftThemePreset]);
+
+  const handleConfirmDeleteCurrentCustomTheme = React.useCallback(() => {
+    performDeleteCurrentCustomTheme();
+    setShowThemeDeleteConfirm(false);
+  }, [performDeleteCurrentCustomTheme]);
 
   const handleCancel = React.useCallback(() => {
     setShowRestoreDefaultsConfirm(false);
+    setShowThemeSaveConfirm(false);
+    setShowThemeRenameDialog(false);
+    setShowThemeDeleteConfirm(false);
+    setThemeNameDialogMode('rename');
+    setPendingCreatedThemePreset(null);
+    setThemeCreationFallbackPreset(null);
     didCommitThemeDraftRef.current = false;
     restoreSavedThemePreview();
     resetDraftFromProps();
@@ -385,6 +596,7 @@ export function SettingsModal({
     setDraftThemePreference('system');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+    setDraftCustomThemeName('');
     setDraftFloatingLayoutPersistence(true);
     setDraftDebugPrimitivesPanelVisible(false);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
@@ -405,6 +617,33 @@ export function SettingsModal({
 
   const handleCancelRestoreDefaults = React.useCallback(() => {
     setShowRestoreDefaultsConfirm(false);
+  }, []);
+
+  const handleCancelThemeSaveConfirm = React.useCallback(() => {
+    setShowThemeSaveConfirm(false);
+  }, []);
+
+  const handleCancelThemeRenameDialog = React.useCallback(() => {
+    if (themeNameDialogMode === 'create' && pendingCreatedThemePreset) {
+      const nextProfiles = deleteCustomThemeProfile(pendingCreatedThemePreset);
+      setDraftThemeProfiles(nextProfiles);
+
+      const fallbackPreset = themeCreationFallbackPreset
+        && (isBuiltInThemePreset(themeCreationFallbackPreset) || nextProfiles.some((profile) => profile.id === themeCreationFallbackPreset))
+        ? themeCreationFallbackPreset
+        : 'dragonfruit-dark';
+
+      setThemeDraftFromProfile(fallbackPreset, nextProfiles);
+    }
+
+    setThemeNameDialogMode('rename');
+    setPendingCreatedThemePreset(null);
+    setThemeCreationFallbackPreset(null);
+    setShowThemeRenameDialog(false);
+  }, [pendingCreatedThemePreset, themeCreationFallbackPreset, themeNameDialogMode, setThemeDraftFromProfile]);
+
+  const handleCancelThemeDeleteConfirm = React.useCallback(() => {
+    setShowThemeDeleteConfirm(false);
   }, []);
 
   const handleApply = React.useCallback(() => {
@@ -457,6 +696,7 @@ export function SettingsModal({
       window.localStorage.setItem(THEME_STORAGE_KEY, draftThemePreference);
       window.localStorage.setItem(THEME_PRESET_STORAGE_KEY, draftThemePreset);
       window.localStorage.setItem(THEME_COLORS_STORAGE_KEY, JSON.stringify(draftThemeColors));
+      window.localStorage.setItem(THEME_CUSTOM_PROFILES_STORAGE_KEY, JSON.stringify(draftThemeProfiles));
     }
 
     didCommitThemeDraftRef.current = true;
@@ -479,6 +719,7 @@ export function SettingsModal({
     draftToonSteps,
     draftThemePreference,
     draftThemeColors,
+    draftThemeProfiles,
     draftFloatingLayoutPersistence,
     draftDebugPrimitivesPanelVisible,
     draftSpaceMouseSettings,
@@ -593,6 +834,18 @@ export function SettingsModal({
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (showThemeDeleteConfirm) {
+        handleCancelThemeDeleteConfirm();
+        return;
+      }
+      if (showThemeRenameDialog) {
+        handleCancelThemeRenameDialog();
+        return;
+      }
+      if (showThemeSaveConfirm) {
+        handleCancelThemeSaveConfirm();
+        return;
+      }
       if (showRestoreDefaultsConfirm) {
         handleCancelRestoreDefaults();
         return;
@@ -602,7 +855,18 @@ export function SettingsModal({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, handleCancel, handleCancelRestoreDefaults, showRestoreDefaultsConfirm]);
+  }, [
+    isOpen,
+    handleCancel,
+    handleCancelRestoreDefaults,
+    handleCancelThemeDeleteConfirm,
+    handleCancelThemeRenameDialog,
+    handleCancelThemeSaveConfirm,
+    showRestoreDefaultsConfirm,
+    showThemeDeleteConfirm,
+    showThemeRenameDialog,
+    showThemeSaveConfirm,
+  ]);
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
     setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
@@ -616,6 +880,8 @@ export function SettingsModal({
   }, []);
 
   if (!isOpen) return null;
+
+  const isCreatingCustomThemeName = themeNameDialogMode === 'create';
 
   const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
     general: {
@@ -988,12 +1254,24 @@ export function SettingsModal({
               )}
               {activeTab === 'ui' && (
                 <UISettingsTab
+                  themeProfiles={[
+                    getThemeProfile('dragonfruit-dark', draftThemeProfiles),
+                    getThemeProfile('dragonfruit-light', draftThemeProfiles),
+                    ...draftThemeProfiles.map((profile) => getThemeProfile(profile.id, draftThemeProfiles)),
+                  ]}
                   themePreset={draftThemePreset}
                   onThemePresetChange={handleThemePresetChange}
                   themePreference={draftThemePreference}
                   onThemePreferenceChange={setDraftThemePreference}
                   themeColors={draftThemeColors}
                   onThemeColorChange={handleThemeColorChange}
+                  isBuiltInThemePreset={isBuiltInThemePreset(draftThemePreset)}
+                  onCreateCustomThemeFromPreset={handleCreateCustomThemeFromPreset}
+                  onRequestSaveCustomTheme={handleRequestSaveCurrentCustomTheme}
+                  onRequestRenameCustomTheme={handleRequestRenameCurrentCustomTheme}
+                  onRequestDeleteCustomTheme={handleRequestDeleteCurrentCustomTheme}
+                  onExportTheme={handleExportTheme}
+                  onImportTheme={handleImportTheme}
                   onResetThemeColors={handleResetThemeColors}
                 />
               )}
@@ -1439,6 +1717,128 @@ export function SettingsModal({
           </div>
         </div>
       )}
+
+      <StructuredDialogModal
+        open={showThemeSaveConfirm && !isBuiltInThemePreset(draftThemePreset)}
+        ariaLabel="Confirm save custom theme"
+        title="Save Theme Changes?"
+        subtitle="This updates the selected custom theme profile."
+        icon={<Save className="h-4 w-4" />}
+        iconTone="accent"
+        zIndexClassName="z-[72]"
+        closeAriaLabel="Close save theme confirmation"
+        onClose={handleCancelThemeSaveConfirm}
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={handleCancelThemeSaveConfirm}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmSaveCurrentCustomTheme}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+              style={accentSecondaryActionStyle92}
+            >
+              <Save className="h-3.5 w-3.5" />
+              Save Theme
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          Save <strong>{draftCustomThemeName.trim() || 'this custom theme'}</strong> with the current scheme and palette values?
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={showThemeDeleteConfirm && !isBuiltInThemePreset(draftThemePreset)}
+        ariaLabel="Confirm delete custom theme"
+        title="Delete Custom Theme?"
+        subtitle="This action cannot be undone."
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[73]"
+        closeAriaLabel="Close delete theme confirmation"
+        onClose={handleCancelThemeDeleteConfirm}
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={handleCancelThemeDeleteConfirm}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            >
+              Keep Theme
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDeleteCurrentCustomTheme}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+              style={{
+                color: 'var(--danger)',
+                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+                background: 'color-mix(in srgb, var(--danger), var(--surface-1) 92%)',
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete Theme
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          Delete <strong>{draftCustomThemeName.trim() || 'this custom theme'}</strong>? DragonFruit will switch back to a built-in preset.
+        </p>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={showThemeRenameDialog && !isBuiltInThemePreset(draftThemePreset)}
+        ariaLabel={isCreatingCustomThemeName ? 'Create custom theme' : 'Rename custom theme'}
+        title={isCreatingCustomThemeName ? 'Create Custom Theme' : 'Rename Custom Theme'}
+        subtitle={isCreatingCustomThemeName ? 'Choose a name for your new custom theme profile.' : 'Update the display name for this custom theme profile.'}
+        icon={<Edit3 className="h-4 w-4" />}
+        iconTone="accent"
+        zIndexClassName="z-[74]"
+        closeAriaLabel={isCreatingCustomThemeName ? 'Close create custom theme dialog' : 'Close rename custom theme dialog'}
+        onClose={handleCancelThemeRenameDialog}
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={handleCancelThemeRenameDialog}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmRenameCurrentCustomTheme}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+              style={accentSecondaryActionStyle92}
+              disabled={draftThemeRenameName.trim().length === 0}
+            >
+              <Check className="h-3.5 w-3.5" />
+              {isCreatingCustomThemeName ? 'Create' : 'Save Name'}
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            Theme name
+          </label>
+          <input
+            type="text"
+            value={draftThemeRenameName}
+            onChange={(event) => setDraftThemeRenameName(event.target.value)}
+            className="ui-input h-9 w-full text-xs"
+            placeholder="Custom Theme"
+          />
+        </div>
+      </StructuredDialogModal>
     </div>
   );
 }

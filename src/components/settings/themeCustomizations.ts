@@ -1,9 +1,11 @@
 export const THEME_STORAGE_KEY = 'app-theme-preference';
 export const THEME_COLORS_STORAGE_KEY = 'app-theme-colors';
 export const THEME_PRESET_STORAGE_KEY = 'app-theme-preset';
+export const THEME_CUSTOM_PROFILES_STORAGE_KEY = 'app-theme-custom-profiles';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
-export type ThemePreset = 'dragonfruit-dark' | 'dragonfruit-light';
+export type BuiltInThemePreset = 'dragonfruit-dark' | 'dragonfruit-light';
+export type ThemePreset = BuiltInThemePreset | string;
 
 const LEGACY_DEFAULT_ACCENT = '#d946ef';
 const NEW_DEFAULT_ACCENT = '#ec2a77';
@@ -33,6 +35,39 @@ export type ThemeCustomColors = {
   sceneGradientLinearMid: string;
   danger: string;
   success: string;
+};
+
+export type SavedCustomThemeProfile = {
+  id: string;
+  name: string;
+  preference: ThemePreference;
+  colors: ThemeCustomColors;
+};
+
+export type ThemeProfile = {
+  id: ThemePreset;
+  name: string;
+  preference: ThemePreference;
+  colors: ThemeCustomColors;
+  isBuiltIn: boolean;
+};
+
+type ThemeProfileExchangeHeader = {
+  kind: 'dragonfruit-theme-profile';
+  formatVersion: 1;
+  exportedAt: string;
+  generator: 'DragonFruit';
+  appVersion?: string;
+};
+
+type ThemeProfileExchangeDocument = {
+  header: ThemeProfileExchangeHeader;
+  theme: {
+    name: string;
+    preference: ThemePreference;
+    colors: ThemeCustomColors;
+    sourcePresetId?: ThemePreset;
+  };
 };
 
 export const DEFAULT_THEME_CUSTOM_COLORS: ThemeCustomColors = {
@@ -89,10 +124,295 @@ export const DRAGONFRUIT_LIGHT_THEME_COLORS: ThemeCustomColors = {
   success: '#2eb67d',
 };
 
+const BUILT_IN_THEME_PROFILES: ThemeProfile[] = [
+  {
+    id: 'dragonfruit-dark',
+    name: 'DragonFruit Dark',
+    preference: 'dark',
+    colors: DEFAULT_THEME_CUSTOM_COLORS,
+    isBuiltIn: true,
+  },
+  {
+    id: 'dragonfruit-light',
+    name: 'DragonFruit Light',
+    preference: 'light',
+    colors: DRAGONFRUIT_LIGHT_THEME_COLORS,
+    isBuiltIn: true,
+  },
+];
+
+function cloneThemeColors(themeColors: ThemeCustomColors): ThemeCustomColors {
+  return { ...themeColors };
+}
+
+function createBuiltInThemeProfiles(): ThemeProfile[] {
+  return BUILT_IN_THEME_PROFILES.map((profile) => ({
+    ...profile,
+    colors: cloneThemeColors(profile.colors),
+  }));
+}
+
+export function isBuiltInThemePreset(preset: ThemePreset): preset is BuiltInThemePreset {
+  return preset === 'dragonfruit-dark' || preset === 'dragonfruit-light';
+}
+
+function normalizeThemePreference(value: unknown, fallback: ThemePreference): ThemePreference {
+  return value === 'dark' || value === 'light' || value === 'system' ? value : fallback;
+}
+
+function normalizeThemeCustomColors(parsed: Partial<ThemeCustomColors> | undefined, defaults: ThemeCustomColors): ThemeCustomColors {
+  const d = defaults;
+
+  let accent = normalizeHex(parsed?.accent ?? d.accent, d.accent);
+  let topbarAccent = normalizeHex(parsed?.topbarAccent ?? d.topbarAccent, d.topbarAccent);
+
+  if (accent === LEGACY_DEFAULT_ACCENT) accent = NEW_DEFAULT_ACCENT;
+  if (topbarAccent === LEGACY_DEFAULT_ACCENT) topbarAccent = NEW_DEFAULT_ACCENT;
+
+  return {
+    background: normalizeHex(parsed?.background ?? d.background, d.background),
+    foreground: normalizeHex(parsed?.foreground ?? d.foreground, d.foreground),
+    surface0: normalizeHex(parsed?.surface0 ?? d.surface0, d.surface0),
+    surface1: normalizeHex(parsed?.surface1 ?? d.surface1, d.surface1),
+    surface2: normalizeHex(parsed?.surface2 ?? d.surface2, d.surface2),
+    textStrong: normalizeHex(parsed?.textStrong ?? d.textStrong, d.textStrong),
+    textMuted: normalizeHex(parsed?.textMuted ?? d.textMuted, d.textMuted),
+    indicator: normalizeHex(parsed?.indicator ?? d.indicator, d.indicator),
+    borderSubtle: normalizeHex(parsed?.borderSubtle ?? d.borderSubtle, d.borderSubtle),
+    borderStrong: normalizeHex(parsed?.borderStrong ?? d.borderStrong, d.borderStrong),
+    accent,
+    accentHover: normalizeHex(parsed?.accentHover ?? darkenHex(accent, 0.82), d.accentHover),
+    primaryButtonSurface: normalizeHex(parsed?.primaryButtonSurface ?? darkenHex(accent, 0.82), d.primaryButtonSurface),
+    accentContrast: normalizeHex(parsed?.accentContrast ?? d.accentContrast, d.accentContrast),
+    accentSecondary: normalizeHex(parsed?.accentSecondary ?? d.accentSecondary, d.accentSecondary),
+    accentSecondaryHover: normalizeHex(parsed?.accentSecondaryHover ?? darkenHex(parsed?.accentSecondary ?? d.accentSecondary, 0.9), d.accentSecondaryHover),
+    secondaryButtonSurface: normalizeHex(parsed?.secondaryButtonSurface ?? darkenHex(parsed?.accentSecondary ?? d.accentSecondary, 0.84), d.secondaryButtonSurface),
+    accentSecondaryContrast: normalizeHex(parsed?.accentSecondaryContrast ?? d.accentSecondaryContrast, d.accentSecondaryContrast),
+    topbarAccent,
+    sceneGradientRadial: normalizeHex(parsed?.sceneGradientRadial ?? d.sceneGradientRadial, d.sceneGradientRadial),
+    sceneGradientLinearStart: normalizeHex(parsed?.sceneGradientLinearStart ?? d.sceneGradientLinearStart, d.sceneGradientLinearStart),
+    sceneGradientLinearMid: normalizeHex(parsed?.sceneGradientLinearMid ?? d.sceneGradientLinearMid, d.sceneGradientLinearMid),
+    danger: normalizeHex(parsed?.danger ?? d.danger, d.danger),
+    success: normalizeHex(parsed?.success ?? d.success, d.success),
+  };
+}
+
+function persistSavedCustomThemeProfiles(profiles: SavedCustomThemeProfile[]): SavedCustomThemeProfile[] {
+  if (typeof window === 'undefined') return profiles;
+  window.localStorage.setItem(THEME_CUSTOM_PROFILES_STORAGE_KEY, JSON.stringify(profiles));
+  return profiles;
+}
+
+function sanitizeCustomThemeName(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, ' ');
+  return trimmed.length > 0 ? trimmed : 'Custom Theme';
+}
+
+function ensureUniqueCustomThemeName(name: string, profiles: SavedCustomThemeProfile[], excludeId?: string): string {
+  const base = sanitizeCustomThemeName(name);
+  const taken = new Set(
+    profiles
+      .filter((profile) => profile.id !== excludeId)
+      .map((profile) => profile.name.toLowerCase()),
+  );
+
+  if (!taken.has(base.toLowerCase())) return base;
+
+  let index = 2;
+  while (taken.has(`${base} ${index}`.toLowerCase())) {
+    index += 1;
+  }
+  return `${base} ${index}`;
+}
+
+function createCustomThemeProfileId(name: string): string {
+  const slug = sanitizeCustomThemeName(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'custom-theme';
+  return `custom:${slug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export function getThemePresetColors(preset: ThemePreset): ThemeCustomColors {
-  return preset === 'dragonfruit-light'
-    ? DRAGONFRUIT_LIGHT_THEME_COLORS
+  return isBuiltInThemePreset(preset) && preset === 'dragonfruit-light'
+    ? cloneThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS)
+    : cloneThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+}
+
+export function getSavedCustomThemeProfiles(): SavedCustomThemeProfile[] {
+  if (typeof window === 'undefined') return [];
+
+  const raw = window.localStorage.getItem(THEME_CUSTOM_PROFILES_STORAGE_KEY);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+
+    const next: SavedCustomThemeProfile[] = [];
+    const seenIds = new Set<string>();
+
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== 'object') continue;
+      const candidate = entry as Partial<SavedCustomThemeProfile>;
+      const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+      if (!id || seenIds.has(id) || isBuiltInThemePreset(id)) continue;
+      seenIds.add(id);
+      next.push({
+        id,
+        name: sanitizeCustomThemeName(typeof candidate.name === 'string' ? candidate.name : 'Custom Theme'),
+        preference: normalizeThemePreference(candidate.preference, 'system'),
+        colors: normalizeThemeCustomColors(candidate.colors, DEFAULT_THEME_CUSTOM_COLORS),
+      });
+    }
+
+    window.localStorage.setItem(THEME_CUSTOM_PROFILES_STORAGE_KEY, JSON.stringify(next));
+    return next;
+  } catch {
+    return [];
+  }
+}
+
+export function getThemeProfiles(customProfiles: SavedCustomThemeProfile[] = getSavedCustomThemeProfiles()): ThemeProfile[] {
+  return [
+    ...createBuiltInThemeProfiles(),
+    ...customProfiles.map((profile) => ({
+      ...profile,
+      colors: cloneThemeColors(profile.colors),
+      isBuiltIn: false,
+    })),
+  ];
+}
+
+export function getThemeProfile(preset: ThemePreset, customProfiles: SavedCustomThemeProfile[] = getSavedCustomThemeProfiles()): ThemeProfile {
+  const builtIn = createBuiltInThemeProfiles().find((profile) => profile.id === preset);
+  if (builtIn) return builtIn;
+
+  const custom = customProfiles.find((profile) => profile.id === preset);
+  if (custom) {
+    return {
+      ...custom,
+      colors: cloneThemeColors(custom.colors),
+      isBuiltIn: false,
+    };
+  }
+
+  return createBuiltInThemeProfiles()[0];
+}
+
+export function exportThemeProfileToJson(params: {
+  name: string;
+  preference: ThemePreference;
+  colors: ThemeCustomColors;
+  sourcePresetId?: ThemePreset;
+  appVersion?: string;
+}): string {
+  const fallbackDefaults = isBuiltInThemePreset(params.sourcePresetId ?? '')
+    ? getThemePresetColors(params.sourcePresetId as ThemePreset)
     : DEFAULT_THEME_CUSTOM_COLORS;
+
+  const doc: ThemeProfileExchangeDocument = {
+    header: {
+      kind: 'dragonfruit-theme-profile',
+      formatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      generator: 'DragonFruit',
+      appVersion: params.appVersion?.trim() || undefined,
+    },
+    theme: {
+      name: sanitizeCustomThemeName(params.name),
+      preference: normalizeThemePreference(params.preference, 'system'),
+      colors: normalizeThemeCustomColors(params.colors, fallbackDefaults),
+      sourcePresetId: params.sourcePresetId,
+    },
+  };
+
+  return JSON.stringify(doc, null, 2);
+}
+
+export function importThemeProfileFromJson(jsonText: string): {
+  name: string;
+  preference: ThemePreference;
+  colors: ThemeCustomColors;
+  sourcePresetId?: ThemePreset;
+} {
+  const parsed = JSON.parse(jsonText) as unknown;
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Invalid theme file: expected a JSON object.');
+  }
+
+  const doc = parsed as Partial<ThemeProfileExchangeDocument>;
+  const header = doc.header;
+  if (!header || typeof header !== 'object') {
+    throw new Error('Invalid theme file: missing header.');
+  }
+
+  if (header.kind !== 'dragonfruit-theme-profile') {
+    throw new Error('Invalid theme file: unsupported kind.');
+  }
+
+  if (header.formatVersion !== 1) {
+    throw new Error(`Invalid theme file: unsupported format version ${String(header.formatVersion)}.`);
+  }
+
+  const theme = doc.theme;
+  if (!theme || typeof theme !== 'object') {
+    throw new Error('Invalid theme file: missing theme payload.');
+  }
+
+  const sourcePresetId = typeof theme.sourcePresetId === 'string' ? theme.sourcePresetId : undefined;
+  const defaults = sourcePresetId && isBuiltInThemePreset(sourcePresetId)
+    ? getThemePresetColors(sourcePresetId)
+    : DEFAULT_THEME_CUSTOM_COLORS;
+
+  return {
+    name: sanitizeCustomThemeName(typeof theme.name === 'string' ? theme.name : 'Imported Theme'),
+    preference: normalizeThemePreference(theme.preference, 'system'),
+    colors: normalizeThemeCustomColors(
+      (theme.colors && typeof theme.colors === 'object' ? theme.colors : undefined) as Partial<ThemeCustomColors> | undefined,
+      defaults,
+    ),
+    sourcePresetId,
+  };
+}
+
+export function createCustomThemeProfile(name: string, preference: ThemePreference, colors: ThemeCustomColors): SavedCustomThemeProfile {
+  const profiles = getSavedCustomThemeProfiles();
+  const profile: SavedCustomThemeProfile = {
+    id: createCustomThemeProfileId(name),
+    name: ensureUniqueCustomThemeName(name, profiles),
+    preference,
+    colors: normalizeThemeCustomColors(colors, DEFAULT_THEME_CUSTOM_COLORS),
+  };
+
+  persistSavedCustomThemeProfiles([...profiles, profile]);
+  return profile;
+}
+
+export function saveCustomThemeProfile(id: string, updates: { name?: string; preference: ThemePreference; colors: ThemeCustomColors }): SavedCustomThemeProfile | null {
+  const profiles = getSavedCustomThemeProfiles();
+  const index = profiles.findIndex((profile) => profile.id === id);
+  if (index < 0) return null;
+
+  const existing = profiles[index];
+  const nextProfile: SavedCustomThemeProfile = {
+    ...existing,
+    name: ensureUniqueCustomThemeName(updates.name ?? existing.name, profiles, id),
+    preference: updates.preference,
+    colors: normalizeThemeCustomColors(updates.colors, DEFAULT_THEME_CUSTOM_COLORS),
+  };
+
+  const nextProfiles = [...profiles];
+  nextProfiles[index] = nextProfile;
+  persistSavedCustomThemeProfiles(nextProfiles);
+  return nextProfile;
+}
+
+export function deleteCustomThemeProfile(id: string): SavedCustomThemeProfile[] {
+  const nextProfiles = getSavedCustomThemeProfiles().filter((profile) => profile.id !== id);
+  persistSavedCustomThemeProfiles(nextProfiles);
+  return nextProfiles;
 }
 
 function normalizeHex(value: string, fallback: string): string {
@@ -115,13 +435,20 @@ function darkenHex(hexColor: string, factor: number): string {
 export function getSavedThemePreference(): ThemePreference {
   if (typeof window === 'undefined') return 'system';
   const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return raw === 'dark' || raw === 'light' || raw === 'system' ? raw : 'system';
+  if (raw === 'dark' || raw === 'light' || raw === 'system') return raw;
+  return getThemeProfile(getSavedThemePreset()).preference;
 }
 
 export function getSavedThemePreset(): ThemePreset {
   if (typeof window === 'undefined') return 'dragonfruit-dark';
   const raw = window.localStorage.getItem(THEME_PRESET_STORAGE_KEY);
-  return raw === 'dragonfruit-dark' || raw === 'dragonfruit-light' ? raw : 'dragonfruit-dark';
+  if (typeof raw !== 'string' || raw.trim().length === 0) return 'dragonfruit-dark';
+
+  const preset = raw.trim();
+  if (isBuiltInThemePreset(preset)) return preset;
+  return getSavedCustomThemeProfiles().some((profile) => profile.id === preset)
+    ? preset
+    : 'dragonfruit-dark';
 }
 
 export function applyThemePreference(preference: ThemePreference) {
@@ -138,56 +465,21 @@ export function applyThemePreference(preference: ThemePreference) {
 export function getSavedThemeCustomColors(): ThemeCustomColors {
   if (typeof window === 'undefined') return DEFAULT_THEME_CUSTOM_COLORS;
 
-  const defaults = getThemePresetColors(getSavedThemePreset());
+  const defaults = getThemeProfile(getSavedThemePreset()).colors;
 
   const raw = window.localStorage.getItem(THEME_COLORS_STORAGE_KEY);
   if (!raw) return defaults;
 
   try {
     const parsed = JSON.parse(raw) as Partial<ThemeCustomColors>;
-    const d = defaults;
-
-    let accent = normalizeHex(parsed.accent ?? d.accent, d.accent);
-    let topbarAccent = normalizeHex(parsed.topbarAccent ?? d.topbarAccent, d.topbarAccent);
-
-    // Migrate old bundled defaults (#d946ef) to the new brand default (#ec2a77).
-    // If users explicitly customized away from legacy values, their choices are preserved.
-    if (accent === LEGACY_DEFAULT_ACCENT) accent = NEW_DEFAULT_ACCENT;
-    if (topbarAccent === LEGACY_DEFAULT_ACCENT) topbarAccent = NEW_DEFAULT_ACCENT;
-
-    const next: ThemeCustomColors = {
-      background: normalizeHex(parsed.background ?? d.background, d.background),
-      foreground: normalizeHex(parsed.foreground ?? d.foreground, d.foreground),
-      surface0: normalizeHex(parsed.surface0 ?? d.surface0, d.surface0),
-      surface1: normalizeHex(parsed.surface1 ?? d.surface1, d.surface1),
-      surface2: normalizeHex(parsed.surface2 ?? d.surface2, d.surface2),
-      textStrong: normalizeHex(parsed.textStrong ?? d.textStrong, d.textStrong),
-      textMuted: normalizeHex(parsed.textMuted ?? d.textMuted, d.textMuted),
-      indicator: normalizeHex(parsed.indicator ?? d.indicator, d.indicator),
-      borderSubtle: normalizeHex(parsed.borderSubtle ?? d.borderSubtle, d.borderSubtle),
-      borderStrong: normalizeHex(parsed.borderStrong ?? d.borderStrong, d.borderStrong),
-      accent,
-      accentHover: normalizeHex(parsed.accentHover ?? darkenHex(accent, 0.82), d.accentHover),
-      primaryButtonSurface: normalizeHex(parsed.primaryButtonSurface ?? darkenHex(accent, 0.82), d.primaryButtonSurface),
-      accentContrast: normalizeHex(parsed.accentContrast ?? d.accentContrast, d.accentContrast),
-      accentSecondary: normalizeHex(parsed.accentSecondary ?? d.accentSecondary, d.accentSecondary),
-      accentSecondaryHover: normalizeHex(parsed.accentSecondaryHover ?? darkenHex(parsed.accentSecondary ?? d.accentSecondary, 0.9), d.accentSecondaryHover),
-      secondaryButtonSurface: normalizeHex(parsed.secondaryButtonSurface ?? darkenHex(parsed.accentSecondary ?? d.accentSecondary, 0.84), d.secondaryButtonSurface),
-      accentSecondaryContrast: normalizeHex(parsed.accentSecondaryContrast ?? d.accentSecondaryContrast, d.accentSecondaryContrast),
-      topbarAccent,
-      sceneGradientRadial: normalizeHex(parsed.sceneGradientRadial ?? d.sceneGradientRadial, d.sceneGradientRadial),
-      sceneGradientLinearStart: normalizeHex(parsed.sceneGradientLinearStart ?? d.sceneGradientLinearStart, d.sceneGradientLinearStart),
-      sceneGradientLinearMid: normalizeHex(parsed.sceneGradientLinearMid ?? d.sceneGradientLinearMid, d.sceneGradientLinearMid),
-      danger: normalizeHex(parsed.danger ?? d.danger, d.danger),
-      success: normalizeHex(parsed.success ?? d.success, d.success),
-    };
+    const next = normalizeThemeCustomColors(parsed, defaults);
 
     // Keep storage in sync after migration so future loads are deterministic.
     window.localStorage.setItem(THEME_COLORS_STORAGE_KEY, JSON.stringify(next));
 
     return next;
   } catch {
-    return DEFAULT_THEME_CUSTOM_COLORS;
+    return defaults;
   }
 }
 
