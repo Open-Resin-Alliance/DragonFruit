@@ -217,6 +217,28 @@ export function Helpers({
   const shouldShowGrid = showGrid ?? true;
   const shouldShowBuildPlate = showBuildPlate ?? true;
 
+  const [isLightTheme, setIsLightTheme] = React.useState(() => {
+    if (typeof document === 'undefined') return false;
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'light') return true;
+    if (attr === 'dark') return false;
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
+  });
+
+  React.useEffect(() => {
+    const update = () => {
+      const attr = document.documentElement.getAttribute('data-theme');
+      if (attr === 'light') { setIsLightTheme(true); return; }
+      if (attr === 'dark') { setIsLightTheme(false); return; }
+      setIsLightTheme(window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false);
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    const mq = window.matchMedia?.('(prefers-color-scheme: light)');
+    mq?.addEventListener('change', update);
+    return () => { observer.disconnect(); mq?.removeEventListener('change', update); };
+  }, []);
+
   const width = Number.isFinite(gridWidthMm) && (gridWidthMm as number) > 0 ? (gridWidthMm as number) : 200;
   const depth = Number.isFinite(gridDepthMm) && (gridDepthMm as number) > 0 ? (gridDepthMm as number) : 200;
   const resolvedOriginMinX = Number.isFinite(originMinX) ? (originMinX as number) : -width * 0.5;
@@ -232,11 +254,12 @@ export function Helpers({
   const buildPlateThicknessMm = 3;
   const buildPlateCornerRadiusMm = 3;
   const clampedBuildPlateOpacity = THREE.MathUtils.clamp(buildPlateOpacity ?? 1, 0, 1);
-  const gridMajorColor = '#4f5560';
-  const gridMinorColor = '#2c3138';
+  const buildPlateColor = isLightTheme ? '#8a8e9e' : '#323841';
+  const gridMajorColor = isLightTheme ? '#8a8e9e' : '#4f5560';
+  const gridMinorColor = isLightTheme ? '#9ea2b0' : '#2c3138';
   const frontMarkerColor = React.useMemo(() => {
-    return new THREE.Color(gridMajorColor).lerp(new THREE.Color('#ffffff'), 0.36).getStyle();
-  }, [gridMajorColor]);
+    return new THREE.Color(gridMajorColor).lerp(new THREE.Color(isLightTheme ? '#000000' : '#ffffff'), 0.36).getStyle();
+  }, [gridMajorColor, isLightTheme]);
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
@@ -590,7 +613,7 @@ export function Helpers({
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
         <meshStandardMaterial
-          color="#323841"
+          color={buildPlateColor}
           transparent
           opacity={0.94 * clampedBuildPlateOpacity}
           side={THREE.FrontSide}

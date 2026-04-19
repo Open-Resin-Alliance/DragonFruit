@@ -4643,7 +4643,7 @@ export function SceneCanvas({
     >
       <Canvas
         key={`scene-canvas-${canvasRecoveryNonce}`}
-        style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
+        style={{ width: '100%', height: '100%', backgroundColor: 'var(--surface-0)', display: 'block' }}
         camera={defaultCamera}
         shadows={!isLinux}
         dpr={dynamicDpr}
@@ -6009,7 +6009,7 @@ export function SceneCanvas({
             inset: 0,
             zIndex: 55,
             pointerEvents: 'none',
-            background: '#181a22',
+            background: 'var(--surface-0)',
           }}
           aria-hidden="true"
         >

@@ -4,7 +4,7 @@ export const THEME_STORAGE_KEY = 'app-theme-preference';
 export const THEME_COLORS_STORAGE_KEY = 'app-theme-colors';
 export const THEME_PRESET_STORAGE_KEY = 'app-theme-preset';
 
-export type ThemePreset = 'dragonfruit-dark';
+export type ThemePreset = 'dragonfruit-dark' | 'dragonfruit-light';
 
 const LEGACY_DEFAULT_ACCENT = '#d946ef';
 const NEW_DEFAULT_ACCENT = '#ec2a77';
@@ -53,6 +53,28 @@ export const DEFAULT_THEME_CUSTOM_COLORS: ThemeCustomColors = {
   danger: '#e45454',
 };
 
+export const DRAGONFRUIT_LIGHT_THEME_COLORS: ThemeCustomColors = {
+  surface0: '#cccfe0',
+  accent: NEW_DEFAULT_ACCENT,
+  primaryButtonSurface: '#c11f61',
+  accentContrast: '#fff0f7',
+  accentSecondary: '#6ab80a',
+  secondaryButtonSurface: '#4e8900',
+  accentSecondaryContrast: '#f0fff4',
+  sceneGradientRadial: '#ff37aa',
+  sceneGradientLinearStart: '#ff37aa',
+  sceneGradientLinearMid: '#6f33ff',
+  topbarAccent: NEW_DEFAULT_ACCENT,
+  surface1: '#c2c5d4',
+  surface2: '#b6b9c8',
+  textStrong: '#191a20',
+  textMuted: '#484c5e',
+  indicator: '#585c70',
+  borderSubtle: '#a4a8b8',
+  borderStrong: '#9195a6',
+  danger: '#c9302c',
+};
+
 function normalizeHex(value: string, fallback: string): string {
   const trimmed = value.trim();
   const withHash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
@@ -79,7 +101,7 @@ export function getSavedThemePreference(): ThemePreference {
 export function getSavedThemePreset(): ThemePreset {
   if (typeof window === 'undefined') return 'dragonfruit-dark';
   const raw = window.localStorage.getItem(THEME_PRESET_STORAGE_KEY);
-  return raw === 'dragonfruit-dark' ? raw : 'dragonfruit-dark';
+  return raw === 'dragonfruit-dark' || raw === 'dragonfruit-light' ? raw : 'dragonfruit-dark';
 }
 
 export function applyThemePreference(preference: ThemePreference) {

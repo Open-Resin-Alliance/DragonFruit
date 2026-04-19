@@ -19,6 +19,7 @@ import {
   applyThemeCustomColors,
   applyThemePreference,
   DEFAULT_THEME_CUSTOM_COLORS,
+  DRAGONFRUIT_LIGHT_THEME_COLORS,
   getSavedThemeCustomColors,
   getSavedThemePreset,
   getSavedThemePreference,
@@ -316,10 +317,26 @@ export function SettingsModal({
     });
   }, []);
 
-  const handleResetThemeColors = React.useCallback(() => {
-    setDraftThemePreference('system');
-    setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+  const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
+    setDraftThemePreset(preset);
+    if (preset === 'dragonfruit-light') {
+      setDraftThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS);
+      setDraftThemePreference('light');
+    } else {
+      setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+      setDraftThemePreference('dark');
+    }
   }, []);
+
+  const handleResetThemeColors = React.useCallback(() => {
+    if (draftThemePreset === 'dragonfruit-light') {
+      setDraftThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS);
+      setDraftThemePreference('light');
+    } else {
+      setDraftThemePreference('system');
+      setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+    }
+  }, [draftThemePreset]);
 
   const handleCancel = React.useCallback(() => {
     setShowRestoreDefaultsConfirm(false);
@@ -898,7 +915,7 @@ export function SettingsModal({
               {activeTab === 'ui' && (
                 <UISettingsTab
                   themePreset={draftThemePreset}
-                  onThemePresetChange={setDraftThemePreset}
+                  onThemePresetChange={handleThemePresetChange}
                   themePreference={draftThemePreference}
                   onThemePreferenceChange={setDraftThemePreference}
                   themeColors={draftThemeColors}

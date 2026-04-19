@@ -2,7 +2,7 @@ import React from 'react';
 import { Select } from '@/components/ui/primitives';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
-export type ThemePreset = 'dragonfruit-dark';
+export type ThemePreset = 'dragonfruit-dark' | 'dragonfruit-light';
 
 export type ThemeColors = {
 	surface0: string;
@@ -92,6 +92,7 @@ export function UISettingsTab({
 						onChange={(e) => onThemePresetChange(e.target.value as ThemePreset)}
 					>
 						<option value="dragonfruit-dark">Default DragonFruit Dark</option>
+						<option value="dragonfruit-light">Default DragonFruit Light</option>
 					</Select>
 				</div>
 
