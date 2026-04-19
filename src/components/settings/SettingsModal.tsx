@@ -30,6 +30,7 @@ import {
   getThemePresetColors,
   importThemeProfileFromJson,
   isBuiltInThemePreset,
+  deriveThemeCustomColorsFromBranding,
   saveCustomThemeProfile,
   THEME_COLORS_STORAGE_KEY,
   THEME_CUSTOM_PROFILES_STORAGE_KEY,
@@ -265,6 +266,13 @@ export function SettingsModal({
   const [showThemeRenameDialog, setShowThemeRenameDialog] = useState(false);
   const [showThemeDeleteConfirm, setShowThemeDeleteConfirm] = useState(false);
   const [draftThemeRenameName, setDraftThemeRenameName] = useState('');
+  const [draftThemeCreateBasePreset, setDraftThemeCreateBasePreset] = useState<'dark' | 'light'>(() => {
+    const savedPreference = getSavedThemePreference();
+    const savedPreset = getSavedThemePreset();
+    return savedPreference === 'light' || savedPreset === 'dragonfruit-light' ? 'light' : 'dark';
+  });
+  const [draftThemeCreatePrimaryBrandColor, setDraftThemeCreatePrimaryBrandColor] = useState<string>(() => getSavedThemeCustomColors().accent);
+  const [draftThemeCreateSecondaryBrandColor, setDraftThemeCreateSecondaryBrandColor] = useState<string>(() => getSavedThemeCustomColors().accentSecondary);
   const [themeNameDialogMode, setThemeNameDialogMode] = useState<'rename' | 'create'>('rename');
   const [pendingCreatedThemePreset, setPendingCreatedThemePreset] = useState<ThemePreset | null>(null);
   const [themeCreationFallbackPreset, setThemeCreationFallbackPreset] = useState<ThemePreset | null>(null);
@@ -489,17 +497,31 @@ export function SettingsModal({
 
   const handleCreateCustomThemeFromPreset = React.useCallback(() => {
     const previousPreset = draftThemePreset;
+    const initialCreateBasePreset: 'dark' | 'light' = draftThemePreference === 'light' || draftThemePreset === 'dragonfruit-light'
+      ? 'light'
+      : 'dark';
+    const initialCreateBaseColors = getThemePresetColors(initialCreateBasePreset === 'light' ? 'dragonfruit-light' : 'dragonfruit-dark');
     const profile = createCustomThemeProfile('', draftThemePreference, draftThemeColors);
     const nextProfiles = [...draftThemeProfiles, profile];
     setDraftThemeProfiles(nextProfiles);
     setDraftThemePreset(profile.id);
     setDraftCustomThemeName(profile.name);
     setDraftThemeRenameName(profile.name);
+    setDraftThemeCreateBasePreset(initialCreateBasePreset);
+    setDraftThemeCreatePrimaryBrandColor(initialCreateBaseColors.accent);
+    setDraftThemeCreateSecondaryBrandColor(initialCreateBaseColors.accentSecondary);
     setThemeNameDialogMode('create');
     setPendingCreatedThemePreset(profile.id);
     setThemeCreationFallbackPreset(previousPreset);
     setShowThemeRenameDialog(true);
   }, [draftThemeColors, draftThemePreference, draftThemePreset, draftThemeProfiles]);
+
+  const handleThemeCreateBasePresetChange = React.useCallback((preset: 'dark' | 'light') => {
+    setDraftThemeCreateBasePreset(preset);
+    const basePresetColors = getThemePresetColors(preset === 'light' ? 'dragonfruit-light' : 'dragonfruit-dark');
+    setDraftThemeCreatePrimaryBrandColor(basePresetColors.accent);
+    setDraftThemeCreateSecondaryBrandColor(basePresetColors.accentSecondary);
+  }, []);
 
   const persistCurrentCustomTheme = React.useCallback(() => {
     if (isBuiltInThemePreset(draftThemePreset)) return;
@@ -547,10 +569,22 @@ export function SettingsModal({
     const selectedProfile = getThemeProfile(draftThemePreset, draftThemeProfiles);
     if (selectedProfile.isBuiltIn) return;
 
+    const nextPreference = themeNameDialogMode === 'create'
+      ? draftThemeCreateBasePreset
+      : selectedProfile.preference;
+
+    const nextColors = themeNameDialogMode === 'create'
+      ? deriveThemeCustomColorsFromBranding({
+        primaryBrandColor: draftThemeCreatePrimaryBrandColor,
+        secondaryBrandColor: draftThemeCreateSecondaryBrandColor,
+        preference: nextPreference,
+      })
+      : selectedProfile.colors;
+
     const renamed = saveCustomThemeProfile(selectedProfile.id, {
       name: nextName,
-      preference: selectedProfile.preference,
-      colors: selectedProfile.colors,
+      preference: nextPreference,
+      colors: nextColors,
     });
     if (!renamed) return;
 
@@ -558,13 +592,17 @@ export function SettingsModal({
       profile.id === renamed.id ? renamed : profile
     ));
     setDraftThemeProfiles(nextProfiles);
-    setDraftCustomThemeName(renamed.name);
+    if (themeNameDialogMode === 'create') {
+      setThemeDraftFromProfile(renamed.id, nextProfiles);
+    } else {
+      setDraftCustomThemeName(renamed.name);
+    }
     setDraftThemeRenameName(renamed.name);
     setThemeNameDialogMode('rename');
     setPendingCreatedThemePreset(null);
     setThemeCreationFallbackPreset(null);
     setShowThemeRenameDialog(false);
-  }, [draftThemePreset, draftThemeProfiles, draftThemeRenameName]);
+  }, [draftThemeCreateBasePreset, draftThemeCreatePrimaryBrandColor, draftThemeCreateSecondaryBrandColor, draftThemePreset, draftThemeProfiles, draftThemeRenameName, setThemeDraftFromProfile, themeNameDialogMode]);
 
   const performDeleteCurrentCustomTheme = React.useCallback(() => {
     if (isBuiltInThemePreset(draftThemePreset)) return;
@@ -1896,6 +1934,93 @@ export function SettingsModal({
             className="ui-input h-9 w-full text-xs"
             placeholder="Custom Theme"
           />
+
+          {isCreatingCustomThemeName ? (
+            <div className="space-y-2">
+              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Base preset
+                </label>
+                <div
+                  className="inline-flex w-full rounded-md border p-1"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                >
+                  {(['dark', 'light'] as const).map((preset) => {
+                    const active = draftThemeCreateBasePreset === preset;
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => handleThemeCreateBasePresetChange(preset)}
+                        className="flex-1 rounded-sm px-2 py-1 text-[11px] font-semibold transition-colors"
+                        style={active
+                          ? {
+                            color: 'var(--accent-contrast)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 12%)',
+                          }
+                          : {
+                            color: 'var(--text-muted)',
+                            background: 'transparent',
+                          }}
+                      >
+                        {preset === 'dark' ? 'Dark' : 'Light'}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  Pre-populates branding colors from DragonFruit {draftThemeCreateBasePreset === 'dark' ? 'Dark' : 'Light'}.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Primary branding
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="color"
+                    value={draftThemeCreatePrimaryBrandColor}
+                    onChange={(event) => setDraftThemeCreatePrimaryBrandColor(event.target.value)}
+                    className="h-8 w-9 shrink-0 rounded border"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                  />
+                  <input
+                    type="text"
+                    value={draftThemeCreatePrimaryBrandColor}
+                    onChange={(event) => setDraftThemeCreatePrimaryBrandColor(event.target.value)}
+                    className="ui-input h-8 min-w-0 flex-1 text-xs"
+                    placeholder="#ec2a77"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Secondary branding
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="color"
+                    value={draftThemeCreateSecondaryBrandColor}
+                    onChange={(event) => setDraftThemeCreateSecondaryBrandColor(event.target.value)}
+                    className="h-8 w-9 shrink-0 rounded border"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                  />
+                  <input
+                    type="text"
+                    value={draftThemeCreateSecondaryBrandColor}
+                    onChange={(event) => setDraftThemeCreateSecondaryBrandColor(event.target.value)}
+                    className="ui-input h-8 min-w-0 flex-1 text-xs"
+                    placeholder="#baf72e"
+                  />
+                </div>
+              </div>
+
+              </div>
+            </div>
+          ) : null}
         </div>
       </StructuredDialogModal>
     </div>

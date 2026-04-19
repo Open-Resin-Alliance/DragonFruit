@@ -415,10 +415,66 @@ export function deleteCustomThemeProfile(id: string): SavedCustomThemeProfile[] 
   return nextProfiles;
 }
 
+export function deriveThemeCustomColorsFromBranding(params: {
+  primaryBrandColor: string;
+  secondaryBrandColor: string;
+  preference: ThemePreference;
+}): ThemeCustomColors {
+  const resolvedPreference = params.preference === 'light' ? 'light' : 'dark';
+  const base = resolvedPreference === 'light'
+    ? cloneThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS)
+    : cloneThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
+
+  const primary = normalizeHex(params.primaryBrandColor, base.accent);
+  const secondary = normalizeHex(params.secondaryBrandColor, base.accentSecondary);
+
+  return {
+    ...base,
+    accent: primary,
+    accentHover: darkenHex(primary, resolvedPreference === 'light' ? 0.9 : 0.82),
+    primaryButtonSurface: darkenHex(primary, resolvedPreference === 'light' ? 0.82 : 0.78),
+    accentContrast: getContrastForeground(primary),
+    topbarAccent: primary,
+    accentSecondary: secondary,
+    accentSecondaryHover: darkenHex(secondary, resolvedPreference === 'light' ? 0.9 : 0.86),
+    secondaryButtonSurface: darkenHex(secondary, resolvedPreference === 'light' ? 0.84 : 0.8),
+    accentSecondaryContrast: getContrastForeground(secondary),
+    sceneGradientRadial: primary,
+    sceneGradientLinearStart: primary,
+    sceneGradientLinearMid: blendHex(primary, secondary, resolvedPreference === 'light' ? 0.52 : 0.46),
+  };
+}
+
 function normalizeHex(value: string, fallback: string): string {
   const trimmed = value.trim();
   const withHash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
   return /^#[0-9a-fA-F]{6}$/.test(withHash) ? withHash.toLowerCase() : fallback;
+}
+
+function parseHexRgb(hexColor: string): { r: number; g: number; b: number } {
+  const normalized = normalizeHex(hexColor, DEFAULT_THEME_CUSTOM_COLORS.accent).slice(1);
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function blendHex(aHex: string, bHex: string, bWeight: number): string {
+  const weight = Math.max(0, Math.min(1, Number.isFinite(bWeight) ? bWeight : 0.5));
+  const a = parseHexRgb(aHex);
+  const b = parseHexRgb(bHex);
+  const mix = (aChannel: number, bChannel: number) => Math.round(aChannel * (1 - weight) + bChannel * weight);
+  const r = mix(a.r, b.r);
+  const g = mix(a.g, b.g);
+  const bOut = mix(a.b, b.b);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bOut.toString(16).padStart(2, '0')}`;
+}
+
+function getContrastForeground(backgroundHex: string): string {
+  const { r, g, b } = parseHexRgb(backgroundHex);
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 150 ? '#111216' : '#f8f8fb';
 }
 
 function darkenHex(hexColor: string, factor: number): string {
