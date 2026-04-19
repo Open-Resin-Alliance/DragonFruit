@@ -124,7 +124,7 @@ draw = ImageDraw.Draw(dmg_bg)
 
 paint_brand_gradient(draw, W_D, H_D)
 
-footer_text = "Open Resin Alliance  -  AGPL-3.0-or-later"
+footer_text = "Open Resin Alliance  -  All Rights Reserved."
 footer_bbox = draw.textbbox((0, 0), footer_text, font=font_footer)
 footer_w = footer_bbox[2] - footer_bbox[0]
 footer_h = footer_bbox[3] - footer_bbox[1]
