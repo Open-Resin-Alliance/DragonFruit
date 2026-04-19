@@ -3232,12 +3232,12 @@ export function ProfileSettingsModal({
             <div
               className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
               style={{
-                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 30%)',
-                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)',
+                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 30%)',
+                background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
                 color: 'var(--text-muted)',
               }}
             >
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#f59e0b' }} />
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#d97706' }} />
               <span>
                 <strong style={{ color: 'var(--text-strong)' }}>Safety warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury. Verify all settings carefully before printing.
               </span>
@@ -4393,7 +4393,8 @@ export function ProfileSettingsModal({
                   type="button"
                   aria-disabled={selectedLibraryPresetIds.size === 0}
                   onClick={selectedLibraryPresetIds.size > 0 ? handleAddSelectedPrinterPresets : undefined}
-                  className={`ui-button !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed ${selectedLibraryPresetIds.size > 0 ? 'ui-button-accent' : 'ui-button-secondary aria-disabled:opacity-45'}`}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+                  style={selectedLibraryPresetIds.size > 0 ? accentSecondaryActionStyle92 : undefined}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   {selectedLibraryPresetIds.size > 0
@@ -4436,6 +4437,7 @@ export function ProfileSettingsModal({
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
                     onActiveTabChange={setMaterialEditorTab}
+                    activeTabStyle={accentSecondaryActionStyle92}
                     draft={editMaterialDraft}
                     onDraftChange={setEditMaterialDraft}
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
@@ -4485,7 +4487,7 @@ export function ProfileSettingsModal({
                     type="button"
                     onClick={handleSaveMaterialEdits}
                     className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                    style={{ color: 'var(--accent-secondary)' }}
+                    style={accentSecondaryActionStyle92}
                   >
                     <Check className="w-3.5 h-3.5" />
                     Save Material
@@ -4521,11 +4523,11 @@ export function ProfileSettingsModal({
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 {isSelectedPrinterOfficial && (
-                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)' }}>
+                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-sm font-semibold inline-flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
-                          <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
+                          <AlertTriangle className="w-4 h-4" style={{ color: '#d97706' }} />
                           Official Profile — Edits Limited!
                         </div>
                         <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -4541,7 +4543,7 @@ export function ProfileSettingsModal({
                           void handleDuplicateSelectedPrinterAsCustom();
                         }}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                        style={{ color: 'var(--accent-secondary)' }}
+                        style={accentSecondaryActionStyle92}
                       >
                         <Plus className="w-3.5 h-3.5" />
                         Create Custom Copy
@@ -4870,7 +4872,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={() => setIsEditingPrinter(false)}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                  style={{ color: 'var(--accent-secondary)' }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
                   Done
@@ -5086,7 +5088,8 @@ export function ProfileSettingsModal({
                   type="button"
                   aria-disabled={selectedLibraryMaterialKeys.size === 0}
                   onClick={selectedLibraryMaterialKeys.size > 0 ? handleAddSelectedMaterialPresets : undefined}
-                  className={`ui-button !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed ${selectedLibraryMaterialKeys.size > 0 ? 'ui-button-accent' : 'ui-button-secondary aria-disabled:opacity-45'}`}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+                  style={selectedLibraryMaterialKeys.size > 0 ? accentSecondaryActionStyle92 : undefined}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   {selectedLibraryMaterialKeys.size > 0
@@ -5129,6 +5132,7 @@ export function ProfileSettingsModal({
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
                     onActiveTabChange={setMaterialEditorTab}
+                    activeTabStyle={accentSecondaryActionStyle92}
                     draft={newMaterialDraft}
                     onDraftChange={setNewMaterialDraft}
                     outputFormat={selectedPrinter.display.outputFormat}
@@ -5164,7 +5168,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleCreateMaterial}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                  style={{ color: 'var(--accent)' }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
                   Save Material
@@ -5360,9 +5364,9 @@ export function ProfileSettingsModal({
                   <span
                     className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                     style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
+                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                      color: '#d97706',
                     }}
                   >
                     <AlertTriangle className="h-4 w-4" />
@@ -5419,7 +5423,8 @@ export function ProfileSettingsModal({
                   <button
                     type="button"
                     onClick={handleDuplicateOfficialProfile}
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                    style={accentSecondaryActionStyle92}
                   >
                     <Lock className="w-3.5 h-3.5" />
                     Make Custom Copy
@@ -5450,9 +5455,9 @@ export function ProfileSettingsModal({
                   <span
                     className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                     style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
+                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                      color: '#d97706',
                     }}
                   >
                     <AlertTriangle className="h-4 w-4" />
@@ -5504,7 +5509,8 @@ export function ProfileSettingsModal({
                   <button
                     type="button"
                     onClick={handleDuplicateMaterialAsCustom}
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                    style={accentSecondaryActionStyle92}
                   >
                     <Lock className="w-3.5 h-3.5" />
                     Make Custom Copy
@@ -5666,9 +5672,9 @@ function RemoteMaterialEditDialog({
                       <span
                         className="text-[10px] rounded-full border px-2 py-0.5 normal-case tracking-normal"
                         style={{
-                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
-                          color: '#fbbf24',
+                          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+                          color: '#d97706',
                         }}
                         title="Dynamic Wait is controlling Wait Before Print fields"
                       >

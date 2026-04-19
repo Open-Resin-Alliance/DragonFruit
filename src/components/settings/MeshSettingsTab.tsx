@@ -141,7 +141,6 @@ export function MeshSettingsTab({
     shaderType === 'toon' ||
     showRoughness ||
     showLighting ||
-    shaderType === 'xray' ||
     shaderType === 'overhang_heatmap';
 
   const activeHexColor = activeColorIndex === 0 ? meshColor : heatmapColors[activeColorIndex - 1];
@@ -348,7 +347,7 @@ export function MeshSettingsTab({
                       ? {
                           borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                           background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
+                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                         }
                       : {
                           borderColor: 'var(--border-subtle)',
@@ -607,7 +606,7 @@ export function MeshSettingsTab({
                   style={
                     isPreviewSelected && selectionHighlightMode !== 'none'
                       ? {
-                          color: 'var(--accent-contrast)',
+                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                           borderColor: 'color-mix(in srgb, var(--accent), white 12%)',
                           background: 'color-mix(in srgb, var(--accent), transparent 22%)',
                         }

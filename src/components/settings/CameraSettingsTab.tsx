@@ -108,7 +108,7 @@ export function CameraSettingsTab({
                   ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                       background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                     }
                   : {
                       borderColor: 'var(--border-subtle)',
@@ -126,7 +126,7 @@ export function CameraSettingsTab({
                   ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                       background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                     }
                   : {
                       borderColor: 'var(--border-subtle)',
@@ -166,7 +166,7 @@ export function CameraSettingsTab({
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                       }
                     : {
                         borderColor: 'var(--border-subtle)',
@@ -184,7 +184,7 @@ export function CameraSettingsTab({
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                       }
                     : {
                         borderColor: 'var(--border-subtle)',
@@ -229,7 +229,7 @@ export function CameraSettingsTab({
                       ? {
                           borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                           background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
+                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                         }
                       : {
                           borderColor: 'var(--border-subtle)',
@@ -260,7 +260,7 @@ export function CameraSettingsTab({
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                       }
                     : {
                         borderColor: 'var(--border-subtle)',
@@ -278,7 +278,7 @@ export function CameraSettingsTab({
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                       }
                     : {
                         borderColor: 'var(--border-subtle)',
@@ -321,7 +321,7 @@ export function CameraSettingsTab({
                       ? {
                           borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                           background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
+                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                         }
                       : {
                           borderColor: 'var(--border-subtle)',
@@ -392,7 +392,7 @@ export function CameraSettingsTab({
                       ? {
                           borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                           background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
+                          color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                         }
                       : {
                           borderColor: 'var(--border-subtle)',
@@ -435,7 +435,7 @@ export function CameraSettingsTab({
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                                color: 'var(--accent-contrast)',
+                                color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                               }
                             : {
                                 borderColor: 'var(--border-subtle)',

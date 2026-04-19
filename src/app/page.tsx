@@ -14206,9 +14206,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14483,9 +14483,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14666,9 +14666,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -16337,8 +16337,8 @@ export default function Home() {
                         className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
                         style={printingMonitorWebcamStatusPresentation.tone === 'warning'
                             ? {
-                                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)',
-                                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)',
+                                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                                background: 'color-mix(in srgb, #d97706, var(--surface-1) 90%)',
                               }
                             : printingMonitorWebcamStatusPresentation.tone === 'error'
                               ? {
@@ -16351,7 +16351,7 @@ export default function Home() {
                                 }}
                       >
                         {printingMonitorWebcamStatusPresentation.tone === 'warning' ? (
-                          <AlertTriangle className="w-5 h-5" style={{ color: '#f59e0b' }} />
+                          <AlertTriangle className="w-5 h-5" style={{ color: '#d97706' }} />
                         ) : printingMonitorWebcamStatusPresentation.tone === 'error' ? (
                           <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
                         ) : (

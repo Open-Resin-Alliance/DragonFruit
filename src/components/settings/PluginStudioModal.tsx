@@ -1331,13 +1331,13 @@ function StepDetails({ meta, onChange, onImportManifest, installedPlugins, onImp
       <div
         className="mt-3 shrink-0 rounded-xl border px-4 py-3"
         style={{
-          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)',
-          background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)',
-          boxShadow: '0 -1px 0 color-mix(in srgb, #f59e0b, transparent 84%)',
+          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)',
+          background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+          boxShadow: '0 -1px 0 color-mix(in srgb, #d97706, transparent 84%)',
         }}
       >
         <div className="flex items-start gap-2.5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: '#f59e0b' }} />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: '#d97706' }} />
           <div className="min-w-0">
             <div className="text-[13px] font-semibold leading-5" style={{ color: 'var(--text-strong)' }}>
               Development Build Warning
@@ -3217,9 +3217,9 @@ function StepExport({ jsonContent, readmeContent, slug, printerPresetFiles, mate
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -4027,9 +4027,9 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
                   <span
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                     style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                      color: '#f59e0b',
+                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                      color: '#d97706',
                     }}
                   >
                     <AlertTriangle className="h-4 w-4" />

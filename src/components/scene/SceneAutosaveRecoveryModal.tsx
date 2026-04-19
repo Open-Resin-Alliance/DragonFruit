@@ -66,9 +66,9 @@ export function SceneAutosaveRecoveryModal({ savedAt, onRestore, onDiscard }: Pr
             <span
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
               style={{
-                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                color: '#f59e0b',
+                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                color: '#d97706',
               }}
             >
               <AlertTriangle className="h-4 w-4" />

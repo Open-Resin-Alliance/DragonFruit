@@ -7,9 +7,9 @@ type DialogIconTone = 'warning' | 'danger' | 'accent' | 'neutral';
 
 const ICON_TONE_STYLES: Record<DialogIconTone, React.CSSProperties> = {
   warning: {
-    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-    color: '#f59e0b',
+    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+    color: '#d97706',
   },
   danger: {
     borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)',

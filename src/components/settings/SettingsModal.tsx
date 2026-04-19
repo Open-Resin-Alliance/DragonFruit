@@ -239,7 +239,23 @@ export function SettingsModal({
   const [draftSlicingThumbnailRenderSettings, setDraftSlicingThumbnailRenderSettings] = useState<SlicingThumbnailRenderSettings>(() => slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
   const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
+  const [isLightTheme, setIsLightTheme] = useState(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
+
+  const accentSecondaryActionColor = isLightTheme
+    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
+    : 'var(--accent-secondary)';
+  const accentSecondaryActionBorderColor = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
+  const accentSecondaryActionBackground92 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground92,
+  };
 
   const resetDraftFromProps = React.useCallback(() => {
     setDraftMeshColor(meshColor);
@@ -519,6 +535,46 @@ export function SettingsModal({
 
     return () => cancelAnimationFrame(frame);
   }, [isOpen, resetDraftFromProps]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const evaluateTheme = () => {
+      const root = document.documentElement;
+      const explicitTheme = root.getAttribute('data-theme');
+      if (explicitTheme === 'light') {
+        setIsLightTheme(true);
+        return;
+      }
+      if (explicitTheme === 'dark') {
+        setIsLightTheme(false);
+        return;
+      }
+      setIsLightTheme(window.matchMedia('(prefers-color-scheme: light)').matches);
+    };
+
+    evaluateTheme();
+
+    const observer = new MutationObserver(evaluateTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const handleMediaChange = () => evaluateTheme();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleMediaChange);
+    } else {
+      mediaQuery.addListener(handleMediaChange);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleMediaChange);
+      } else {
+        mediaQuery.removeListener(handleMediaChange);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1251,11 +1307,7 @@ export function SettingsModal({
             type="button"
             onClick={handleRestoreDefaults}
             className="ui-button !h-10 !px-3.5 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 64%)',
-              background: 'color-mix(in srgb, var(--surface-1), var(--accent-secondary) 7%)',
-              color: 'var(--text-strong)',
-            }}
+            style={accentSecondaryActionStyle92}
           >
             <RotateCcw className="h-4 w-4 shrink-0" />
             Restore Defaults
@@ -1313,9 +1365,9 @@ export function SettingsModal({
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <RotateCcw className="h-4 w-4" />
@@ -1357,11 +1409,7 @@ export function SettingsModal({
                   type="button"
                   onClick={handleConfirmRestoreDefaults}
                   className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: '#fde68a',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Restore Defaults
