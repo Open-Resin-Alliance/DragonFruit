@@ -1,27 +1,44 @@
 'use client';
 
 import React from 'react';
-import { Cpu, Sparkles, Zap, Trash2 } from 'lucide-react';
+import { Cpu, ImageIcon, Sparkles, Trash2, Zap } from 'lucide-react';
 import type { SlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupAllPrintTempArtifacts, cleanupStalePrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 const SLICING_ENGINE_CRATE = 'dragonfruit-slicing-engine';
 const SLICING_ENGINE_VERSION = '3.1.0';
 
+export type SlicingThumbnailRenderSettings = {
+  includeGradient: boolean;
+  includeBuildPlate: boolean;
+  includeGrid: boolean;
+};
+
 interface PerformanceSettingsTabProps {
   settings: SlicingPerformanceSettings;
   onChange: (settings: SlicingPerformanceSettings) => void;
+  thumbnailSettings: SlicingThumbnailRenderSettings;
+  onThumbnailSettingsChange: (settings: SlicingThumbnailRenderSettings) => void;
   showPngCompressionControls?: boolean;
 }
 
 export function PerformanceSettingsTab({
   settings,
   onChange,
+  thumbnailSettings,
+  onThumbnailSettingsChange,
   showPngCompressionControls = true,
 }: PerformanceSettingsTabProps) {
   const patch = React.useCallback((partial: Partial<SlicingPerformanceSettings>) => {
     onChange({ ...settings, ...partial });
   }, [onChange, settings]);
+
+  const patchThumbnailSettings = React.useCallback((partial: Partial<SlicingThumbnailRenderSettings>) => {
+    onThumbnailSettingsChange({
+      ...thumbnailSettings,
+      ...partial,
+    });
+  }, [onThumbnailSettingsChange, thumbnailSettings]);
 
   const pngCompressionMode: 'auto' | 'on' | 'off' = settings.pngCompressionStrategy === 'auto'
     ? 'auto'
@@ -69,6 +86,126 @@ export function PerformanceSettingsTab({
               <div style={{ color: 'var(--text-muted)' }}>Version</div>
               <div className="font-semibold" style={{ color: 'var(--text-strong)' }}>{SLICING_ENGINE_VERSION}</div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <ImageIcon className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Thumbnail Rendering
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Configure what appears in generated export/slice thumbnails.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Background gradient
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Scene mood overlay in thumbnail
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-pressed={thumbnailSettings.includeGradient}
+              onClick={() => patchThumbnailSettings({ includeGradient: !thumbnailSettings.includeGradient })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={thumbnailSettings.includeGradient
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {thumbnailSettings.includeGradient ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Build plate
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Render build plate in thumbnail
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-pressed={thumbnailSettings.includeBuildPlate}
+              onClick={() => patchThumbnailSettings({ includeBuildPlate: !thumbnailSettings.includeBuildPlate })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={thumbnailSettings.includeBuildPlate
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {thumbnailSettings.includeBuildPlate ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Grid
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Render build grid in thumbnail
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-pressed={thumbnailSettings.includeGrid}
+              onClick={() => patchThumbnailSettings({ includeGrid: !thumbnailSettings.includeGrid })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={thumbnailSettings.includeGrid
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {thumbnailSettings.includeGrid ? 'ON' : 'OFF'}
+            </button>
           </div>
         </div>
       </section>

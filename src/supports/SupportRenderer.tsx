@@ -2499,19 +2499,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [renderKickstandList, isModelVisible]);
 
     const sceneBatchedJointGroups = useMemo(() => {
-        const grouped = new Map<string, InstancedJoint[]>();
+        const grouped = new Map<string, { modelId: string | null; color: string; joints: InstancedJoint[] }>();
 
-        const pushJoints = (color: string, joints: InstancedJoint[]) => {
-            const existing = grouped.get(color);
+        const pushJoints = (modelId: string | null, color: string, joints: InstancedJoint[]) => {
+            const key = `${modelId ?? '__unassigned__'}:${color}`;
+            const existing = grouped.get(key);
             const adjusted = joints.map((joint) => ({
                 ...joint,
                 pos: applyDropToVec3Like(joint.pos, joint.modelId),
                 diameter: Math.max(0.001, joint.diameter - SCENE_JOINT_DIAMETER_BLEND_MM),
             }));
             if (existing) {
-                existing.push(...adjusted);
+                existing.joints.push(...adjusted);
             } else {
-                grouped.set(color, adjusted);
+                grouped.set(key, { modelId, color, joints: adjusted });
             }
         };
 
@@ -2522,7 +2523,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!jointSet) continue;
 
             const color = resolveSceneSupportColor(trunk.modelId, trunk.id);
-            pushJoints(color, jointSet.joints);
+            pushJoints(trunk.modelId ?? null, color, jointSet.joints);
         }
 
         for (const branch of renderBranchList) {
@@ -2532,7 +2533,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!jointSet) continue;
 
             const color = resolveSceneSupportColor(branch.modelId, branch.id);
-            pushJoints(color, jointSet.joints);
+            pushJoints(branch.modelId ?? null, color, jointSet.joints);
         }
 
         for (const twig of renderTwigList) {
@@ -2542,7 +2543,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!jointSet) continue;
 
             const color = resolveSceneSupportColor(twig.modelId, twig.id);
-            pushJoints(color, jointSet.joints);
+            pushJoints(twig.modelId ?? null, color, jointSet.joints);
         }
 
         for (const stick of renderStickList) {
@@ -2552,7 +2553,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!jointSet) continue;
 
             const color = resolveSceneSupportColor(stick.modelId, stick.id);
-            pushJoints(color, jointSet.joints);
+            pushJoints(stick.modelId ?? null, color, jointSet.joints);
         }
 
         for (const kickstand of renderKickstandList) {
@@ -2562,10 +2563,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!jointSet) continue;
 
             const color = resolveSceneSupportColor(kickstand.modelId, kickstand.id);
-            pushJoints(color, jointSet.joints);
+            pushJoints(kickstand.modelId ?? null, color, jointSet.joints);
         }
 
-        return Array.from(grouped.entries()).map(([color, joints]) => ({ color, joints }));
+        return Array.from(grouped.values());
     }, [
         disableSelectionAndHover,
         renderTrunkList,
@@ -2765,9 +2766,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [renderBranchList, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
-        if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
+        if (hidePlateContactPrimitivesEffective) return [] as Array<{ modelId: string | null; color: string; roots: InstancedRoot[] }>;
 
-        const grouped = new Map<string, InstancedRoot[]>();
+        const grouped = new Map<string, { modelId: string | null; color: string; roots: InstancedRoot[] }>();
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
@@ -2785,8 +2786,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
 
             const color = resolveSceneSupportColor(trunk.modelId, trunk.id);
-            const rootsForColor = grouped.get(color) ?? [];
-            rootsForColor.push({
+            const modelKey = `${trunk.modelId ?? '__unassigned__'}:${color}`;
+            const existing = grouped.get(modelKey) ?? { modelId: trunk.modelId ?? null, color, roots: [] };
+            existing.roots.push({
                 id: root.id,
                 supportId: trunk.id,
                 modelId: trunk.modelId,
@@ -2800,13 +2802,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 effectiveDiskHeight,
                 coneHeight: Math.max(0, root.coneHeight),
             });
-
-            if (rootsForColor.length > 0) {
-                grouped.set(color, rootsForColor);
-            }
+            grouped.set(modelKey, existing);
         }
 
-        return Array.from(grouped.entries()).map(([color, roots]) => ({ color, roots }));
+        return Array.from(grouped.values());
     }, [
         hidePlateContactPrimitivesEffective,
         raftSettings.bottomMode,
@@ -2823,9 +2822,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     const sceneBatchedKickstandRootGroups = useMemo(() => {
-        if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
+        if (hidePlateContactPrimitivesEffective) return [] as Array<{ modelId: string | null; color: string; roots: InstancedRoot[] }>;
 
-        const grouped = new Map<string, InstancedRoot[]>();
+        const grouped = new Map<string, { modelId: string | null; color: string; roots: InstancedRoot[] }>();
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
 
@@ -2846,8 +2845,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
 
             const color = resolveSceneSupportColor(kickstand.modelId, kickstand.id);
-            const rootsForColor = grouped.get(color) ?? [];
-            rootsForColor.push({
+            const modelKey = `${kickstand.modelId ?? '__unassigned__'}:${color}`;
+            const existing = grouped.get(modelKey) ?? { modelId: kickstand.modelId ?? null, color, roots: [] };
+            existing.roots.push({
                 id: root.id,
                 supportId: kickstand.id,
                 modelId: kickstand.modelId,
@@ -2861,13 +2861,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 effectiveDiskHeight,
                 coneHeight: Math.max(0, root.coneHeight),
             });
-
-            if (rootsForColor.length > 0) {
-                grouped.set(color, rootsForColor);
-            }
+            grouped.set(modelKey, existing);
         }
 
-        return Array.from(grouped.entries()).map(([color, roots]) => ({ color, roots }));
+        return Array.from(grouped.values());
     }, [
         hidePlateContactPrimitivesEffective,
         raftSettings.bottomMode,
@@ -2884,12 +2881,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     const sceneBatchedContactConeGroups = useMemo(() => {
-        const grouped = new Map<string, InstancedContactCone[]>();
+        const grouped = new Map<string, { modelId: string | null; color: string; cones: InstancedContactCone[] }>();
 
-        const pushCone = (color: string, cone: InstancedContactCone) => {
-            const conesForColor = grouped.get(color) ?? [];
-            conesForColor.push(cone);
-            if (conesForColor.length > 0) grouped.set(color, conesForColor);
+        const pushCone = (modelId: string | null, color: string, cone: InstancedContactCone) => {
+            const key = `${modelId ?? '__unassigned__'}:${color}`;
+            const existing = grouped.get(key);
+            if (existing) {
+                existing.cones.push(cone);
+            } else {
+                grouped.set(key, { modelId, color, cones: [cone] });
+            }
         };
 
         for (const trunk of renderTrunkList) {
@@ -2898,7 +2899,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, trunk.id);
-            coneSet.cones.forEach((cone) => pushCone(color, {
+            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
                 ...cone,
                 pos: applyDropToVec3Like(cone.pos, cone.modelId),
             }));
@@ -2910,7 +2911,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, branch.id);
-            coneSet.cones.forEach((cone) => pushCone(color, {
+            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
                 ...cone,
                 pos: applyDropToVec3Like(cone.pos, cone.modelId),
             }));
@@ -2922,7 +2923,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, stick.id);
-            coneSet.cones.forEach((cone) => pushCone(color, {
+            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
                 ...cone,
                 pos: applyDropToVec3Like(cone.pos, cone.modelId),
             }));
@@ -2934,13 +2935,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, leaf.id);
-            coneSet.cones.forEach((cone) => pushCone(color, {
+            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
                 ...cone,
                 pos: applyDropToVec3Like(cone.pos, cone.modelId),
             }));
         }
 
-        return Array.from(grouped.entries()).map(([color, cones]) => ({ color, cones }));
+        return Array.from(grouped.values());
     }, [
         renderTrunkList,
         renderBranchList,
@@ -3687,57 +3688,61 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             ))}
 
             {sceneBatchedJointGroups.map((group) => (
-                <InstancedJointGroup
-                    key={`scene-joint-batch:${group.color}:${group.joints.length}`}
-                    joints={group.joints}
-                    color={group.color}
-                    transparent={ghostTransparent}
-                    opacity={ghostOpacityClamped}
-                    widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
-                    heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
-                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
-                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
-                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                />
+                <group key={`scene-joint-batch:${group.modelId ?? 'none'}:${group.color}:${group.joints.length}`} userData={{ modelId: group.modelId ?? null }}>
+                    <InstancedJointGroup
+                        joints={group.joints}
+                        color={group.color}
+                        transparent={ghostTransparent}
+                        opacity={ghostOpacityClamped}
+                        widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
+                        heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
+                        onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                        onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                        onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    />
+                </group>
             ))}
 
             {sceneBatchedTrunkRootGroups.map((group) => (
-                <InstancedRootsGroup
-                    key={`scene-trunk-root-batch:${group.color}:${group.roots.length}`}
-                    roots={group.roots}
-                    color={group.color}
-                    transparent={ghostTransparent}
-                    opacity={ghostOpacityClamped}
-                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
-                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
-                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                />
+                <group key={`scene-trunk-root-batch:${group.modelId ?? 'none'}:${group.color}:${group.roots.length}`} userData={{ modelId: group.modelId ?? null }}>
+                    <InstancedRootsGroup
+                        roots={group.roots}
+                        color={group.color}
+                        transparent={ghostTransparent}
+                        opacity={ghostOpacityClamped}
+                        onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                        onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                        onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    />
+                </group>
             ))}
 
             {sceneBatchedKickstandRootGroups.map((group) => (
-                <InstancedRootsGroup
-                    key={`scene-kickstand-root-batch:${group.color}:${group.roots.length}`}
-                    roots={group.roots}
-                    color={group.color}
-                    transparent={ghostTransparent}
-                    opacity={ghostOpacityClamped}
-                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
-                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
-                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                />
+                <group key={`scene-kickstand-root-batch:${group.modelId ?? 'none'}:${group.color}:${group.roots.length}`} userData={{ modelId: group.modelId ?? null }}>
+                    <InstancedRootsGroup
+                        roots={group.roots}
+                        color={group.color}
+                        transparent={ghostTransparent}
+                        opacity={ghostOpacityClamped}
+                        onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                        onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                        onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    />
+                </group>
             ))}
 
             {sceneBatchedContactConeGroups.map((group) => (
-                <InstancedContactConeGroup
-                    key={`scene-cone-batch:${group.color}:${group.cones.length}`}
-                    cones={group.cones}
-                    color={group.color}
-                    transparent={ghostTransparent}
-                    opacity={ghostOpacityClamped}
-                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
-                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
-                    onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                />
+                <group key={`scene-cone-batch:${group.modelId ?? 'none'}:${group.color}:${group.cones.length}`} userData={{ modelId: group.modelId ?? null }}>
+                    <InstancedContactConeGroup
+                        cones={group.cones}
+                        color={group.color}
+                        transparent={ghostTransparent}
+                        opacity={ghostOpacityClamped}
+                        onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                        onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                        onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    />
+                </group>
             ))}
 
             {placementPreviewBatches.map((batch) => (

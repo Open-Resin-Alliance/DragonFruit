@@ -30,6 +30,7 @@ import {
 } from '@/features/profiles/profileStore';
 import { getInstalledProfilePlugins } from '@/features/plugins/pluginRegistry';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
+import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 
 interface TopBarProps {
   meshColor: string;
@@ -68,6 +69,8 @@ interface TopBarProps {
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
+  slicingThumbnailRenderSettings: SlicingThumbnailRenderSettings;
+  onSlicingThumbnailRenderSettingsChange: (settings: SlicingThumbnailRenderSettings) => void;
   // New: global application mode (prepare vs support)
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
@@ -127,6 +130,8 @@ export function TopBar({
   onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
   onView3dSettingsChange,
+  slicingThumbnailRenderSettings,
+  onSlicingThumbnailRenderSettingsChange,
   mode,
   onModeChange,
   hasModels,
@@ -1251,6 +1256,8 @@ export function TopBar({
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
+        slicingThumbnailRenderSettings={slicingThumbnailRenderSettings}
+        onSlicingThumbnailRenderSettingsChange={onSlicingThumbnailRenderSettingsChange}
         activeOutputFormat={activePrinterProfile?.display.outputFormat ?? null}
         heatmapColors={heatmapColors}
         onHeatmapColorChange={onHeatmapColorChange}

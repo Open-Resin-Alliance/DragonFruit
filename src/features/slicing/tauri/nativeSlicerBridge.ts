@@ -585,6 +585,17 @@ export async function pickSavePathWithNativeDialog(defaultFilename: string): Pro
   });
 }
 
+export async function pickDirectoryWithNativeDialog(currentPath?: string): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native folder picker is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('local_backup_pick_directory', {
+    currentPath: currentPath?.trim() || undefined,
+  });
+}
+
 export async function pickOpenFilesWithNativeDialog(
   category: NativeOpenDialogCategory,
   multiple = false,

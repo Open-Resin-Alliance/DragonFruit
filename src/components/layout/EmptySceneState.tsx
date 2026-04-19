@@ -440,7 +440,7 @@ export function EmptySceneState({
         <input
           id="empty-state-stl-file-input"
           type="file"
-          accept=".stl,.obj,.3mf"
+          accept=".stl,.obj,.3mf,.zip"
           multiple
           onChange={onFileChange}
           className="hidden"
@@ -450,7 +450,7 @@ export function EmptySceneState({
           <input
             id="empty-state-scene-file-input"
             type="file"
-            accept=".voxl,.lys"
+            accept=".voxl,.lys,.zip"
             multiple
             onChange={onImportSceneChange}
             className="hidden"

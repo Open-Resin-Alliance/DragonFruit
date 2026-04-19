@@ -333,7 +333,7 @@ export function ModelManagerPanel({
               <input
                 id="models-card-mesh-input"
                 type="file"
-                accept=".stl,.obj,.3mf"
+                accept=".stl,.obj,.3mf,.zip"
                 multiple
                 onChange={onLoadMeshChange}
                 className="hidden"
@@ -352,7 +352,7 @@ export function ModelManagerPanel({
                   <input
                     id="models-card-scene-input"
                     type="file"
-                    accept=".voxl,.lys"
+                    accept=".voxl,.lys,.zip"
                     onChange={onImportSceneChange}
                     className="hidden"
                   />

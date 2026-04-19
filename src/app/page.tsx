@@ -47,6 +47,8 @@ import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
+import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
+import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -774,6 +776,8 @@ export default function Home() {
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
+  const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
+  const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
@@ -792,6 +796,15 @@ export default function Home() {
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
+
+  // ZIP file picker modal
+  const [zipPickerState, setZipPickerState] = React.useState<{
+    zipName: string;
+    files: File[];
+    category: 'mesh' | 'scene' | 'mixed';
+    defaultSelectionCategory: 'mesh' | 'scene';
+  } | null>(null);
+  const zipPickerResolveRef = React.useRef<((files: File[]) => void) | null>(null);
   const hasUnsavedSceneChangesRef = React.useRef(false);
   const allowProgrammaticWindowCloseRef = React.useRef(false);
   const sceneSaveBaselineRef = React.useRef<{
@@ -814,6 +827,7 @@ export default function Home() {
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
   const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const exportErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
   const saveToastHideTimeoutRef = React.useRef<number | null>(null);
   const saveToastClearTimeoutRef = React.useRef<number | null>(null);
   const saveToastEnterRafRef = React.useRef<number | null>(null);
@@ -1464,12 +1478,147 @@ export default function Home() {
     return imported;
   }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
 
+  // ── ZIP import helpers ───────────────────────────────────────────────────
+
+  const resolveZipFiles = React.useCallback(async (
+    zip: File,
+    requestedCategory: 'mesh' | 'scene',
+  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
+    const meshExts = new Set(['.stl', '.obj', '.3mf']);
+    const sceneExts = new Set(['.voxl', '.lys']);
+    const oppositeCategory = requestedCategory === 'mesh' ? 'scene' : 'mesh';
+
+    const readingLabel = 'Loading Archive…';
+    setNativePickerPreparationState({
+      active: true,
+      label: readingLabel,
+      detail: `Reading ${zip.name}…`,
+      progress: null,
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    let extracted: File[];
+    try {
+      extracted = await extractFilesFromZip(zip);
+    } catch (err) {
+      console.error('[ZIP] Failed to read ZIP archive:', err);
+      setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
+      return { meshFiles: [], sceneFiles: [] };
+    }
+
+    const meshCandidates = extracted.filter((f) => meshExts.has(getFileExtensionLower(f.name)));
+    const sceneCandidates = extracted.filter((f) => sceneExts.has(getFileExtensionLower(f.name)));
+
+    // Clear spinner before potentially showing the picker modal (or returning nothing)
+    setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
+
+    const hasMeshCandidates = meshCandidates.length > 0;
+    const hasSceneCandidates = sceneCandidates.length > 0;
+
+    let targetCategory: 'mesh' | 'scene' | 'mixed';
+    let targetCandidates: File[];
+
+    if (hasMeshCandidates && hasSceneCandidates) {
+      // Fully mixed ZIP: allow user to choose any combination of mesh/scene files.
+      targetCategory = 'mixed';
+      targetCandidates = [...meshCandidates, ...sceneCandidates];
+    } else {
+      const primaryCandidates = requestedCategory === 'mesh' ? meshCandidates : sceneCandidates;
+      const oppositeCandidates = requestedCategory === 'mesh' ? sceneCandidates : meshCandidates;
+      targetCategory = primaryCandidates.length === 0 && oppositeCandidates.length > 0
+        ? oppositeCategory
+        : requestedCategory;
+      targetCandidates = targetCategory === 'mesh' ? meshCandidates : sceneCandidates;
+    }
+
+    if (targetCandidates.length === 0) {
+      return { meshFiles: [], sceneFiles: [] };
+    }
+
+    const uniqueExts = new Set(targetCandidates.map((f) => getFileExtensionLower(f.name)));
+    const selectedCandidates = (targetCategory !== 'mixed' && uniqueExts.size === 1)
+      ? targetCandidates
+      : await new Promise<File[]>((resolve) => {
+          zipPickerResolveRef.current = resolve;
+          setZipPickerState({
+            zipName: zip.name,
+            files: targetCandidates,
+            category: targetCategory,
+            defaultSelectionCategory: requestedCategory,
+          });
+        });
+
+    const selectedMeshFiles = selectedCandidates.filter((file) => meshExts.has(getFileExtensionLower(file.name)));
+    const selectedSceneFiles = selectedCandidates.filter((file) => sceneExts.has(getFileExtensionLower(file.name)));
+
+    return {
+      meshFiles: selectedMeshFiles,
+      sceneFiles: selectedSceneFiles,
+    };
+  }, []);
+
+  const expandPickedFilesWithZip = React.useCallback(async (
+    files: File[],
+    requestedCategory: 'mesh' | 'scene',
+  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
+    const meshExts = new Set(['.stl', '.obj', '.3mf']);
+    const sceneExts = new Set(['.voxl', '.lys']);
+
+    const meshFiles: File[] = [];
+    const sceneFiles: File[] = [];
+
+    for (const file of files) {
+      const ext = getFileExtensionLower(file.name);
+      if (ext === '.zip') {
+        const expanded = await resolveZipFiles(file, requestedCategory);
+        if (expanded.meshFiles.length > 0) meshFiles.push(...expanded.meshFiles);
+        if (expanded.sceneFiles.length > 0) sceneFiles.push(...expanded.sceneFiles);
+      } else if (meshExts.has(ext)) {
+        meshFiles.push(file);
+      } else if (sceneExts.has(ext)) {
+        sceneFiles.push(file);
+      }
+    }
+
+    return { meshFiles, sceneFiles };
+  }, [resolveZipFiles]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
     void importSceneFilesWithLysWarning(files);
     e.target.value = '';
   }, [importSceneFilesWithLysWarning]);
+
+  const handleLoadMeshChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    const processed = await expandPickedFilesWithZip(files, 'mesh');
+    if (processed.meshFiles.length > 0) {
+      void scene.loadFiles(processed.meshFiles);
+    }
+    if (processed.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+    }
+  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+
+  const handleImportSceneChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    const processed = await expandPickedFilesWithZip(files, 'scene');
+    if (processed.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+    }
+    if (processed.meshFiles.length > 0) {
+      void scene.loadFiles(processed.meshFiles);
+    }
+  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
@@ -3530,6 +3679,9 @@ export default function Home() {
   const printableConnectedPrinterFleet = React.useMemo(() => {
     return connectedPrinterFleet;
   }, [connectedPrinterFleet]);
+  const reachablePrintableConnectedPrinterFleet = React.useMemo(() => {
+    return printableConnectedPrinterFleet.filter((device) => printerReachabilityByDeviceId[device.id] !== false);
+  }, [printableConnectedPrinterFleet, printerReachabilityByDeviceId]);
   const printingTargetDevice = React.useMemo(() => {
     if (printableConnectedPrinterFleet.length === 0) return null;
     return printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
@@ -3763,7 +3915,16 @@ export default function Home() {
     return Array.from(groups.entries()).map(([label, materials]) => ({ label, materials }));
   }, [printingTargetMaterialOptions]);
   const sendToPrinterTargetName = printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || null;
+  const shouldShowOfflineRemoteMaterialName = Boolean(
+    activeNetworkUiAdapter
+    && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false
+    && shouldUseRemoteOfflineLayerHeight,
+  );
   const printingResinName = React.useMemo(() => {
+    if (shouldShowOfflineRemoteMaterialName) {
+      return 'N/A';
+    }
+
     const targetName = printingTargetDevice?.selectedMaterialName?.trim();
     if (targetName && targetName.length > 0) return targetName;
 
@@ -3777,13 +3938,48 @@ export default function Home() {
       return selectedName;
     }
 
-    return activeMaterialProfile?.name ?? 'No resin selected';
+    const formatResinFamilyLabel = (resinFamily: string | null | undefined): string => {
+      const normalized = (resinFamily ?? '').trim().toLowerCase();
+      if (!normalized) return '';
+      if (normalized === 'standard') return 'Standard';
+      if (normalized === 'abs-like') return 'ABS-like';
+      if (normalized === 'tough') return 'Tough';
+      if (normalized === 'flexible') return 'Flexible';
+      if (normalized === 'engineering') return 'Engineering';
+      if (normalized === 'other') return 'Other';
+      return normalized;
+    };
+
+    const compositeLocalMaterialName = (() => {
+      if (!activeMaterialProfile) return null;
+
+      const brand = (activeMaterialProfile.brand ?? '').trim();
+      const resinFamilyLabel = formatResinFamilyLabel(activeMaterialProfile.resinFamily);
+      const name = (activeMaterialProfile.name ?? '').trim();
+
+      const parts: string[] = [];
+      const pushUnique = (value: string) => {
+        if (!value) return;
+        if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
+        parts.push(value);
+      };
+
+      pushUnique(brand);
+      pushUnique(resinFamilyLabel);
+      pushUnique(name);
+
+      if (parts.length === 0) return null;
+      return parts.join(' ');
+    })();
+
+    return compositeLocalMaterialName ?? activeMaterialProfile?.name ?? 'No resin selected';
   }, [
-    activeMaterialProfile?.name,
+    activeMaterialProfile,
     activeNetworkUiAdapter,
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     printingTargetDevice?.selectedMaterialName,
+    shouldShowOfflineRemoteMaterialName,
   ]);
   const sendToPrinterButtonLabel = sendToPrinterTargetName
     ? `Upload to ${sendToPrinterTargetName.length > 26 ? `${sendToPrinterTargetName.slice(0, 24)}…` : sendToPrinterTargetName}`
@@ -3794,7 +3990,10 @@ export default function Home() {
     && printableConnectedPrinterFleet.length > 0,
   );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
-  const canSliceAndUpload = Boolean(activeNetworkUiAdapter && printableConnectedPrinterFleet.length > 0);
+  const canSliceAndUpload = Boolean(
+    activeNetworkUiAdapter
+    && reachablePrintableConnectedPrinterFleet.length > 0,
+  );
   const canSliceAndPrint = canSliceAndUpload && Boolean(printingMonitoringAdapter.operations?.start);
   const requiresRemoteMaterialSelectionForUpload = Boolean(
     activeNetworkUiAdapter
@@ -3850,12 +4049,12 @@ export default function Home() {
       }
     }
 
-    if (!activeNetworkUiAdapter || printableConnectedPrinterFleet.length === 0) {
-      setPrintingSendStatusText('No connected printer is available for upload.');
+    if (!activeNetworkUiAdapter || reachablePrintableConnectedPrinterFleet.length === 0) {
+      setPrintingSendStatusText('No online printer is available for upload.');
       return false;
     }
 
-    const shouldOpenTargetPicker = printableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
+    const shouldOpenTargetPicker = reachablePrintableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
     if (shouldOpenTargetPicker) {
       setPrintingTargetPickerMode(intent === 'print' ? 'pre-slice-print' : 'pre-slice-upload');
       setPrintingTargetPickerOpen(true);
@@ -3869,9 +4068,13 @@ export default function Home() {
       }
       preSliceUploadSelectionRef.current = selection;
     } else {
-      const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
+      const selectedTarget = (
+        printingTargetDevice && printerReachabilityByDeviceId[printingTargetDevice.id] !== false
+          ? printingTargetDevice
+          : reachablePrintableConnectedPrinterFleet[0]
+      ) ?? null;
       if (!selectedTarget) {
-        setPrintingSendStatusText('No connected printer is available for upload.');
+        setPrintingSendStatusText('No online printer is available for upload.');
         return false;
       }
       preSliceUploadSelectionRef.current = {
@@ -3897,7 +4100,8 @@ export default function Home() {
     return true;
   }, [
     activeNetworkUiAdapter,
-    printableConnectedPrinterFleet,
+    reachablePrintableConnectedPrinterFleet,
+    printerReachabilityByDeviceId,
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
     suggestedSliceOutputFilename,
@@ -6859,7 +7063,7 @@ export default function Home() {
       const core = await import('@tauri-apps/api/core');
       const files: File[] = [];
 
-      const readingLabel = category === 'scene' ? 'Importing scene…' : 'Loading mesh…';
+      const readingLabel = category === 'scene' ? 'Loading Scene…' : 'Loading Mesh…';
       const singleNoun = category === 'scene' ? 'scene file' : 'mesh file';
       const pluralNoun = category === 'scene' ? 'scene files' : 'mesh files';
 
@@ -6952,7 +7156,7 @@ export default function Home() {
 
       setNativePickerPreparationState({
         active: true,
-        label: 'Importing scene…',
+        label: 'Loading Scene…',
         detail: picked.length > 1
           ? `Reading 0/${picked.length} selected scene files…`
           : 'Reading selected scene file…',
@@ -6970,7 +7174,7 @@ export default function Home() {
           const resolvedName = entry.name || getFileNameFromPath(sourcePath);
           setNativePickerPreparationState({
             active: true,
-            label: 'Importing scene…',
+            label: 'Loading Scene…',
             detail: picked.length > 1
               ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
               : `Reading ${resolvedName}…`,
@@ -7014,33 +7218,67 @@ export default function Home() {
     const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      scene.onFileChange(buildSyntheticFileChangeEvent(nativeFiles));
+      const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
+      if (expanded.meshFiles.length > 0) {
+        scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+      }
+      if (expanded.sceneFiles.length > 0) {
+        await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      }
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf', true);
+    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf,.zip', true);
     if (webFiles.length === 0) return;
-    scene.onFileChange(buildSyntheticFileChangeEvent(webFiles));
-  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    const expanded = await expandPickedFilesWithZip(webFiles, 'mesh');
+    if (expanded.meshFiles.length > 0) {
+      scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+    }
+    if (expanded.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+    }
+  }, [buildSyntheticFileChangeEvent, importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
     const nativeFiles = await pickSceneFilesWithNativeDialog();
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      await importSceneFilesWithLysWarning(
-        nativeFiles.map((entry) => entry.file),
-        {
-          resultingScenePath: nativeFiles.length === 1 ? nativeFiles[0]?.sourcePath ?? null : null,
-          sourcePaths: nativeFiles.map((entry) => entry.sourcePath),
-        },
-      );
+      const nonZip = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) !== '.zip');
+      const zips = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) === '.zip');
+      const expandedFromZips = await expandPickedFilesWithZip(zips.map((e) => e.file), 'scene');
+      const sceneFiles = [...nonZip.map((e) => e.file), ...expandedFromZips.sceneFiles];
+
+      if (sceneFiles.length > 0) {
+        await importSceneFilesWithLysWarning(
+          sceneFiles,
+          {
+            resultingScenePath: nonZip.length === 1 && expandedFromZips.sceneFiles.length === 0
+              ? nativeFiles[0]?.sourcePath ?? null
+              : null,
+            sourcePaths: [
+              ...nonZip.map((e) => e.sourcePath),
+              ...Array.from({ length: expandedFromZips.sceneFiles.length }, () => null),
+            ],
+          },
+        );
+      }
+
+      if (expandedFromZips.meshFiles.length > 0) {
+        void scene.loadFiles(expandedFromZips.meshFiles);
+      }
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys,.zip', true);
     if (webFiles.length === 0) return;
-    await importSceneFilesWithLysWarning(webFiles, { resultingScenePath: null });
-  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput]);
+    const expanded = await expandPickedFilesWithZip(webFiles, 'scene');
+    if (expanded.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+    }
+    if (expanded.meshFiles.length > 0) {
+      void scene.loadFiles(expanded.meshFiles);
+    }
+  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -8746,6 +8984,18 @@ export default function Home() {
       setIsExportSuccessToastVisible(false);
       exportSuccessToastFadeTimeoutRef.current = null;
     }, 3800);
+  }, []);
+
+  const handleExportError = React.useCallback((message: string) => {
+    setExportErrorToast({ id: Date.now(), text: message });
+    setIsExportErrorToastVisible(true);
+    if (exportErrorToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(exportErrorToastFadeTimeoutRef.current);
+    }
+    exportErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsExportErrorToastVisible(false);
+      exportErrorToastFadeTimeoutRef.current = null;
+    }, 4500);
   }, []);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
@@ -11458,7 +11708,7 @@ export default function Home() {
     if (scene.importProgress.active) {
       return {
         active: true,
-        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Importing scene…' : 'Loading mesh…'),
+        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Loading Scene…' : 'Loading Mesh…'),
         detail: scene.importProgress.detail,
         progress: scene.importProgress.progress,
       };
@@ -11467,7 +11717,7 @@ export default function Home() {
     if (scene.isLysLoading) {
       return {
         active: true,
-        label: 'Importing scene…',
+        label: 'Loading Scene…',
         detail: 'Parsing and applying scene transforms',
         progress: null as number | null,
       };
@@ -11476,7 +11726,7 @@ export default function Home() {
     if (scene.lycheeImportPhase === 'processing') {
       return {
         active: true,
-        label: 'Importing Lychee scene…',
+        label: 'Loading Lychee Scene…',
         detail: 'Converting support data and model metadata',
         progress: null as number | null,
       };
@@ -11495,7 +11745,8 @@ export default function Home() {
 
   React.useEffect(() => {
     const isSceneImportActive =
-      (scene.importProgress.active && scene.importProgress.type === 'scene')
+      (scene.importProgress.active
+        && (scene.importProgress.type === 'scene' || scene.importProgress.type === 'mesh'))
       || scene.isLysLoading
       || scene.lycheeImportPhase === 'processing';
 
@@ -12693,6 +12944,13 @@ export default function Home() {
         onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
         view3dSettings={scene.view3dSettings}
         onView3dSettingsChange={scene.setView3dSettings}
+        slicingThumbnailRenderSettings={exportThumbnailRenderOptions}
+        onSlicingThumbnailRenderSettingsChange={(next) => {
+          setExportThumbnailRenderOptions((previous) => ({
+            ...previous,
+            ...next,
+          }));
+        }}
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
@@ -12735,9 +12993,9 @@ export default function Home() {
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onLoadMeshChange={scene.onFileChange}
+              onLoadMeshChange={handleLoadMeshChangeWithZip}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneInputChange}
+              onImportSceneChange={handleImportSceneChangeWithZip}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -13026,6 +13284,7 @@ export default function Home() {
               supportsRef={supportsRef}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onExportSuccess={handleExportSuccess}
+              onExportError={handleExportError}
             />
 
             <SlicingPanel
@@ -13034,15 +13293,6 @@ export default function Home() {
               activeModel={scene.activeModel}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
-              thumbnailIncludeGradient={exportThumbnailRenderOptions.includeGradient}
-              thumbnailIncludeBuildPlate={exportThumbnailRenderOptions.includeBuildPlate}
-              thumbnailIncludeGrid={exportThumbnailRenderOptions.includeGrid}
-              onThumbnailRenderOptionsChange={(next) => {
-                setExportThumbnailRenderOptions((previous) => ({
-                  ...previous,
-                  ...next,
-                }));
-              }}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}
@@ -13365,9 +13615,9 @@ export default function Home() {
           {showEmptyStatePanel && (
             <EmptySceneState
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onFileChange={scene.onFileChange}
+              onFileChange={handleLoadMeshChangeWithZip}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneInputChange}
+              onImportSceneChange={handleImportSceneChangeWithZip}
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={handleReopenRecentFile}
@@ -14030,6 +14280,27 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {zipPickerState && (
+        <ZipFilePickerModal
+          zipName={zipPickerState.zipName}
+          files={zipPickerState.files}
+          category={zipPickerState.category}
+          defaultSelectionCategory={zipPickerState.defaultSelectionCategory}
+          onConfirm={(selected) => {
+            const resolve = zipPickerResolveRef.current;
+            zipPickerResolveRef.current = null;
+            setZipPickerState(null);
+            resolve?.(selected);
+          }}
+          onCancel={() => {
+            const resolve = zipPickerResolveRef.current;
+            zipPickerResolveRef.current = null;
+            setZipPickerState(null);
+            resolve?.([]);
+          }}
+        />
       )}
 
       {showCloseUnsavedChangesModal && (
@@ -16654,6 +16925,15 @@ export default function Home() {
           <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
             Saved to: {exportSuccessToast.path}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {exportErrorToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            {exportErrorToast.text}
           </Toast>
         </ToastViewport>
       )}

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Cpu, Download, Gauge, Layers3, Minus, Play, Plus, Printer, Timer } from 'lucide-react';
+import { ChevronDown, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -32,14 +34,6 @@ interface SlicingPanelProps {
   activeModel: LoadedModel | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
-  thumbnailIncludeGradient?: boolean;
-  thumbnailIncludeBuildPlate?: boolean;
-  thumbnailIncludeGrid?: boolean;
-  onThumbnailRenderOptionsChange?: (next: {
-    includeGradient?: boolean;
-    includeBuildPlate?: boolean;
-    includeGrid?: boolean;
-  }) => void;
   onSliceRunStarted?: () => void;
   onLayerPreviewGenerated?: (payload: {
     layerIndex: number;
@@ -167,11 +161,53 @@ function formatElapsedClock(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+function formatResinFamilyLabel(resinFamily: string | null | undefined): string {
+  const normalized = (resinFamily ?? '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'standard') return 'Standard';
+  if (normalized === 'abs-like') return 'ABS-like';
+  if (normalized === 'tough') return 'Tough';
+  if (normalized === 'flexible') return 'Flexible';
+  if (normalized === 'engineering') return 'Engineering';
+  if (normalized === 'other') return 'Other';
+  return normalized;
+}
+
+function resolveCompositeMaterialLabel(material: {
+  brand?: string;
+  resinFamily?: string;
+  name?: string;
+} | null | undefined): string | null {
+  if (!material) return null;
+
+  const brand = (material.brand ?? '').trim();
+  const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
+  const name = (material.name ?? '').trim();
+
+  const parts: string[] = [];
+  const pushUnique = (value: string) => {
+    if (!value) return;
+    if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
+    parts.push(value);
+  };
+
+  pushUnique(brand);
+  pushUnique(resinFamilyLabel);
+  pushUnique(name);
+
+  if (parts.length === 0) return null;
+  return parts.join(' ');
+}
+
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
+const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
+const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
+const REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM = 0.01;
+const MICRONS_PER_MM = 1000;
 
 function readSliceIntentByPrinterProfile(): Record<string, SliceIntent> {
   if (typeof window === 'undefined') return {};
@@ -205,6 +241,22 @@ function clampLayerHeightMm(value: number, fallback = 0.05): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   const clamped = Math.max(0.001, Math.min(1, numeric));
+  return Math.round(clamped * 1000) / 1000;
+}
+
+function clampRemoteOfflineLayerHeightMm(value: number, fallback = 0.05): number {
+  const fallbackClamped = Math.max(
+    REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM,
+    Math.min(REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM, fallback),
+  );
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallbackClamped;
+
+  const clamped = Math.max(
+    REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM,
+    Math.min(REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM, numeric),
+  );
   return Math.round(clamped * 1000) / 1000;
 }
 
@@ -247,10 +299,6 @@ export function SlicingPanel({
   activeModel,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
-  thumbnailIncludeGradient = false,
-  thumbnailIncludeBuildPlate = false,
-  thumbnailIncludeGrid = false,
-  onThumbnailRenderOptionsChange,
   onSliceRunStarted,
   onLayerPreviewGenerated,
   onSlicingFinished,
@@ -266,7 +314,6 @@ export function SlicingPanel({
   onBeforeSliceStart,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [isThumbnailDrawerOpen, setIsThumbnailDrawerOpen] = useState(false);
   const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
     const id = (getActivePrinterProfile(getProfileStoreSnapshot())?.id ?? '').trim();
     if (!id) return 'file';
@@ -302,9 +349,8 @@ export function SlicingPanel({
       ?? window.sessionStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
     if (raw == null || raw.trim().length === 0) return 0.05;
     const parsed = Number(raw);
-    return (Number.isFinite(parsed) && parsed > 0) ? clampLayerHeightMm(parsed) : 0.05;
+    return (Number.isFinite(parsed) && parsed > 0) ? clampRemoteOfflineLayerHeightMm(parsed) : 0.05;
   });
-  const [remoteOfflineLayerHeightDraft, setRemoteOfflineLayerHeightDraft] = useState<string | null>(null);
   const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
   const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
@@ -524,7 +570,10 @@ export function SlicingPanel({
 
   const effectiveLayerHeightMm = useMemo(() => {
     if (showRemoteOfflineLayerHeightOverride) {
-      return clampLayerHeightMm(remoteOfflineLayerHeightMm, clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05));
+      return clampRemoteOfflineLayerHeightMm(
+        remoteOfflineLayerHeightMm,
+        clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      );
     }
     if (!effectiveMaterialProfile) return null;
     return clampLayerHeightMm(effectiveMaterialProfile.layerHeightMm, 0.05);
@@ -535,7 +584,7 @@ export function SlicingPanel({
     if (!showRemoteOfflineLayerHeightOverride) return effectiveMaterialProfile;
     return {
       ...effectiveMaterialProfile,
-      layerHeightMm: effectiveLayerHeightMm ?? clampLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      layerHeightMm: effectiveLayerHeightMm ?? clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
     };
   }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
 
@@ -579,7 +628,6 @@ export function SlicingPanel({
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
-  const minimumAlphaLabel = 'Minimum Alpha';
 
   const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
@@ -656,40 +704,18 @@ export function SlicingPanel({
   const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
     if (typeof window === 'undefined') return;
 
-    const serialized = String(clampLayerHeightMm(value));
+    const serialized = String(clampRemoteOfflineLayerHeightMm(value));
     window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
   }, []);
 
   const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
     setRemoteOfflineLayerHeightMm((previous) => {
-      const next = clampLayerHeightMm(value, previous);
+      const next = clampRemoteOfflineLayerHeightMm(value, previous);
       persistRemoteOfflineLayerHeight(next);
       return next;
     });
   }, [persistRemoteOfflineLayerHeight]);
-
-  const beginRemoteOfflineLayerHeightEdit = useCallback(() => {
-    setRemoteOfflineLayerHeightDraft(String(remoteOfflineLayerHeightMm));
-  }, [remoteOfflineLayerHeightMm]);
-
-  const cancelRemoteOfflineLayerHeightEdit = useCallback(() => {
-    setRemoteOfflineLayerHeightDraft(null);
-  }, []);
-
-  const commitRemoteOfflineLayerHeightEdit = useCallback(() => {
-    if (remoteOfflineLayerHeightDraft == null) return;
-
-    const trimmed = remoteOfflineLayerHeightDraft.trim();
-    if (trimmed.length > 0) {
-      const parsed = Number(trimmed);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        setClampedRemoteOfflineLayerHeightMm(parsed);
-      }
-    }
-
-    setRemoteOfflineLayerHeightDraft(null);
-  }, [remoteOfflineLayerHeightDraft, setClampedRemoteOfflineLayerHeightMm]);
 
   useEffect(() => {
     void getSlicerEngineVersion().then((v) => {
@@ -748,12 +774,16 @@ export function SlicingPanel({
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const serialized = String(clampLayerHeightMm(remoteOfflineLayerHeightMm));
+    const serialized = String(clampRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm));
     window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
   }, [remoteOfflineLayerHeightMm]);
 
   const resolvedMaterialLabel = useMemo(() => {
+    if (showRemoteOfflineLayerHeightOverride) {
+      return 'N/A';
+    }
+
     if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
       if (isLoadingRemoteMaterial) return 'Loading remote material…';
       if (selectedRemoteMaterialName) return `${selectedRemoteMaterialName} (${networkUiAdapter?.displayName ?? 'Remote'})`;
@@ -762,15 +792,16 @@ export function SlicingPanel({
       return `${selectedRemoteMaterialId} (Remote ID)`;
     }
 
-    return effectiveMaterialProfile?.name ?? 'No material selected';
+    return resolveCompositeMaterialLabel(effectiveMaterialProfile) ?? effectiveMaterialProfile?.name ?? 'No material selected';
   }, [
     activePrinterProfile?.networkConnection?.selectedMaterialName,
-    effectiveMaterialProfile?.name,
+    effectiveMaterialProfile,
     isLoadingRemoteMaterial,
     isRemoteMaterialSyncConnected,
     networkUiAdapter?.displayName,
     selectedRemoteMaterialName,
     selectedRemoteMaterialId,
+    showRemoteOfflineLayerHeightOverride,
   ]);
 
   useEffect(() => {
@@ -1334,50 +1365,69 @@ export function SlicingPanel({
 
       {isExpanded && (
         <div className="px-3 pt-2 pb-3 space-y-2.5">
-          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Gauge className="w-3.5 h-3.5" />
-              <span>Print Profile</span>
-            </div>
-
+          <div className="space-y-1.5">
             <div className="grid grid-cols-2 gap-1.5">
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <button
+                type="button"
+                className="col-span-2 relative rounded border px-1.5 py-1 pr-7 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--surface-1),white_4%)]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                onClick={() => openProfileSettingsModal('printer')}
+                aria-label="Edit printer profile"
+                title="Open printer profiles"
+              >
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Printer</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
+                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
                   {activePrinterProfile?.name ?? 'No printer selected'}
                 </div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <Edit3
+                  className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-hidden="true"
+                />
+              </button>
+              <button
+                type="button"
+                className="col-span-2 relative rounded border px-1.5 py-1 pr-7 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--surface-1),white_4%)]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                onClick={() => openProfileSettingsModal('material')}
+                aria-label="Edit material profile"
+                title="Open material profiles"
+              >
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Material</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
+                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
                   {resolvedMaterialLabel}
                 </div>
+                <Edit3
+                  className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-hidden="true"
+                />
+              </button>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layers</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                  {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
-                </div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {effectiveLayerHeightMm != null ? `${effectiveLayerHeightMm.toFixed(3)} mm` : '—'}
                 </div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Layers</div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                  {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
+                </div>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Engine</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {slicerEngineVersion ? `v${slicerEngineVersion}` : 'Slicer V3'}
@@ -1386,133 +1436,81 @@ export function SlicingPanel({
             </div>
 
             {showRemoteOfflineLayerHeightOverride && (
-              <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="space-y-0.5 text-center">
                   <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
                     Offline Layer Height
                   </div>
                   <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    No remote material profile is loaded right now.
+                    Remote material unavailable.
                   </div>
                 </div>
 
-                <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="flex min-w-0 items-center gap-1">
-                    <IconButton
-                      className="!h-8 !w-8 shrink-0 !p-0"
-                      onClick={() => setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm - 0.005)}
-                      disabled={remoteOfflineLayerHeightMm <= 0.001}
-                      title="Decrease offline layer height"
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                    </IconButton>
-
-                    <input
-                      type="number"
-                      min={0.001}
-                      max={1}
-                      step={0.005}
-                      value={remoteOfflineLayerHeightDraft ?? String(remoteOfflineLayerHeightMm)}
-                      onFocus={beginRemoteOfflineLayerHeightEdit}
-                      onChange={(event) => setRemoteOfflineLayerHeightDraft(event.target.value)}
-                      onBlur={commitRemoteOfflineLayerHeightEdit}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          commitRemoteOfflineLayerHeightEdit();
-                          event.currentTarget.blur();
-                          return;
-                        }
-
-                        if (event.key === 'Escape') {
-                          event.preventDefault();
-                          cancelRemoteOfflineLayerHeightEdit();
-                          event.currentTarget.blur();
-                        }
-                      }}
-                      onWheel={(event) => {
-                        event.preventDefault();
-                        setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + (event.deltaY < 0 ? 0.005 : -0.005));
-                      }}
-                      className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                      aria-label="Offline layer height override in millimeters"
-                    />
-
-                    <IconButton
-                      className="!h-8 !w-8 shrink-0 !p-0"
-                      onClick={() => setClampedRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm + 0.005)}
-                      disabled={remoteOfflineLayerHeightMm >= 1}
-                      title="Increase offline layer height"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </IconButton>
-                  </div>
-                </div>
+                <ScrollableNumberField
+                  value={remoteOfflineLayerHeightMm * MICRONS_PER_MM}
+                  onChange={(nextMicrons) => setClampedRemoteOfflineLayerHeightMm(nextMicrons / MICRONS_PER_MM)}
+                  min={REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM * MICRONS_PER_MM}
+                  max={REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM * MICRONS_PER_MM}
+                  step={REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM * MICRONS_PER_MM}
+                  unit="µm"
+                  ariaLabel="Offline layer height override in micrometers"
+                  decreaseTitle="Decrease offline layer height"
+                  increaseTitle="Increase offline layer height"
+                  commitOnBlur
+                />
 
                 <div className="text-[11px] leading-snug text-center" style={{ color: 'var(--text-muted)' }}>
-                  Networking is currently unavailable, so this slice will use offline import. Set the layer height here, then choose the matching resin profile on the machine before printing.
+                  Network unavailable. <br />
+                  Select a matching material during import instead.
                 </div>
               </div>
             )}
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Cpu className="w-3.5 h-3.5" />
-              <span>Quality Settings</span>
-            </div>
-
             <div className="space-y-1">
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
-              <div className="grid grid-cols-5 gap-1">
-                {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
-                  const active = antiAliasingLevel === level;
-                  return (
-                    <button
-                      key={level}
-                      type="button"
-                      disabled={!antiAliasingAvailable}
-                      aria-disabled={!antiAliasingAvailable}
-                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                      style={!antiAliasingAvailable
-                        ? {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                            color: 'color-mix(in srgb, var(--text-muted), black 18%)',
-                            cursor: 'not-allowed',
-                            opacity: 0.68,
-                          }
-                        : active
-                          ? {
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                              color: 'var(--text-strong)',
-                            }
-                          : {
-                              borderColor: 'var(--border-subtle)',
-                              background: 'var(--surface-0)',
-                              color: 'var(--text-muted)',
-                            }}
-                      onClick={() => setAntiAliasingLevel(level)}
-                    >
-                      {level}
-                    </button>
-                  );
-                })}
-              </div>
-              {!antiAliasingAvailable && (
-                <div
-                  className="mt-2 px-1 text-[11px] leading-snug font-mono text-center"
-                  style={{
-                    color: 'color-mix(in srgb, #fca5a5, var(--text-muted) 38%)',
-                  }}
-                >
-                  The selected Machine does not support AA at this time.
-                </div>
-              )}
-                {antiAliasingAvailable && (
+              {antiAliasingAvailable ? (
+                <>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
+                  <div className="grid grid-cols-5 gap-1">
+                    {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
+                      const active = antiAliasingLevel === level;
+                      return (
+                        <button
+                          key={level}
+                          type="button"
+                          disabled={!antiAliasingAvailable}
+                          aria-disabled={!antiAliasingAvailable}
+                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          style={!antiAliasingAvailable
+                            ? {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+                                color: 'color-mix(in srgb, var(--text-muted), black 18%)',
+                                cursor: 'not-allowed',
+                                opacity: 0.68,
+                              }
+                            : active
+                              ? {
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                  color: 'var(--text-strong)',
+                                }
+                              : {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--surface-0)',
+                                  color: 'var(--text-muted)',
+                                }}
+                          onClick={() => setAntiAliasingLevel(level)}
+                        >
+                          {level}
+                        </button>
+                      );
+                    })}
+                  </div>
+
                   <div className="space-y-1">
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Alpha</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Grey Level</div>
                     {hasProfileMinimumAaAlpha && (
                       <div className="grid grid-cols-2 gap-1">
                         <button
@@ -1576,148 +1574,33 @@ export function SlicingPanel({
                       </div>
                     )}
                     {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
-                      <div className="mt-1 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                        <div className="flex min-w-0 items-center gap-1">
-                          <IconButton
-                            className="!h-8 !w-8 shrink-0 !p-0"
-                            onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent - 1)}
-                            disabled={minimumAaControlsDisabled || minimumAaAlphaPercent <= 0}
-                            title="Decrease minimum alpha"
-                          >
-                            <Minus className="h-3.5 w-3.5" />
-                          </IconButton>
-
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            step={1}
-                            value={minimumAaAlphaPercent}
-                            disabled={minimumAaControlsDisabled}
-                            aria-disabled={minimumAaControlsDisabled}
-                            onChange={(event) => setClampedMinimumAaAlphaPercent(Number(event.target.value))}
-                            onWheel={(event) => {
-                              if (minimumAaControlsDisabled) return;
-                              event.preventDefault();
-                              setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + (event.deltaY < 0 ? 1 : -1));
-                            }}
-                            className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                            aria-label="Minimum alpha percent override"
-                          />
-
-                          <IconButton
-                            className="!h-8 !w-8 shrink-0 !p-0"
-                            onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + 1)}
-                            disabled={minimumAaControlsDisabled || minimumAaAlphaPercent >= 100}
-                            title="Increase minimum alpha"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </IconButton>
-                        </div>
-                      </div>
+                      <ScrollableNumberField
+                        className="mt-1"
+                        value={minimumAaAlphaPercent}
+                        onChange={setClampedMinimumAaAlphaPercent}
+                        min={0}
+                        max={100}
+                        step={1}
+                        unit="%"
+                        disabled={minimumAaControlsDisabled}
+                        ariaLabel="Minimum alpha percent override"
+                        decreaseTitle="Decrease minimum alpha"
+                        increaseTitle="Increase minimum alpha"
+                      />
                     )}
                   </div>
-                )}
+                </>
+              ) : (
+                <div
+                  className="px-1 text-[11px] leading-snug font-mono text-center"
+                  style={{
+                    color: 'color-mix(in srgb, #fca5a5, var(--text-muted) 38%)',
+                  }}
+                >
+                  The selected Machine does not support AA at this time.
+                </div>
+              )}
             </div>
-          </div>
-
-          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <button
-              type="button"
-              className="mb-1 w-full flex items-center justify-between gap-2 text-left"
-              onClick={() => setIsThumbnailDrawerOpen((prev) => !prev)}
-              aria-expanded={isThumbnailDrawerOpen}
-              aria-label="Toggle thumbnail settings"
-            >
-              <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                <Layers3 className="w-3.5 h-3.5" />
-                <span>Thumbnails</span>
-              </span>
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: isThumbnailDrawerOpen ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {isThumbnailDrawerOpen ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </button>
-
-            {isThumbnailDrawerOpen && (
-              <div className="mt-1 space-y-2">
-
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs" style={{ color: 'var(--text-strong)' }}>Background gradient</div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Scene mood overlay in thumbnail</div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={thumbnailIncludeGradient}
-                  onClick={() => onThumbnailRenderOptionsChange?.({ includeGradient: !thumbnailIncludeGradient })}
-                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                  style={{
-                    background: thumbnailIncludeGradient ? 'var(--accent)' : 'var(--surface-2)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span
-                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeGradient ? 'translate-x-4' : 'translate-x-0'}`}
-                  />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs" style={{ color: 'var(--text-strong)' }}>Build plate</div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Render build plate in thumbnail</div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={thumbnailIncludeBuildPlate}
-                  onClick={() => onThumbnailRenderOptionsChange?.({ includeBuildPlate: !thumbnailIncludeBuildPlate })}
-                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                  style={{
-                    background: thumbnailIncludeBuildPlate ? 'var(--accent)' : 'var(--surface-2)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span
-                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeBuildPlate ? 'translate-x-4' : 'translate-x-0'}`}
-                  />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs" style={{ color: 'var(--text-strong)' }}>Grid</div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Render build grid in thumbnail</div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={thumbnailIncludeGrid}
-                  onClick={() => onThumbnailRenderOptionsChange?.({ includeGrid: !thumbnailIncludeGrid })}
-                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                  style={{
-                    background: thumbnailIncludeGrid ? 'var(--accent)' : 'var(--surface-2)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span
-                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeGrid ? 'translate-x-4' : 'translate-x-0'}`}
-                  />
-                </button>
-              </div>
-              </div>
-            )}
           </div>
 
           {/* Slice intent split-button */}

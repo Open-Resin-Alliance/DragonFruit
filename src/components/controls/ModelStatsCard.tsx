@@ -8,6 +8,12 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
+import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 
 interface ModelStatsCardProps {
@@ -19,6 +25,44 @@ interface ModelStatsCardProps {
   heightMm: number;
   estimatedPrintTimeLabelOverride?: string | null;
   estimatedResinLabelOverride?: string | null;
+}
+
+function formatResinFamilyLabel(resinFamily: string | null | undefined): string {
+  const normalized = (resinFamily ?? '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'standard') return 'Standard';
+  if (normalized === 'abs-like') return 'ABS-like';
+  if (normalized === 'tough') return 'Tough';
+  if (normalized === 'flexible') return 'Flexible';
+  if (normalized === 'engineering') return 'Engineering';
+  if (normalized === 'other') return 'Other';
+  return normalized;
+}
+
+function resolveCompositeMaterialLabel(material: {
+  brand?: string;
+  resinFamily?: string;
+  name?: string;
+} | null | undefined): string | null {
+  if (!material) return null;
+
+  const brand = (material.brand ?? '').trim();
+  const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
+  const name = (material.name ?? '').trim();
+
+  const parts: string[] = [];
+  const pushUnique = (value: string) => {
+    if (!value) return;
+    if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
+    parts.push(value);
+  };
+
+  pushUnique(brand);
+  pushUnique(resinFamilyLabel);
+  pushUnique(name);
+
+  if (parts.length === 0) return null;
+  return parts.join(' ');
 }
 
 export function ModelStatsCard({
@@ -36,8 +80,44 @@ export function ModelStatsCard({
   const inFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [estimatedResinMl, setEstimatedResinMl] = React.useState<number | null>(null);
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const networkUiAdapter = React.useMemo(
+    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
+    [activePrinterProfile?.networkSupport],
+  );
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const selectedNetworkDeviceId = React.useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedNetworkDeviceReachability = selectedNetworkDeviceId
+    ? (printerReachabilityByDeviceId[selectedNetworkDeviceId] ?? null)
+    : null;
+  const showRemoteOfflineMaterialPlaceholder = Boolean(networkUiAdapter)
+    && networkUiAdapter?.supportsRemoteMaterialProfiles !== false
+    && (
+      activePrinterProfile?.networkConnection?.connected !== true
+      || selectedNetworkDeviceReachability === false
+    );
+  const isNetworkPrinterOffline = Boolean(activePrinterProfile?.networkSupport) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedNetworkDeviceReachability === false
+  );
   const connectedHostName = React.useMemo(() => {
     const networkConnection = activePrinterProfile?.networkConnection;
     if (!networkConnection?.connected) return null;
@@ -45,12 +125,16 @@ export function ModelStatsCard({
   }, [activePrinterProfile]);
 
   const effectiveMaterialName = React.useMemo(() => {
+    if (showRemoteOfflineMaterialPlaceholder) {
+      return 'N/A';
+    }
+
     const networkConnection = activePrinterProfile?.networkConnection;
     if (activePrinterProfile?.networkSupport === 'nanodlp' && networkConnection?.connected) {
       return networkConnection.selectedMaterialName || networkConnection.selectedMaterialId || '-';
     }
-    return activeMaterialProfile?.name ?? '-';
-  }, [activeMaterialProfile, activePrinterProfile]);
+    return resolveCompositeMaterialLabel(activeMaterialProfile) ?? activeMaterialProfile?.name ?? '-';
+  }, [activeMaterialProfile, activePrinterProfile, showRemoteOfflineMaterialPlaceholder]);
 
   const effectiveLayerHeightMm = React.useMemo(() => {
     const networkConnection = activePrinterProfile?.networkConnection;
@@ -348,6 +432,9 @@ export function ModelStatsCard({
   }, [activeMaterialProfile, estimatedResinMl]);
 
   const frontHeader = connectedHostName || activePrinterProfile?.name || 'No printer connected';
+  const frontHeaderColor = isNetworkPrinterOffline
+    ? 'color-mix(in srgb, #f87171, var(--text-strong) 58%)'
+    : (connectedHostName ? '#86efac' : 'var(--text-strong)');
 
   const handleToggleFlip = React.useCallback(() => {
     setIsFlipped((prev) => !prev);
@@ -385,7 +472,7 @@ export function ModelStatsCard({
               backfaceVisibility: 'hidden',
             }}
           >
-            <div className="font-semibold text-[12px] truncate" style={{ color: connectedHostName ? '#86efac' : 'var(--text-strong)' }}>
+            <div className="font-semibold text-[12px] truncate" style={{ color: frontHeaderColor }}>
               {frontHeader}
             </div>
 
