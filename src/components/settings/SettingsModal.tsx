@@ -680,13 +680,13 @@ export function SettingsModal({
 
         <div className="flex-1 min-h-0 flex">
           <div
-            className="w-72 p-2.5"
+            className="w-72 min-h-0 p-2.5"
             style={{
               borderRight: '1px solid var(--border-subtle)',
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 6%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
             }}
           >
-            <div className="h-full flex flex-col">
+            <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
               <div className="space-y-1.5">
                 {sidebarTopTabs.map((tab) => {
                   const meta = tabMeta[tab];
