@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Eye,
   EyeOff,
@@ -95,6 +95,8 @@ export function ModelManagerPanel({
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
+  const [useCompactQuickActionLabels, setUseCompactQuickActionLabels] = useState(false);
+  const quickActionsGridRef = useRef<HTMLDivElement | null>(null);
 
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
 
@@ -238,6 +240,33 @@ export function ModelManagerPanel({
     };
   }, [contextMenu]);
 
+  useEffect(() => {
+    const grid = quickActionsGridRef.current;
+    if (!grid) return;
+
+    const computeCompactMode = (width: number) => {
+      const compactThreshold = onImportSceneChange ? 312 : 184;
+      const nextCompact = width < compactThreshold;
+      setUseCompactQuickActionLabels((prev) => (prev === nextCompact ? prev : nextCompact));
+    };
+
+    computeCompactMode(grid.clientWidth);
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (typeof width === 'number') {
+        computeCompactMode(width);
+      }
+    });
+
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [onImportSceneChange]);
+
   const triggerMeshPicker = React.useCallback(() => {
     if (onLoadMeshClick) {
       onLoadMeshClick();
@@ -321,14 +350,18 @@ export function ModelManagerPanel({
               Quick Actions
             </div>
 
-            <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <div
+              ref={quickActionsGridRef}
+              className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}
+            >
               <button
                 type="button"
                 onClick={triggerMeshPicker}
                 className="ui-button ui-button-primary inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
+                title="Load Mesh"
               >
                 <Upload className="w-3.5 h-3.5 shrink-0" />
-                <span className="whitespace-nowrap">Load Mesh</span>
+                <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Mesh' : 'Load Mesh'}</span>
               </button>
               <input
                 id="models-card-mesh-input"
@@ -345,9 +378,10 @@ export function ModelManagerPanel({
                     type="button"
                     onClick={triggerScenePicker}
                     className="ui-button ui-button-accent inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
+                    title="Import Scene"
                   >
                     <FolderInput className="w-3.5 h-3.5 shrink-0" />
-                    <span className="whitespace-nowrap">Import Scene</span>
+                    <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Scene' : 'Import Scene'}</span>
                   </button>
                   <input
                     id="models-card-scene-input"
