@@ -1953,14 +1953,17 @@ export function SettingsModal({
                         key={preset}
                         type="button"
                         onClick={() => handleThemeCreateBasePresetChange(preset)}
-                        className="flex-1 rounded-sm px-2 py-1 text-[11px] font-semibold transition-colors"
+                        className="flex-1 rounded-sm border px-2 py-1 text-[11px] font-semibold transition-colors"
                         style={active
                           ? {
-                            color: 'var(--accent-contrast)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 12%)',
+                            color: 'var(--accent)',
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 22%)',
+                            background: 'color-mix(in srgb, var(--accent), transparent 94%)',
+                            boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 78%) inset',
                           }
                           : {
                             color: 'var(--text-muted)',
+                            borderColor: 'var(--border-subtle)',
                             background: 'transparent',
                           }}
                       >
@@ -1969,9 +1972,6 @@ export function SettingsModal({
                     );
                   })}
                 </div>
-                <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  Pre-populates branding colors from DragonFruit {draftThemeCreateBasePreset === 'dark' ? 'Dark' : 'Light'}.
-                </p>
               </div>
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
