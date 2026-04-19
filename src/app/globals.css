@@ -32,6 +32,11 @@
   --danger: #e45454;
   --success: #2eb67d;
 
+  --accent-secondary-action-color: var(--accent-secondary);
+  --accent-secondary-action-border: color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%);
+  --accent-secondary-action-bg-92: color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%);
+  --accent-secondary-action-bg-90: color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%);
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -109,6 +114,11 @@
   --topbar-accent: #ec2a77;
 
   --danger: #c9302c;
+
+  --accent-secondary-action-color: color-mix(in srgb, #4f8a08, var(--text-strong) 30%);
+  --accent-secondary-action-border: color-mix(in srgb, #6aa20d, var(--border-subtle) 34%);
+  --accent-secondary-action-bg-92: color-mix(in srgb, #6aa20d, var(--surface-1) 80%);
+  --accent-secondary-action-bg-90: color-mix(in srgb, #6aa20d, var(--surface-1) 78%);
 }
 
 @theme inline {
@@ -145,6 +155,11 @@
     --topbar-accent: #ec2a77;
 
     --danger: #c9302c;
+
+    --accent-secondary-action-color: color-mix(in srgb, #4f8a08, var(--text-strong) 30%);
+    --accent-secondary-action-border: color-mix(in srgb, #6aa20d, var(--border-subtle) 34%);
+    --accent-secondary-action-bg-92: color-mix(in srgb, #6aa20d, var(--surface-1) 80%);
+    --accent-secondary-action-bg-90: color-mix(in srgb, #6aa20d, var(--surface-1) 78%);
   }
 }
 

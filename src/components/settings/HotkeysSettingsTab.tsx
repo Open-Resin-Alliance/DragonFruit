@@ -388,9 +388,9 @@ export function HotkeysSettingsTab() {
           onClick={resetToDefaults}
           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
           style={{
-            color: 'var(--accent-secondary)',
-            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+            color: 'var(--accent-secondary-action-color)',
+            borderColor: 'var(--accent-secondary-action-border)',
+            background: 'var(--accent-secondary-action-bg-92)',
           }}
         >
           <RotateCcw className="w-3.5 h-3.5" />
