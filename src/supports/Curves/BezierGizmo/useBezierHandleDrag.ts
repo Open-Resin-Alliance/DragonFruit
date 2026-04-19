@@ -23,7 +23,7 @@ export function useBezierHandleDrag({
     onDragEnd,
     enabled = true
 }: UseBezierHandleDragProps) {
-    const { camera, gl } = useThree();
+    const { camera, gl, invalidate } = useThree();
     const [isDragging, setIsDragging] = useState(false);
     
     // Refs for drag state
@@ -101,6 +101,8 @@ export function useBezierHandleDrag({
                 const point = getRayPlaneIntersection(e.clientX, e.clientY);
                 if (point && onDragRef.current) {
                     onDragRef.current(point.clone().add(dragOffset.current));
+                    // onDrag mutates three.js refs via parent — needed for demand mode.
+                    invalidate();
                 }
                 rafId.current = null;
             });

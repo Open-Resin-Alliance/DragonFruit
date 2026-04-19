@@ -42,7 +42,7 @@ export function LeafPlacementController() {
     const { getHotkey } = useHotkeyConfig();
     const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
 
-    const { raycaster, camera, pointer, scene } = useThree();
+    const { raycaster, camera, pointer, scene, invalidate } = useThree();
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const rearmFrameRef = useRef<number | null>(null);
@@ -173,6 +173,9 @@ export function LeafPlacementController() {
             lastPreviewSignatureRef.current = null;
             return;
         }
+
+        // Active placement — keep the loop alive for smooth preview tracking.
+        invalidate();
 
         raycaster.setFromCamera(pointer, camera);
 

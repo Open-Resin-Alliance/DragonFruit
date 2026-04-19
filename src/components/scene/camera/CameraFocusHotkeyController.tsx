@@ -88,7 +88,7 @@ export function CameraFocusHotkeyController({
   cameraRef,
   orbitControlsRef,
 }: CameraFocusHotkeyControllerProps) {
-  const { camera, controls, size } = useThree();
+  const { camera, controls, size, invalidate } = useThree();
   const sizeRef = React.useRef(size);
   React.useEffect(() => { sizeRef.current = size; }, [size]);
   const transitionRef = React.useRef<FocusTransition | null>(null);
@@ -126,6 +126,9 @@ export function CameraFocusHotkeyController({
       if (typeof transition.prevEnabled === 'boolean') controls.enabled = transition.prevEnabled;
       transitionRef.current = null;
     }
+
+    // Keep the demand-mode loop alive while the focus tween is running.
+    invalidate();
   }, -1);
 
   const snapCameraToPoint = React.useCallback((point: THREE.Vector3, modelRadius?: number) => {
@@ -202,7 +205,12 @@ export function CameraFocusHotkeyController({
       prevDamping,
       prevEnabled,
     };
-  }, [camera, controls, setOrbitTargetFromPoint]);
+
+    // Pre-emptive invalidate + rAF defer per R3F scaling-performance docs — ensures
+    // the first rendered frame shows the animation from t=0, avoiding the jump caveat.
+    invalidate();
+    requestAnimationFrame(() => invalidate());
+  }, [camera, controls, setOrbitTargetFromPoint, invalidate]);
 
   useCameraFocusHotkey(() => {
     const visibleModels = models.filter((model) => model.visible);

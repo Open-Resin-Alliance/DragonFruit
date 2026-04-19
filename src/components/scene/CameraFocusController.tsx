@@ -14,7 +14,7 @@ type CameraFocusControllerProps = {
  * Smoothly transitions camera position and target to center the island in view.
  */
 export function CameraFocusController({ selectedIslandId, islandMarkers }: CameraFocusControllerProps) {
-  const { camera, controls } = useThree();
+  const { camera, controls, invalidate } = useThree();
   const animatingRef = useRef(false);
 
   useEffect(() => {
@@ -167,6 +167,8 @@ export function CameraFocusController({ selectedIslandId, islandMarkers }: Camer
       // Interpolate controls target
       orbitControls.target.lerpVectors(startTarget, islandCenter, eased);
       orbitControls.update();
+      // Demand-mode safety: rAF-driven animation mutates refs, needs explicit invalidate.
+      invalidate();
 
       if (t < 1) {
         requestAnimationFrame(animate);

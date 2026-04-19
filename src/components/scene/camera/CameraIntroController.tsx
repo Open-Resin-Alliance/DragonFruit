@@ -48,7 +48,7 @@ export function CameraIntroController({
   plateWidthMm,
   plateDepthMm,
 }: CameraIntroControllerProps) {
-  const { camera, controls, size } = useThree();
+  const { camera, controls, size, invalidate } = useThree();
   const sizeRef = React.useRef(size);
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
@@ -216,6 +216,10 @@ export function CameraIntroController({
       }
       camera.lookAt(orbitControls.target);
       camera.updateMatrixWorld();
+      // rAF-driven animation mutates three.js refs directly and intentionally
+      // defers orbitControls.update() to completion to avoid change-churn.
+      // In demand mode nothing invalidates for us, so we must do it here.
+      invalidate();
 
       if (t < 1) {
         rafRef.current = requestAnimationFrame(animate);

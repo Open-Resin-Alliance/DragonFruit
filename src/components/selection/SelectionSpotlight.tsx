@@ -2,7 +2,7 @@
 
 import React from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 
 interface SelectionSpotlightProps {
   /** Ref to the mesh to illuminate */
@@ -51,6 +51,8 @@ export function SelectionSpotlight({
   const helperRef = React.useRef<THREE.SpotLightHelper | null>(null);
   const hasValidPlacementRef = React.useRef(false);
   const lastMeshIdRef = React.useRef<string | null>(null);
+  const lastLightPosRef = React.useRef<THREE.Vector3>(new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN));
+  const { invalidate } = useThree();
 
   React.useEffect(() => {
     hasValidPlacementRef.current = false;
@@ -109,13 +111,24 @@ export function SelectionSpotlight({
     light.distance = distToModel + fitRadius * 1.5;
     light.decay = 0;
 
+    let mutated = false;
     if (!hasValidPlacementRef.current) {
       hasValidPlacementRef.current = true;
       light.visible = true;
+      mutated = true;
     }
-    light.intensity = intensity;
+    if (Math.abs(intensity - light.intensity) > 1e-4) {
+      light.intensity = intensity;
+      mutated = true;
+    }
+
+    if (!lastLightPosRef.current.equals(light.position)) {
+      lastLightPosRef.current.copy(light.position);
+      mutated = true;
+    }
 
     light.updateMatrixWorld();
+    if (mutated) invalidate();
 
     if (debug) {
       if (!helperRef.current) {

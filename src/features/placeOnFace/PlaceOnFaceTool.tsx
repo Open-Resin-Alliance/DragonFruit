@@ -36,7 +36,7 @@ export function PlaceOnFaceTool({
   onFaceSelect,
   onBeforeFaceApply,
 }: PlaceOnFaceToolProps) {
-  const { scene } = useThree();
+  const { scene, invalidate } = useThree();
   const toolGroupRef = useRef<THREE.Group>(null);
   const targetMeshGroupRef = useRef<THREE.Group | null>(null);
   const tempQuatRef = useRef(new THREE.Quaternion());
@@ -146,6 +146,9 @@ export function PlaceOnFaceTool({
       setAnimState(null);
       onFaceSelect(animState.modelId);
     }
+
+    // Keep the demand-mode loop alive while the face-apply animation runs.
+    invalidate();
   });
 
   const meshLocalOffset = useMemo(() => {

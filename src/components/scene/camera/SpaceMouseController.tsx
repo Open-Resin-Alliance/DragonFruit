@@ -94,7 +94,7 @@ export function SpaceMouseController({
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
 }) {
-  const { camera, controls, scene } = useThree();
+  const { camera, controls, scene, invalidate } = useThree();
 
   const worldUp = React.useMemo(() => new THREE.Vector3(0, 0, 1), []);
   const defaultPivot = React.useMemo(
@@ -470,6 +470,10 @@ export function SpaceMouseController({
     camera.lookAt(lookTarget);
     camera.updateMatrixWorld();
     onNavigationFrame?.();
+    // Continuous-motion path per R3F discussion #1800 — keeps the loop alive in demand mode
+    // while the SpaceMouse is driving input. Idle-handback branches above don't invalidate:
+    // drei's OrbitControls.update() in those paths emits 'change' which invalidates for us.
+    invalidate();
   });
 
   return (

@@ -76,7 +76,7 @@ export function GizmoScale({
   const [isDragging, setIsDragging] = useState(false);
   const [isUniformScale, setIsUniformScale] = useState(false);
   const startDistance = useRef<number>(0);
-  const { camera, gl } = useThree();
+  const { camera, gl, invalidate } = useThree();
 
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
@@ -235,6 +235,8 @@ export function GizmoScale({
 
       const factor = getScaleFactor(e.clientX, e.clientY, gizmoCenterX, gizmoCenterY);
       onDrag(factor, isUniformScale);
+      // onDrag mutates three.js refs directly — needed for demand mode.
+      invalidate();
     };
 
     const handleGlobalPointerUp = () => {

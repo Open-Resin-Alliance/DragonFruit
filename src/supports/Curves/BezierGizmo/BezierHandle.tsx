@@ -21,7 +21,7 @@ export function BezierHandle({
     onDragStart,
     onDragEnd
 }: BezierHandleProps) {
-    const { camera } = useThree();
+    const { camera, invalidate } = useThree();
     const [scale, setScale] = useState(1);
     const [isHovered, setIsHovered] = useState(false);
     const sphereRef = useRef<THREE.Mesh>(null);
@@ -39,11 +39,12 @@ export function BezierHandle({
 
     // Calculate screen-space scale for the sphere
     useFrame(() => {
-        if (sphereRef.current) {
-            const distance = camera.position.distanceTo(position);
-            const next = THREE.MathUtils.clamp(distance * HANDLE_SCALE_FACTOR, MIN_HANDLE_SCALE, MAX_HANDLE_SCALE);
-            setScale((prev) => (Math.abs(prev - next) > 1e-4 ? next : prev));
-        }
+        if (!sphereRef.current) return;
+        const distance = camera.position.distanceTo(position);
+        const next = THREE.MathUtils.clamp(distance * HANDLE_SCALE_FACTOR, MIN_HANDLE_SCALE, MAX_HANDLE_SCALE);
+        if (Math.abs(scale - next) <= 1e-4) return;
+        setScale(next);
+        invalidate();
     });
 
     // Visuals

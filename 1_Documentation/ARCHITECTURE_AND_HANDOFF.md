@@ -1452,3 +1452,83 @@ The UI uses a hybrid layout:
 
 - Renders as an overlay inside the canvas region.
 - Positioned flush to the left edge of the docked sidebar by anchoring it to the canvas container (`right: 0` relative to the canvas region).
+
+---
+
+## 🎨 R3F Rendering Contract
+
+**Added**: 2026-04-19 — tracks issue #120 (Linux CEF idle CPU).
+
+### The rule
+
+> **A `useFrame` callback that mutates observable scene state MUST call `invalidate()`.**
+
+"Observable scene state" means any `three.js` `Object3D`, `Material`, `Uniform`, or `BufferAttribute` participating in the current render graph.
+
+### Why
+
+The main `SceneCanvas` supports an opt-in `frameloop='demand'` mode. In demand mode, R3F only renders when `invalidate()` is called (or when reactive props change). Any `useFrame` that mutates scene state without invalidating will display stale visuals — the user sees a frozen scene for that interaction.
+
+Canonical idiom (R3F maintainer-blessed — [discussion #1800](https://github.com/pmndrs/react-three-fiber/discussions/1800)):
+
+```ts
+useFrame(() => isActive() && invalidate());
+```
+
+Threshold-guarded pattern (when the hook mutates only under specific conditions):
+
+```ts
+useFrame(() => {
+  const changed = computeAndApplyIfNeeded();
+  if (changed) invalidate();
+});
+```
+
+Animation-start pattern (for animations kicked off by events — avoids the [first-frame-jump](https://r3f.docs.pmnd.rs/advanced/scaling-performance) caveat):
+
+```ts
+onSomeEvent(() => {
+  invalidate();
+  requestAnimationFrame(() => startAnimation());
+});
+```
+
+### Drei dependency
+
+drei ≥9 `OrbitControls` auto-invalidates on camera change. `@react-three/drei ^10.7.6` is pinned in `package.json`. **Do NOT swap to `three/examples` OrbitControls** — raw three.js controls do not auto-invalidate, and every hook that relies on camera-change propagation would need explicit invalidate plumbing.
+
+### Picking cache warmup (non-render-loop)
+
+`PickingRenderer` previously kept its pick-scene cache warm via an idle-frame `useFrame` — this conflicted with demand mode (defeats the idle-skip). The warmup now runs via `requestIdleCallback` (falling back to `setTimeout`) at ~50ms cadence, independent of frameloop mode. First-pick-after-idle latency is bounded by the interval cadence (<50ms).
+
+### Defense layers
+
+1. **Runtime toggle** — `demandFrameloopPreferences.ts` exposes a three-value preference (`null` / `true` / `false`) plus `NEXT_PUBLIC_DEMAND_FRAMELOOP` env override. Default is `null` → platform OFF (opt-in only this PR).
+2. **Dev diagnostic** — `renderDiagnostics.ts` + `RenderDiagnosticsOverlay` (opt-in via Settings → Mesh) shows renders/sec for user-reported stale-scene reports.
+3. **CI lint gate (pending — tracked at `dragonfruit-120-1`)** — ESLint rule or CI grep that enforces every new `useFrame(cb)` either references `invalidate` in its body or carries `// invalidate-safe: pure-read`.
+
+**Platform default flip** from OFF → ON is blocked on:
+
+- `dragonfruit-120-1` landing the CI lint gate, AND
+- One release cycle of opt-in telemetry showing zero freeze regressions.
+
+Follow-up issue will be created when both conditions are met.
+
+### SupportAnatomyPreviewCanvas caveat
+
+`src/supports/Settings/AnatomyPreview/SupportAnatomyPreviewCanvas.tsx` uses `gl-scissor` (see §"Anatomy Preview" elsewhere in this doc). The interaction of `gl-scissor` with `frameloop='demand'` is not documented by three.js or R3F. This Canvas remains on the default `always` frameloop until a spike test confirms:
+(i) preview redraws within 1 frame of a support-config change,
+(ii) gl-scissor rect renders correctly (no stale pixels outside scissor),
+(iii) manual config edit → visible update without external invalidate.
+Tracked at `dragonfruit-120-1` (spike + conversion).
+
+### Known R3F upstream bug
+
+- [GH #3186](https://github.com/pmndrs/react-three-fiber/issues/3186) — `invalidate()` can queue up to 60 frames per call. Monitored via the diagnostic overlay (renders/sec spikes during interaction). No direct mitigation needed; surfaced if it manifests in practice.
+
+### References
+
+- [Scaling performance — R3F docs](https://r3f.docs.pmnd.rs/advanced/scaling-performance)
+- [R3F discussion #1800 — animation invalidation pattern](https://github.com/pmndrs/react-three-fiber/discussions/1800)
+- [R3F discussion #1701 — pause rendering when nothing happens](https://github.com/pmndrs/react-three-fiber/discussions/1701)
+- Complementary future direction: R3F's `performance.regress()` API for quality scaling during interaction (separate concern from demand mode).

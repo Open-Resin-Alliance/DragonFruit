@@ -1,6 +1,11 @@
 'use client';
 
 import { useEffect } from 'react';
+import {
+  getSavedDemandFrameloopSettings,
+  resolveDemandFrameloop,
+  subscribeToDemandFrameloopSettings,
+} from '@/components/settings/demandFrameloopPreferences';
 
 type DiagnosticBreadcrumb = {
   at: string;
@@ -392,8 +397,19 @@ export function RendererCrashDiagnostics() {
     };
 
     rafId = window.requestAnimationFrame(onRaf);
+
+    // In demand-mode rendering, the compositor intentionally pauses rAF when
+    // the scene is idle — that's the whole point (saves CPU). The stall check
+    // would fire constantly. Suppress raf-stall events while demand mode is
+    // the resolved frameloop; re-enable if the user flips back to always.
+    let demandModeActive = resolveDemandFrameloop(getSavedDemandFrameloopSettings()) === 'demand';
+    const unsubscribeDemand = subscribeToDemandFrameloopSettings(() => {
+      demandModeActive = resolveDemandFrameloop(getSavedDemandFrameloopSettings()) === 'demand';
+    });
+
     stallTimerId = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
+      if (demandModeActive) return;
 
       const now = performance.now();
       const delta = now - lastRafMs;
@@ -439,6 +455,7 @@ export function RendererCrashDiagnostics() {
       if (stallTimerId != null) {
         window.clearInterval(stallTimerId);
       }
+      unsubscribeDemand();
 
       console.warn = originalWarn;
       console.error = originalError;

@@ -61,7 +61,7 @@ export function BracePlacementController() {
     const { getHotkey } = useHotkeyConfig();
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
 
-    const { raycaster, camera, pointer } = useThree();
+    const { raycaster, camera, pointer, invalidate } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
     const supportEditSuppressedRef = useRef(false);
     const lastPreviewSignatureRef = useRef<string | null>(null);
@@ -344,6 +344,10 @@ export function BracePlacementController() {
         supportEditSuppressedRef.current = false;
 
         if (!altActive && stage === 'idle') return;
+
+        // Active placement work follows — keep the loop alive in demand mode so
+        // hover previews and snap feedback track the cursor without lag.
+        invalidate();
 
         // Fast path: when shaft-hover already provides a concrete segment+point,
         // skip the heavier global snapping pass for this frame.

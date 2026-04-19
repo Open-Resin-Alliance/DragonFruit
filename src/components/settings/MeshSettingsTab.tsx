@@ -9,6 +9,7 @@ import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighl
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Input, Select } from '@/components/ui/primitives';
 import { Layers, MousePointer2, SlidersHorizontal } from 'lucide-react';
+import { DemandFrameloopSettingsSection } from '@/components/settings/DemandFrameloopSettingsSection';
 
 type PreviewModelConfig = {
   label: string;
@@ -159,6 +160,8 @@ export function MeshSettingsTab({
 
   return (
     <div className="space-y-3">
+
+      <DemandFrameloopSettingsSection />
 
       {/* ── Shader & Preview ─────────────────────────────────── */}
       <section

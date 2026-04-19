@@ -51,7 +51,7 @@ export function GizmoCenter({
   const intersectionRef = useRef(new THREE.Vector3());
   const deltaRef = useRef(new THREE.Vector3());
   const hoverStateRef = useRef(false);
-  const { camera, gl, pointer } = useThree();
+  const { camera, gl, pointer, invalidate } = useThree();
 
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
@@ -163,6 +163,7 @@ export function GizmoCenter({
       if (hoverStateRef.current) {
         hoverStateRef.current = false;
         setIsScreenHovered(false);
+        invalidate();
       }
       return;
     }
@@ -187,6 +188,7 @@ export function GizmoCenter({
       } else {
         onPointerLeave();
       }
+      invalidate();
     }
   });
 
@@ -215,6 +217,8 @@ export function GizmoCenter({
       if (delta.lengthSq() < MIN_DRAG_DELTA_SQ) return;
 
       onDrag(delta);
+      // onDrag mutates three.js refs directly — needed for demand mode.
+      invalidate();
       lastPointRef.current.copy(worldPoint);
     };
 

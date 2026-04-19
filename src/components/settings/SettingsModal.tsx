@@ -1146,8 +1146,8 @@ export function SettingsModal({
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 6%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
             }}
           >
-            <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
-              <div className="space-y-1.5">
+            <div className="h-full flex flex-col gap-2 min-h-0">
+              <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 space-y-1.5">
                 {sidebarTopTabs.map((tab) => {
                   const meta = tabMeta[tab];
                   const Icon = meta.icon;
@@ -1199,7 +1199,7 @@ export function SettingsModal({
                 })}
               </div>
 
-              <div className="mt-auto space-y-1.5 pt-3">
+              <div className="shrink-0 space-y-1.5 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                 {sidebarBottomTabs.map((tab) => {
                   const meta = tabMeta[tab];
                   const Icon = meta.icon;

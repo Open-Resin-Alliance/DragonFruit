@@ -43,7 +43,7 @@ export function useKnotInteraction(enabled: boolean = true) {
     const DRAG_SNAP_MM = 0.001;
 
     const { isDragging, hit } = usePicking();
-    const { camera, raycaster, pointer } = useThree();
+    const { camera, raycaster, pointer, invalidate } = useThree();
 
     const activeKnotId = useRef<string | null>(null);
     const activeHost = useRef<ActiveHost | null>(null);
@@ -166,7 +166,9 @@ export function useKnotInteraction(enabled: boolean = true) {
     const markKnotDragUpdatePending = useCallback(() => {
         if (!activeKnotId.current) return;
         knotDragUpdatePendingRef.current = true;
-    }, []);
+        // Demand-mode: wake the useFrame loop so pointer motion drives the drag.
+        invalidate();
+    }, [invalidate]);
 
     const snapVec3 = (vec: THREE.Vector3) => {
         vec.x = Math.round(vec.x / DRAG_SNAP_MM) * DRAG_SNAP_MM;
@@ -909,6 +911,9 @@ export function useKnotInteraction(enabled: boolean = true) {
         if (!activeKnotId.current || !activeHost.current) return;
 
         knotDragUpdatePendingRef.current = false;
+
+        // Active knot drag — keep loop alive.
+        invalidate();
 
         const knot = getKnotById(activeKnotId.current);
         if (!knot) return;

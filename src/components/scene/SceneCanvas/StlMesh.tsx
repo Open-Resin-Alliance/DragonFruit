@@ -245,7 +245,7 @@ function StlMeshComponent({
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
   const supportDimCameraLocalPointRef = React.useRef(new THREE.Vector3());
@@ -591,17 +591,21 @@ if (uDitherAmount > 0.0) {
     const proximityFadeRangeMm = 80;
     const proximityT = THREE.MathUtils.clamp(1 - (distanceToBoundsMm / proximityFadeRangeMm), 0, 1);
 
+    let mutated = false;
+
     // Opacity: 0.5 (far) → 0.08 (close). Dithering handles the remaining visibility.
     const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, 0.08, proximityT);
     const nextOpacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 0.18);
     if (Math.abs(nextOpacity - material.opacity) > 0.0005) {
       material.opacity = nextOpacity;
+      mutated = true;
     }
 
     const shouldDepthWrite = nextOpacity > 0.2;
     if (material.depthWrite !== shouldDepthWrite) {
       material.depthWrite = shouldDepthWrite;
       material.needsUpdate = true;
+      mutated = true;
     }
 
     // Bayer dither dissolve — ramps 0 (far, no dither) → 1 (close, fully discarded).
@@ -611,6 +615,7 @@ if (uDitherAmount > 0.0) {
       const nextDither = THREE.MathUtils.lerp(currentDither, proximityT, 0.18);
       if (Math.abs(nextDither - currentDither) > 0.0005) {
         ditherUniforms.uDitherAmount.value = nextDither;
+        mutated = true;
       }
     }
 
@@ -619,7 +624,10 @@ if (uDitherAmount > 0.0) {
     const shouldBlockRaycast = proximityT >= 0.25 && !shiftHeldRef.current;
     if (supportDimRaycastBlockedRef.current !== shouldBlockRaycast) {
       supportDimRaycastBlockedRef.current = shouldBlockRaycast;
+      // Not a visible mutation but ensures consistency — no invalidate needed.
     }
+
+    if (mutated) invalidate();
   });
 
   const interactionLodColor = React.useMemo(() => {

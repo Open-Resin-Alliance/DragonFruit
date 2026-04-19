@@ -43,7 +43,7 @@ export function CameraHomeResetController({
   homeFovDeg = 50,
   onComplete,
 }: CameraHomeResetControllerProps) {
-  const { camera, controls } = useThree();
+  const { camera, controls, invalidate } = useThree();
 
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
@@ -160,6 +160,10 @@ export function CameraHomeResetController({
       }
 
       controls.update();
+      // Drei's OrbitControls.update() emits 'change' on state diff and
+      // auto-invalidates; the explicit invalidate here is defensive in case
+      // an idle step produces no diff but we still need the frame rendered.
+      invalidate();
 
       if (t < 1) {
         rafRef.current = requestAnimationFrame(animate);

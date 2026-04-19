@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
 import { OrbitControls } from '@react-three/drei';
+import { useDemandFrameloop, useDemandFrameloopSettings } from '@/components/scene/useDemandFrameloop';
+import { RenderDiagnosticsOverlay, RenderDiagnosticsProbe } from '@/components/scene/RenderDiagnosticsOverlay';
 import {
   CrossSectionStencilCap,
   type CrossSectionCapDebugOverrides,
@@ -525,7 +527,6 @@ export function SceneCanvas({
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
-
   const [isLightTheme, setIsLightTheme] = React.useState(() => {
     if (typeof window === 'undefined') return false;
     const html = document.documentElement;
@@ -551,6 +552,8 @@ export function SceneCanvas({
     return () => { observer.disconnect(); mq.removeEventListener('change', check); };
   }, []);
 
+  const demandFrameloop = useDemandFrameloop();
+  const demandFrameloopSettings = useDemandFrameloopSettings();
   const cameraProjectionMode = React.useSyncExternalStore(
     subscribeToCameraProjectionSettings,
     () => getSavedCameraProjectionSettings().mode,
@@ -4668,14 +4671,19 @@ export function SceneCanvas({
       ref={containerRef}
     >
       <Canvas
-        key={`scene-canvas-${canvasRecoveryNonce}`}
+        // Re-key on frameloop change: R3F rebuilds its render-loop mode cleanly
+        // on remount. Trade-off: toggling the demandFrameloop setting mid-session
+        // loses scene state briefly. Settings-level toggles are not a hot path.
+        key={`scene-canvas-${canvasRecoveryNonce}-${demandFrameloop}`}
         style={{ width: '100%', height: '100%', backgroundColor: 'var(--surface-0)', display: 'block' }}
         camera={defaultCamera}
         shadows={!isLinux}
         dpr={dynamicDpr}
+        frameloop={demandFrameloop}
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}
       >
+        {demandFrameloopSettings.showDiagnosticsOverlay && <RenderDiagnosticsProbe />}
         <SceneRenderBindings
           rendererRef={rendererRef}
           sceneRef={sceneRef}
@@ -6025,6 +6033,8 @@ export function SceneCanvas({
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
         {children}
       </Canvas>
+
+      {demandFrameloopSettings.showDiagnosticsOverlay && <RenderDiagnosticsOverlay />}
 
       <SceneMoodOverlay />
 

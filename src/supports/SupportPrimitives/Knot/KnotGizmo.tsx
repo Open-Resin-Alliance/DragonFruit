@@ -44,7 +44,7 @@ export function KnotGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedId = state.selectedId;
     const selectedCategory = state.selectedCategory;
-    const { camera, raycaster, pointer } = useThree();
+    const { camera, raycaster, pointer, invalidate } = useThree();
     const activeKnotDragPreview = useActiveKnotDragPreview();
 
     const isDraggingRef = useRef(false);
@@ -401,6 +401,8 @@ export function KnotGizmo() {
             knot: updated,
             branchSegmentsById: previewBranchSegmentsByIdRef.current,
         });
+        // Keep the loop alive while the user is dragging.
+        invalidate();
     });
 
     const handleMoveStart = useCallback((axis?: 'x' | 'y' | 'z') => {

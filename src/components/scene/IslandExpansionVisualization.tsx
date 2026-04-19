@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useEffect } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillSimulator';
 import { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import { getScanVisualPosition } from '@/utils/scanPositioning';
@@ -18,6 +18,22 @@ export function IslandExpansionVisualization({ simulator, transform, enabled }: 
     const meshRef = useRef<THREE.InstancedMesh>(null);
     const textureRef = useRef<THREE.DataTexture | null>(null);
     const materialRef = useRef<THREE.MeshStandardMaterial>(null);
+    const { invalidate } = useThree();
+
+    // Kick the demand-mode loop alive when the animation starts — without this,
+    // useFrame never fires in an idle demand scene and the simulator's first
+    // flush never renders. Uses invalidate + rAF defer per R3F scaling-performance
+    // docs (avoids first-frame-jump).
+    useEffect(() => {
+        if (!enabled || !simulator) return;
+        let cancelled = false;
+        invalidate();
+        requestAnimationFrame(() => {
+            if (cancelled) return;
+            invalidate();
+        });
+        return () => { cancelled = true; };
+    }, [enabled, simulator, invalidate]);
 
     // 1. Initialize GPU Data (Texture & Geometry)
     // Re-run only if simulator instance changes or enabled toggle flips
@@ -188,6 +204,7 @@ export function IslandExpansionVisualization({ simulator, transform, enabled }: 
         }
 
         texture.needsUpdate = true; // Fast upload
+        invalidate(); // Keep the loop alive in demand mode while changes keep flushing.
     });
 
     if (!enabled || !simulator) return null;

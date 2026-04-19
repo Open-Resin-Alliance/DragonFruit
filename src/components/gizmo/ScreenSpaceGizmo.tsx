@@ -46,7 +46,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   const SWITCH_SNAP_EPSILON = 0.003;
   const AXIS_SUPPRESS_MS = 72;
 
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
   const scaleFactor = props.scaleFactor ?? 0.04;
   const followMeshRef = props.followMeshRef ?? true;
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
@@ -176,6 +176,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     const root = gizmoRootRef.current;
     if (!root) return;
 
+    let mutated = false;
     let effectivePosition: [number, number, number];
 
     if (transitionRef.current.active && !isDraggingRef.current) {
@@ -191,6 +192,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       lastPositionRef.current = damped;
       root.position.set(damped[0], damped[1], damped[2]);
       effectivePosition = damped;
+      mutated = true;
 
       const rx = target[0] - damped[0];
       const ry = target[1] - damped[1];
@@ -211,6 +213,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       ) {
         lastPositionRef.current = nextPosition;
         root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+        mutated = true;
       }
       effectivePosition = lastPositionRef.current;
     }
@@ -219,7 +222,10 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     if (Math.abs(newScale - lastScaleRef.current) > 1e-4) {
       lastScaleRef.current = newScale;
       root.scale.setScalar(newScale);
+      mutated = true;
     }
+
+    if (mutated) invalidate();
   });
 
   const handleDragStateChange = React.useCallback((isDragging: boolean) => {

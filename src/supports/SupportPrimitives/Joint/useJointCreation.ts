@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick } from '../../state';
 import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from './jointUtils';
@@ -43,6 +43,7 @@ export function useJointCreation() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+    const { invalidate } = useThree();
 
     // Continuous update loop
     useFrame(() => {
@@ -51,6 +52,9 @@ export function useJointCreation() {
             if (target !== null) setTarget(null);
             return;
         }
+
+        // Active joint-creation session — keep loop alive for snap responsiveness.
+        invalidate();
 
         const result = updateSnapping();
         

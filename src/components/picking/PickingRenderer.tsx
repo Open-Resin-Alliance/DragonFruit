@@ -55,7 +55,7 @@ export function PickingRenderer({
   onPick,
   mouseNDC,
 }: PickingRendererProps) {
-  const { gl, scene, camera } = useThree();
+  const { gl, scene, camera, invalidate } = useThree();
   
   // Render target for picking (3x3 pixels)
   const renderTargetRef = useRef<THREE.WebGLRenderTarget | null>(null);
@@ -433,16 +433,66 @@ export function PickingRenderer({
       : 1000 / Math.max(1, effectiveHoverHz);
     
     if (now - lastPickTimeRef.current < minInterval) return;
-    
+
     lastPickTimeRef.current = now;
+    const priorWinner = previousWinnerRef.current;
     performPick(mouseNDC.current.x, mouseNDC.current.y);
+    const winnerChanged = previousWinnerRef.current !== priorWinner;
+
+    // Demand-mode invalidate policy: only render when something visibly
+    // changed. Pointer motion, scene motion, active drag, or a hover-winner
+    // transition all warrant a render. A stationary pointer with no winner
+    // change does NOT — this keeps the scene idle on mode tabs / view
+    // switching / anywhere the picking useFrame is active but the result
+    // is stable.
+    if (moved || sceneMoved || isDragging || winnerChanged) {
+      invalidate();
+    }
   });
 
-  // Keep cache in sync even when pointer is idle, so next pick has no setup hitch.
-  useFrame(() => {
+  // Previously kept the pick-scene cache warm via a per-frame useFrame — but
+  // that defeats frameloop='demand' by forcing a render every idle frame.
+  // Sync via requestIdleCallback (falls back to setTimeout on envs that lack it)
+  // so the cache stays current without keeping the render loop alive. See
+  // ADR / ARCHITECTURE_AND_HANDOFF "R3F rendering contract" section.
+  useEffect(() => {
     if (!config.enabled || isPaused) return;
-    syncPickSceneCache();
-  });
+
+    const CACHE_SYNC_INTERVAL_MS = 50;
+    let cancelled = false;
+
+    // Browser-only: requestIdleCallback / setTimeout both return number in a
+    // Window context. The useEffect is guarded behind typeof window !== 'undefined'
+    // via its callers, so SSR never reaches here.
+    type IdleCallbackHandle = number;
+    type IdleCallbackShim = (cb: () => void, opts?: { timeout?: number }) => IdleCallbackHandle;
+    type CancelIdleCallbackShim = (handle: IdleCallbackHandle) => void;
+
+    const requestIdle: IdleCallbackShim =
+      (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function')
+        ? (cb, opts) => (window as any).requestIdleCallback(cb, opts)
+        : (cb) => window.setTimeout(cb, CACHE_SYNC_INTERVAL_MS);
+
+    const cancelIdle: CancelIdleCallbackShim =
+      (typeof window !== 'undefined' && typeof (window as any).cancelIdleCallback === 'function')
+        ? (handle) => (window as any).cancelIdleCallback(handle)
+        : (handle) => window.clearTimeout(handle);
+
+    let handle: IdleCallbackHandle | null = null;
+
+    const tick = () => {
+      if (cancelled) return;
+      syncPickSceneCache();
+      handle = requestIdle(tick, { timeout: CACHE_SYNC_INTERVAL_MS * 2 });
+    };
+
+    handle = requestIdle(tick, { timeout: CACHE_SYNC_INTERVAL_MS });
+
+    return () => {
+      cancelled = true;
+      if (handle !== null) cancelIdle(handle);
+    };
+  }, [config.enabled, isPaused, syncPickSceneCache]);
 
   // Cleanup any cached pick objects on unmount.
   useEffect(() => {

@@ -134,8 +134,9 @@ export function OrbitPivotIndicator({
   visible: boolean;
   color?: string;
 }) {
-  const { controls } = useThree();
+  const { controls, invalidate } = useThree();
   const markerRef = React.useRef<THREE.Points>(null);
+  const prevTargetRef = React.useRef<THREE.Vector3>(new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN));
   const markerPoint = React.useMemo(() => new Float32Array([0, 0, 0]), []);
   const markerTexture = React.useMemo(() => {
     if (typeof document === 'undefined') return null;
@@ -170,7 +171,11 @@ export function OrbitPivotIndicator({
     if (!controls || typeof controls !== 'object' || !('target' in controls)) return;
 
     const orbit = controls as unknown as { target: THREE.Vector3 };
+    const prev = prevTargetRef.current;
+    if (prev.equals(orbit.target)) return;
+    prev.copy(orbit.target);
     markerRef.current.position.copy(orbit.target);
+    invalidate();
   });
 
   if (!visible) return null;

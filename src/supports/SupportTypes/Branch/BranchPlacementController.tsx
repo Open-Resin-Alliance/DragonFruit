@@ -101,7 +101,7 @@ export function BranchPlacementController() {
 
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
 
-    const { raycaster, camera, pointer, gl, scene } = useThree();
+    const { raycaster, camera, pointer, gl, scene, invalidate } = useThree();
 
     useEffect(() => {
         if (!altActive) return;
@@ -346,6 +346,9 @@ export function BranchPlacementController() {
             publishPreview(`inactive:${stage}:${altActive ? 'alt' : 'none'}`, null);
             return;
         }
+
+        // Active placement — keep the loop alive for smooth preview tracking.
+        invalidate();
 
         // Update raycaster for mouse position
         raycaster.setFromCamera(pointer, camera);

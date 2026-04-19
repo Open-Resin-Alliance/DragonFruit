@@ -26,12 +26,16 @@ function ZUpPreviewCamera({ distance }: { distance: number }) {
 }
 
 function CameraHeadlight({ intensity }: { intensity: number }) {
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
   const lightRef = React.useRef<THREE.PointLight | null>(null);
+  const prevCameraPosRef = React.useRef<THREE.Vector3>(new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN));
 
   useFrame(() => {
     if (!lightRef.current) return;
+    if (prevCameraPosRef.current.equals(camera.position)) return;
+    prevCameraPosRef.current.copy(camera.position);
     lightRef.current.position.copy(camera.position);
+    invalidate();
   });
 
   return (
@@ -538,6 +542,7 @@ export function MeshShaderPreviewCanvas({
         gl={{ alpha: true, antialias: true }}
         camera={{ position: [0, -cameraDistance, 0], fov: 35 }}
         dpr={[1, 2]}
+        frameloop="demand"
         onPointerMissed={() => {
           onHoverChange?.(false);
           onCanvasPress?.();

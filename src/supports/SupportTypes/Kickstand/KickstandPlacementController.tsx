@@ -268,7 +268,7 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string): boolean {
 export function KickstandPlacementController() {
     const { hotkeyActive } = useKickstandPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const { camera, gl, pointer, raycaster } = useThree();
+    const { camera, gl, pointer, raycaster, invalidate } = useThree();
     const { getHotkey } = useHotkeyConfig();
     const hoverPointBySegmentRef = useRef<Map<string, Vec3>>(new Map());
     const hoveredSegmentIdRef = useRef<string | null>(null);
@@ -410,6 +410,9 @@ export function KickstandPlacementController() {
             lastPreviewSegmentIdRef.current = null;
             return;
         }
+
+        // Active placement — keep the loop alive for smooth preview tracking.
+        invalidate();
 
         const resolvedSnap = updateAndGetResolvedSnap();
 

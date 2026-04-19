@@ -53,7 +53,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const JOINT_PARENT_CACHE_MAX_ENTRIES = 12000;
 
     const { isDragging, hit } = usePicking();
-    const { camera, raycaster, pointer, controls } = useThree();
+    const { camera, raycaster, pointer, controls, invalidate } = useThree();
 
     const activeJointId = useRef<string | null>(null);
     const activeTrunkId = useRef<string | null>(null);
@@ -298,7 +298,10 @@ export function useJointInteraction(enabled: boolean = true) {
     const markJointDragUpdatePending = useCallback(() => {
         if (!activeJointId.current) return;
         jointDragUpdatePendingRef.current = true;
-    }, []);
+        // Demand-mode: the useFrame consumer of this ref only fires on rendered
+        // frames. Without invalidate, pointer motion wouldn't wake the loop.
+        invalidate();
+    }, [invalidate]);
 
     const applyWarningForDragDelta = useCallback((clampedPos: Vec3 | null, rawPos: Vec3) => {
         if (!clampedPos) return;
@@ -999,6 +1002,9 @@ export function useJointInteraction(enabled: boolean = true) {
         if (!(activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current || activeTwigId.current || activeStickId.current))) return;
 
         jointDragUpdatePendingRef.current = false;
+
+        // Active drag — keep loop alive while the user is manipulating a joint.
+        invalidate();
 
         if (activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current || activeTwigId.current || activeStickId.current)) {
             raycaster.setFromCamera(pointer, camera);

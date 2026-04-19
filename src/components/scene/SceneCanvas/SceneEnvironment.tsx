@@ -29,7 +29,7 @@ export function CameraProvider({ cameraRef }: { cameraRef: React.MutableRefObjec
 }
 
 export function CameraClipPlaneStabilizer() {
-  const { camera, controls } = useThree();
+  const { camera, controls, invalidate } = useThree();
 
   useFrame(() => {
     const perspective = camera as THREE.PerspectiveCamera;
@@ -52,6 +52,7 @@ export function CameraClipPlaneStabilizer() {
       perspective.near = desiredNear;
       perspective.far = desiredFar;
       perspective.updateProjectionMatrix();
+      invalidate();
     }
   });
 

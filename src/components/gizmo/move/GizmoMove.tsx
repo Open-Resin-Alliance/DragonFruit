@@ -64,7 +64,7 @@ export function GizmoMove({
   const axisDeltaRef = useRef(new THREE.Vector3());
   const scratchAxisDirRef = useRef(new THREE.Vector3());
   const scratchAxisToRayRef = useRef(new THREE.Vector3());
-  const { camera, gl } = useThree();
+  const { camera, gl, invalidate } = useThree();
 
   const pickMeshRef = useRef<THREE.Group>(null);
   const pickIdRef = useRef<number | null>(null);
@@ -200,6 +200,9 @@ export function GizmoMove({
 
       const delta = axisDeltaRef.current.copy(axisDirection).multiplyScalar(axisMagnitude);
       onDrag(delta);
+      // onDrag mutates three.js refs directly (no React state change) — in
+      // demand mode nothing would render without this invalidate.
+      invalidate();
       lastAxisParamRef.current = nextAxisParam;
     };
 

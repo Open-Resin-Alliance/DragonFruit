@@ -67,7 +67,7 @@ export function GizmoRotation({
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
   const pointLightRef = useRef<THREE.PointLight>(null);
-  const { camera, gl } = useThree();
+  const { camera, gl, invalidate } = useThree();
 
   const computeShouldFlip = useCallback(() => {
     if (axis === 'x') {
@@ -159,7 +159,13 @@ export function GizmoRotation({
     if (delta < -Math.PI) delta += 2 * Math.PI;
 
     const smoothing = isDragging || suppressAxisAnimations ? 1 : 0.2;
-    handleAngleRef.current += delta * smoothing;
+    // Snap to target when close — asymptotic damping never exactly reaches
+    // the target, which kept the loop alive forever in demand mode.
+    if (!isDragging && Math.abs(delta) < 5e-4) {
+      handleAngleRef.current = targetHandleAngleRef.current;
+    } else {
+      handleAngleRef.current += delta * smoothing;
+    }
 
     const handleAngle = handleAngleRef.current;
     const radius = GIZMO_SIZES.ringMajorRadius;
@@ -185,13 +191,22 @@ export function GizmoRotation({
 
     const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
     const billboardTarget = Math.atan2(cameraDir.y, cameraDir.x);
-    if (suppressAxisAnimations) {
+    const billboardRemaining = billboardTarget - billboardRotationRef.current;
+    if (suppressAxisAnimations || Math.abs(billboardRemaining) < 5e-4) {
+      // Snap when close to target — prevents asymptotic chase from keeping
+      // the render loop alive forever in demand mode.
       billboardRotationRef.current = billboardTarget;
     } else {
-      billboardRotationRef.current += (billboardTarget - billboardRotationRef.current) * 0.2;
+      billboardRotationRef.current += billboardRemaining * 0.2;
     }
     if (billboardGroupRef.current) {
       billboardGroupRef.current.rotation.x = billboardRotationRef.current;
+    }
+
+    // Invalidate while either value is still meaningfully converging.
+    const handleRemaining = Math.abs(targetHandleAngleRef.current - handleAngleRef.current);
+    if (isDragging || handleRemaining > 5e-4 || Math.abs(billboardRemaining) > 5e-4) {
+      invalidate();
     }
   }, -1);
 
@@ -300,6 +315,8 @@ export function GizmoRotation({
 
       // Send rotation delta to parent (object rotation)
       onDragRef.current(emittedObjectDelta);
+      // Parent mutates three.js refs directly — needed for demand mode.
+      invalidate();
 
       // Dispatch snap readout event for DOM overlay (always active while dragging)
       window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
