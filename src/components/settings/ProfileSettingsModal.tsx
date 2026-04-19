@@ -367,6 +367,54 @@ export function ProfileSettingsModal({
     getPrinterReachabilitySnapshot,
     getPrinterReachabilityServerSnapshot,
   );
+  const [isLightTheme, setIsLightTheme] = React.useState<boolean>(() => {
+    if (typeof document === 'undefined') return false;
+    const explicitTheme = document.documentElement.getAttribute('data-theme');
+    if (explicitTheme === 'light') return true;
+    if (explicitTheme === 'dark') return false;
+    return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches;
+  });
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const resolveLightTheme = () => {
+      const explicitTheme = document.documentElement.getAttribute('data-theme');
+      if (explicitTheme === 'light') return true;
+      if (explicitTheme === 'dark') return false;
+      return window.matchMedia('(prefers-color-scheme: light)').matches;
+    };
+
+    const syncTheme = () => setIsLightTheme(resolveLightTheme());
+    syncTheme();
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          syncTheme();
+          return;
+        }
+      }
+    });
+
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncTheme);
+    } else {
+      mediaQuery.addListener(syncTheme);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', syncTheme);
+      } else {
+        mediaQuery.removeListener(syncTheme);
+      }
+    };
+  }, []);
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
   const officialPrinterUpdates = React.useMemo(() => getOfficialPrinterProfileUpdates(profileState), [profileState]);
@@ -1105,6 +1153,31 @@ export function ProfileSettingsModal({
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 0 ? 'Manage Fleet' : 'Network Settings';
   const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 0;
   const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
+  const accentSecondaryActionColor = isLightTheme
+    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
+    : 'var(--accent-secondary)';
+  const accentSecondaryActionBorderColor = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
+  const accentSecondaryActionBackground92 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
+  const accentSecondaryActionBackground93 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 82%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)';
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground92,
+  };
+  const accentSecondaryActionStyle93: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground93,
+  };
+  const printerImageWellBackground = isLightTheme
+    ? 'color-mix(in srgb, var(--surface-2), white 20%)'
+    : '#1c2027';
   const printerSectionTitle = shouldRenderFleetRail
     ? `${selectedPrinter?.name ?? 'Printer'} Fleet`
     : '3D Printer';
@@ -1196,7 +1269,7 @@ export function ProfileSettingsModal({
             className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-lg border overflow-hidden relative"
             style={{
               borderColor: 'var(--border-subtle)',
-              background: '#1c2027',
+              background: printerImageWellBackground,
               height: 128,
               minHeight: 128,
               maxHeight: 128,
@@ -1246,7 +1319,7 @@ export function ProfileSettingsModal({
         </div>
       </div>
     );
-  }, []);
+  }, [printerImageWellBackground]);
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
@@ -3200,11 +3273,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleAddPrinter}
                   className="ui-button ui-button-secondary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Plus className="w-4 h-4" />
                   Add Printer
@@ -3266,16 +3335,8 @@ export function ProfileSettingsModal({
                       onClick={handleAddPrinter}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
                       style={shouldShowFleetSwitchAction
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                          }}
+                        ? accentSecondaryActionStyle92
+                        : accentSecondaryActionStyle93}
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Add Printer
@@ -3519,11 +3580,7 @@ export function ProfileSettingsModal({
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
                               background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                             }
-                          : {
-                              color: 'var(--accent-secondary)',
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                            }}
+                          : accentSecondaryActionStyle93}
                         title={fleetCount > 0 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                       >
                         {fleetCount > 0 ? (
@@ -3563,11 +3620,7 @@ export function ProfileSettingsModal({
                       setIsNetworkSettingsOpen(true);
                     }}
                     className="ui-button ui-button-secondary mt-2 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                    style={{
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                    }}
+                    style={accentSecondaryActionStyle93}
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Add First Device
@@ -3584,11 +3637,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => setPrinterRailViewMode('profiles')}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         Return to Printers
                       </button>
@@ -3628,11 +3677,7 @@ export function ProfileSettingsModal({
                           disabled={!hasPrinters || !selectedPrinter}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                           style={shouldShowFleetSwitchAction
-                            ? {
-                                color: 'var(--accent-secondary)',
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                              }
+                            ? accentSecondaryActionStyle92
                             : { color: 'var(--text-strong)' }}
                         >
                           {shouldShowFleetSwitchAction ? <LayoutGrid className="w-3.5 h-3.5" /> : <Search className="w-3.5 h-3.5" />}
@@ -3644,11 +3689,7 @@ export function ProfileSettingsModal({
                           type="button"
                           onClick={() => setShowPrinterUpdateDiffModal(true)}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                          style={{
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }}
+                          style={accentSecondaryActionStyle92}
                           title={`Update v${selectedPrinterUpdate.currentVersion} to v${selectedPrinterUpdate.latestVersion}`}
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -3781,11 +3822,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleAddMaterial}
                         className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Plus className="w-3.5 h-3.5" />
                         New
@@ -3878,11 +3915,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleOpenNetworkSettings}
                         className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
                         Open Fleet Management
@@ -3912,11 +3945,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleOpenNetworkSettings}
                         className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
                         Connect Now
@@ -4180,7 +4209,7 @@ export function ProfileSettingsModal({
 
                   <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Card Thumbnail</div>
-                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                       {editingFleetUnitImageDataUrl ? (
                         <AutoTrimmedImage src={editingFleetUnitImageDataUrl} alt={editingFleetUnitNickname || editingFleetUnit.displayName || 'Fleet unit'} className="h-full w-full object-cover" />
                       ) : (
@@ -4573,7 +4602,7 @@ export function ProfileSettingsModal({
                     </div>
 
                     <div className="rounded-lg border p-2.5 h-full min-h-0 flex" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                         {selectedPrinter.imageDataUrl ? (
                           <AutoTrimmedImage src={selectedPrinter.imageDataUrl} alt={selectedPrinter.name} className="h-full w-full object-contain" />
                         ) : (
@@ -4612,11 +4641,7 @@ export function ProfileSettingsModal({
                       disabled={isSelectedPrinterOfficial}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md disabled:opacity-55 disabled:cursor-not-allowed"
                       style={selectedBuildDimensionMode === 'auto'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
+                        ? accentSecondaryActionStyle92
                         : { color: 'var(--text-strong)' }}
                     >
                       {selectedBuildDimensionMode === 'auto' ? 'Auto' : 'Manual'}
@@ -5302,11 +5327,7 @@ export function ProfileSettingsModal({
                     setShowPrinterUpdateDiffModal(false);
                   }}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Download className="w-3.5 h-3.5" />
                   Apply Update

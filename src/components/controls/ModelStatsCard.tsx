@@ -573,7 +573,9 @@ export function ModelStatsCard({
                   background: model.geometry.meshDefects.repairedByManifold
                     ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
                     : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
-                  color: model.geometry.meshDefects.repairedByManifold ? '#86efac' : '#fde68a',
+                  color: model.geometry.meshDefects.repairedByManifold
+                    ? 'color-mix(in srgb, #22c55e, var(--text-strong) 20%)'
+                    : 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                   border: model.geometry.meshDefects.repairedByManifold
                     ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
                     : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',

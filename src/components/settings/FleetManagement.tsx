@@ -218,7 +218,7 @@ export function FleetManagement({
                             type="button"
                             onClick={() => onRemoveManagedPrinter(device)}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-[11px] rounded-md"
-                            style={{ color: '#fca5a5' }}
+                            style={{ color: 'var(--danger)' }}
                             title="Remove saved printer"
                           >
                             Remove

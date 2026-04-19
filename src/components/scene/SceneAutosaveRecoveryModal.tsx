@@ -136,7 +136,7 @@ export function SceneAutosaveRecoveryModal({ savedAt, onRestore, onDiscard }: Pr
               style={{
                 borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                 background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
-                color: '#86efac',
+                color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
               }}
               disabled={busy !== 'none'}
               onClick={() => { void handleRestore(); }}

@@ -14382,7 +14382,7 @@ export default function Home() {
                   style={{
                     borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 55%)',
                     background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
-                    color: '#86efac',
+                    color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                   }}
                 >
                   <CheckCircle2 className="h-4 w-4" />
@@ -14576,12 +14576,12 @@ export default function Home() {
                           ? {
                               borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                               background: 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)',
-                              color: '#bbf7d0',
+                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
                             }
                           : {
                               borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                               background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: '#fee2e2',
+                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
                             }
                       )
                       : (
@@ -14589,12 +14589,12 @@ export default function Home() {
                           ? {
                               borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
                               background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                              color: '#fde68a',
+                              color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                             }
                           : {
                               borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                               background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: '#fee2e2',
+                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
                             }
                       )
                   }
@@ -14711,15 +14711,15 @@ export default function Home() {
               </div>
               <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Build plate and resin vat are properly seated and secured.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Resin is mixed, sufficient for the print, and at operating temperature.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Build plate is clean and clear, and the printer cover is fully closed.</span>
                 </div>
               </div>
@@ -14858,7 +14858,7 @@ export default function Home() {
                             <div
                               className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
                               style={{
-                                color: '#86efac',
+                                color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                                 background: 'color-mix(in srgb, #22c55e, transparent 84%)',
                               }}
                               aria-label="Selected printer"
@@ -14937,7 +14937,7 @@ export default function Home() {
                                       <div
                                         className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
                                         style={{
-                                          color: '#86efac',
+                                          color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                                           background: 'color-mix(in srgb, #22c55e, transparent 84%)',
                                         }}
                                         aria-label="Selected material"
@@ -15242,7 +15242,7 @@ export default function Home() {
                   <div className="inline-flex h-7 w-7 items-center justify-center rounded-sm shrink-0" style={{
                     background: 'color-mix(in srgb, #baf72e, var(--surface-1) 90%)',
                     border: '1px solid color-mix(in srgb, #baf72e, var(--border-subtle) 45%)',
-                    color: '#baf72e',
+                    color: 'var(--accent-secondary)',
                   }}>
                     <LayoutGrid className="h-3.5 w-3.5" />
                   </div>
@@ -15687,7 +15687,7 @@ export default function Home() {
                       <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
                         borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 52%)',
                         background: 'color-mix(in srgb, #f59e0b, transparent 84%)',
-                        color: '#fde68a',
+                        color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                       }}>
                         <RefreshCw className="h-5 w-5 animate-spin" />
                       </div>
@@ -15729,7 +15729,7 @@ export default function Home() {
                       <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
                         borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 52%)',
                         background: 'color-mix(in srgb, #f87171, transparent 84%)',
-                        color: '#fecaca',
+                        color: 'var(--danger)',
                       }}>
                         <AlertTriangle className="h-5 w-5" />
                       </div>
@@ -15904,7 +15904,7 @@ export default function Home() {
                                             style={{
                                               borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                                               background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
-                                              color: '#bbf7d0',
+                                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
                                             }}
                                             title={`Start plate #${plate.plateId}`}
                                             disabled={printingMonitorAnyActionBusy || printingMonitorHasActivePrint}

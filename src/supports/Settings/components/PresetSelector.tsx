@@ -158,14 +158,14 @@ export function PresetSelector({
                         aria-hidden="true"
                         title="Preset has unsaved changes"
                         className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2"
-                        style={{ color: isSelected ? 'var(--accent-contrast)' : 'var(--text-muted)' }}
+                        style={{ color: isSelected ? 'var(--text-muted)' : 'var(--text-muted)' }}
                     >
                         <PenLine className="h-3 w-3" />
                     </span>
                 ) : null}
                 <div className="w-full">
                     <div className="flex items-center justify-center text-center">
-                        <div className="flex-1 truncate" style={{ color: isSelected ? 'var(--accent-contrast)' : undefined }}>
+                        <div className="flex-1 truncate" style={{ color: isSelected ? 'var(--text-strong)' : undefined }}>
                             {preset.name}
                         </div>
                     </div>

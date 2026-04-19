@@ -14,7 +14,7 @@ const ICON_TONE_STYLES: Record<DialogIconTone, React.CSSProperties> = {
   danger: {
     borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)',
     background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
-    color: '#fca5a5',
+    color: 'var(--danger)',
   },
   accent: {
     borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',

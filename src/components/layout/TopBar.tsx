@@ -985,7 +985,7 @@ export function TopBar({
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
                     style={active
                       ? {
-                        color: 'var(--accent-contrast)',
+                        color: 'var(--text-strong)',
                         background: 'color-mix(in srgb, var(--accent), white 10%)',
                       }
                       : {
@@ -999,7 +999,7 @@ export function TopBar({
 
                   <span
                     className="text-xs font-bold leading-none tracking-[0.01em]"
-                    style={{ color: active ? 'var(--accent-contrast)' : 'var(--text-strong)' }}
+                    style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}
                   >
                     {item.label}
                   </span>
@@ -1048,7 +1048,7 @@ export function TopBar({
               >
                 <AlertTriangle
                   className="w-4 h-4"
-                  style={{ color: 'color-mix(in srgb, #ff6b6b, white 8%)' }}
+                  style={{ color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)' }}
                 />
               </Button>
 
@@ -1107,9 +1107,9 @@ export function TopBar({
               onClick={handleDesktopWindowMinimize}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
               style={isLightTheme ? {
-                borderColor: 'color-mix(in srgb, #c8920a, var(--border-subtle) 40%)',
-                background: 'color-mix(in srgb, #c8920a, var(--surface-1) 70%)',
-                color: '#7a5500',
+                borderColor: 'color-mix(in srgb, #c8920a, var(--border-subtle) 35%)',
+                background: 'color-mix(in srgb, #c8920a, var(--surface-1) 50%)',
+                color: 'var(--text-strong)',
               } : {
                 borderColor: 'color-mix(in srgb, #f4bf4f, var(--border-subtle) 55%)',
                 background: 'color-mix(in srgb, #f4bf4f, var(--surface-1) 86%)',
@@ -1125,9 +1125,9 @@ export function TopBar({
               onClick={handleDesktopWindowToggleMaximize}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
               style={isLightTheme ? {
-                borderColor: 'color-mix(in srgb, #1a7a3a, var(--border-subtle) 40%)',
-                background: 'color-mix(in srgb, #1a7a3a, var(--surface-1) 70%)',
-                color: '#0d4d22',
+                borderColor: 'color-mix(in srgb, #1a7a3a, var(--border-subtle) 35%)',
+                background: 'color-mix(in srgb, #1a7a3a, var(--surface-1) 50%)',
+                color: 'var(--text-strong)',
               } : {
                 borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 55%)',
                 background: 'color-mix(in srgb, #40c463, var(--surface-1) 86%)',
@@ -1147,9 +1147,9 @@ export function TopBar({
               onClick={handleDesktopWindowClose}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
               style={isLightTheme ? {
-                borderColor: 'color-mix(in srgb, #c0160a, var(--border-subtle) 40%)',
-                background: 'color-mix(in srgb, #c0160a, var(--surface-1) 70%)',
-                color: '#7a0a05',
+                borderColor: 'color-mix(in srgb, #c0160a, var(--border-subtle) 35%)',
+                background: 'color-mix(in srgb, #c0160a, var(--surface-1) 50%)',
+                color: 'var(--text-strong)',
               } : {
                 borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
                 background: 'color-mix(in srgb, #ff6b6b, var(--surface-1) 88%)',
@@ -1233,7 +1233,7 @@ export function TopBar({
                   style={{
                     borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
                     background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: '#fde68a',
+                    color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                   }}
                   onClick={() => {
                     setShowProfileChangeWarning(false);

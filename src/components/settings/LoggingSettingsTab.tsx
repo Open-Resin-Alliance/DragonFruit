@@ -588,7 +588,7 @@ function LogLineRow({ line }: { line: ParsedLogLine }) {
           {line.target}
         </span>
       )}
-      <span className="flex-1 min-w-0 break-all" style={{ color: line.level === 'error' ? '#fca5a5' : line.level === 'warn' ? '#fdba74' : '#d1d5db' }}>
+      <span className="flex-1 min-w-0 break-all" style={{ color: line.level === 'error' ? 'var(--danger)' : line.level === 'warn' ? 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)' : 'var(--text-strong)' }}>
         {line.message || line.raw}
       </span>
     </div>

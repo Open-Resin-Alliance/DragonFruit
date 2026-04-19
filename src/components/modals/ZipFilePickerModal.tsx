@@ -374,7 +374,7 @@ export function ZipFilePickerModal({
                 background: selectedIndices.size > 0
                   ? 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)'
                   : 'color-mix(in srgb, var(--surface-1), black 8%)',
-                color: selectedIndices.size > 0 ? '#86efac' : 'var(--text-muted)',
+                color: selectedIndices.size > 0 ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' : 'var(--text-muted)',
                 opacity: selectedIndices.size > 0 ? 1 : 0.65,
                 cursor: selectedIndices.size > 0 ? 'pointer' : 'not-allowed',
               }}

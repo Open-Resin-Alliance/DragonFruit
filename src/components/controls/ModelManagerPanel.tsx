@@ -396,34 +396,36 @@ export function ModelManagerPanel({
                         }
                       : undefined}
                   >
-                    {showHeader && (
-                      <div
-                        className={`px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors ${
-                          isGroupFullySelected
-                            ? 'bg-blue-500/12 border-blue-500/45'
-                            : isGroupPartiallySelected
-                              ? 'bg-blue-500/8 border-blue-500/30'
-                              : 'hover:bg-neutral-700/60'
-                        }`}
-                        style={isGroupFullySelected || isGroupPartiallySelected
-                          ? undefined
-                          : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                        onClick={(e) => {
-                          const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
-                          selectFolder(group, mode);
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setContextMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                            groupId: group.id,
-                            groupName: group.name,
-                            isSystemGroup: group.isSystemGroup,
-                          });
-                        }}
-                      >
+                        {showHeader && (
+                          <div
+                            className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                            style={isGroupFullySelected
+                              ? {
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                                }
+                              : isGroupPartiallySelected
+                                ? {
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                                  }
+                                : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                            onClick={(e) => {
+                              const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                              selectFolder(group, mode);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                groupId: group.id,
+                                groupName: group.name,
+                                isSystemGroup: group.isSystemGroup,
+                              });
+                            }}
+                          >
                         <button
                           type="button"
                           className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
@@ -492,17 +494,16 @@ export function ModelManagerPanel({
                       return (
                         <div
                           key={model.id}
-                          className={`p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer ${
-                            isSelected
-                              ? 'bg-blue-500/10 border-blue-500/50'
-                              : 'hover:bg-neutral-700/70'
-                          }`}
-                          style={!isSelected
-                            ? {
-                                background: 'var(--surface-1)',
-                                borderColor: 'var(--border-subtle)',
-                              }
-                            : undefined}
+                            className="p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer"
+                            style={isSelected
+                              ? {
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+                                }
+                              : {
+                                  background: 'var(--surface-1)',
+                                  borderColor: 'var(--border-subtle)',
+                                }}
                           onClick={(e) => {
                             if (e.shiftKey) {
                               const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
@@ -544,12 +545,12 @@ export function ModelManagerPanel({
                             });
                           }}
                         >
-                          <div className={`p-1 rounded ${isSelected ? 'bg-blue-500/20 text-blue-300' : ''}`} style={!isSelected ? { background: 'var(--surface-2)', color: 'var(--text-muted)' } : undefined}>
+                          <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
                             <Box className="w-3.5 h-3.5" />
                           </div>
 
                           <div className="flex-1 min-w-0">
-                            <div className={`text-xs font-medium truncate ${isSelected ? 'text-blue-100' : ''}`} style={!isSelected ? { color: 'var(--text-strong)' } : undefined}>
+                            <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
                               {model.name}
                               {isActive && <span className="ml-1 text-[10px] uppercase" style={{ color: 'var(--accent)' }}>Active</span>}
                             </div>
@@ -586,7 +587,8 @@ export function ModelManagerPanel({
                                 e.stopPropagation();
                                 onDelete(model.id);
                               }}
-                              className="!p-1.5 text-red-300 hover:text-red-200"
+                                className="!p-1.5"
+                                style={{ color: 'var(--danger)' }}
                               title="Delete model"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
