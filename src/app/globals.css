@@ -483,9 +483,9 @@ button:disabled,
 
 .ui-empty-title {
   color: var(--text-strong);
-  font-size: clamp(24px, 3vw, 34px);
+  font-size: clamp(18px, 2vw, 24px);
   line-height: var(--line-height-tight);
-  font-weight: 700;
+  font-weight: 600;
   max-width: 460px;
   margin-left: auto;
   margin-right: auto;

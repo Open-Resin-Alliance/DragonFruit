@@ -43,6 +43,47 @@ function formatRecentOpenedAt(openedAt: number): string {
   return new Date(openedAt).toLocaleString();
 }
 
+const TAGLINES = [
+  // Adventurous
+  "Ready for your next adventure?",
+  "The build plate awaits.",
+  "What are we printing today?",
+  "Time to make something real.",
+  "Every great print starts with an empty scene.",
+  // Snarky / witty
+  "Nothing to see here. Yet.",
+  "Your models called. They want to be sliced.",
+  "Suspiciously empty in here.",
+  "This scene is aggressively unoccupied.",
+  "Zero polygons. Infinite potential.",
+  "The resin is ready. Are you?",
+  "Currently displaying nothing at maximum fidelity.",
+  "Idle hands do no slicing.",
+  "The build volume misses you.",
+  "Drag a file in. The platform is judging you.",
+  // Movie / pop-culture references
+  "Do or do not. There is no try... oh wait, just click Load Mesh.",
+  "In space, no one can hear you slice.",
+  "You shall not pass... until you load a model.",
+  "I am the one who slices.",
+  "With great resin comes great responsibility.",
+  "Why so empty?",
+  "We're gonna need a bigger build plate.",
+  "One does not simply import a mesh... or actually, you just click a button.",
+  "I'll be back. (Drop a file and I really will be.)",
+  "It's a trap! ...just kidding, drop your STL.",
+  "The spice must flow. The resin must cure.",
+  "Elementary, my dear user — load a model.",
+  "Roads? Where we're printing, we don't need roads.",
+  // Engineering/maker flavour
+  "Waiting for first layer adhesion... to reality.",
+  "No supports needed for an empty scene.",
+  "Layer 0 of 0. Living dangerously.",
+  "Anti-aliasing: nothing to anti-alias.",
+  // Open Resin Alliance
+  "Join the Open Resin Alliance!"
+];
+
 function formatBytes(bytes?: number): string | null {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return null;
   if (bytes < 1024) return `${bytes} B`;
@@ -75,6 +116,7 @@ export function EmptySceneState({
   onAddPrinter,
   onUseWithoutPrinter,
 }: EmptySceneStateProps) {
+  const [tagline] = React.useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
   const [isDropActive, setIsDropActive] = React.useState(false);
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
   const [reopenError, setReopenError] = React.useState<string | null>(null);
@@ -199,7 +241,7 @@ export function EmptySceneState({
             Empty workspace
           </div>
         )}
-        <h1 className="ui-empty-title">Ready for your next adventure?</h1>
+        <h1 className="ui-empty-title" suppressHydrationWarning>{tagline}</h1>
         <p className="ui-empty-text" style={{ maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
           Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print.
         </p>
