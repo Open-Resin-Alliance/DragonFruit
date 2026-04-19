@@ -19,10 +19,10 @@ import {
   applyThemeCustomColors,
   applyThemePreference,
   DEFAULT_THEME_CUSTOM_COLORS,
-  DRAGONFRUIT_LIGHT_THEME_COLORS,
   getSavedThemeCustomColors,
   getSavedThemePreset,
   getSavedThemePreference,
+  getThemePresetColors,
   THEME_COLORS_STORAGE_KEY,
   THEME_PRESET_STORAGE_KEY,
   THEME_STORAGE_KEY,
@@ -240,6 +240,7 @@ export function SettingsModal({
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
   const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
   const [isLightTheme, setIsLightTheme] = useState(false);
+  const didCommitThemeDraftRef = React.useRef(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
 
   const accentSecondaryActionColor = isLightTheme
@@ -325,6 +326,11 @@ export function SettingsModal({
     }));
   }, []);
 
+  const restoreSavedThemePreview = React.useCallback(() => {
+    applyThemePreference(getSavedThemePreference());
+    applyThemeCustomColors(getSavedThemeCustomColors());
+  }, []);
+
   const handleDraftHeatmapColorChange = React.useCallback((index: number, color: string) => {
     setDraftHeatmapColors((prev) => {
       const copy = [...prev];
@@ -335,30 +341,21 @@ export function SettingsModal({
 
   const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
     setDraftThemePreset(preset);
-    if (preset === 'dragonfruit-light') {
-      setDraftThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS);
-      setDraftThemePreference('light');
-    } else {
-      setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
-      setDraftThemePreference('dark');
-    }
+    setDraftThemeColors(getThemePresetColors(preset));
+    setDraftThemePreference(preset === 'dragonfruit-light' ? 'light' : 'dark');
   }, []);
 
   const handleResetThemeColors = React.useCallback(() => {
-    if (draftThemePreset === 'dragonfruit-light') {
-      setDraftThemeColors(DRAGONFRUIT_LIGHT_THEME_COLORS);
-      setDraftThemePreference('light');
-    } else {
-      setDraftThemePreference('system');
-      setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
-    }
+    setDraftThemeColors(getThemePresetColors(draftThemePreset));
   }, [draftThemePreset]);
 
   const handleCancel = React.useCallback(() => {
     setShowRestoreDefaultsConfirm(false);
+    didCommitThemeDraftRef.current = false;
+    restoreSavedThemePreview();
     resetDraftFromProps();
     onClose();
-  }, [onClose, resetDraftFromProps]);
+  }, [onClose, resetDraftFromProps, restoreSavedThemePreview]);
 
   const applyRestoreDefaultsToDraft = React.useCallback(() => {
     setDraftMeshColor(DEFAULT_MESH_COLOR);
@@ -462,6 +459,7 @@ export function SettingsModal({
       window.localStorage.setItem(THEME_COLORS_STORAGE_KEY, JSON.stringify(draftThemeColors));
     }
 
+    didCommitThemeDraftRef.current = true;
     onClose();
   }, [
     draftAmbientIntensity,
@@ -529,12 +527,26 @@ export function SettingsModal({
   useEffect(() => {
     if (!isOpen) return;
 
+    didCommitThemeDraftRef.current = false;
+
     const frame = requestAnimationFrame(() => {
       resetDraftFromProps();
     });
 
-    return () => cancelAnimationFrame(frame);
-  }, [isOpen, resetDraftFromProps]);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (!didCommitThemeDraftRef.current) {
+        restoreSavedThemePreview();
+      }
+    };
+  }, [isOpen, resetDraftFromProps, restoreSavedThemePreview]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    applyThemePreference(draftThemePreference);
+    applyThemeCustomColors(draftThemeColors);
+  }, [draftThemeColors, draftThemePreference, isOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
