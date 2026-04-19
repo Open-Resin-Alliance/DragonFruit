@@ -653,7 +653,7 @@ export function EmptySceneState({
               )}
 
               <div
-                className="mt-2 block min-h-[92px] rounded-md border border-dashed px-4 py-3 transition-colors"
+                className="mt-2 block min-h-[32px] rounded-md border border-dashed px-4 py-3 transition-colors"
                 style={{
                   borderColor: isDropActive
                     ? (isDropUnsupported ? 'var(--danger)' : 'var(--accent)')
@@ -669,7 +669,7 @@ export function EmptySceneState({
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
               >
-                <div className="flex min-h-[64px] items-center justify-between gap-3">
+                <div className="flex min-h-[34px] items-center justify-between gap-3">
                   <div className="min-w-0 inline-flex items-center gap-2">
                     <Upload className="h-4 w-4" style={{ color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)' }} />
                     <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
