@@ -1,0 +1,684 @@
+//! Repair pipeline. Fixed-order passes over an [`IndexedMesh`].
+//!
+//! Each pass mutates the mesh in-place and appends a [`RepairStepReport`].
+//! The passes are:
+//!
+//!   1. Dedup / weld vertices (epsilon quantization).
+//!   2. Strip degenerate + duplicate triangles.
+//!   3. Fill small boundary loops via ear-clipping triangulation on a best-fit plane.
+//!   4. Resolve per-component winding by majority outward-normal vote (BVH ray cast).
+//!   5. Optionally drop small disconnected components (keep top-N by signed volume).
+//!   6. Recompute analysis for the post-report.
+//!
+//! Self-intersection retriangulation and voxel-based solid remeshing are not
+//! yet implemented; residual counts flow into [`MeshHealthReport::residual_issues`].
+
+use ahash::AHashMap;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::analysis::analyze;
+use crate::core::bvh::Bvh;
+use crate::core::halfedge::{edge_key, Topology};
+use crate::core::mesh::{IndexedMesh, Vec3};
+use crate::report::{MeshHealthReport, RepairStepReport};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairOptions {
+    /// Relative to bbox diagonal. Vertices within this distance are welded.
+    pub weld_epsilon: f32,
+    /// Maximum boundary loop length (in vertices) that will be auto-filled.
+    /// Loops larger than this are left alone — they usually indicate intentional
+    /// open shells rather than holes.
+    pub fill_holes_max_edges: usize,
+    /// Keep the top-N components ranked by |signed volume|. `None` = keep all.
+    pub keep_largest_n_components: Option<usize>,
+    /// Attempt orientation repair (per-component outward vote).
+    pub repair_orientation: bool,
+    /// Attempt self-intersection resolution via winding-number interior-face
+    /// culling: each triangle fires a ray along its outward normal; an odd hit
+    /// count means the face is inside another shell and is removed.
+    pub resolve_self_intersections: bool,
+}
+
+impl Default for RepairOptions {
+    fn default() -> Self {
+        Self {
+            weld_epsilon: 1e-5,
+            fill_holes_max_edges: 64,
+            keep_largest_n_components: None,
+            repair_orientation: true,
+            resolve_self_intersections: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RepairOutcome {
+    pub mesh: IndexedMesh,
+    pub report: MeshHealthReport,
+}
+
+pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
+    let t_start = std::time::Instant::now();
+
+    let pre = analyze(&mesh);
+    let mut report = MeshHealthReport::new(pre);
+
+    // 1. Weld.
+    let t = std::time::Instant::now();
+    let welded = weld_vertices(&mut mesh, options.weld_epsilon);
+    report.steps.push(RepairStepReport {
+        name: "weld".into(),
+        changed: welded as u32,
+        notes: None,
+        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+    });
+
+    // 2. Cull degenerate + duplicate triangles.
+    let t = std::time::Instant::now();
+    let culled = cull_degenerate_and_duplicate(&mut mesh);
+    report.steps.push(RepairStepReport {
+        name: "cull_degenerate_duplicate".into(),
+        changed: culled as u32,
+        notes: None,
+        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+    });
+
+    // 3. Fill small holes.
+    let t = std::time::Instant::now();
+    let filled = fill_small_holes(&mut mesh, options.fill_holes_max_edges);
+    report.steps.push(RepairStepReport {
+        name: "fill_holes".into(),
+        changed: filled as u32,
+        notes: None,
+        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+    });
+
+    // 4. Orient components.
+    if options.repair_orientation {
+        let t = std::time::Instant::now();
+        let flipped = repair_orientation(&mut mesh);
+        report.steps.push(RepairStepReport {
+            name: "orient_components".into(),
+            changed: flipped as u32,
+            notes: None,
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+    }
+
+    // 4.5. Cull interior faces (winding-number self-intersection resolution).
+    if options.resolve_self_intersections {
+        let t = std::time::Instant::now();
+        let culled = cull_interior_faces_by_winding(&mut mesh);
+        report.steps.push(RepairStepReport {
+            name: "cull_interior_faces".into(),
+            changed: culled as u32,
+            notes: Some(format!(
+                "{culled} interior-facing triangles removed via winding-number test"
+            )),
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+        if culled > 0 {
+            // Re-run hole fill: intersections seams become boundary loops.
+            let t = std::time::Instant::now();
+            let refilled = fill_small_holes(&mut mesh, options.fill_holes_max_edges);
+            report.steps.push(RepairStepReport {
+                name: "fill_holes_post_cull".into(),
+                changed: refilled as u32,
+                notes: None,
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+        }
+    }
+
+    // 5. Component filter.
+    if let Some(keep_n) = options.keep_largest_n_components {
+        let t = std::time::Instant::now();
+        let dropped_tris = keep_largest_components(&mut mesh, keep_n);
+        report.steps.push(RepairStepReport {
+            name: "filter_components".into(),
+            changed: dropped_tris as u32,
+            notes: Some(format!("kept top {keep_n} components by |volume|")),
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+    }
+
+    // 6. Drop unused vertices (post-cull cleanup).
+    let t = std::time::Instant::now();
+    let pruned = prune_unused_vertices(&mut mesh);
+    report.steps.push(RepairStepReport {
+        name: "prune_unused_vertices".into(),
+        changed: pruned as u32,
+        notes: None,
+        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+    });
+
+    // Post-analysis.
+    report.post = analyze(&mesh);
+
+    // Surface residual issues.
+    let mut residuals: Vec<String> = Vec::new();
+    if report.post.non_manifold_edges > 0 {
+        residuals.push(format!(
+            "{} non-manifold edges remain",
+            report.post.non_manifold_edges
+        ));
+    }
+    if report.post.boundary_edges > 0 {
+        residuals.push(format!(
+            "{} boundary edges remain across {} loop(s)",
+            report.post.boundary_edges, report.post.boundary_loops
+        ));
+    }
+    if report.post.self_intersection_triangles > 0 && !options.resolve_self_intersections {
+        residuals.push(format!(
+            "{} self-intersecting triangles detected (pass resolve_self_intersections=true to attempt repair)",
+            report.post.self_intersection_triangles
+        ));
+    }
+    if options.resolve_self_intersections && report.post.self_intersection_triangles > 0 {
+        residuals.push(format!(
+            "{} self-intersecting triangles remain after winding-number cull",
+            report.post.self_intersection_triangles
+        ));
+    }
+    if report.post.inconsistent_winding_edges > 0 {
+        residuals.push(format!(
+            "{} inconsistently wound edges remain",
+            report.post.inconsistent_winding_edges
+        ));
+    }
+
+    report.fully_repaired = residuals.is_empty();
+    report.residual_issues = residuals;
+    report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    RepairOutcome { mesh, report }
+}
+
+// --- individual passes ---------------------------------------------------
+
+fn weld_vertices(mesh: &mut IndexedMesh, epsilon: f32) -> usize {
+    let bbox = mesh.bbox();
+    let diag = bbox.diag().max(1e-6);
+    let step = (epsilon * diag).max(1e-7);
+    let inv_step = 1.0 / step;
+
+    let mut map: AHashMap<(i32, i32, i32), u32> = AHashMap::with_capacity(mesh.positions.len());
+    let mut new_positions: Vec<Vec3> = Vec::with_capacity(mesh.positions.len());
+    let mut remap: Vec<u32> = Vec::with_capacity(mesh.positions.len());
+
+    for p in &mesh.positions {
+        let key = (
+            (p.x * inv_step).round() as i32,
+            (p.y * inv_step).round() as i32,
+            (p.z * inv_step).round() as i32,
+        );
+        let new_idx = *map.entry(key).or_insert_with(|| {
+            let i = new_positions.len() as u32;
+            new_positions.push(*p);
+            i
+        });
+        remap.push(new_idx);
+    }
+    let merged = mesh.positions.len() - new_positions.len();
+    if merged == 0 {
+        return 0;
+    }
+    for tri in mesh.triangles.iter_mut() {
+        for v in tri.iter_mut() {
+            *v = remap[*v as usize];
+        }
+    }
+    mesh.positions = new_positions;
+    merged
+}
+
+fn cull_degenerate_and_duplicate(mesh: &mut IndexedMesh) -> usize {
+    let before = mesh.triangles.len();
+    let mut seen: ahash::AHashSet<(u32, u32, u32)> = ahash::AHashSet::with_capacity(before);
+    mesh.triangles.retain(|tri| {
+        if tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] {
+            return false;
+        }
+        let mut s = *tri;
+        s.sort();
+        let key = (s[0], s[1], s[2]);
+        if !seen.insert(key) {
+            return false;
+        }
+        true
+    });
+    // Zero-area filter (positional).
+    let positions = &mesh.positions;
+    mesh.triangles.retain(|tri| {
+        let a = positions[tri[0] as usize];
+        let b = positions[tri[1] as usize];
+        let c = positions[tri[2] as usize];
+        let area = b.sub(a).cross(c.sub(a)).length() * 0.5;
+        area > 1e-16
+    });
+    before - mesh.triangles.len()
+}
+
+fn prune_unused_vertices(mesh: &mut IndexedMesh) -> usize {
+    let before = mesh.positions.len();
+    if before == 0 {
+        return 0;
+    }
+    let mut used = vec![false; before];
+    for tri in &mesh.triangles {
+        used[tri[0] as usize] = true;
+        used[tri[1] as usize] = true;
+        used[tri[2] as usize] = true;
+    }
+    let mut remap = vec![u32::MAX; before];
+    let mut new_positions: Vec<Vec3> = Vec::with_capacity(before);
+    for i in 0..before {
+        if used[i] {
+            remap[i] = new_positions.len() as u32;
+            new_positions.push(mesh.positions[i]);
+        }
+    }
+    if new_positions.len() == before {
+        return 0;
+    }
+    for tri in mesh.triangles.iter_mut() {
+        for v in tri.iter_mut() {
+            *v = remap[*v as usize];
+        }
+    }
+    mesh.positions = new_positions;
+    before - mesh.positions.len()
+}
+
+/// Ear-clipping hole filler. For each boundary loop of size <= `max_edges`,
+/// project loop vertices onto a best-fit plane (via normal averaging) and
+/// triangulate 2D. Convex-first greedy — does not handle self-intersecting
+/// polygons but handles the common case of small planar/near-planar holes.
+fn fill_small_holes(mesh: &mut IndexedMesh, max_edges: usize) -> usize {
+    let topo = Topology::build(mesh);
+    let loops = topo.boundary_loops();
+    let mut added = 0usize;
+
+    for loop_verts in loops
+        .into_iter()
+        .filter(|l| l.len() <= max_edges && l.len() >= 3)
+    {
+        // Compute average normal of one-ring faces along the loop to orient
+        // the fill (so ear clipping produces outward-facing triangles).
+        let avg_normal = {
+            let mut sum = Vec3::ZERO;
+            for &v in &loop_verts {
+                for &face in &topo.vertex_faces[v as usize] {
+                    sum = sum.add(mesh.tri_normal(face));
+                }
+            }
+            let len = sum.length();
+            if len > 1e-8 {
+                sum.scale(1.0 / len)
+            } else {
+                Vec3::new(0.0, 0.0, 1.0)
+            }
+        };
+
+        // Build a local 2D frame perpendicular to `avg_normal`.
+        let up = if avg_normal.z.abs() < 0.9 {
+            Vec3::new(0.0, 0.0, 1.0)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+        let u_axis = {
+            let n = avg_normal.cross(up);
+            let len = n.length();
+            if len > 1e-8 {
+                n.scale(1.0 / len)
+            } else {
+                Vec3::new(1.0, 0.0, 0.0)
+            }
+        };
+        let v_axis = avg_normal.cross(u_axis);
+
+        let pts2d: Vec<(f32, f32)> = loop_verts
+            .iter()
+            .map(|&v| {
+                let p = mesh.positions[v as usize];
+                (p.dot(u_axis), p.dot(v_axis))
+            })
+            .collect();
+
+        // Orient loop counter-clockwise in the 2D frame for consistent winding.
+        let mut verts_ordered: Vec<u32> = loop_verts.clone();
+        let mut pts_ordered = pts2d.clone();
+        if polygon_signed_area(&pts_ordered) < 0.0 {
+            verts_ordered.reverse();
+            pts_ordered.reverse();
+        }
+
+        // Ear clipping.
+        let tris = ear_clip(&pts_ordered);
+        for [i, j, k] in tris {
+            mesh.triangles
+                .push([verts_ordered[i], verts_ordered[j], verts_ordered[k]]);
+            added += 1;
+        }
+    }
+    added
+}
+
+fn polygon_signed_area(pts: &[(f32, f32)]) -> f32 {
+    let mut s = 0.0f32;
+    let n = pts.len();
+    for i in 0..n {
+        let (x0, y0) = pts[i];
+        let (x1, y1) = pts[(i + 1) % n];
+        s += x0 * y1 - x1 * y0;
+    }
+    s * 0.5
+}
+
+fn ear_clip(pts: &[(f32, f32)]) -> Vec<[usize; 3]> {
+    let n = pts.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let mut remaining: Vec<usize> = (0..n).collect();
+    let mut tris: Vec<[usize; 3]> = Vec::with_capacity(n - 2);
+    let mut guard = 0usize;
+    while remaining.len() > 3 && guard < n * n {
+        guard += 1;
+        let m = remaining.len();
+        let mut ear_found = false;
+        for i in 0..m {
+            let ia = remaining[(i + m - 1) % m];
+            let ib = remaining[i];
+            let ic = remaining[(i + 1) % m];
+            if !is_convex(pts[ia], pts[ib], pts[ic]) {
+                continue;
+            }
+            let mut contains_other = false;
+            for (j, &idx) in remaining.iter().enumerate() {
+                if j == (i + m - 1) % m || j == i || j == (i + 1) % m {
+                    continue;
+                }
+                if point_in_tri(pts[idx], pts[ia], pts[ib], pts[ic]) {
+                    contains_other = true;
+                    break;
+                }
+            }
+            if !contains_other {
+                tris.push([ia, ib, ic]);
+                remaining.remove(i);
+                ear_found = true;
+                break;
+            }
+        }
+        if !ear_found {
+            // Fallback: centroid fan (robust but may produce skinny tris).
+            break;
+        }
+    }
+    if remaining.len() == 3 {
+        tris.push([remaining[0], remaining[1], remaining[2]]);
+    } else if remaining.len() > 3 {
+        // Fan-fallback when ear clipping cannot progress.
+        let anchor = remaining[0];
+        for i in 1..remaining.len() - 1 {
+            tris.push([anchor, remaining[i], remaining[i + 1]]);
+        }
+    }
+    tris
+}
+
+fn is_convex(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    let ux = b.0 - a.0;
+    let uy = b.1 - a.1;
+    let vx = c.0 - b.0;
+    let vy = c.1 - b.1;
+    (ux * vy - uy * vx) > 0.0
+}
+
+fn point_in_tri(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    fn sign(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+        (p.0 - b.0) * (a.1 - b.1) - (a.0 - b.0) * (p.1 - b.1)
+    }
+    let d1 = sign(p, a, b);
+    let d2 = sign(p, b, c);
+    let d3 = sign(p, c, a);
+    let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+    let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+    !(has_neg && has_pos)
+}
+
+/// Remove triangles that are on the interior of another shell by shooting a
+/// ray from each face's centroid along its outward normal. If the ray hits an
+/// odd number of OTHER triangles, the face is inside another shell and is
+/// culled. Runs in parallel via rayon.
+///
+/// After culling, the intersection seam becomes an open boundary; call
+/// [`fill_small_holes`] to close it.
+fn cull_interior_faces_by_winding(mesh: &mut IndexedMesh) -> usize {
+    if mesh.triangles.is_empty() {
+        return 0;
+    }
+
+    let bvh = Bvh::build(mesh);
+
+    // Offset origin along the outward normal to avoid self-intersecting the
+    // source triangle via numerical noise.
+    const OFFSET: f32 = 1e-4;
+
+    // Determine which faces are interior by parallel ray casting.
+    let n = mesh.triangles.len();
+    let interior: Vec<bool> = {
+        let mesh_ref: &IndexedMesh = mesh;
+        (0..n)
+            .into_par_iter()
+            .map(|fi| {
+                let [a, b, c] = mesh_ref.tri_positions(fi as u32);
+                let e1 = b.sub(a);
+                let e2 = c.sub(a);
+                let raw_n = e1.cross(e2);
+                let len = raw_n.length();
+                if len < 1e-8 {
+                    // Degenerate — leave it; cull_degenerate pass handles it.
+                    return false;
+                }
+                let normal = raw_n.scale(1.0 / len);
+                let centroid = a.add(b).add(c).scale(1.0 / 3.0);
+                let origin = centroid.add(normal.scale(OFFSET));
+                let hits = bvh.ray_hit_count_excluding(mesh_ref, origin, normal, fi as u32);
+                // Odd hit count → face is inside another shell.
+                hits % 2 == 1
+            })
+            .collect()
+    };
+
+    let before = mesh.triangles.len();
+    let mut kept = Vec::with_capacity(before);
+    for (fi, &is_interior) in interior.iter().enumerate() {
+        if !is_interior {
+            kept.push(mesh.triangles[fi]);
+        }
+    }
+    mesh.triangles = kept;
+    before - mesh.triangles.len()
+}
+
+/// Assign a component id to each triangle via union-find over shared edges;
+/// for each component, cast a ray from a point well outside the bbox along a
+/// random direction and count hits. If the count is even when the component
+/// is supposed to contain the origin, or if the signed volume disagrees with
+/// the majority-normal direction, flip every triangle's winding.
+fn repair_orientation(mesh: &mut IndexedMesh) -> usize {
+    if mesh.triangles.is_empty() {
+        return 0;
+    }
+    let components = triangle_components(mesh);
+    let n_components = components.iter().max().copied().unwrap_or(0) + 1;
+    let mut flipped_faces = 0usize;
+
+    // Per-component signed volume gives us the simplest orientation check —
+    // if a component is watertight and signed volume is negative, flip it.
+    // For non-watertight components we fall back to a ray-cast vote using the
+    // overall BVH.
+    let bvh = Bvh::build(mesh);
+
+    for comp_id in 0..n_components {
+        let face_indices: Vec<u32> = components
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c == comp_id { Some(i as u32) } else { None })
+            .collect();
+        if face_indices.is_empty() {
+            continue;
+        }
+
+        // Component signed volume.
+        let mut vol = 0.0f64;
+        for &fi in &face_indices {
+            let t = mesh.triangles[fi as usize];
+            let a = mesh.positions[t[0] as usize];
+            let b = mesh.positions[t[1] as usize];
+            let c = mesh.positions[t[2] as usize];
+            vol += (a.x as f64) * ((b.y as f64) * (c.z as f64) - (b.z as f64) * (c.y as f64))
+                - (a.y as f64) * ((b.x as f64) * (c.z as f64) - (b.z as f64) * (c.x as f64))
+                + (a.z as f64) * ((b.x as f64) * (c.y as f64) - (b.y as f64) * (c.x as f64));
+        }
+        vol /= 6.0;
+
+        let flip_by_volume = vol < -1e-6;
+
+        let should_flip = if flip_by_volume {
+            true
+        } else if vol.abs() < 1e-6 {
+            // Likely not watertight — ray-cast vote using triangle centroids.
+            let votes: usize = face_indices
+                .par_iter()
+                .map(|&fi| {
+                    let [a, b, c] = mesh.tri_positions(fi);
+                    let n = mesh.tri_normal(fi);
+                    if n.length() < 1e-8 {
+                        return 0;
+                    }
+                    let centroid = a.add(b).add(c).scale(1.0 / 3.0);
+                    let offset = centroid.add(n.scale(1e-3));
+                    let hits = bvh.ray_hit_count(mesh, offset, n);
+                    // Subtract our own forward face if detected.
+                    if hits % 2 == 0 {
+                        0
+                    } else {
+                        1
+                    }
+                })
+                .sum();
+            votes * 2 > face_indices.len()
+        } else {
+            false
+        };
+
+        if should_flip {
+            for fi in face_indices {
+                let t = &mut mesh.triangles[fi as usize];
+                t.swap(1, 2);
+                flipped_faces += 1;
+            }
+        }
+    }
+    flipped_faces
+}
+
+/// Assign each triangle to a connected-component id (edge-shared).
+fn triangle_components(mesh: &IndexedMesh) -> Vec<u32> {
+    let n = mesh.triangles.len();
+    let mut edge_to_face: AHashMap<(u32, u32), u32> = AHashMap::with_capacity(n * 3);
+    let mut parent: Vec<u32> = (0..n as u32).collect();
+    fn find(p: &mut [u32], i: u32) -> u32 {
+        let mut r = i;
+        while p[r as usize] != r {
+            r = p[r as usize];
+        }
+        let mut cur = i;
+        while p[cur as usize] != r {
+            let next = p[cur as usize];
+            p[cur as usize] = r;
+            cur = next;
+        }
+        r
+    }
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let fi = fi as u32;
+        let edges = [
+            edge_key(tri[0], tri[1]),
+            edge_key(tri[1], tri[2]),
+            edge_key(tri[2], tri[0]),
+        ];
+        for e in edges {
+            if let Some(&other) = edge_to_face.get(&e) {
+                let ri = find(&mut parent, fi);
+                let rj = find(&mut parent, other);
+                if ri != rj {
+                    parent[ri as usize] = rj;
+                }
+            } else {
+                edge_to_face.insert(e, fi);
+            }
+        }
+    }
+    let mut comp_id_map: AHashMap<u32, u32> = AHashMap::new();
+    let mut next_id: u32 = 0;
+    let mut result = vec![0u32; n];
+    for i in 0..n {
+        let r = find(&mut parent, i as u32);
+        let id = *comp_id_map.entry(r).or_insert_with(|| {
+            let id = next_id;
+            next_id += 1;
+            id
+        });
+        result[i] = id;
+    }
+    result
+}
+
+fn keep_largest_components(mesh: &mut IndexedMesh, keep_n: usize) -> usize {
+    if keep_n == 0 {
+        let before = mesh.triangles.len();
+        mesh.triangles.clear();
+        return before;
+    }
+    let components = triangle_components(mesh);
+    let n_components = components.iter().max().copied().unwrap_or(0) + 1;
+    if (n_components as usize) <= keep_n {
+        return 0;
+    }
+
+    // Rank components by |signed volume|.
+    let mut vols = vec![0.0f64; n_components as usize];
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let a = mesh.positions[tri[0] as usize];
+        let b = mesh.positions[tri[1] as usize];
+        let c = mesh.positions[tri[2] as usize];
+        let v = (a.x as f64) * ((b.y as f64) * (c.z as f64) - (b.z as f64) * (c.y as f64))
+            - (a.y as f64) * ((b.x as f64) * (c.z as f64) - (b.z as f64) * (c.x as f64))
+            + (a.z as f64) * ((b.x as f64) * (c.y as f64) - (b.y as f64) * (c.x as f64));
+        vols[components[fi] as usize] += v / 6.0;
+    }
+    let mut ranked: Vec<(u32, f64)> = vols
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i as u32, v.abs()))
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let keep: ahash::AHashSet<u32> = ranked.into_iter().take(keep_n).map(|(i, _)| i).collect();
+
+    let before = mesh.triangles.len();
+    let mut kept: Vec<[u32; 3]> = Vec::with_capacity(before);
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        if keep.contains(&components[fi]) {
+            kept.push(*tri);
+        }
+    }
+    mesh.triangles = kept;
+    before - mesh.triangles.len()
+}
