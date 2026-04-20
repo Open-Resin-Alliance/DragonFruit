@@ -7,6 +7,12 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { repairGeometryWithManifold } from '@/utils/manifoldRepair';
+import {
+  applyRepairedPositions,
+  isTauriRuntime,
+  repairFromGeometry,
+  type MeshHealthReport,
+} from '@/utils/meshRepair';
 
 export type MeshDefects = {
   /** Whether any non-finite vertex position values were found */
@@ -19,6 +25,8 @@ export type MeshDefects = {
   repairedByManifold?: boolean;
   /** Number of degenerate triangles collapsed by Manifold */
   degeneratesRemoved?: number;
+  /** Full health report from the native Rust repair engine (Tauri only) */
+  nativeRepairReport?: MeshHealthReport;
 };
 
 export type GeometryWithBounds = {
@@ -133,7 +141,35 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       `[processGeometry] Defective mesh detected: ${meshDefects.repairedFloats} non-finite position` +
       ` values (out of ${meshDefects.totalVertices * 3} floats) replaced with 0.`,
     );
+  }
 
+  // Always attempt a full analyze+repair pass via the native Rust engine
+  // when running under Tauri. In the browser we fall back to the legacy
+  // Manifold WASM path (which only activates when NaN defects were detected).
+  if (isTauriRuntime()) {
+    try {
+      console.log(`[${new Date().toISOString()}] [processGeometry] Running native mesh repair`);
+      const nativeStart = performance.now();
+      const result = await repairFromGeometry(geometry);
+      if (result) {
+        applyRepairedPositions(geometry, result.positions);
+        const { report } = result;
+        console.log(
+          `[processGeometry] Native repair finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
+          `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
+          `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
+          `watertight=${report.post.is_watertight}`,
+        );
+        meshDefects = {
+          ...meshDefects,
+          hasDefects: meshDefects.hasDefects || !report.fully_repaired || report.residual_issues.length > 0,
+          nativeRepairReport: report,
+        };
+      }
+    } catch (err) {
+      console.warn('[processGeometry] Native mesh repair failed; falling back to sanitized geometry.', err);
+    }
+  } else if (meshDefects.hasDefects) {
     // Attempt full topology repair via Manifold (welds open edges, collapses
     // degenerate triangles, rebuilds a valid watertight solid).
     console.log(`[${new Date().toISOString()}] [processGeometry] Attempting Manifold repair`);
@@ -194,7 +230,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const flatteningPlanes = computeFlatteningPlanes(geometry);
   console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
 
-  return { geometry, bbox, center, size, flatteningPlanes, ...(meshDefects.hasDefects ? { meshDefects } : {}) };
+  const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
+  return { geometry, bbox, center, size, flatteningPlanes, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 
 export async function loadStlGeometry(fileUrl: string): Promise<GeometryWithBounds> {

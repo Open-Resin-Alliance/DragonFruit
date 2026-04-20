@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadMeshGeometry, processGeometry, type GeometryWithBounds, type MeshDefects } from '@/hooks/useStlGeometry';
+import type { MeshHealthReport } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
@@ -683,6 +684,63 @@ type SceneImportReport = {
   tone: SceneImportReportTone;
 };
 
+export type MeshRepairReportEntry = {
+  id: string;
+  modelName: string;
+  report: MeshHealthReport;
+};
+
+function summarizeRepairReports(
+  reports: { modelName: string; report: MeshHealthReport }[],
+): { text: string; tone: SceneImportReportTone } | null {
+  if (reports.length === 0) return null;
+
+  const describeEntry = (pre: MeshHealthReport['pre'], post: MeshHealthReport['post']) => {
+    const fixes: string[] = [];
+    const welded = pre.vertex_count - post.vertex_count;
+    if (welded > 0) fixes.push(`${welded.toLocaleString()} verts welded`);
+    const culled = pre.triangle_count - post.triangle_count;
+    if (culled > 0) fixes.push(`${culled.toLocaleString()} tris culled`);
+    const nmeFixed = pre.non_manifold_edges - post.non_manifold_edges;
+    if (nmeFixed > 0) fixes.push(`${nmeFixed.toLocaleString()} non-manifold edges fixed`);
+    const holesClosed = pre.boundary_loops - post.boundary_loops;
+    if (holesClosed > 0) fixes.push(`${holesClosed.toLocaleString()} holes closed`);
+    const inconFixed = pre.inconsistent_edges - post.inconsistent_edges;
+    if (inconFixed > 0) fixes.push(`${inconFixed.toLocaleString()} winding fixed`);
+    return fixes;
+  };
+
+  // Filter to "interesting" reports — skip fully-clean meshes.
+  const interesting = reports.filter(({ report }) => {
+    if (!report.fully_repaired) return true;
+    return describeEntry(report.pre, report.post).length > 0;
+  });
+
+  if (interesting.length === 0) {
+    const totalTris = reports.reduce((sum, r) => sum + r.report.post.triangle_count, 0);
+    return {
+      text: `Mesh analysis: ${reports.length} file${reports.length === 1 ? '' : 's'}, ${totalTris.toLocaleString()} triangles — clean`,
+      tone: 'success',
+    };
+  }
+
+  const anyResidual = interesting.some(({ report }) => !report.fully_repaired);
+  const tone: SceneImportReportTone = anyResidual ? 'warning' : 'success';
+
+  if (interesting.length === 1) {
+    const { modelName, report } = interesting[0];
+    const fixes = describeEntry(report.pre, report.post);
+    const head = report.fully_repaired ? 'Mesh repaired' : 'Mesh repair (residual issues)';
+    const body = fixes.length > 0 ? ` — ${fixes.slice(0, 3).join(', ')}` : '';
+    return { text: `"${modelName}" — ${head}${body}`, tone };
+  }
+
+  return {
+    text: `${interesting.length} meshes repaired${anyResidual ? ' (some with residuals)' : ''}`,
+    tone,
+  };
+}
+
 type SceneImportPlacementChoice = 'auto_arrange' | 'load_as_is';
 
 export type SceneImportPlacementPrompt = {
@@ -746,6 +804,7 @@ export function useSceneCollectionManager() {
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
+  const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
 
@@ -789,6 +848,10 @@ export function useSceneCollectionManager() {
       window.clearTimeout(sceneImportReportTimeoutRef.current);
       sceneImportReportTimeoutRef.current = null;
     }
+  }, []);
+
+  const dismissMeshRepairReports = useCallback(() => {
+    setMeshRepairReports([]);
   }, []);
 
   const resolveSceneImportPlacementPrompt = useCallback((choice: SceneImportPlacementChoice) => {
@@ -1676,6 +1739,7 @@ export function useSceneCollectionManager() {
 
     const stagedNewModels: LoadedModel[] = [];
     const defectiveModels: { name: string; defects: MeshDefects }[] = [];
+    const repairReports: MeshRepairReportEntry[] = [];
     const hadActiveModelAtStart = Boolean(activeModelIdRef.current);
     let firstLoadedModelId: string | null = null;
 
@@ -1781,6 +1845,13 @@ export function useSceneCollectionManager() {
           if (geom.meshDefects?.hasDefects) {
             defectiveModels.push({ name: file.name, defects: geom.meshDefects });
           }
+          if (geom.meshDefects?.nativeRepairReport) {
+            repairReports.push({
+              id: model.id,
+              modelName: file.name,
+              report: geom.meshDefects.nativeRepairReport,
+            });
+          }
         } catch (err) {
           console.error(`Failed to load ${file.name}`, err);
           URL.revokeObjectURL(url); // Cleanup if failed
@@ -1829,6 +1900,14 @@ export function useSceneCollectionManager() {
               `${defectiveModels.length} files with defective geometry — ${parts.join(', ')}`,
               'warning',
             );
+          }
+        }
+
+        if (repairReports.length > 0) {
+          setMeshRepairReports(repairReports);
+          const summary = summarizeRepairReports(repairReports);
+          if (summary) {
+            emitSceneImportReport(summary.text, summary.tone);
           }
         }
       }
@@ -3712,6 +3791,8 @@ export function useSceneCollectionManager() {
     importProgress,
     sceneImportReport,
     clearSceneImportReport,
+    meshRepairReports,
+    dismissMeshRepairReports,
     sceneImportPlacementPrompt,
     resolveSceneImportPlacementPrompt,
     recentOpenedFiles,

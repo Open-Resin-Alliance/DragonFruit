@@ -165,6 +165,7 @@ import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
+import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -14395,6 +14396,13 @@ export default function Home() {
           savedAt={autosaveRecovery.savedAt}
           onRestore={handleAutosaveRestore}
           onDiscard={handleAutosaveDiscard}
+        />
+      )}
+
+      {scene.meshRepairReports.length > 0 && (
+        <MeshRepairReportModal
+          reports={scene.meshRepairReports}
+          onDismiss={scene.dismissMeshRepairReports}
         />
       )}
 

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod network;
+mod mesh_repair;
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
@@ -133,16 +134,17 @@ static STAGED_MESH_FILE_APPENDER: OnceLock<Mutex<Option<StageFileAppender>>> = O
 const STAGED_MESH_PREALLOC_MIN_BYTES: usize = 16 * 1024 * 1024;
 const STAGED_MESH_PREALLOC_MAX_BYTES: usize = 1024 * 1024 * 1024;
 
-struct StageFileAppender {
-    path: String,
-    writer: std::io::BufWriter<std::fs::File>,
-    len: u64,
+pub(crate) struct StageFileAppender {
+    pub path: String,
+    pub writer: std::io::BufWriter<std::fs::File>,
+    #[allow(dead_code)]
+    pub len: u64,
 }
 
 #[derive(Default)]
-struct StageMeshStats {
-    chunks_received: u64,
-    append_ns_total: u64,
+pub(crate) struct StageMeshStats {
+    pub chunks_received: u64,
+    pub append_ns_total: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -157,19 +159,19 @@ struct StageMeshChunkAck {
     append_ns_total: u64,
 }
 
-fn staged_mesh() -> &'static Mutex<Option<Vec<u8>>> {
+pub(crate) fn staged_mesh() -> &'static Mutex<Option<Vec<u8>>> {
     STAGED_MESH.get_or_init(|| Mutex::new(None))
 }
 
-fn staged_mesh_stats() -> &'static Mutex<StageMeshStats> {
+pub(crate) fn staged_mesh_stats() -> &'static Mutex<StageMeshStats> {
     STAGED_MESH_STATS.get_or_init(|| Mutex::new(StageMeshStats::default()))
 }
 
-fn staged_mesh_file_path() -> &'static Mutex<Option<String>> {
+pub(crate) fn staged_mesh_file_path() -> &'static Mutex<Option<String>> {
     STAGED_MESH_FILE_PATH.get_or_init(|| Mutex::new(None))
 }
 
-fn staged_mesh_file_appender() -> &'static Mutex<Option<StageFileAppender>> {
+pub(crate) fn staged_mesh_file_appender() -> &'static Mutex<Option<StageFileAppender>> {
     STAGED_MESH_FILE_APPENDER.get_or_init(|| Mutex::new(None))
 }
 
@@ -2976,7 +2978,11 @@ fn main() {
             open_log_file,
             delete_log_file,
             network::plugin_network_request,
-            network::ensure_rtsp_relay
+            network::ensure_rtsp_relay,
+            mesh_repair::mesh_analyze_from_path,
+            mesh_repair::mesh_repair_from_path,
+            mesh_repair::mesh_repair_staged,
+            mesh_repair::mesh_repair_read_positions
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");
