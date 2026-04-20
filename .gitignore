@@ -65,3 +65,7 @@ conversion/
 src-tauri/windows-resources/*.dll
 src-tauri/binaries/dragonfruit-voxl-thumbnailer*
 **/build
+
+# flatpak local build artefacts — bind-mount host paths sneak in here
+flatpak/build-dir/
+flatpak/.flatpak-builder/
