@@ -61,6 +61,12 @@ conversion/
 *.pem
 .DS_Store
 
+# Generated build artifacts that cause rebuild loops
+src-tauri/generated_crate_requirements.toml
+src-tauri/nsis/
+src-tauri/binding.rs
+src-tauri/permissions.toml
+
 # compiled native binaries / COM DLLs (built locally, not committed)
 src-tauri/windows-resources/*.dll
 src-tauri/binaries/dragonfruit-voxl-thumbnailer*
