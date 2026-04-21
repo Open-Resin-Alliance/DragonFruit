@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod network;
 mod mesh_repair;
+mod network;
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
@@ -2980,6 +2980,7 @@ fn main() {
             network::plugin_network_request,
             network::ensure_rtsp_relay,
             mesh_repair::mesh_analyze_from_path,
+            mesh_repair::mesh_analyze_staged,
             mesh_repair::mesh_repair_from_path,
             mesh_repair::mesh_repair_staged,
             mesh_repair::mesh_repair_read_positions

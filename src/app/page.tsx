@@ -166,6 +166,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
+import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -14399,6 +14400,14 @@ export default function Home() {
           savedAt={autosaveRecovery.savedAt}
           onRestore={handleAutosaveRestore}
           onDiscard={handleAutosaveDiscard}
+        />
+      )}
+
+      {scene.meshRepairConfirmPrompt && (
+        <MeshRepairConfirmModal
+          prompt={scene.meshRepairConfirmPrompt}
+          onRepair={() => scene.resolveMeshRepairConfirmPrompt('repair')}
+          onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
         />
       )}
 

@@ -132,6 +132,20 @@ pub async fn mesh_repair_staged(options_json: String) -> Result<String, String> 
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
 }
 
+/// Analyses the current staged positions buffer without modifying it.
+/// Used by the frontend to inspect mesh health before committing to a repair.
+#[tauri::command]
+pub async fn mesh_analyze_staged() -> Result<String, String> {
+    let bytes = read_staging_bytes()?;
+    let analysis = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(analyze(&mesh))
+    })
+    .await
+    .map_err(|e| format!("analyze task panicked: {e}"))??;
+    serde_json::to_string(&analysis).map_err(|e| format!("serialize analysis: {e}"))
+}
+
 /// Returns the current staged positions buffer as raw little-endian bytes.
 /// Used by the frontend to hydrate a `THREE.BufferGeometry` after a repair.
 #[tauri::command]

@@ -14,7 +14,7 @@
 //! opt-in path; full arrangement classification/extraction is still WIP.
 //! Residual counts flow into [`MeshHealthReport::residual_issues`].
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -216,45 +216,107 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         });
     }
 
-    // 7. Last-mile micro topology heal for tiny residual defects.
+    // 7-8. Iterative topology repair loop.
     //
-    // This targets cases like support-heavy imported meshes where we end up
-    // with a handful of non-manifold/boundary edges after the main passes.
-    // It is tightly gated and internally rollback-protected.
-    let t = std::time::Instant::now();
-    match attempt_micro_topology_heal(&mut mesh, options.fill_holes_max_edges) {
-        MicroHealOutcome::Skipped => {}
-        MicroHealOutcome::Applied { changed, notes } => {
-            report.steps.push(RepairStepReport {
-                name: "micro_topology_heal".into(),
-                changed: changed as u32,
-                notes: Some(notes),
-                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-            });
+    // Non-manifold face cleanup and micro-topology heal are alternated in a
+    // convergence loop. A single pass often leaves 1-2 residual NMEs because
+    // the hole-fill after face removal can itself introduce a new NME; the
+    // second pass catches those artifacts. The loop stops when the mesh is
+    // watertight, no pass made progress, or `MAX_TOPOLOGY_ITERS` is reached.
+    const MAX_TOPOLOGY_ITERS: usize = 5;
+    'topology_loop: for _iter in 0..MAX_TOPOLOGY_ITERS {
+        let iter_state = analyze(&mesh);
+        if iter_state.is_watertight {
+            break 'topology_loop;
+        }
+        if iter_state.non_manifold_edges == 0 && iter_state.boundary_edges == 0 {
+            break 'topology_loop;
+        }
 
-            // Re-run orientation after local topology surgery.
-            if options.repair_orientation {
-                let t = std::time::Instant::now();
-                let flipped = repair_orientation(&mut mesh);
+        let mut progress_this_iter = false;
+
+        // 7. Targeted non-manifold face cleanup (VCGlib-inspired), rollback-safe.
+        let t = std::time::Instant::now();
+        match attempt_non_manifold_face_cleanup(&mut mesh, options.fill_holes_max_edges) {
+            NonManifoldFaceCleanupOutcome::Skipped => {}
+            NonManifoldFaceCleanupOutcome::Applied { changed, notes } => {
+                progress_this_iter = true;
                 report.steps.push(RepairStepReport {
-                    name: "orient_components_post_micro_heal".into(),
-                    changed: flipped as u32,
-                    notes: None,
+                    name: "remove_non_manifold_faces".into(),
+                    changed: changed as u32,
+                    notes: Some(notes),
+                    elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                });
+
+                // Re-orient after topology edits so winding coherence has a
+                // chance to recover before the micro-heal pass.
+                if options.repair_orientation {
+                    let t = std::time::Instant::now();
+                    let flipped = repair_orientation(&mut mesh);
+                    report.steps.push(RepairStepReport {
+                        name: "orient_components_post_non_manifold_cleanup".into(),
+                        changed: flipped as u32,
+                        notes: None,
+                        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                    });
+                }
+            }
+            NonManifoldFaceCleanupOutcome::RolledBack { notes } => {
+                report.steps.push(RepairStepReport {
+                    name: "rollback_non_manifold_cleanup".into(),
+                    changed: 0,
+                    notes: Some(notes),
                     elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
                 });
             }
         }
-        MicroHealOutcome::RolledBack { notes } => {
-            report.steps.push(RepairStepReport {
-                name: "rollback_micro_topology_heal".into(),
-                changed: 0,
-                notes: Some(notes),
-                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-            });
+
+        // 8. Last-mile micro topology heal for tiny residual defects.
+        //
+        // This targets cases like support-heavy imported meshes where we end
+        // up with a handful of non-manifold/boundary edges after the main
+        // passes. It is tightly gated and internally rollback-protected.
+        let t = std::time::Instant::now();
+        match attempt_micro_topology_heal(&mut mesh, options.fill_holes_max_edges) {
+            MicroHealOutcome::Skipped => {}
+            MicroHealOutcome::Applied { changed, notes } => {
+                progress_this_iter = true;
+                report.steps.push(RepairStepReport {
+                    name: "micro_topology_heal".into(),
+                    changed: changed as u32,
+                    notes: Some(notes),
+                    elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                });
+
+                // Re-run orientation after local topology surgery.
+                if options.repair_orientation {
+                    let t = std::time::Instant::now();
+                    let flipped = repair_orientation(&mut mesh);
+                    report.steps.push(RepairStepReport {
+                        name: "orient_components_post_micro_heal".into(),
+                        changed: flipped as u32,
+                        notes: None,
+                        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                    });
+                }
+            }
+            MicroHealOutcome::RolledBack { notes } => {
+                report.steps.push(RepairStepReport {
+                    name: "rollback_micro_topology_heal".into(),
+                    changed: 0,
+                    notes: Some(notes),
+                    elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                });
+            }
+        }
+
+        if !progress_this_iter {
+            // Neither pass made progress; further iterations won't help.
+            break 'topology_loop;
         }
     }
 
-    // 8. Drop unused vertices (post-cull cleanup).
+    // 9. Drop unused vertices (post-cull cleanup).
     let t = std::time::Instant::now();
     let pruned = prune_unused_vertices(&mut mesh);
     report.steps.push(RepairStepReport {
@@ -378,6 +440,179 @@ enum MicroHealOutcome {
     Skipped,
     Applied { changed: usize, notes: String },
     RolledBack { notes: String },
+}
+
+#[derive(Debug)]
+enum NonManifoldFaceCleanupOutcome {
+    Skipped,
+    Applied { changed: usize, notes: String },
+    RolledBack { notes: String },
+}
+
+fn attempt_non_manifold_face_cleanup(
+    mesh: &mut IndexedMesh,
+    fill_holes_max_edges: usize,
+) -> NonManifoldFaceCleanupOutcome {
+    if mesh.triangles.is_empty() {
+        return NonManifoldFaceCleanupOutcome::Skipped;
+    }
+
+    let topo = Topology::build(mesh);
+    let non_manifold_edges = topo.non_manifold_edges();
+    if non_manifold_edges.is_empty() {
+        return NonManifoldFaceCleanupOutcome::Skipped;
+    }
+
+    // Keep this pass bounded. We use it as a targeted cleanup step, not a full
+    // remeshing strategy.
+    const MAX_NON_MANIFOLD_EDGES: usize = 4096;
+    if non_manifold_edges.len() > MAX_NON_MANIFOLD_EDGES {
+        return NonManifoldFaceCleanupOutcome::Skipped;
+    }
+
+    let before = analyze(mesh);
+    let mesh_before = mesh.clone();
+
+    let mut faces_to_remove: AHashSet<u32> = AHashSet::new();
+
+    for edge in &non_manifold_edges {
+        let Some(info) = topo.edges.get(edge) else {
+            continue;
+        };
+
+        // Keep at most one face for each direction across this edge (if
+        // possible), preferring larger-area faces. This approximates manifold
+        // pairing and avoids random sliver retention.
+        let mut best_forward: Option<(u32, f32)> = None;
+        let mut best_backward: Option<(u32, f32)> = None;
+        let mut ranked_all: Vec<(u32, f32)> = Vec::new();
+
+        for &(from, to, fi) in &info.directed {
+            let area = mesh.tri_area(fi);
+            ranked_all.push((fi, area));
+
+            if from == edge.0 && to == edge.1 {
+                match best_forward {
+                    Some((_, best_area)) if best_area >= area => {}
+                    _ => best_forward = Some((fi, area)),
+                }
+            } else {
+                match best_backward {
+                    Some((_, best_area)) if best_area >= area => {}
+                    _ => best_backward = Some((fi, area)),
+                }
+            }
+        }
+
+        let mut keep: AHashSet<u32> = AHashSet::new();
+        if let Some((fi, _)) = best_forward {
+            keep.insert(fi);
+        }
+        if let Some((fi, _)) = best_backward {
+            keep.insert(fi);
+        }
+
+        // If all faces happen to share one direction, keep the two largest.
+        if keep.len() < 2 {
+            ranked_all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (fi, _) in ranked_all.into_iter().take(2) {
+                keep.insert(fi);
+            }
+        }
+
+        for &fi in &info.faces {
+            if !keep.contains(&fi) {
+                faces_to_remove.insert(fi);
+            }
+        }
+    }
+
+    if faces_to_remove.is_empty() {
+        return NonManifoldFaceCleanupOutcome::Skipped;
+    }
+
+    let tri_before = mesh.triangles.len();
+    mesh.triangles = mesh
+        .triangles
+        .iter()
+        .enumerate()
+        .filter_map(|(fi, tri)| {
+            if faces_to_remove.contains(&(fi as u32)) {
+                None
+            } else {
+                Some(*tri)
+            }
+        })
+        .collect();
+
+    let removed = tri_before - mesh.triangles.len();
+    let culled_pre = cull_degenerate_and_duplicate(mesh);
+    let filled = fill_small_holes(mesh, fill_holes_max_edges.clamp(8, 96));
+    let culled_post = cull_degenerate_and_duplicate(mesh);
+
+    let after = analyze(mesh);
+    let improved = non_manifold_cleanup_is_improvement(&before, &after);
+    let hard_regression = non_manifold_cleanup_is_hard_regression(&before, &after);
+
+    if !improved || hard_regression {
+        *mesh = mesh_before;
+        return NonManifoldFaceCleanupOutcome::RolledBack {
+            notes: format!(
+                "rolled back non-manifold cleanup: nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {}, degenerate {} -> {}, duplicate {} -> {}",
+                before.non_manifold_edges,
+                after.non_manifold_edges,
+                before.boundary_edges,
+                after.boundary_edges,
+                before.inconsistent_winding_edges,
+                after.inconsistent_winding_edges,
+                before.self_intersection_triangles,
+                after.self_intersection_triangles,
+                before.degenerate_triangles,
+                after.degenerate_triangles,
+                before.duplicate_triangles,
+                after.duplicate_triangles,
+            ),
+        };
+    }
+
+    NonManifoldFaceCleanupOutcome::Applied {
+        changed: removed + culled_pre + filled + culled_post,
+        notes: format!(
+            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {} (removed={}, culled_pre={}, filled={}, culled_post={})",
+            before.non_manifold_edges,
+            after.non_manifold_edges,
+            before.boundary_edges,
+            after.boundary_edges,
+            before.inconsistent_winding_edges,
+            after.inconsistent_winding_edges,
+            before.self_intersection_triangles,
+            after.self_intersection_triangles,
+            removed,
+            culled_pre,
+            filled,
+            culled_post,
+        ),
+    }
+}
+
+fn non_manifold_cleanup_is_improvement(before: &MeshAnalysis, after: &MeshAnalysis) -> bool {
+    if after.is_watertight {
+        return true;
+    }
+
+    // Primary target is reducing non-manifold edges without damaging other
+    // critical quality indicators.
+    after.non_manifold_edges < before.non_manifold_edges
+        && after.self_intersection_triangles <= before.self_intersection_triangles
+        && after.degenerate_triangles <= before.degenerate_triangles
+        && after.duplicate_triangles <= before.duplicate_triangles
+}
+
+fn non_manifold_cleanup_is_hard_regression(before: &MeshAnalysis, after: &MeshAnalysis) -> bool {
+    after.boundary_edges > before.boundary_edges.saturating_add(256)
+        || after.inconsistent_winding_edges > before.inconsistent_winding_edges.saturating_add(64)
+        || after.self_intersection_triangles > before.self_intersection_triangles.saturating_add(64)
+        || after.connected_components > before.connected_components.saturating_add(512)
 }
 
 fn attempt_micro_topology_heal(
@@ -1134,5 +1369,29 @@ mod tests {
             after_score
         ));
         assert!(micro_heal_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_accepts_non_manifold_reduction_without_regression() {
+        let mut before = analysis(1, 20, 2173, 99_059);
+        before.inconsistent_winding_edges = 22;
+
+        let mut after = analysis(1, 10, 2173, 99_050);
+        after.inconsistent_winding_edges = 18;
+
+        assert!(non_manifold_cleanup_is_improvement(&before, &after));
+        assert!(!non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_rejects_if_self_intersections_get_worse() {
+        let mut before = analysis(1, 20, 2173, 99_059);
+        before.inconsistent_winding_edges = 22;
+
+        let mut after = analysis(1, 10, 2173, 99_300);
+        after.inconsistent_winding_edges = 18;
+
+        assert!(!non_manifold_cleanup_is_improvement(&before, &after));
+        assert!(non_manifold_cleanup_is_hard_regression(&before, &after));
     }
 }

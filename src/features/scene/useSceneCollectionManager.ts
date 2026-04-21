@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
-import type { MeshHealthReport } from '@/utils/meshRepair';
+import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
@@ -713,6 +713,13 @@ export type SceneImportPlacementPrompt = {
   offPlateModelCount: number;
 };
 
+export type MeshRepairConfirmPrompt = {
+  fileName: string;
+  analysis: MeshAnalysisJson;
+};
+
+type MeshRepairConfirmChoice = 'repair' | 'load_as_is';
+
 type ModelClipboardEntry = {
   sourceId: string;
   name: string;
@@ -767,10 +774,12 @@ export function useSceneCollectionManager() {
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
+  const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const [pendingMeshRepairReports, setPendingMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
+  const meshRepairConfirmResolveRef = useRef<((choice: MeshRepairConfirmChoice) => void) | null>(null);
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
@@ -844,6 +853,31 @@ export function useSceneCollectionManager() {
     sceneImportPlacementResolveRef.current = null;
     setSceneImportPlacementPrompt(null);
     resolve?.(choice);
+  }, []);
+
+  const resolveMeshRepairConfirmPrompt = useCallback((choice: MeshRepairConfirmChoice) => {
+    const resolve = meshRepairConfirmResolveRef.current;
+    meshRepairConfirmResolveRef.current = null;
+    setMeshRepairConfirmPrompt(null);
+    resolve?.(choice);
+  }, []);
+
+  const requestMeshRepairConfirmation = useCallback(async (
+    prompt: MeshRepairConfirmPrompt,
+  ): Promise<MeshRepairConfirmChoice> => {
+    if (typeof window === 'undefined') return 'repair';
+
+    if (meshRepairConfirmResolveRef.current) {
+      // Fail-safe: resolve a stale unresolved prompt so imports never deadlock.
+      meshRepairConfirmResolveRef.current('repair');
+      meshRepairConfirmResolveRef.current = null;
+    }
+
+    setMeshRepairConfirmPrompt(prompt);
+
+    return new Promise<MeshRepairConfirmChoice>((resolve) => {
+      meshRepairConfirmResolveRef.current = resolve;
+    });
   }, []);
 
   const requestSceneImportPlacementChoice = useCallback(async (
@@ -1745,7 +1779,23 @@ export function useSceneCollectionManager() {
 
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
-          const geom = await loadMeshGeometry(url, file.name);
+          const geom = await loadMeshGeometry(url, file.name, {
+            onConfirmHeavyRepair: async (analysis) => {
+              const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
+              if (choice === 'repair') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Repairing meshes…' : 'Repairing mesh…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Repairing ${file.name}`,
+                  progress: null,
+                });
+              }
+              return choice === 'repair';
+            },
+          });
 
           // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
           const color = preferredMeshColor;
@@ -1887,7 +1937,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -3763,6 +3813,8 @@ export function useSceneCollectionManager() {
     dismissMeshRepairReports,
     sceneImportPlacementPrompt,
     resolveSceneImportPlacementPrompt,
+    meshRepairConfirmPrompt,
+    resolveMeshRepairConfirmPrompt,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     view3dSettings,

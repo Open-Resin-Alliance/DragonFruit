@@ -253,6 +253,39 @@ export async function repairFromPath(
 }
 
 /**
+ * Uploads a geometry to the Rust staging buffer and runs analysis only —
+ * no repair is performed and the staged buffer retains the original positions.
+ * Returns null if not running under Tauri.
+ */
+export async function analyzeFromGeometry(
+  geometry: THREE.BufferGeometry,
+): Promise<MeshAnalysisJson | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
+  if (!posAttr) throw new Error('analyzeFromGeometry: geometry has no position attribute');
+
+  const soup = expandGeometryToTriangleSoup(geometry);
+  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
+
+  await core.invoke('stage_mesh_binary_set', bytes, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+
+  const analysisJson = await core.invoke<string>('mesh_analyze_staged');
+  return normalizeMeshAnalysis(JSON.parse(analysisJson));
+}
+
+/**
+ * Returns true when analysis data indicates a heavy solidification repair will
+ * be triggered. Matches the default thresholds in RepairOptions::default().
+ */
+export function isHeavyRepair(analysis: MeshAnalysisJson): boolean {
+  return analysis.component_count >= 256 && analysis.self_intersections >= 128;
+}
+
+/**
  * Runs the native mesh-repair engine over an existing THREE.BufferGeometry
  * by staging its position buffer and invoking the staged-repair command.
  * Returns null if not running under Tauri.
