@@ -41,8 +41,8 @@ pub struct RepairOptions {
     ///
     /// Current sequence when enabled:
     /// 1) Co-refine intersecting triangles (split along intersection segments),
-    /// 2) Run a best-effort winding cull to drop faces likely interior to other
-    ///    shells.
+    /// 2) Extract union boundary faces via parity classification on both sides
+    ///    of each refined triangle (no voxel remesh).
     ///
     /// This is a stepping stone toward full arrangement+classification repair.
     pub resolve_self_intersections: bool,
@@ -65,9 +65,8 @@ impl Default for RepairOptions {
             fill_holes_max_edges: 64,
             keep_largest_n_components: None,
             repair_orientation: true,
-            // Off by default: the current winding-number cull is a best-effort
-            // partial solution; proper repair requires co-refinement (WIP in
-            // `arrangement` module). Callers can opt in explicitly.
+            // Off by default because this path can be expensive on huge meshes;
+            // callers can opt in explicitly or rely on fragmented auto mode.
             resolve_self_intersections: false,
             // On by default for highly fragmented support-style meshes; guarded
             // by high pre-analysis thresholds to avoid impacting normal models.
@@ -148,9 +147,9 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     //             components whose majority of faces are interior-facing.
     //             Fast (single BVH + parallel ray cast), never creates new
     //             boundary edges, ideal for highly fragmented meshes.
-    //   Phase B – Co-refinement + winding cull: triangle-level approach that
-    //             resolves self-intersections via edge splitting. Only runs if
-    //             Phase A found no interior components to remove.
+    //   Phase B – Co-refinement + parity union-boundary extraction: split
+    //             intersections, then keep only faces that separate inside and
+    //             outside volume states. No voxel remeshing.
     if run_self_intersection_path {
         // Orient first so face normals are reliable for the winding test.
         if options.repair_orientation {
@@ -201,14 +200,13 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             }
         }
 
-        // Phase B: Co-refinement + winding cull (only if Phase A didn't apply).
+        // Phase B: Co-refinement + volumetric union-boundary extraction
+        // (only if Phase A didn't apply).
         //
-        // For auto-triggered fragmented meshes, this path is often explosive
-        // (huge temporary topology growth then rollback) and costs a lot of
-        // time without helping quality. Keep it opt-in there unless the caller
-        // explicitly requested `resolve_self_intersections`.
-        let allow_phase_b = options.resolve_self_intersections || !auto_fragmented_solidify;
-        if !applied_self_intersection_path && allow_phase_b {
+        // This keeps geometric detail (triangle splitting only where needed)
+        // while performing a volume-style boundary classification via parity
+        // tests on both sides of each refined face.
+        if !applied_self_intersection_path {
             let t = std::time::Instant::now();
             let stats = corefine_self_intersections(&mut mesh);
             report.steps.push(RepairStepReport {
@@ -227,12 +225,12 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             });
 
             let t = std::time::Instant::now();
-            let culled = cull_interior_faces_by_winding(&mut mesh);
+            let culled = extract_union_boundary_faces_by_parity(&mut mesh);
             report.steps.push(RepairStepReport {
-                name: "cull_interior_faces".into(),
+                name: "extract_union_boundary_faces".into(),
                 changed: culled as u32,
                 notes: Some(format!(
-                    "{culled} interior-facing triangles removed (winding-number test, partial)"
+                    "{culled} triangles removed (parity volumetric classification + open-fragment pruning)"
                 )),
                 elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
             });
@@ -247,22 +245,14 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                 report.steps.push(RepairStepReport {
                     name: "rollback_solidify".into(),
                     changed: 0,
-                    notes: Some(format!("rolled back co-refinement/cull output: {reason}")),
+                    notes: Some(format!(
+                        "rolled back co-refinement/union-extraction output: {reason}"
+                    )),
                     elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
                 });
             } else {
                 applied_self_intersection_path = true;
             }
-        } else if !applied_self_intersection_path && !allow_phase_b {
-            report.steps.push(RepairStepReport {
-                name: "skip_corefine_fragmented_auto".into(),
-                changed: 0,
-                notes: Some(
-                    "skipped co-refinement fallback for auto-fragmented mesh; enable resolve_self_intersections=true to force it"
-                        .into(),
-                ),
-                elapsed_ms: 0.0,
-            });
         }
     }
 
@@ -494,6 +484,44 @@ fn solidify_regression_reason(before: &MeshAnalysis, after: &MeshAnalysis) -> Op
             "component count exploded {} -> {}",
             before.connected_components, after.connected_components
         ));
+    }
+
+    // Catastrophic geometry collapse guard: union extraction should not erase
+    // almost the entire model while claiming success.
+    if before.triangle_count > 0 {
+        // Require at least 10% of triangles to remain unless the input was
+        // already tiny. This catches pathological over-pruning where we keep
+        // only a handful of shards.
+        if before.triangle_count >= 10_000
+            && after.triangle_count.saturating_mul(10) < before.triangle_count
+        {
+            return Some(format!(
+                "triangle count collapsed {} -> {}",
+                before.triangle_count, after.triangle_count
+            ));
+        }
+    }
+
+    // Volume should remain broadly consistent for a union-style extraction.
+    // A huge drop indicates we kept only residual fragments.
+    let before_abs_vol = before.signed_volume.abs();
+    let after_abs_vol = after.signed_volume.abs();
+    if before_abs_vol > 1e-3 && after_abs_vol < before_abs_vol * 0.20 {
+        return Some(format!(
+            "signed volume collapsed {:.3} -> {:.3}",
+            before.signed_volume, after.signed_volume
+        ));
+    }
+
+    if after.triangle_count > 0 {
+        // Post-solidify output with a large duplicate fraction is unstable and
+        // typically indicates degeneracy in extracted fragments.
+        if after.duplicate_triangles.saturating_mul(8) > after.triangle_count {
+            return Some(format!(
+                "duplicate triangle ratio too high {}/{}",
+                after.duplicate_triangles, after.triangle_count
+            ));
+        }
     }
 
     if after.self_intersection_triangles >= before.self_intersection_triangles
@@ -1101,53 +1129,134 @@ fn point_in_tri(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> b
     !(has_neg && has_pos)
 }
 
-/// Classify each triangle as interior (`true`) or exterior (`false`) using a
-/// parity ray cast along the face outward normal.  Interior means the face
-/// centroid is inside another shell (odd number of forward-shell crossings).
-///
-/// This is the shared primitive for both the per-face and the per-component
-/// interior-culling passes.
-fn compute_interior_face_flags(mesh: &IndexedMesh) -> Vec<bool> {
-    if mesh.triangles.is_empty() {
-        return Vec::new();
+fn parity_inside_vote(mesh: &IndexedMesh, bvh: &Bvh, origin: Vec3, skip_face: u32) -> bool {
+    // Three non-axis-aligned directions; majority vote mitigates vertex/edge
+    // grazing ambiguities from any one direction.
+    let dirs = [
+        Vec3::new(1.0, 0.173_205_08, 0.097_341_63),
+        Vec3::new(0.137_431_56, 1.0, 0.223_606_8),
+        Vec3::new(0.182_574_18, 0.365_148_37, 1.0),
+    ];
+
+    let mut inside_votes = 0usize;
+    for dir in dirs {
+        let hits = bvh.ray_hit_count_excluding(mesh, origin, dir, skip_face);
+        if hits % 2 == 1 {
+            inside_votes += 1;
+        }
     }
-    let bvh = Bvh::build(mesh);
-    // Offset the origin slightly along the face normal to avoid self-hits.
-    const OFFSET: f32 = 1e-4;
-    let n = mesh.triangles.len();
-    let mesh_ref: &IndexedMesh = mesh;
-    (0..n)
-        .into_par_iter()
-        .map(|fi| {
-            let [a, b, c] = mesh_ref.tri_positions(fi as u32);
-            let e1 = b.sub(a);
-            let e2 = c.sub(a);
-            let raw_n = e1.cross(e2);
-            let len = raw_n.length();
-            if len < 1e-8 {
-                // Degenerate — leave it; cull_degenerate pass handles it.
-                return false;
-            }
-            let normal = raw_n.scale(1.0 / len);
-            let centroid = a.add(b).add(c).scale(1.0 / 3.0);
-            let origin = centroid.add(normal.scale(OFFSET));
-            let hits = bvh.ray_hit_count_excluding(mesh_ref, origin, normal, fi as u32);
-            // Odd hit count → face is inside another shell.
-            hits % 2 == 1
-        })
-        .collect()
+    inside_votes >= 2
 }
 
-fn cull_interior_faces_by_winding(mesh: &mut IndexedMesh) -> usize {
-    let interior = compute_interior_face_flags(mesh);
+/// Extract the outer boundary of the volumetric union represented by the mesh
+/// without voxel remeshing.
+///
+/// For each triangle, sample points on both sides of the face and classify
+/// each sample by parity-in-volume. A triangle belongs to the union boundary
+/// iff the two samples are on different inside/outside states.
+///
+/// This preserves existing surface detail (no grid decimation or marching
+/// cubes) and only removes triangles that are interior to the union volume.
+fn extract_union_boundary_faces_by_parity(mesh: &mut IndexedMesh) -> usize {
+    if mesh.triangles.is_empty() {
+        return 0;
+    }
+
+    let bvh = Bvh::build(mesh);
+    let bb = mesh.bbox();
+    let offset = (bb.diag().max(1e-4)) * 1e-6;
+
+    let n = mesh.triangles.len();
+    let boundary_keep: Vec<bool> = {
+        let mesh_ref: &IndexedMesh = mesh;
+        (0..n)
+            .into_par_iter()
+            .map(|fi| {
+                let [a, b, c] = mesh_ref.tri_positions(fi as u32);
+                let e1 = b.sub(a);
+                let e2 = c.sub(a);
+                let raw_n = e1.cross(e2);
+                let len = raw_n.length();
+                if len < 1e-8 {
+                    return false;
+                }
+
+                let normal = raw_n.scale(1.0 / len);
+                let centroid = a.add(b).add(c).scale(1.0 / 3.0);
+                let plus = centroid.add(normal.scale(offset));
+                let minus = centroid.sub(normal.scale(offset));
+
+                let plus_inside = parity_inside_vote(mesh_ref, &bvh, plus, fi as u32);
+                let minus_inside = parity_inside_vote(mesh_ref, &bvh, minus, fi as u32);
+
+                // Boundary face if classification differs across the face.
+                plus_inside != minus_inside
+            })
+            .collect()
+    };
+
     let before = mesh.triangles.len();
     let mut kept = Vec::with_capacity(before);
-    for (fi, &is_interior) in interior.iter().enumerate() {
-        if !is_interior {
-            kept.push(mesh.triangles[fi]);
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        if boundary_keep[fi] {
+            kept.push(*tri);
         }
     }
     mesh.triangles = kept;
+
+    // Drop open seam shards that are common when co-refinement had unresolved
+    // local failures (e.g. skipped faces). Keep only extracted components that
+    // are closed or near-closed and sufficiently large.
+    if !mesh.triangles.is_empty() {
+        let comps = triangle_components(mesh);
+        let n_comps = comps.iter().copied().max().unwrap_or(0) as usize + 1;
+
+        let mut comp_tri_count = vec![0usize; n_comps];
+        for &c in &comps {
+            comp_tri_count[c as usize] += 1;
+        }
+
+        let topo = Topology::build(mesh);
+        let mut comp_boundary_edges = vec![0usize; n_comps];
+        for info in topo.edges.values() {
+            if info.faces.len() == 1 {
+                let fi = info.faces[0] as usize;
+                let c = comps[fi] as usize;
+                comp_boundary_edges[c] += 1;
+            }
+        }
+
+        let mut keep_comp = vec![false; n_comps];
+        for c in 0..n_comps {
+            let tris = comp_tri_count[c];
+            if tris == 0 {
+                continue;
+            }
+            let boundary = comp_boundary_edges[c];
+            let closed = boundary == 0;
+            // Near-closed: modest absolute boundary and small relative leak.
+            let near_closed = boundary <= 64 && boundary.saturating_mul(8) <= tris;
+            if closed || (near_closed && tris >= 128) {
+                keep_comp[c] = true;
+            }
+        }
+
+        if keep_comp.iter().any(|&k| k) {
+            mesh.triangles = mesh
+                .triangles
+                .iter()
+                .enumerate()
+                .filter_map(|(fi, tri)| {
+                    if keep_comp[comps[fi] as usize] {
+                        Some(*tri)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+    }
+
     before - mesh.triangles.len()
 }
 
@@ -1483,6 +1592,47 @@ mod tests {
         let before = analysis(512, 300, 64, 5_000);
         let after = analysis(480, 240, 64, 4_100);
         assert!(solidify_regression_reason(&before, &after).is_none());
+    }
+
+    #[test]
+    fn solidify_guard_flags_triangle_and_volume_collapse() {
+        let mut before = analysis(0, 20, 2173, 99_060);
+        before.triangle_count = 1_200_173;
+        before.signed_volume = 75_998.39;
+
+        let mut after = analysis(0, 28, 177, 0);
+        after.triangle_count = 422;
+        after.signed_volume = 243.29;
+
+        let reason = solidify_regression_reason(&before, &after);
+        assert!(reason.is_some(), "expected catastrophic collapse guard");
+        let reason = reason.unwrap();
+        assert!(
+            reason.contains("triangle count collapsed")
+                || reason.contains("signed volume collapsed"),
+            "expected collapse reason, got: {reason}"
+        );
+    }
+
+    #[test]
+    fn solidify_guard_flags_high_duplicate_ratio() {
+        let mut before = analysis(0, 20, 2173, 99_060);
+        before.triangle_count = 300_000;
+        before.signed_volume = 10_000.0;
+
+        let mut after = analysis(0, 10, 64, 50_000);
+        after.triangle_count = 120_000;
+        after.duplicate_triangles = 20_000;
+        after.signed_volume = 8_500.0;
+
+        let reason = solidify_regression_reason(&before, &after);
+        assert!(reason.is_some(), "expected duplicate-ratio guard");
+        assert!(
+            reason
+                .unwrap()
+                .contains("duplicate triangle ratio too high"),
+            "expected duplicate ratio reason"
+        );
     }
 
     #[test]
