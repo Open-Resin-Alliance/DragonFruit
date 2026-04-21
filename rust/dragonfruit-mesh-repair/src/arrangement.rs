@@ -197,7 +197,12 @@ fn tri_interval_on_line(t: [Vec3; 3], d: [f32; 3], axis: u8) -> Option<LineInter
     } else {
         (tb, ta, cross_b, cross_a)
     };
-    Some(LineInterval { p_lo, p_hi, lo_t, hi_t })
+    Some(LineInterval {
+        p_lo,
+        p_hi,
+        lo_t,
+        hi_t,
+    })
 }
 
 /// Given two intervals on the same line (axis-aligned parameter `t`), pick a
@@ -282,8 +287,7 @@ pub fn corefine_self_intersections(mesh: &mut IndexedMesh) -> CorefineStats {
 
     let new_vertex_count_before = mesh.positions.len();
     {
-        let mut registry: SpatialVertexRegistry =
-            SpatialVertexRegistry::new(vertex_epsilon);
+        let mut registry: SpatialVertexRegistry = SpatialVertexRegistry::new(vertex_epsilon);
         // Seed with existing positions so segment endpoints landing on an
         // existing vertex dedup to it.
         for (i, p) in mesh.positions.iter().enumerate() {
@@ -317,8 +321,7 @@ pub fn corefine_self_intersections(mesh: &mut IndexedMesh) -> CorefineStats {
 
     // 4. Apply. Build a new triangle list: non-refined faces kept as-is,
     //    refined faces replaced.
-    let mut replacement: AHashMap<u32, Vec<[u32; 3]>> =
-        AHashMap::with_capacity(refined.len());
+    let mut replacement: AHashMap<u32, Vec<[u32; 3]>> = AHashMap::with_capacity(refined.len());
     for (fi, opt) in refined {
         match opt {
             Some(tris) => {
@@ -844,7 +847,10 @@ mod tests {
         let stats = corefine_self_intersections(&mut mesh);
         assert_eq!(stats.intersecting_pairs, 0);
         assert_eq!(stats.refined_faces, 0);
-        assert_eq!(mesh.triangles, before_tris, "disjoint mesh must be unchanged");
+        assert_eq!(
+            mesh.triangles, before_tris,
+            "disjoint mesh must be unchanged"
+        );
         assert_eq!(mesh.positions.len(), before_positions);
     }
 
@@ -871,7 +877,10 @@ mod tests {
             ],
         };
         let pre = count_self_intersections(&mesh);
-        assert!(pre >= 2, "expected both horizontal tris to cross vertical, got {pre}");
+        assert!(
+            pre >= 2,
+            "expected both horizontal tris to cross vertical, got {pre}"
+        );
 
         let stats = corefine_self_intersections(&mut mesh);
         assert_eq!(stats.intersecting_pairs, 2);
@@ -885,6 +894,9 @@ mod tests {
             stats.new_vertices
         );
         let post = count_self_intersections(&mesh);
-        assert_eq!(post, 0, "corefinement should fully resolve crossings, got {post}");
+        assert_eq!(
+            post, 0,
+            "corefinement should fully resolve crossings, got {post}"
+        );
     }
 }

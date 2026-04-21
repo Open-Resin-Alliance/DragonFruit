@@ -132,3 +132,74 @@ fn degenerate_triangles_are_culled() {
     let outcome = repair(mesh, &RepairOptions::default());
     assert_eq!(outcome.mesh.triangles.len(), 12);
 }
+
+#[test]
+fn defaults_enable_fragmented_auto_solidify_with_guards() {
+    let defaults = RepairOptions::default();
+    assert!(
+        defaults.solidify_fragmented_components,
+        "fragmented auto-solidify should be enabled by default"
+    );
+    assert_eq!(defaults.solidify_component_threshold, 256);
+    assert_eq!(defaults.solidify_self_intersection_threshold, 128);
+}
+
+#[test]
+fn fragmented_auto_solidify_triggers_without_explicit_resolve_flag() {
+    // Two disconnected triangles crossing each other.
+    let mesh = IndexedMesh {
+        positions: vec![
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(2.0, -1.0, 0.0),
+            Vec3::new(-1.0, 2.0, 0.0),
+            Vec3::new(-1.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, -1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ],
+        triangles: vec![[0, 1, 2], [3, 4, 5]],
+    };
+
+    let options = RepairOptions {
+        resolve_self_intersections: false,
+        solidify_fragmented_components: true,
+        solidify_component_threshold: 2,
+        solidify_self_intersection_threshold: 1,
+        ..RepairOptions::default()
+    };
+
+    let outcome = repair(mesh.clone(), &options);
+    assert!(
+        outcome
+            .report
+            .steps
+            .iter()
+            .any(|s| s.name == "auto_enable_solidify"),
+        "auto solidify step should be recorded"
+    );
+    assert!(
+        outcome
+            .report
+            .steps
+            .iter()
+            .any(|s| s.name == "corefine_self_intersections"),
+        "co-refinement should run when auto solidify triggers"
+    );
+
+    // Control check: same thresholds but auto mode disabled should not run corefine.
+    let control = RepairOptions {
+        resolve_self_intersections: false,
+        solidify_fragmented_components: false,
+        solidify_component_threshold: 2,
+        solidify_self_intersection_threshold: 1,
+        ..RepairOptions::default()
+    };
+    let control_outcome = repair(mesh, &control);
+    assert!(
+        !control_outcome
+            .report
+            .steps
+            .iter()
+            .any(|s| s.name == "corefine_self_intersections"),
+        "corefine should remain off when both resolve and auto-solidify are disabled"
+    );
+}

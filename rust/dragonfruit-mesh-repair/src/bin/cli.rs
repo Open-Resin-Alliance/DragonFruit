@@ -49,6 +49,12 @@ enum Command {
         repair_orientation: bool,
         #[arg(long, default_value_t = false)]
         resolve_self_intersections: bool,
+        #[arg(long, default_value_t = true)]
+        solidify_fragmented_components: bool,
+        #[arg(long, default_value_t = 256)]
+        solidify_component_threshold: usize,
+        #[arg(long, default_value_t = 128)]
+        solidify_self_intersection_threshold: usize,
     },
 }
 
@@ -75,6 +81,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             keep_largest_n,
             repair_orientation,
             resolve_self_intersections,
+            solidify_fragmented_components,
+            solidify_component_threshold,
+            solidify_self_intersection_threshold,
         } => {
             let options = RepairOptions {
                 weld_epsilon,
@@ -82,6 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 keep_largest_n_components: keep_largest_n,
                 repair_orientation,
                 resolve_self_intersections,
+                solidify_fragmented_components,
+                solidify_component_threshold,
+                solidify_self_intersection_threshold,
             };
             let outcome = repair_path(&input, &options)?;
             if let Some(p) = &out_stl {

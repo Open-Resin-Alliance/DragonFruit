@@ -12,9 +12,7 @@
 
 use std::path::PathBuf;
 
-use dragonfruit_mesh_repair::{
-    analyze, io, repair, IndexedMesh, RepairOptions,
-};
+use dragonfruit_mesh_repair::{analyze, io, repair, IndexedMesh, RepairOptions};
 use serde::Deserialize;
 use tauri::ipc::Response;
 
@@ -31,6 +29,9 @@ struct RepairOptionsDto {
     keep_largest_n_components: Option<usize>,
     repair_orientation: Option<bool>,
     resolve_self_intersections: Option<bool>,
+    solidify_fragmented_components: Option<bool>,
+    solidify_component_threshold: Option<usize>,
+    solidify_self_intersection_threshold: Option<usize>,
 }
 
 impl From<RepairOptionsDto> for RepairOptions {
@@ -50,6 +51,15 @@ impl From<RepairOptionsDto> for RepairOptions {
             resolve_self_intersections: dto
                 .resolve_self_intersections
                 .unwrap_or(defaults.resolve_self_intersections),
+            solidify_fragmented_components: dto
+                .solidify_fragmented_components
+                .unwrap_or(defaults.solidify_fragmented_components),
+            solidify_component_threshold: dto
+                .solidify_component_threshold
+                .unwrap_or(defaults.solidify_component_threshold),
+            solidify_self_intersection_threshold: dto
+                .solidify_self_intersection_threshold
+                .unwrap_or(defaults.solidify_self_intersection_threshold),
         }
     }
 }
@@ -67,7 +77,10 @@ fn parse_options(options_json: &str) -> RepairOptions {
 pub async fn mesh_analyze_from_path(file_path: String) -> Result<String, String> {
     let path = PathBuf::from(file_path);
     if !path.exists() {
-        return Err(format!("mesh_analyze_from_path: not found: {}", path.display()));
+        return Err(format!(
+            "mesh_analyze_from_path: not found: {}",
+            path.display()
+        ));
     }
     let mesh = tauri::async_runtime::spawn_blocking(move || {
         io::load_mesh_from_path(&path).map_err(|e| e.to_string())
@@ -85,7 +98,10 @@ pub async fn mesh_repair_from_path(
 ) -> Result<String, String> {
     let path = PathBuf::from(&file_path);
     if !path.exists() {
-        return Err(format!("mesh_repair_from_path: not found: {}", path.display()));
+        return Err(format!(
+            "mesh_repair_from_path: not found: {}",
+            path.display()
+        ));
     }
     let options = parse_options(&options_json);
     let source_path = file_path.clone();
@@ -155,7 +171,9 @@ fn read_staging_bytes() -> Result<Vec<u8>, String> {
         .clone();
     match path {
         Some(p) => std::fs::read(&p).map_err(|e| format!("read staged mesh file '{p}': {e}")),
-        None => Err("No staged mesh buffer — call stage_mesh_* or mesh_repair_from_path first".into()),
+        None => {
+            Err("No staged mesh buffer — call stage_mesh_* or mesh_repair_from_path first".into())
+        }
     }
 }
 

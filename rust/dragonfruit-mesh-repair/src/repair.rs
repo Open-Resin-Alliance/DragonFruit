@@ -10,14 +10,16 @@
 //!   5. Optionally drop small disconnected components (keep top-N by signed volume).
 //!   6. Recompute analysis for the post-report.
 //!
-//! Self-intersection retriangulation and voxel-based solid remeshing are not
-//! yet implemented; residual counts flow into [`MeshHealthReport::residual_issues`].
+//! Co-refinement-based self-intersection retriangulation is available as an
+//! opt-in path; full arrangement classification/extraction is still WIP.
+//! Residual counts flow into [`MeshHealthReport::residual_issues`].
 
 use ahash::AHashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::analyze;
+use crate::analysis::{analyze, MeshAnalysis};
+use crate::arrangement::corefine_self_intersections;
 use crate::core::bvh::Bvh;
 use crate::core::halfedge::{edge_key, Topology};
 use crate::core::mesh::{IndexedMesh, Vec3};
@@ -35,10 +37,25 @@ pub struct RepairOptions {
     pub keep_largest_n_components: Option<usize>,
     /// Attempt orientation repair (per-component outward vote).
     pub repair_orientation: bool,
-    /// Attempt self-intersection resolution via winding-number interior-face
-    /// culling: each triangle fires a ray along its outward normal; an odd hit
-    /// count means the face is inside another shell and is removed.
+    /// Attempt self-intersection resolution.
+    ///
+    /// Current sequence when enabled:
+    /// 1) Co-refine intersecting triangles (split along intersection segments),
+    /// 2) Run a best-effort winding cull to drop faces likely interior to other
+    ///    shells.
+    ///
+    /// This is a stepping stone toward full arrangement+classification repair.
     pub resolve_self_intersections: bool,
+    /// If true, automatically enable the self-intersection solidify path for
+    /// heavily fragmented meshes (typical of broken support STLs), even when
+    /// `resolve_self_intersections` is false.
+    pub solidify_fragmented_components: bool,
+    /// Minimum connected-component count in the *pre* analysis required for
+    /// `solidify_fragmented_components` to auto-trigger.
+    pub solidify_component_threshold: usize,
+    /// Minimum self-intersection-triangle count in the *pre* analysis required
+    /// for `solidify_fragmented_components` to auto-trigger.
+    pub solidify_self_intersection_threshold: usize,
 }
 
 impl Default for RepairOptions {
@@ -52,6 +69,11 @@ impl Default for RepairOptions {
             // partial solution; proper repair requires co-refinement (WIP in
             // `arrangement` module). Callers can opt in explicitly.
             resolve_self_intersections: false,
+            // On by default for highly fragmented support-style meshes; guarded
+            // by high pre-analysis thresholds to avoid impacting normal models.
+            solidify_fragmented_components: true,
+            solidify_component_threshold: 256,
+            solidify_self_intersection_threshold: 128,
         }
     }
 }
@@ -66,7 +88,28 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let t_start = std::time::Instant::now();
 
     let pre = analyze(&mesh);
+    let auto_fragmented_solidify = options.solidify_fragmented_components
+        && pre.connected_components >= options.solidify_component_threshold
+        && pre.self_intersection_triangles >= options.solidify_self_intersection_threshold;
+    let run_self_intersection_path = options.resolve_self_intersections || auto_fragmented_solidify;
+    let mut applied_self_intersection_path = false;
+    let mut solidify_rollback_reason: Option<String> = None;
     let mut report = MeshHealthReport::new(pre);
+
+    if auto_fragmented_solidify {
+        report.steps.push(RepairStepReport {
+            name: "auto_enable_solidify".into(),
+            changed: 0,
+            notes: Some(format!(
+                "auto-triggered: components={} (>= {}), self_intersections={} (>= {})",
+                report.pre.connected_components,
+                options.solidify_component_threshold,
+                report.pre.self_intersection_triangles,
+                options.solidify_self_intersection_threshold,
+            )),
+            elapsed_ms: 0.0,
+        });
+    }
 
     // 1. Weld.
     let t = std::time::Instant::now();
@@ -98,7 +141,58 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
     });
 
-    // 4. Orient components.
+    // 4. Optional co-refinement + interior-face cull (self-intersection path).
+    if run_self_intersection_path {
+        let mesh_before_solidify = mesh.clone();
+        let analysis_before_solidify = analyze(&mesh);
+
+        let t = std::time::Instant::now();
+        let stats = corefine_self_intersections(&mut mesh);
+        report.steps.push(RepairStepReport {
+            name: "corefine_self_intersections".into(),
+            changed: stats.refined_faces as u32,
+            notes: Some(format!(
+                "pairs={} refined_faces={} skipped_faces={} new_vertices={} tris:{}->{}",
+                stats.intersecting_pairs,
+                stats.refined_faces,
+                stats.skipped_faces,
+                stats.new_vertices,
+                stats.tri_count_before,
+                stats.tri_count_after
+            )),
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+
+        let t = std::time::Instant::now();
+        let culled = cull_interior_faces_by_winding(&mut mesh);
+        report.steps.push(RepairStepReport {
+            name: "cull_interior_faces".into(),
+            changed: culled as u32,
+            notes: Some(format!(
+                "{culled} interior-facing triangles removed (winding-number test, partial)"
+            )),
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+
+        let t = std::time::Instant::now();
+        let analysis_after_solidify = analyze(&mesh);
+        if let Some(reason) =
+            solidify_regression_reason(&analysis_before_solidify, &analysis_after_solidify)
+        {
+            mesh = mesh_before_solidify;
+            solidify_rollback_reason = Some(reason.clone());
+            report.steps.push(RepairStepReport {
+                name: "rollback_solidify".into(),
+                changed: 0,
+                notes: Some(format!("rolled back co-refinement/cull output: {reason}")),
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+        } else {
+            applied_self_intersection_path = true;
+        }
+    }
+
+    // 5. Orient components.
     if options.repair_orientation {
         let t = std::time::Instant::now();
         let flipped = repair_orientation(&mut mesh);
@@ -110,31 +204,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         });
     }
 
-    // 4.5. Cull interior faces (partial self-intersection resolution).
-    //
-    // NOTE: This is a best-effort heuristic that only handles faces fully
-    // enclosed by another shell. Surface-surface crossings (two shells poking
-    // through each other, no shell inside the other) are NOT fixed here —
-    // those need real co-refinement (see `arrangement` module, WIP).
-    //
-    // We intentionally do NOT re-fill holes after culling. Ear-clipping the
-    // huge non-planar multi-hole boundary loops left by a cull in a messy
-    // mesh produces tangled self-intersecting triangles, which is strictly
-    // worse than leaving the seam open. Open seams are reported as residuals.
-    if options.resolve_self_intersections {
-        let t = std::time::Instant::now();
-        let culled = cull_interior_faces_by_winding(&mut mesh);
-        report.steps.push(RepairStepReport {
-            name: "cull_interior_faces".into(),
-            changed: culled as u32,
-            notes: Some(format!(
-                "{culled} interior-facing triangles removed (winding-number test, partial)"
-            )),
-            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-        });
-    }
-
-    // 5. Component filter.
+    // 6. Component filter.
     if let Some(keep_n) = options.keep_largest_n_components {
         let t = std::time::Instant::now();
         let dropped_tris = keep_largest_components(&mut mesh, keep_n);
@@ -146,7 +216,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         });
     }
 
-    // 6. Drop unused vertices (post-cull cleanup).
+    // 7. Drop unused vertices (post-cull cleanup).
     let t = std::time::Instant::now();
     let pruned = prune_unused_vertices(&mut mesh);
     report.steps.push(RepairStepReport {
@@ -173,15 +243,22 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             report.post.boundary_edges, report.post.boundary_loops
         ));
     }
-    if report.post.self_intersection_triangles > 0 && !options.resolve_self_intersections {
-        residuals.push(format!(
-            "{} self-intersecting triangles detected (pass resolve_self_intersections=true to attempt repair)",
-            report.post.self_intersection_triangles
-        ));
+    if report.post.self_intersection_triangles > 0 && !applied_self_intersection_path {
+        if let Some(reason) = &solidify_rollback_reason {
+            residuals.push(format!(
+                "{} self-intersecting triangles detected (solidify attempt was rolled back: {reason})",
+                report.post.self_intersection_triangles
+            ));
+        } else {
+            residuals.push(format!(
+                "{} self-intersecting triangles detected (pass resolve_self_intersections=true or enable solidify_fragmented_components=true to attempt repair)",
+                report.post.self_intersection_triangles
+            ));
+        }
     }
-    if options.resolve_self_intersections && report.post.self_intersection_triangles > 0 {
+    if applied_self_intersection_path && report.post.self_intersection_triangles > 0 {
         residuals.push(format!(
-            "{} self-intersecting triangles remain after winding-number cull",
+            "{} self-intersecting triangles remain after co-refinement+cull",
             report.post.self_intersection_triangles
         ));
     }
@@ -197,6 +274,65 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     RepairOutcome { mesh, report }
+}
+
+fn solidify_regression_reason(before: &MeshAnalysis, after: &MeshAnalysis) -> Option<String> {
+    fn is_explosive_increase(
+        before: usize,
+        after: usize,
+        min_delta: usize,
+        min_ratio: usize,
+    ) -> bool {
+        if after <= before {
+            return false;
+        }
+        let delta = after - before;
+        if delta < min_delta {
+            return false;
+        }
+        if before == 0 {
+            return after >= min_delta;
+        }
+        after >= before.saturating_mul(min_ratio)
+    }
+
+    if is_explosive_increase(before.boundary_edges, after.boundary_edges, 2048, 8) {
+        return Some(format!(
+            "boundary edges exploded {} -> {}",
+            before.boundary_edges, after.boundary_edges
+        ));
+    }
+
+    if is_explosive_increase(before.non_manifold_edges, after.non_manifold_edges, 512, 4) {
+        return Some(format!(
+            "non-manifold edges regressed {} -> {}",
+            before.non_manifold_edges, after.non_manifold_edges
+        ));
+    }
+
+    if is_explosive_increase(
+        before.connected_components,
+        after.connected_components,
+        512,
+        2,
+    ) {
+        return Some(format!(
+            "component count exploded {} -> {}",
+            before.connected_components, after.connected_components
+        ));
+    }
+
+    if after.self_intersection_triangles >= before.self_intersection_triangles
+        && (after.boundary_edges > before.boundary_edges.saturating_add(256)
+            || after.non_manifold_edges > before.non_manifold_edges.saturating_add(128))
+    {
+        return Some(format!(
+            "self-intersections did not improve ({} -> {}) while topology worsened",
+            before.self_intersection_triangles, after.self_intersection_triangles
+        ));
+    }
+
+    None
 }
 
 // --- individual passes ---------------------------------------------------
@@ -683,4 +819,57 @@ fn keep_largest_components(mesh: &mut IndexedMesh, keep_n: usize) -> usize {
     }
     mesh.triangles = kept;
     before - mesh.triangles.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn analysis(
+        boundary_edges: usize,
+        non_manifold_edges: usize,
+        components: usize,
+        self_intersections: usize,
+    ) -> MeshAnalysis {
+        MeshAnalysis {
+            vertex_count: 0,
+            triangle_count: 0,
+            bbox_min: [0.0, 0.0, 0.0],
+            bbox_max: [0.0, 0.0, 0.0],
+            signed_volume: 0.0,
+            duplicate_vertices: 0,
+            degenerate_triangles: 0,
+            duplicate_triangles: 0,
+            non_manifold_edges,
+            non_manifold_vertices: 0,
+            boundary_edges,
+            boundary_loops: 0,
+            largest_boundary_loop: 0,
+            inconsistent_winding_edges: 0,
+            self_intersection_triangles: self_intersections,
+            connected_components: components,
+            is_watertight: false,
+            is_oriented: false,
+            timings_ms: crate::analysis::AnalysisTimings::default(),
+        }
+    }
+
+    #[test]
+    fn solidify_guard_flags_boundary_explosion() {
+        let before = analysis(0, 20, 2173, 99_060);
+        let after = analysis(455_630, 4_295, 4_052, 99_307);
+        let reason = solidify_regression_reason(&before, &after);
+        assert!(reason.is_some(), "expected regression guard to trip");
+        assert!(
+            reason.unwrap().contains("boundary edges exploded"),
+            "expected boundary explosion reason"
+        );
+    }
+
+    #[test]
+    fn solidify_guard_accepts_non_explosive_progress() {
+        let before = analysis(512, 300, 64, 5_000);
+        let after = analysis(480, 240, 64, 4_100);
+        assert!(solidify_regression_reason(&before, &after).is_none());
+    }
 }
