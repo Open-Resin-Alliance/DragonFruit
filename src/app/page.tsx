@@ -9167,10 +9167,13 @@ export default function Home() {
       window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
     }
 
+    const sceneImportToastDurationMs = scene.sceneImportReport.durationMs ?? 4200;
+    const sceneImportToastFadeMs = Math.max(0, sceneImportToastDurationMs - 400);
+
     sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
       setIsSceneImportToastVisible(false);
       sceneImportToastFadeTimeoutRef.current = null;
-    }, 3800);
+    }, sceneImportToastFadeMs);
 
     return () => {
       if (sceneImportToastFadeTimeoutRef.current !== null) {
@@ -17090,7 +17093,27 @@ export default function Home() {
             }
             animated
             visible={isSceneImportToastVisible}
-            className="flex items-center gap-2"
+            className={`flex items-center gap-2 ${
+              scene.sceneImportReport.clickAction === 'openMeshRepairReport'
+                ? 'pointer-events-auto cursor-pointer select-none'
+                : ''
+            }`}
+            role={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 'button' : undefined}
+            tabIndex={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 0 : undefined}
+            onClick={() => {
+              if (scene.sceneImportReport?.clickAction === 'openMeshRepairReport') {
+                scene.openPendingMeshRepairReports();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (scene.sceneImportReport?.clickAction !== 'openMeshRepairReport') {
+                return;
+              }
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                scene.openPendingMeshRepairReports();
+              }
+            }}
           >
             {scene.sceneImportReport.tone === 'error' ? (
               <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
