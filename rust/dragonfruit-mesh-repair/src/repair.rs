@@ -216,7 +216,45 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         });
     }
 
-    // 7. Drop unused vertices (post-cull cleanup).
+    // 7. Last-mile micro topology heal for tiny residual defects.
+    //
+    // This targets cases like support-heavy imported meshes where we end up
+    // with a handful of non-manifold/boundary edges after the main passes.
+    // It is tightly gated and internally rollback-protected.
+    let t = std::time::Instant::now();
+    match attempt_micro_topology_heal(&mut mesh, options.fill_holes_max_edges) {
+        MicroHealOutcome::Skipped => {}
+        MicroHealOutcome::Applied { changed, notes } => {
+            report.steps.push(RepairStepReport {
+                name: "micro_topology_heal".into(),
+                changed: changed as u32,
+                notes: Some(notes),
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+
+            // Re-run orientation after local topology surgery.
+            if options.repair_orientation {
+                let t = std::time::Instant::now();
+                let flipped = repair_orientation(&mut mesh);
+                report.steps.push(RepairStepReport {
+                    name: "orient_components_post_micro_heal".into(),
+                    changed: flipped as u32,
+                    notes: None,
+                    elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                });
+            }
+        }
+        MicroHealOutcome::RolledBack { notes } => {
+            report.steps.push(RepairStepReport {
+                name: "rollback_micro_topology_heal".into(),
+                changed: 0,
+                notes: Some(notes),
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+        }
+    }
+
+    // 8. Drop unused vertices (post-cull cleanup).
     let t = std::time::Instant::now();
     let pruned = prune_unused_vertices(&mut mesh);
     report.steps.push(RepairStepReport {
@@ -333,6 +371,158 @@ fn solidify_regression_reason(before: &MeshAnalysis, after: &MeshAnalysis) -> Op
     }
 
     None
+}
+
+#[derive(Debug)]
+enum MicroHealOutcome {
+    Skipped,
+    Applied { changed: usize, notes: String },
+    RolledBack { notes: String },
+}
+
+fn attempt_micro_topology_heal(
+    mesh: &mut IndexedMesh,
+    fill_holes_max_edges: usize,
+) -> MicroHealOutcome {
+    if mesh.triangles.is_empty() {
+        return MicroHealOutcome::Skipped;
+    }
+
+    let topo = Topology::build(mesh);
+    let non_manifold_edges = topo.non_manifold_edges();
+    let boundary_edges = topo.boundary_edges();
+
+    if non_manifold_edges.is_empty() && boundary_edges.is_empty() {
+        return MicroHealOutcome::Skipped;
+    }
+
+    // Keep this as a targeted "last mile" fixer only.
+    const MAX_NON_MANIFOLD_EDGES: usize = 64;
+    const MAX_BOUNDARY_EDGES: usize = 128;
+    if non_manifold_edges.len() > MAX_NON_MANIFOLD_EDGES
+        || boundary_edges.len() > MAX_BOUNDARY_EDGES
+    {
+        return MicroHealOutcome::Skipped;
+    }
+
+    let before = analyze(mesh);
+    let mesh_before = mesh.clone();
+
+    let mut faces_to_remove: ahash::AHashSet<u32> = ahash::AHashSet::new();
+
+    // Always remove faces touching non-manifold edges.
+    for edge in &non_manifold_edges {
+        if let Some(info) = topo.edges.get(edge) {
+            for &fi in &info.faces {
+                faces_to_remove.insert(fi);
+            }
+        }
+    }
+
+    // For tiny residual boundary slits, remove incident faces as well, then
+    // close the resulting micro-hole deterministically.
+    if boundary_edges.len() <= 8 {
+        for edge in &boundary_edges {
+            if let Some(info) = topo.edges.get(edge) {
+                for &fi in &info.faces {
+                    faces_to_remove.insert(fi);
+                }
+            }
+        }
+    }
+
+    if faces_to_remove.is_empty() {
+        return MicroHealOutcome::Skipped;
+    }
+
+    let tri_before = mesh.triangles.len();
+    mesh.triangles = mesh
+        .triangles
+        .iter()
+        .enumerate()
+        .filter_map(|(fi, tri)| {
+            if faces_to_remove.contains(&(fi as u32)) {
+                None
+            } else {
+                Some(*tri)
+            }
+        })
+        .collect();
+    let removed = tri_before - mesh.triangles.len();
+
+    let culled = cull_degenerate_and_duplicate(mesh);
+    let filled = fill_small_holes(mesh, fill_holes_max_edges.clamp(8, 128));
+
+    let after = analyze(mesh);
+    let before_score =
+        before.non_manifold_edges + before.boundary_edges + before.inconsistent_winding_edges;
+    let after_score =
+        after.non_manifold_edges + after.boundary_edges + after.inconsistent_winding_edges;
+
+    let improved = micro_heal_is_improvement(&before, &after, before_score, after_score);
+    let hard_regression = micro_heal_is_hard_regression(&before, &after);
+
+    if !improved || hard_regression {
+        *mesh = mesh_before;
+        return MicroHealOutcome::RolledBack {
+            notes: format!(
+                "rolled back micro topology heal: score {} -> {}, nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}",
+                before_score,
+                after_score,
+                before.non_manifold_edges,
+                after.non_manifold_edges,
+                before.boundary_edges,
+                after.boundary_edges,
+                before.inconsistent_winding_edges,
+                after.inconsistent_winding_edges,
+            ),
+        };
+    }
+
+    MicroHealOutcome::Applied {
+        changed: removed + culled + filled,
+        notes: format!(
+            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {} (removed={}, culled={}, filled={})",
+            before.non_manifold_edges,
+            after.non_manifold_edges,
+            before.boundary_edges,
+            after.boundary_edges,
+            before.inconsistent_winding_edges,
+            after.inconsistent_winding_edges,
+            removed,
+            culled,
+            filled,
+        ),
+    }
+}
+
+fn micro_heal_is_improvement(
+    before: &MeshAnalysis,
+    after: &MeshAnalysis,
+    before_score: usize,
+    after_score: usize,
+) -> bool {
+    if after.is_watertight {
+        return true;
+    }
+
+    if after_score < before_score {
+        return true;
+    }
+
+    // Allow partial progress if at least one primary defect class improved and
+    // none materially worsened.
+    (after.non_manifold_edges < before.non_manifold_edges
+        || after.boundary_edges < before.boundary_edges
+        || after.inconsistent_winding_edges < before.inconsistent_winding_edges)
+        && after.boundary_edges <= before.boundary_edges.saturating_add(4)
+        && after.non_manifold_edges <= before.non_manifold_edges.saturating_add(4)
+}
+
+fn micro_heal_is_hard_regression(before: &MeshAnalysis, after: &MeshAnalysis) -> bool {
+    after.boundary_edges > before.boundary_edges.saturating_add(64)
+        || after.non_manifold_edges > before.non_manifold_edges.saturating_add(32)
+        || after.connected_components > before.connected_components.saturating_add(128)
 }
 
 // --- individual passes ---------------------------------------------------
@@ -871,5 +1061,41 @@ mod tests {
         let before = analysis(512, 300, 64, 5_000);
         let after = analysis(480, 240, 64, 4_100);
         assert!(solidify_regression_reason(&before, &after).is_none());
+    }
+
+    #[test]
+    fn micro_heal_accepts_defect_score_improvement() {
+        let before = analysis(2, 20, 2173, 99_059);
+        let mut after = analysis(0, 0, 2173, 99_059);
+        after.inconsistent_winding_edges = 0;
+        let before_score =
+            before.non_manifold_edges + before.boundary_edges + before.inconsistent_winding_edges;
+        let after_score =
+            after.non_manifold_edges + after.boundary_edges + after.inconsistent_winding_edges;
+        assert!(micro_heal_is_improvement(
+            &before,
+            &after,
+            before_score,
+            after_score
+        ));
+        assert!(!micro_heal_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn micro_heal_rejects_hard_boundary_regression() {
+        let before = analysis(2, 20, 2173, 99_059);
+        let mut after = analysis(500, 22, 2350, 99_059);
+        after.inconsistent_winding_edges = 30;
+        let before_score =
+            before.non_manifold_edges + before.boundary_edges + before.inconsistent_winding_edges;
+        let after_score =
+            after.non_manifold_edges + after.boundary_edges + after.inconsistent_winding_edges;
+        assert!(!micro_heal_is_improvement(
+            &before,
+            &after,
+            before_score,
+            after_score
+        ));
+        assert!(micro_heal_is_hard_regression(&before, &after));
     }
 }
