@@ -397,8 +397,8 @@ fn attempt_micro_topology_heal(
     }
 
     // Keep this as a targeted "last mile" fixer only.
-    const MAX_NON_MANIFOLD_EDGES: usize = 64;
-    const MAX_BOUNDARY_EDGES: usize = 128;
+    const MAX_NON_MANIFOLD_EDGES: usize = 32;
+    const MAX_BOUNDARY_EDGES: usize = 16;
     if non_manifold_edges.len() > MAX_NON_MANIFOLD_EDGES
         || boundary_edges.len() > MAX_BOUNDARY_EDGES
     {
@@ -450,8 +450,9 @@ fn attempt_micro_topology_heal(
         .collect();
     let removed = tri_before - mesh.triangles.len();
 
-    let culled = cull_degenerate_and_duplicate(mesh);
+    let culled_before_fill = cull_degenerate_and_duplicate(mesh);
     let filled = fill_small_holes(mesh, fill_holes_max_edges.clamp(8, 128));
+    let culled_after_fill = cull_degenerate_and_duplicate(mesh);
 
     let after = analyze(mesh);
     let before_score =
@@ -466,7 +467,7 @@ fn attempt_micro_topology_heal(
         *mesh = mesh_before;
         return MicroHealOutcome::RolledBack {
             notes: format!(
-                "rolled back micro topology heal: score {} -> {}, nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}",
+                "rolled back micro topology heal: score {} -> {}, nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {}, degenerate {} -> {}, duplicate {} -> {}",
                 before_score,
                 after_score,
                 before.non_manifold_edges,
@@ -475,23 +476,36 @@ fn attempt_micro_topology_heal(
                 after.boundary_edges,
                 before.inconsistent_winding_edges,
                 after.inconsistent_winding_edges,
+                before.self_intersection_triangles,
+                after.self_intersection_triangles,
+                before.degenerate_triangles,
+                after.degenerate_triangles,
+                before.duplicate_triangles,
+                after.duplicate_triangles,
             ),
         };
     }
 
     MicroHealOutcome::Applied {
-        changed: removed + culled + filled,
+        changed: removed + culled_before_fill + culled_after_fill + filled,
         notes: format!(
-            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {} (removed={}, culled={}, filled={})",
+            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {}, degenerate {} -> {}, duplicate {} -> {} (removed={}, culled_pre={}, filled={}, culled_post={})",
             before.non_manifold_edges,
             after.non_manifold_edges,
             before.boundary_edges,
             after.boundary_edges,
             before.inconsistent_winding_edges,
             after.inconsistent_winding_edges,
+            before.self_intersection_triangles,
+            after.self_intersection_triangles,
+            before.degenerate_triangles,
+            after.degenerate_triangles,
+            before.duplicate_triangles,
+            after.duplicate_triangles,
             removed,
-            culled,
+            culled_before_fill,
             filled,
+            culled_after_fill,
         ),
     }
 }
@@ -506,22 +520,21 @@ fn micro_heal_is_improvement(
         return true;
     }
 
-    if after_score < before_score {
-        return true;
-    }
-
-    // Allow partial progress if at least one primary defect class improved and
-    // none materially worsened.
-    (after.non_manifold_edges < before.non_manifold_edges
-        || after.boundary_edges < before.boundary_edges
-        || after.inconsistent_winding_edges < before.inconsistent_winding_edges)
-        && after.boundary_edges <= before.boundary_edges.saturating_add(4)
-        && after.non_manifold_edges <= before.non_manifold_edges.saturating_add(4)
+    // Strict acceptance: only keep if the primary edge-defect score improves
+    // and we don't regress other critical defect classes.
+    after_score < before_score
+        && after.self_intersection_triangles <= before.self_intersection_triangles
+        && after.degenerate_triangles <= before.degenerate_triangles
+        && after.duplicate_triangles <= before.duplicate_triangles
 }
 
 fn micro_heal_is_hard_regression(before: &MeshAnalysis, after: &MeshAnalysis) -> bool {
     after.boundary_edges > before.boundary_edges.saturating_add(64)
         || after.non_manifold_edges > before.non_manifold_edges.saturating_add(32)
+        || after.inconsistent_winding_edges > before.inconsistent_winding_edges.saturating_add(8)
+        || after.self_intersection_triangles > before.self_intersection_triangles.saturating_add(16)
+        || after.degenerate_triangles > before.degenerate_triangles
+        || after.duplicate_triangles > before.duplicate_triangles
         || after.connected_components > before.connected_components.saturating_add(128)
 }
 
@@ -1090,6 +1103,30 @@ mod tests {
             before.non_manifold_edges + before.boundary_edges + before.inconsistent_winding_edges;
         let after_score =
             after.non_manifold_edges + after.boundary_edges + after.inconsistent_winding_edges;
+        assert!(!micro_heal_is_improvement(
+            &before,
+            &after,
+            before_score,
+            after_score
+        ));
+        assert!(micro_heal_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn micro_heal_rejects_boundary_fix_that_worsens_winding_and_self_intersections() {
+        let mut before = analysis(1, 20, 2173, 99_059);
+        before.inconsistent_winding_edges = 22;
+
+        let mut after = analysis(0, 21, 2173, 99_085);
+        after.inconsistent_winding_edges = 57;
+        after.degenerate_triangles = 6;
+        after.duplicate_triangles = 4;
+
+        let before_score =
+            before.non_manifold_edges + before.boundary_edges + before.inconsistent_winding_edges;
+        let after_score =
+            after.non_manifold_edges + after.boundary_edges + after.inconsistent_winding_edges;
+
         assert!(!micro_heal_is_improvement(
             &before,
             &after,
