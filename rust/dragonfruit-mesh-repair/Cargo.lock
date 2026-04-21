@@ -131,6 +131,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "cdt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b91b872294f63ef586b32aa94141561681aa35ca2d703960cca4f661f4e18184"
+dependencies = [
+ "geometry-predicates",
+ "thiserror",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -222,6 +232,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "bytemuck",
+ "cdt",
  "clap",
  "proptest",
  "quick-xml",
@@ -282,6 +293,12 @@ name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
+name = "geometry-predicates"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8dba84198cf199c11b83f1cb9243eaeb70dc50b719d2835ebf34bf2481bca010"
 
 [[package]]
 name = "getrandom"

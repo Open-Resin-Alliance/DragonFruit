@@ -35,7 +35,10 @@ fn unit_cube() -> IndexedMesh {
         [1, 2, 6],
         [1, 6, 5],
     ];
-    IndexedMesh { positions, triangles }
+    IndexedMesh {
+        positions,
+        triangles,
+    }
 }
 
 #[test]
@@ -48,7 +51,10 @@ fn watertight_cube_is_clean() {
     assert_eq!(report.non_manifold_edges, 0, "cube is manifold");
     assert_eq!(report.connected_components, 1);
     assert!(report.is_watertight);
-    assert!(report.signed_volume > 0.0, "cube should have positive volume");
+    assert!(
+        report.signed_volume > 0.0,
+        "cube should have positive volume"
+    );
 }
 
 #[test]
@@ -68,7 +74,11 @@ fn duplicated_vertices_are_welded() {
         8,
         "welding should reduce to 8 unique corners"
     );
-    assert!(outcome.report.steps.iter().any(|s| s.name == "weld" && s.changed > 0));
+    assert!(outcome
+        .report
+        .steps
+        .iter()
+        .any(|s| s.name == "weld" && s.changed > 0));
 }
 
 #[test]
@@ -93,7 +103,10 @@ fn hole_is_filled() {
     mesh.triangles.remove(0);
     mesh.triangles.remove(0);
     let pre = analyze(&mesh);
-    assert!(pre.boundary_edges > 0, "cube missing a face should have a boundary");
+    assert!(
+        pre.boundary_edges > 0,
+        "cube missing a face should have a boundary"
+    );
     let outcome = repair(mesh, &RepairOptions::default());
     assert_eq!(
         outcome.report.post.boundary_edges, 0,

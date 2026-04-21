@@ -5,12 +5,13 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use dragonfruit_mesh_repair::{
-    analyze_path, io::write_positions_file, repair_path, RepairOptions,
-};
+use dragonfruit_mesh_repair::{analyze_path, io::write_positions_file, repair_path, RepairOptions};
 
 #[derive(Debug, Parser)]
-#[command(name = "dragonfruit-mesh-repair", about = "DragonFruit mesh repair engine")]
+#[command(
+    name = "dragonfruit-mesh-repair",
+    about = "DragonFruit mesh repair engine"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -705,6 +705,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b91b872294f63ef586b32aa94141561681aa35ca2d703960cca4f661f4e18184"
+dependencies = [
+ "geometry-predicates",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cef"
 version = "146.4.1+146.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1393,6 +1403,7 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
+ "cdt",
  "clap",
  "quick-xml 0.31.0",
  "rayon",
@@ -1922,6 +1933,12 @@ dependencies = [
  "typenum",
  "version_check",
 ]
+
+[[package]]
+name = "geometry-predicates"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8dba84198cf199c11b83f1cb9243eaeb70dc50b719d2835ebf34bf2481bca010"
 
 [[package]]
 name = "getrandom"

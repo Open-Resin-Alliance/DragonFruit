@@ -5,6 +5,7 @@
 //! See `1_Documentation/` and session plan for architecture notes.
 
 pub mod analysis;
+pub mod arrangement;
 pub mod core;
 pub mod io;
 pub mod repair;

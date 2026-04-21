@@ -23,6 +23,7 @@ zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
 ahash = "0.8"
 smallvec = "1"
+cdt = "0.1"
 
 [dev-dependencies]
 proptest = "1.9.0"

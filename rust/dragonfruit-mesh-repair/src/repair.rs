@@ -48,7 +48,10 @@ impl Default for RepairOptions {
             fill_holes_max_edges: 64,
             keep_largest_n_components: None,
             repair_orientation: true,
-            resolve_self_intersections: true,
+            // Off by default: the current winding-number cull is a best-effort
+            // partial solution; proper repair requires co-refinement (WIP in
+            // `arrangement` module). Callers can opt in explicitly.
+            resolve_self_intersections: false,
         }
     }
 }
@@ -107,7 +110,17 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         });
     }
 
-    // 4.5. Cull interior faces (winding-number self-intersection resolution).
+    // 4.5. Cull interior faces (partial self-intersection resolution).
+    //
+    // NOTE: This is a best-effort heuristic that only handles faces fully
+    // enclosed by another shell. Surface-surface crossings (two shells poking
+    // through each other, no shell inside the other) are NOT fixed here —
+    // those need real co-refinement (see `arrangement` module, WIP).
+    //
+    // We intentionally do NOT re-fill holes after culling. Ear-clipping the
+    // huge non-planar multi-hole boundary loops left by a cull in a messy
+    // mesh produces tangled self-intersecting triangles, which is strictly
+    // worse than leaving the seam open. Open seams are reported as residuals.
     if options.resolve_self_intersections {
         let t = std::time::Instant::now();
         let culled = cull_interior_faces_by_winding(&mut mesh);
@@ -115,21 +128,10 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             name: "cull_interior_faces".into(),
             changed: culled as u32,
             notes: Some(format!(
-                "{culled} interior-facing triangles removed via winding-number test"
+                "{culled} interior-facing triangles removed (winding-number test, partial)"
             )),
             elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
         });
-        if culled > 0 {
-            // Re-run hole fill: intersections seams become boundary loops.
-            let t = std::time::Instant::now();
-            let refilled = fill_small_holes(&mut mesh, options.fill_holes_max_edges);
-            report.steps.push(RepairStepReport {
-                name: "fill_holes_post_cull".into(),
-                changed: refilled as u32,
-                notes: None,
-                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-            });
-        }
     }
 
     // 5. Component filter.
