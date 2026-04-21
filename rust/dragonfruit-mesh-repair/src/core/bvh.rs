@@ -195,6 +195,52 @@ impl Bvh {
         count
     }
 
+    /// Cast a ray and count intersections while including only faces that
+    /// satisfy `include_face`.
+    ///
+    /// This is used by higher-level repair passes that need to ignore entire
+    /// subsets of faces (for example: all faces of the component currently
+    /// being classified).
+    pub fn ray_hit_count_with_filter<F>(
+        &self,
+        mesh: &IndexedMesh,
+        origin: Vec3,
+        dir: Vec3,
+        include_face: &F,
+    ) -> u32
+    where
+        F: Fn(u32) -> bool,
+    {
+        let inv_dir = Vec3::new(
+            if dir.x.abs() > 1e-20 {
+                1.0 / dir.x
+            } else {
+                f32::INFINITY
+            },
+            if dir.y.abs() > 1e-20 {
+                1.0 / dir.y
+            } else {
+                f32::INFINITY
+            },
+            if dir.z.abs() > 1e-20 {
+                1.0 / dir.z
+            } else {
+                f32::INFINITY
+            },
+        );
+        let mut count = 0u32;
+        self.ray_rec_with_filter(
+            mesh,
+            self.root,
+            origin,
+            dir,
+            inv_dir,
+            include_face,
+            &mut count,
+        );
+        count
+    }
+
     fn ray_rec_excluding(
         &self,
         mesh: &IndexedMesh,
@@ -228,6 +274,45 @@ impl Bvh {
                 }
                 self.ray_rec_excluding(mesh, left, origin, dir, inv_dir, skip_face, count);
                 self.ray_rec_excluding(mesh, right, origin, dir, inv_dir, skip_face, count);
+            }
+        }
+    }
+
+    fn ray_rec_with_filter<F>(
+        &self,
+        mesh: &IndexedMesh,
+        node: u32,
+        origin: Vec3,
+        dir: Vec3,
+        inv_dir: Vec3,
+        include_face: &F,
+        count: &mut u32,
+    ) where
+        F: Fn(u32) -> bool,
+    {
+        match self.nodes[node as usize] {
+            Node::Leaf { face, ref bbox } => {
+                if !include_face(face) {
+                    return;
+                }
+                if !ray_aabb(origin, inv_dir, bbox) {
+                    return;
+                }
+                let [a, b, c] = mesh.tri_positions(face);
+                if ray_tri(origin, dir, a, b, c).is_some() {
+                    *count += 1;
+                }
+            }
+            Node::Internal {
+                ref bbox,
+                left,
+                right,
+            } => {
+                if !ray_aabb(origin, inv_dir, bbox) {
+                    return;
+                }
+                self.ray_rec_with_filter(mesh, left, origin, dir, inv_dir, include_face, count);
+                self.ray_rec_with_filter(mesh, right, origin, dir, inv_dir, include_face, count);
             }
         }
     }

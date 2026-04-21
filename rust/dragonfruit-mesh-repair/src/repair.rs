@@ -141,54 +141,128 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
     });
 
-    // 4. Optional co-refinement + interior-face cull (self-intersection path).
+    // 4. Optional solidify (self-intersection path).
+    //
+    // Two phases:
+    //   Phase A – Component-level interior culling: removes entire connected
+    //             components whose majority of faces are interior-facing.
+    //             Fast (single BVH + parallel ray cast), never creates new
+    //             boundary edges, ideal for highly fragmented meshes.
+    //   Phase B – Co-refinement + winding cull: triangle-level approach that
+    //             resolves self-intersections via edge splitting. Only runs if
+    //             Phase A found no interior components to remove.
     if run_self_intersection_path {
+        // Orient first so face normals are reliable for the winding test.
+        if options.repair_orientation {
+            let t = std::time::Instant::now();
+            let flipped = repair_orientation(&mut mesh);
+            report.steps.push(RepairStepReport {
+                name: "orient_pre_solidify".into(),
+                changed: flipped as u32,
+                notes: None,
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+        }
+
         let mesh_before_solidify = mesh.clone();
         let analysis_before_solidify = analyze(&mesh);
 
+        // Phase A: Component-level interior culling.
         let t = std::time::Instant::now();
-        let stats = corefine_self_intersections(&mut mesh);
-        report.steps.push(RepairStepReport {
-            name: "corefine_self_intersections".into(),
-            changed: stats.refined_faces as u32,
-            notes: Some(format!(
-                "pairs={} refined_faces={} skipped_faces={} new_vertices={} tris:{}->{}",
-                stats.intersecting_pairs,
-                stats.refined_faces,
-                stats.skipped_faces,
-                stats.new_vertices,
-                stats.tri_count_before,
-                stats.tri_count_after
-            )),
-            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-        });
+        let (comp_removed_tris, comp_removed_count) = cull_interior_components(&mut mesh);
+        let elapsed_comp = t.elapsed().as_secs_f64() * 1000.0;
 
-        let t = std::time::Instant::now();
-        let culled = cull_interior_faces_by_winding(&mut mesh);
-        report.steps.push(RepairStepReport {
-            name: "cull_interior_faces".into(),
-            changed: culled as u32,
-            notes: Some(format!(
-                "{culled} interior-facing triangles removed (winding-number test, partial)"
-            )),
-            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-        });
+        if comp_removed_count > 0 {
+            let analysis_after_comp = analyze(&mesh);
+            if let Some(reason) =
+                solidify_regression_reason(&analysis_before_solidify, &analysis_after_comp)
+            {
+                // Regression — roll back Phase A and let Phase B try.
+                mesh = mesh_before_solidify.clone();
+                report.steps.push(RepairStepReport {
+                    name: "rollback_component_solidify".into(),
+                    changed: 0,
+                    notes: Some(format!("rolled back component solidify: {reason}")),
+                    elapsed_ms: elapsed_comp,
+                });
+            } else {
+                applied_self_intersection_path = true;
+                report.steps.push(RepairStepReport {
+                    name: "cull_interior_components".into(),
+                    changed: comp_removed_tris as u32,
+                    notes: Some(format!(
+                        "{comp_removed_count} interior components removed \
+                         ({comp_removed_tris} triangles), {} -> {} components",
+                        analysis_before_solidify.connected_components,
+                        analysis_after_comp.connected_components,
+                    )),
+                    elapsed_ms: elapsed_comp,
+                });
+            }
+        }
 
-        let t = std::time::Instant::now();
-        let analysis_after_solidify = analyze(&mesh);
-        if let Some(reason) =
-            solidify_regression_reason(&analysis_before_solidify, &analysis_after_solidify)
-        {
-            mesh = mesh_before_solidify;
-            solidify_rollback_reason = Some(reason.clone());
+        // Phase B: Co-refinement + winding cull (only if Phase A didn't apply).
+        //
+        // For auto-triggered fragmented meshes, this path is often explosive
+        // (huge temporary topology growth then rollback) and costs a lot of
+        // time without helping quality. Keep it opt-in there unless the caller
+        // explicitly requested `resolve_self_intersections`.
+        let allow_phase_b = options.resolve_self_intersections || !auto_fragmented_solidify;
+        if !applied_self_intersection_path && allow_phase_b {
+            let t = std::time::Instant::now();
+            let stats = corefine_self_intersections(&mut mesh);
             report.steps.push(RepairStepReport {
-                name: "rollback_solidify".into(),
-                changed: 0,
-                notes: Some(format!("rolled back co-refinement/cull output: {reason}")),
+                name: "corefine_self_intersections".into(),
+                changed: stats.refined_faces as u32,
+                notes: Some(format!(
+                    "pairs={} refined_faces={} skipped_faces={} new_vertices={} tris:{}->{}",
+                    stats.intersecting_pairs,
+                    stats.refined_faces,
+                    stats.skipped_faces,
+                    stats.new_vertices,
+                    stats.tri_count_before,
+                    stats.tri_count_after
+                )),
                 elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
             });
-        } else {
-            applied_self_intersection_path = true;
+
+            let t = std::time::Instant::now();
+            let culled = cull_interior_faces_by_winding(&mut mesh);
+            report.steps.push(RepairStepReport {
+                name: "cull_interior_faces".into(),
+                changed: culled as u32,
+                notes: Some(format!(
+                    "{culled} interior-facing triangles removed (winding-number test, partial)"
+                )),
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+
+            let t = std::time::Instant::now();
+            let analysis_after_solidify = analyze(&mesh);
+            if let Some(reason) =
+                solidify_regression_reason(&analysis_before_solidify, &analysis_after_solidify)
+            {
+                mesh = mesh_before_solidify;
+                solidify_rollback_reason = Some(reason.clone());
+                report.steps.push(RepairStepReport {
+                    name: "rollback_solidify".into(),
+                    changed: 0,
+                    notes: Some(format!("rolled back co-refinement/cull output: {reason}")),
+                    elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                });
+            } else {
+                applied_self_intersection_path = true;
+            }
+        } else if !applied_self_intersection_path && !allow_phase_b {
+            report.steps.push(RepairStepReport {
+                name: "skip_corefine_fragmented_auto".into(),
+                changed: 0,
+                notes: Some(
+                    "skipped co-refinement fallback for auto-fragmented mesh; enable resolve_self_intersections=true to force it"
+                        .into(),
+                ),
+                elapsed_ms: 0.0,
+            });
         }
     }
 
@@ -358,7 +432,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     }
     if applied_self_intersection_path && report.post.self_intersection_triangles > 0 {
         residuals.push(format!(
-            "{} self-intersecting triangles remain after co-refinement+cull",
+            "{} self-intersecting triangles remain after solidify pass",
             report.post.self_intersection_triangles
         ));
     }
@@ -1027,50 +1101,45 @@ fn point_in_tri(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> b
     !(has_neg && has_pos)
 }
 
-/// Remove triangles that are on the interior of another shell by shooting a
-/// ray from each face's centroid along its outward normal. If the ray hits an
-/// odd number of OTHER triangles, the face is inside another shell and is
-/// culled. Runs in parallel via rayon.
+/// Classify each triangle as interior (`true`) or exterior (`false`) using a
+/// parity ray cast along the face outward normal.  Interior means the face
+/// centroid is inside another shell (odd number of forward-shell crossings).
 ///
-/// After culling, the intersection seam becomes an open boundary; call
-/// [`fill_small_holes`] to close it.
-fn cull_interior_faces_by_winding(mesh: &mut IndexedMesh) -> usize {
+/// This is the shared primitive for both the per-face and the per-component
+/// interior-culling passes.
+fn compute_interior_face_flags(mesh: &IndexedMesh) -> Vec<bool> {
     if mesh.triangles.is_empty() {
-        return 0;
+        return Vec::new();
     }
-
     let bvh = Bvh::build(mesh);
-
-    // Offset origin along the outward normal to avoid self-intersecting the
-    // source triangle via numerical noise.
+    // Offset the origin slightly along the face normal to avoid self-hits.
     const OFFSET: f32 = 1e-4;
-
-    // Determine which faces are interior by parallel ray casting.
     let n = mesh.triangles.len();
-    let interior: Vec<bool> = {
-        let mesh_ref: &IndexedMesh = mesh;
-        (0..n)
-            .into_par_iter()
-            .map(|fi| {
-                let [a, b, c] = mesh_ref.tri_positions(fi as u32);
-                let e1 = b.sub(a);
-                let e2 = c.sub(a);
-                let raw_n = e1.cross(e2);
-                let len = raw_n.length();
-                if len < 1e-8 {
-                    // Degenerate — leave it; cull_degenerate pass handles it.
-                    return false;
-                }
-                let normal = raw_n.scale(1.0 / len);
-                let centroid = a.add(b).add(c).scale(1.0 / 3.0);
-                let origin = centroid.add(normal.scale(OFFSET));
-                let hits = bvh.ray_hit_count_excluding(mesh_ref, origin, normal, fi as u32);
-                // Odd hit count → face is inside another shell.
-                hits % 2 == 1
-            })
-            .collect()
-    };
+    let mesh_ref: &IndexedMesh = mesh;
+    (0..n)
+        .into_par_iter()
+        .map(|fi| {
+            let [a, b, c] = mesh_ref.tri_positions(fi as u32);
+            let e1 = b.sub(a);
+            let e2 = c.sub(a);
+            let raw_n = e1.cross(e2);
+            let len = raw_n.length();
+            if len < 1e-8 {
+                // Degenerate — leave it; cull_degenerate pass handles it.
+                return false;
+            }
+            let normal = raw_n.scale(1.0 / len);
+            let centroid = a.add(b).add(c).scale(1.0 / 3.0);
+            let origin = centroid.add(normal.scale(OFFSET));
+            let hits = bvh.ray_hit_count_excluding(mesh_ref, origin, normal, fi as u32);
+            // Odd hit count → face is inside another shell.
+            hits % 2 == 1
+        })
+        .collect()
+}
 
+fn cull_interior_faces_by_winding(mesh: &mut IndexedMesh) -> usize {
+    let interior = compute_interior_face_flags(mesh);
     let before = mesh.triangles.len();
     let mut kept = Vec::with_capacity(before);
     for (fi, &is_interior) in interior.iter().enumerate() {
@@ -1080,6 +1149,111 @@ fn cull_interior_faces_by_winding(mesh: &mut IndexedMesh) -> usize {
     }
     mesh.triangles = kept;
     before - mesh.triangles.len()
+}
+
+/// Component-culling variant of interior classification.
+///
+/// For each face we test parity against *other* components only, excluding all
+/// triangles that belong to the face's own component. This prevents a face
+/// from being mislabeled as interior due to self-shell hits when component
+/// winding is noisy or partially inconsistent.
+fn compute_interior_face_flags_against_other_components(
+    mesh: &IndexedMesh,
+    components: &[u32],
+) -> Vec<bool> {
+    if mesh.triangles.is_empty() {
+        return Vec::new();
+    }
+    let bvh = Bvh::build(mesh);
+    const OFFSET: f32 = 1e-4;
+    let n = mesh.triangles.len();
+    let mesh_ref: &IndexedMesh = mesh;
+    (0..n)
+        .into_par_iter()
+        .map(|fi| {
+            let [a, b, c] = mesh_ref.tri_positions(fi as u32);
+            let e1 = b.sub(a);
+            let e2 = c.sub(a);
+            let raw_n = e1.cross(e2);
+            let len = raw_n.length();
+            if len < 1e-8 {
+                return false;
+            }
+            let normal = raw_n.scale(1.0 / len);
+            let centroid = a.add(b).add(c).scale(1.0 / 3.0);
+            let origin = centroid.add(normal.scale(OFFSET));
+            let face_comp = components[fi];
+            let hits = bvh.ray_hit_count_with_filter(mesh_ref, origin, normal, &|hit_face| {
+                components[hit_face as usize] != face_comp
+            });
+            hits % 2 == 1
+        })
+        .collect()
+}
+
+/// Remove entire connected components whose majority of faces are classified
+/// as interior-facing (via [`compute_interior_face_flags`]).
+///
+/// This is the stable alternative to the corefine+winding path: removing a
+/// whole connected component never creates new boundary edges or non-manifold
+/// edges in the remaining mesh, so it is safe even on highly fragmented inputs
+/// (thousands of overlapping shells from 3D scanning, etc.).
+///
+/// Returns `(removed_triangles, removed_component_count)`.
+fn cull_interior_components(mesh: &mut IndexedMesh) -> (usize, usize) {
+    if mesh.triangles.len() < 4 {
+        return (0, 0);
+    }
+
+    let comps = triangle_components(mesh);
+    let interior = compute_interior_face_flags_against_other_components(mesh, &comps);
+    let n_comps = comps.iter().copied().max().unwrap_or(0) as usize + 1;
+
+    let mut comp_total = vec![0usize; n_comps];
+    let mut comp_interior = vec![0usize; n_comps];
+    for (fi, &is_interior) in interior.iter().enumerate() {
+        let c = comps[fi] as usize;
+        comp_total[c] += 1;
+        if is_interior {
+            comp_interior[c] += 1;
+        }
+    }
+
+    // Remove only high-confidence interior components.
+    //
+    // 95% threshold avoids deleting valid exterior pieces when parity votes are
+    // noisy near tangential overlaps or in locally messy scan geometry.
+    const INTERIOR_RATIO_NUM: usize = 19;
+    const INTERIOR_RATIO_DEN: usize = 20;
+    let remove_set: AHashSet<u32> = (0..n_comps as u32)
+        .filter(|&c| {
+            let tot = comp_total[c as usize];
+            let int = comp_interior[c as usize];
+            tot > 0 && int * INTERIOR_RATIO_DEN >= tot * INTERIOR_RATIO_NUM
+        })
+        .collect();
+
+    let removed_comps = remove_set.len();
+    if removed_comps == 0 {
+        return (0, 0);
+    }
+
+    let before = mesh.triangles.len();
+    let kept: Vec<[u32; 3]> = mesh
+        .triangles
+        .iter()
+        .enumerate()
+        .filter_map(|(fi, tri)| {
+            if remove_set.contains(&comps[fi]) {
+                None
+            } else {
+                Some(*tri)
+            }
+        })
+        .collect();
+    let removed_tris = before - kept.len();
+    mesh.triangles = kept;
+    (removed_tris, removed_comps)
 }
 
 /// Assign a component id to each triangle via union-find over shared edges;

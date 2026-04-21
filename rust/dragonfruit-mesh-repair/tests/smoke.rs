@@ -181,8 +181,16 @@ fn fragmented_auto_solidify_triggers_without_explicit_resolve_flag() {
             .report
             .steps
             .iter()
+            .any(|s| s.name == "skip_corefine_fragmented_auto"),
+        "auto fragmented mode should skip corefine fallback by default"
+    );
+    assert!(
+        !outcome
+            .report
+            .steps
+            .iter()
             .any(|s| s.name == "corefine_self_intersections"),
-        "co-refinement should run when auto solidify triggers"
+        "co-refinement should remain off in auto fragmented mode unless explicitly requested"
     );
 
     // Control check: same thresholds but auto mode disabled should not run corefine.
