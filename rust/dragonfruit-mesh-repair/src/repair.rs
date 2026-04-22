@@ -624,36 +624,29 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
 }
 
 /// Attempt to solidify a fragmented mesh by converting each connected
-/// component into a `Manifold` solid and computing their union.
+/// component into a `Manifold` solid.
 ///
-/// Two conversion attempts are made per component — normal winding then
-/// reversed winding — because some CAD / slicer pipelines export components
-/// with consistently inverted normals that manifold3d rejects as
-/// negative-volume solids. Reversing `[a,b,c]→[a,c,b]` fixes this class of
-/// failure without altering geometry.
+/// Components are first classified into two geometric groups:
 ///
-/// Components that are genuinely non-manifold (open surfaces, NME) even after
-/// both winding attempts are sorted by size and treated differently:
+/// * **Model group**: top-down candidate body/bodies (highest-Z component,
+///   plus near-top peers within a small Z band)
+/// * **Support group**: all other geometry, including any component whose
+///   highest point is at or below `global_min_z + 2 mm` (raft region)
 ///
-/// * **Significant fallbacks** (≥ 1 % of the union triangle count) are
-///   appended verbatim. For typical supported print files the largest of
-///   these is the main model body — an open / NME mesh that cannot be
-///   boolean-unioned but must not be discarded.
+/// Each group is batch-unioned internally, but the two groups are **not**
+/// unioned with each other. This preserves a model body separate from the
+/// support body instead of collapsing everything into one component.
 ///
-/// * **Micro-fragments** (< 1 % threshold) are dropped. They are almost
-///   always degenerate shards that would only re-introduce boundary / NME
-///   edges without contributing real geometry.
-///
-/// **Future**: the largest significant fallback is the prime candidate for a
-/// "model body" tag, enabling remove-pre-supports workflows in DragonFruit
-/// (subtract the support union from the tagged body, then re-support with
-/// native DragonFruit supports).
+/// As with the previous path, each component is attempted with preferred
+/// winding then reversed winding. Rejected components run through rescue tiers
+/// and are merged only into their own group.
 ///
 /// Returns `None` if no manifold-capable component exists, which causes the
 /// caller to fall back to the corefine path.
 ///
-/// On success returns `(mesh, manifold_accepted, fallback_kept, fallback_dropped)`
-/// where the counts describe how each input component was handled.
+/// On success returns `(mesh, manifold_accepted, fallback_rescued,
+/// fallback_kept, fallback_dropped)` where the counts describe how each input
+/// component was handled.
 ///
 /// Requires the `manifold` Cargo feature.
 #[cfg(feature = "manifold")]
@@ -662,17 +655,74 @@ fn try_solidify_via_manifold_union(
 ) -> Option<(IndexedMesh, usize, usize, usize, usize)> {
     use manifold_csg::Manifold;
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum GeometryGroup {
+        Model,
+        Support,
+    }
+
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
 
-    let mut manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(8192));
+    const RAFT_Z_CUTOFF_MM: f32 = 2.0;
+    const TOP_MODEL_BAND_MM: f32 = 1.0;
+
+    let global_min_z = mesh
+        .positions
+        .iter()
+        .map(|p| p.z)
+        .fold(f32::INFINITY, f32::min);
+    let raft_z_cut = global_min_z + RAFT_Z_CUTOFF_MM;
+
+    let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
+    let mut comp_tri_count = vec![0usize; n_comps];
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let cid = components[fi] as usize;
+        comp_tri_count[cid] += 1;
+        let z0 = mesh.positions[tri[0] as usize].z;
+        let z1 = mesh.positions[tri[1] as usize].z;
+        let z2 = mesh.positions[tri[2] as usize].z;
+        comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
+    }
+
+    let model_seed = (0..n_comps)
+        .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
+        .max_by(|&a, &b| {
+            comp_max_z[a]
+                .partial_cmp(&comp_max_z[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+    let classify_group = |cid: usize| -> GeometryGroup {
+        // Anything in the raft floor band is support by definition.
+        if comp_max_z[cid] <= raft_z_cut {
+            return GeometryGroup::Support;
+        }
+
+        // Top-down model detection: the highest-Z component is model,
+        // plus near-top peers in case the real model body is split into
+        // multiple disconnected islands.
+        if let Some(seed) = model_seed {
+            let top_z = comp_max_z[seed];
+            if cid == seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
+                GeometryGroup::Model
+            } else {
+                GeometryGroup::Support
+            }
+        } else {
+            GeometryGroup::Support
+        }
+    };
+
+    let mut model_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
+    let mut support_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
     let mut manifold_accepted: usize = 0;
     // Components that could not be converted even with reversed winding.
-    // Sorted by triangle count after the loop; the largest entry is almost
-    // always the main 3D model body in a supported-print file.
-    let mut fallback_meshes: Vec<IndexedMesh> = Vec::new();
+    // These are rescued/kept in their original geometry group.
+    let mut fallback_meshes: Vec<(IndexedMesh, GeometryGroup)> = Vec::new();
 
     for comp_id in 0..n_comps as u32 {
+        let group = classify_group(comp_id as usize);
         let sub = extract_component_submesh(mesh, &components, comp_id);
         if sub.triangles.len() < 4 {
             // Truly degenerate micro-fragment — safe to drop.
@@ -711,7 +761,10 @@ fn try_solidify_via_manifold_union(
         match Manifold::from_mesh_f32(&vert_props, 3, &forward) {
             Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
                 manifold_accepted += 1;
-                manifolds.push(m);
+                match group {
+                    GeometryGroup::Model => model_manifolds.push(m),
+                    GeometryGroup::Support => support_manifolds.push(m),
+                }
                 continue;
             }
             _ => {}
@@ -723,54 +776,130 @@ fn try_solidify_via_manifold_union(
         match Manifold::from_mesh_f32(&vert_props, 3, &reversed) {
             Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
                 manifold_accepted += 1;
-                manifolds.push(m);
+                match group {
+                    GeometryGroup::Model => model_manifolds.push(m),
+                    GeometryGroup::Support => support_manifolds.push(m),
+                }
             }
             _ => {
-                fallback_meshes.push(sub);
+                fallback_meshes.push((sub, group));
             }
         }
     }
 
-    if manifolds.is_empty() {
+    if model_manifolds.is_empty() && support_manifolds.is_empty() {
         return None;
     }
 
-    // Batch union all manifold-capable components (supports, closed primitives)
-    // in one pass. manifold3d uses a robust winding-number classification
-    // internally, so N-body overlap is handled correctly regardless of how
-    // many components interpenetrate.
-    let result = Manifold::batch_union(&manifolds);
-    if result.is_empty() || result.num_tri() == 0 {
+    let mut model_out_positions: Vec<Vec3> = Vec::new();
+    let mut model_out_triangles: Vec<[u32; 3]> = Vec::new();
+    let mut support_out_positions: Vec<Vec3> = Vec::new();
+    let mut support_out_triangles: Vec<[u32; 3]> = Vec::new();
+
+    if !model_manifolds.is_empty() {
+        let m = Manifold::batch_union(&model_manifolds);
+        if !m.is_empty() && m.num_tri() > 0 {
+            let (vp, np, ti) = m.to_mesh_f32();
+            debug_assert_eq!(np, 3);
+            model_out_positions = vp
+                .chunks_exact(np)
+                .map(|c| Vec3::new(c[0], c[1], c[2]))
+                .collect();
+            model_out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        }
+    }
+
+    if !support_manifolds.is_empty() {
+        let m = Manifold::batch_union(&support_manifolds);
+        if !m.is_empty() && m.num_tri() > 0 {
+            let (vp, np, ti) = m.to_mesh_f32();
+            debug_assert_eq!(np, 3);
+            support_out_positions = vp
+                .chunks_exact(np)
+                .map(|c| Vec3::new(c[0], c[1], c[2]))
+                .collect();
+            support_out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        }
+    }
+
+    if model_out_triangles.is_empty() && support_out_triangles.is_empty() {
         return None;
     }
 
-    let (vert_props_out, n_props, tri_indices_out) = result.to_mesh_f32();
-    debug_assert_eq!(n_props, 3);
+    let union_into_group =
+        |out_positions: &mut Vec<Vec3>, out_triangles: &mut Vec<[u32; 3]>, m: &Manifold| {
+            if out_triangles.is_empty() {
+                let (vp, np, ti) = m.to_mesh_f32();
+                if ti.is_empty() {
+                    return false;
+                }
+                *out_positions = vp
+                    .chunks_exact(np)
+                    .map(|c| Vec3::new(c[0], c[1], c[2]))
+                    .collect();
+                *out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                return true;
+            }
 
-    let mut out_positions: Vec<Vec3> = vert_props_out
-        .chunks_exact(n_props)
-        .map(|c| Vec3::new(c[0], c[1], c[2]))
-        .collect();
+            let cur_props = Manifold::from_mesh_f32(
+                &out_positions
+                    .iter()
+                    .flat_map(|v| [v.x, v.y, v.z])
+                    .collect::<Vec<_>>(),
+                3,
+                &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
+            )
+            .ok()
+            .map(|cur_m| cur_m.union(m).to_mesh_f32());
 
-    let mut out_triangles: Vec<[u32; 3]> = tri_indices_out
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
+            if let Some((vp, np, ti)) = cur_props {
+                *out_positions = vp
+                    .chunks_exact(np)
+                    .map(|c| Vec3::new(c[0], c[1], c[2]))
+                    .collect();
+                *out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                true
+            } else {
+                false
+            }
+        };
 
     // Sort fallbacks largest-first so the model body (largest) is processed
     // first and tagged correctly for future workflows.
     //
     // FUTURE: fallback_meshes[0] (largest kept fallback) is the "model body"
     // candidate for a DragonFruit remove-pre-supports workflow.
-    fallback_meshes.sort_unstable_by(|a, b| b.triangles.len().cmp(&a.triangles.len()));
+    fallback_meshes.sort_unstable_by(|(a, _), (b, _)| b.triangles.len().cmp(&a.triangles.len()));
     let mut fallback_kept = 0usize;
     let mut fallback_rescued = 0usize;
     let mut fallback_dropped = 0usize;
 
-    for mut fb in fallback_meshes {
+    for (mut fb, group) in fallback_meshes {
         // Truly degenerate micro-shard — nothing to save.
         if fb.triangles.len() < 4 {
             fallback_dropped += 1;
+            continue;
+        }
+
+        let (out_positions, out_triangles) = match group {
+            GeometryGroup::Model => (&mut model_out_positions, &mut model_out_triangles),
+            GeometryGroup::Support => (&mut support_out_positions, &mut support_out_triangles),
+        };
+
+        // Model body is geometry-critical. If manifold rejected it after both
+        // winding attempts, do not run aggressive reconstruction (large-hole
+        // fill / convex hull), as that can collapse detail into a blob.
+        // Preserve it verbatim and let support geometry absorb the aggressive
+        // rescue strategy instead.
+        if matches!(group, GeometryGroup::Model) {
+            fallback_kept += 1;
+            let offset = out_positions.len() as u32;
+            out_positions.extend_from_slice(&fb.positions);
+            out_triangles.extend(
+                fb.triangles
+                    .iter()
+                    .map(|[a, b, c]| [a + offset, b + offset, c + offset]),
+            );
             continue;
         }
 
@@ -804,28 +933,8 @@ fn try_solidify_via_manifold_union(
         'rescue: for attempt in [&forward_r, &reversed_r] {
             if let Ok(m) = Manifold::from_mesh_f32(&vert_props, 3, attempt) {
                 if !m.is_empty() && m.num_tri() > 0 {
-                    // Successfully closed — union it with the current output.
-                    let cur_props = Manifold::from_mesh_f32(
-                        &out_positions
-                            .iter()
-                            .flat_map(|v| [v.x, v.y, v.z])
-                            .collect::<Vec<_>>(),
-                        3,
-                        &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
-                    )
-                    .ok()
-                    .map(|cur_m| {
-                        let r = cur_m.union(&m);
-                        r.to_mesh_f32()
-                    });
-
-                    if let Some((vp, np, ti)) = cur_props {
-                        debug_assert_eq!(np, 3);
-                        out_positions = vp
-                            .chunks_exact(np)
-                            .map(|c| Vec3::new(c[0], c[1], c[2]))
-                            .collect();
-                        out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                    // Successfully closed — union it with this group's output.
+                    if union_into_group(out_positions, out_triangles, &m) {
                         fallback_rescued += 1;
                         rescued = true;
                         break 'rescue;
@@ -863,24 +972,7 @@ fn try_solidify_via_manifold_union(
             'rescue2: for attempt in [&fwd2, &rev2] {
                 if let Ok(m) = Manifold::from_mesh_f32(&vert_props2, 3, attempt) {
                     if !m.is_empty() && m.num_tri() > 0 {
-                        let cur_props = Manifold::from_mesh_f32(
-                            &out_positions
-                                .iter()
-                                .flat_map(|v| [v.x, v.y, v.z])
-                                .collect::<Vec<_>>(),
-                            3,
-                            &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
-                        )
-                        .ok()
-                        .map(|cur_m| cur_m.union(&m).to_mesh_f32());
-
-                        if let Some((vp, np, ti)) = cur_props {
-                            out_positions = vp
-                                .chunks_exact(np)
-                                .map(|c| Vec3::new(c[0], c[1], c[2]))
-                                .collect();
-                            out_triangles =
-                                ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                        if union_into_group(out_positions, out_triangles, &m) {
                             fallback_rescued += 1;
                             rescued = true;
                             break 'rescue2;
@@ -907,23 +999,7 @@ fn try_solidify_via_manifold_union(
             if !pts.is_empty() {
                 let hull = Manifold::hull_pts(&pts);
                 if !hull.is_empty() && hull.num_tri() > 0 {
-                    let cur_props = Manifold::from_mesh_f32(
-                        &out_positions
-                            .iter()
-                            .flat_map(|v| [v.x, v.y, v.z])
-                            .collect::<Vec<_>>(),
-                        3,
-                        &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
-                    )
-                    .ok()
-                    .map(|cur_m| cur_m.union(&hull).to_mesh_f32());
-
-                    if let Some((vp, np, ti)) = cur_props {
-                        out_positions = vp
-                            .chunks_exact(np)
-                            .map(|c| Vec3::new(c[0], c[1], c[2]))
-                            .collect();
-                        out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                    if union_into_group(out_positions, out_triangles, &hull) {
                         fallback_rescued += 1;
                         rescued = true;
                     }
@@ -944,6 +1020,17 @@ fn try_solidify_via_manifold_union(
             );
         }
     }
+
+    // Preserve logical separation: model body first, then support body.
+    let mut out_positions = model_out_positions;
+    let mut out_triangles = model_out_triangles;
+    let support_offset = out_positions.len() as u32;
+    out_positions.extend_from_slice(&support_out_positions);
+    out_triangles.extend(
+        support_out_triangles
+            .into_iter()
+            .map(|[a, b, c]| [a + support_offset, b + support_offset, c + support_offset]),
+    );
 
     Some((
         IndexedMesh {
