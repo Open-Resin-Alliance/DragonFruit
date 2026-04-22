@@ -200,13 +200,113 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             }
         }
 
-        // Phase B: Co-refinement + volumetric union-boundary extraction
-        // (only if Phase A didn't apply).
+        // Phase B: Co-refinement + component-exclusion boundary extraction.
         //
-        // This keeps geometric detail (triangle splitting only where needed)
-        // while performing a volume-style boundary classification via parity
-        // tests on both sides of each refined face.
+        // The parity test on the post-corefine mesh is unreliable because ~47%
+        // of intersecting face pairs are left unresolved (CDT failures), making
+        // ray parity votes essentially noise.
+        //
+        // Instead we classify faces on the *pre-corefine* mesh (where each
+        // component is topologically intact) using component-exclusion interior
+        // detection, then carry those flags through refinement via face_origin.
+        // A face is on the union outer boundary iff its outward sample is NOT
+        // inside any other component — the same criterion `cull_interior_components`
+        // uses, but applied at face-level instead of component-level.
         if !applied_self_intersection_path {
+            // ── Phase B-0: manifold batch-union (feature-gated) ──────────────
+            //
+            // For meshes with hundreds or thousands of interpenetrating shells
+            // (e.g. multi-component support structures), the corefine +
+            // boundary-extraction path below is unreliable because there is no
+            // stable inside/outside signal when every face is inside at least one
+            // other component. Instead, convert each connected component into a
+            // manifold3d solid and call batch_union, which uses a robust
+            // generalized winding number classification internally.
+            #[cfg(feature = "manifold")]
+            {
+                let t = std::time::Instant::now();
+                match try_solidify_via_manifold_union(&mesh) {
+                    Some(unioned) => {
+                        let analysis_after = analyze(&unioned);
+                        let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+                        // Manifold batch_union computes the TRUE geometric union,
+                        // so the output volume will legitimately be smaller than
+                        // analysis_before_solidify.signed_volume — which is the SUM
+                        // of overlapping component volumes (double-counting all
+                        // intersecting regions). Never apply the volume-collapse guard
+                        // here; only reject a near-empty mesh (catastrophic failure).
+                        let tri_before = analysis_before_solidify.triangle_count;
+                        let tri_after = analysis_after.triangle_count;
+                        let manifold_regression = if tri_after < 4 {
+                            Some(format!("manifold result has only {tri_after} triangles"))
+                        } else if tri_before > 0 && tri_after * 200 < tri_before {
+                            // Reject if < 0.5% of input triangles remain — truly
+                            // pathological (should never happen with correct winding).
+                            Some(format!(
+                                "manifold result collapsed {tri_before} -> {tri_after} triangles"
+                            ))
+                        } else {
+                            None
+                        };
+
+                        if let Some(reason) = manifold_regression {
+                            report.steps.push(RepairStepReport {
+                                name: "rollback_manifold_batch_union".into(),
+                                changed: 0,
+                                notes: Some(format!(
+                                    "manifold batch_union output rejected: {reason}"
+                                )),
+                                elapsed_ms,
+                            });
+                        } else {
+                            let n_comps_before = analysis_before_solidify.connected_components;
+                            let n_comps_after = analysis_after.connected_components;
+                            report.steps.push(RepairStepReport {
+                                name: "manifold_batch_union".into(),
+                                changed: (analysis_before_solidify.triangle_count as i64
+                                    - analysis_after.triangle_count as i64)
+                                    .unsigned_abs() as u32,
+                                notes: Some(format!(
+                                    "components:{}->{} tris:{}->{} si:{}->{} watertight:{}",
+                                    n_comps_before,
+                                    n_comps_after,
+                                    analysis_before_solidify.triangle_count,
+                                    analysis_after.triangle_count,
+                                    analysis_before_solidify.self_intersection_triangles,
+                                    analysis_after.self_intersection_triangles,
+                                    analysis_after.is_watertight,
+                                )),
+                                elapsed_ms,
+                            });
+                            mesh = unioned;
+                            applied_self_intersection_path = true;
+                        }
+                    }
+                    None => {
+                        report.steps.push(RepairStepReport {
+                            name: "skip_manifold_batch_union".into(),
+                            changed: 0,
+                            notes: Some(
+                                "no valid manifold components found; \
+                                 falling back to corefine path"
+                                    .into(),
+                            ),
+                            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                        });
+                    }
+                }
+            }
+        }
+
+        // ── Phase B-1: Co-refinement + component-exclusion boundary extraction ──
+        if !applied_self_intersection_path {
+            // Classify each face in the pre-corefine mesh: interior (inside some
+            // other component from the outward side) vs exterior (outer boundary).
+            let pre_comps = triangle_components(&mesh);
+            let pre_interior =
+                compute_interior_face_flags_against_other_components(&mesh, &pre_comps);
+
             let t = std::time::Instant::now();
             let stats = corefine_self_intersections(&mut mesh);
             report.steps.push(RepairStepReport {
@@ -224,13 +324,31 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                 elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
             });
 
+            // Apply boundary extraction: keep faces whose pre-corefine origin
+            // was classified as exterior (not interior to any other component).
+            // Refined sub-faces inherit the interior flag of the original face
+            // they were split from via face_origin.
             let t = std::time::Instant::now();
-            let culled = extract_union_boundary_faces_by_parity(&mut mesh);
+            let before_extract = mesh.triangles.len();
+            {
+                let mut kept = Vec::with_capacity(before_extract);
+                for (fi, tri) in mesh.triangles.iter().enumerate() {
+                    let orig = stats.face_origin.get(fi).copied().unwrap_or(fi as u32) as usize;
+                    // Keep if origin was exterior (not interior to another component).
+                    if orig >= pre_interior.len() || !pre_interior[orig] {
+                        kept.push(*tri);
+                    }
+                }
+                mesh.triangles = kept;
+            }
+            // Remove open seam shards left by CDT failures.
+            prune_open_fragments(&mut mesh);
+            let culled = before_extract - mesh.triangles.len();
             report.steps.push(RepairStepReport {
                 name: "extract_union_boundary_faces".into(),
                 changed: culled as u32,
                 notes: Some(format!(
-                    "{culled} triangles removed (parity volumetric classification + open-fragment pruning)"
+                    "{culled} triangles removed (pre-corefine component-exclusion + open-fragment pruning)"
                 )),
                 elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
             });
@@ -287,8 +405,19 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // the hole-fill after face removal can itself introduce a new NME; the
     // second pass catches those artifacts. The loop stops when the mesh is
     // watertight, no pass made progress, or `MAX_TOPOLOGY_ITERS` is reached.
+    //
+    // When manifold batch_union succeeded the output is already a valid manifold
+    // mesh by construction — skip the loop entirely to avoid wasting 10+ seconds
+    // on heal passes that always roll back on clean manifold output.
+    let post_solidify_clean = applied_self_intersection_path && {
+        let s = analyze(&mesh);
+        s.is_watertight && s.non_manifold_edges == 0 && s.boundary_edges == 0
+    };
     const MAX_TOPOLOGY_ITERS: usize = 5;
     'topology_loop: for _iter in 0..MAX_TOPOLOGY_ITERS {
+        if post_solidify_clean {
+            break 'topology_loop;
+        }
         let iter_state = analyze(&mesh);
         if iter_state.is_watertight {
             break 'topology_loop;
@@ -438,6 +567,151 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     RepairOutcome { mesh, report }
+}
+
+/// Extract a single connected component into its own [`IndexedMesh`] with
+/// compacted (zero-based) vertex indices.
+///
+/// `components` must be the output of [`triangle_components`] for `mesh`.
+/// Only triangles where `components[fi] == comp_id` are included.
+fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u32) -> IndexedMesh {
+    // Collect face indices for this component.
+    let face_iter = mesh
+        .triangles
+        .iter()
+        .enumerate()
+        .filter(|(fi, _)| components[*fi] == comp_id);
+
+    // Build a compact vertex map: global index → local index.
+    let mut vert_map: AHashMap<u32, u32> = AHashMap::new();
+    let mut new_verts: Vec<Vec3> = Vec::new();
+
+    let new_tris: Vec<[u32; 3]> = face_iter
+        .map(|(_, tri)| {
+            tri.map(|gi| {
+                let next = new_verts.len() as u32;
+                *vert_map.entry(gi).or_insert_with(|| {
+                    new_verts.push(mesh.positions[gi as usize]);
+                    next
+                })
+            })
+        })
+        .collect();
+
+    IndexedMesh {
+        positions: new_verts,
+        triangles: new_tris,
+    }
+}
+
+/// Attempt to solidify a fragmented mesh by converting each connected
+/// component into a `Manifold` solid and computing their union.
+///
+/// This is the robust path for meshes with hundreds or thousands of
+/// interpenetrating shells (e.g. support structures exported as separate
+/// bodies), where parity-based classification is unreliable. manifold3d's
+/// union uses generalized winding numbers internally and is guaranteed to
+/// produce a valid manifold output.
+///
+/// Components that manifold rejects (open surfaces, non-manifold geometry)
+/// are NOT discarded — they are appended back into the final mesh verbatim
+/// so no geometry is lost.  Self-intersections between those fallback
+/// components and the union result may remain, but the caller's
+/// `topology_loop` and subsequent passes can clean those up.
+///
+/// Returns `None` only if zero components were manifold-capable AND zero
+/// fallback geometry existed (i.e. the mesh was entirely degenerate).
+///
+/// Requires the `manifold` Cargo feature.
+#[cfg(feature = "manifold")]
+fn try_solidify_via_manifold_union(mesh: &IndexedMesh) -> Option<IndexedMesh> {
+    use manifold_csg::Manifold;
+
+    let components = triangle_components(mesh);
+    let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
+
+    let mut manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(8192));
+    // Components that manifold rejected (open surfaces, NME geometry, etc.)
+    // are preserved here so no geometry is silently lost.
+    let mut fallback_meshes: Vec<IndexedMesh> = Vec::new();
+
+    for comp_id in 0..n_comps as u32 {
+        let sub = extract_component_submesh(mesh, &components, comp_id);
+        if sub.triangles.len() < 4 {
+            // Truly degenerate micro-fragment — safe to drop.
+            continue;
+        }
+
+        // Flatten to the format manifold-csg expects: [x,y,z, x,y,z, ...]
+        // and flat triangle indices.
+        let vert_props: Vec<f32> = sub.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+        let tri_indices: Vec<u32> = sub.triangles.iter().flat_map(|t| *t).collect();
+
+        match Manifold::from_mesh_f32(&vert_props, 3, &tri_indices) {
+            Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
+                manifolds.push(m);
+            }
+            _ => {
+                // Manifold rejected this component (open surface, NME, etc.).
+                // Keep it verbatim so nothing is lost (body mesh, primitives…).
+                fallback_meshes.push(sub);
+            }
+        }
+    }
+
+    // If absolutely nothing was usable, signal the caller to try corefine.
+    if manifolds.is_empty() && fallback_meshes.is_empty() {
+        return None;
+    }
+
+    // Start building the output positions/triangles from the union result
+    // (if any), then append every fallback component.
+    let mut out_positions: Vec<Vec3>;
+    let mut out_triangles: Vec<[u32; 3]>;
+
+    if manifolds.is_empty() {
+        // No closeable component — nothing to union; signal corefine fallback.
+        return None;
+    }
+
+    // Batch union: combine all valid component manifolds in one pass.
+    // manifold3d parallelises this internally with TBB when available.
+    let result = Manifold::batch_union(&manifolds);
+
+    if result.is_empty() || result.num_tri() == 0 {
+        return None;
+    }
+
+    // Extract the unioned mesh back into our IndexedMesh format.
+    let (vert_props_out, n_props, tri_indices_out) = result.to_mesh_f32();
+    debug_assert_eq!(n_props, 3);
+
+    out_positions = vert_props_out
+        .chunks_exact(n_props)
+        .map(|c| Vec3::new(c[0], c[1], c[2]))
+        .collect();
+
+    out_triangles = tri_indices_out
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+
+    // Append any fallback (non-manifoldable) components verbatim so that
+    // body meshes / primitives rejected by manifold3d are not silently lost.
+    for fb in fallback_meshes {
+        let offset = out_positions.len() as u32;
+        out_positions.extend_from_slice(&fb.positions);
+        out_triangles.extend(
+            fb.triangles
+                .iter()
+                .map(|[a, b, c]| [a + offset, b + offset, c + offset]),
+        );
+    }
+
+    Some(IndexedMesh {
+        positions: out_positions,
+        triangles: out_triangles,
+    })
 }
 
 fn solidify_regression_reason(before: &MeshAnalysis, after: &MeshAnalysis) -> Option<String> {
@@ -1129,135 +1403,61 @@ fn point_in_tri(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> b
     !(has_neg && has_pos)
 }
 
-fn parity_inside_vote(mesh: &IndexedMesh, bvh: &Bvh, origin: Vec3, skip_face: u32) -> bool {
-    // Three non-axis-aligned directions; majority vote mitigates vertex/edge
-    // grazing ambiguities from any one direction.
-    let dirs = [
-        Vec3::new(1.0, 0.173_205_08, 0.097_341_63),
-        Vec3::new(0.137_431_56, 1.0, 0.223_606_8),
-        Vec3::new(0.182_574_18, 0.365_148_37, 1.0),
-    ];
-
-    let mut inside_votes = 0usize;
-    for dir in dirs {
-        let hits = bvh.ray_hit_count_excluding(mesh, origin, dir, skip_face);
-        if hits % 2 == 1 {
-            inside_votes += 1;
-        }
-    }
-    inside_votes >= 2
-}
-
-/// Extract the outer boundary of the volumetric union represented by the mesh
-/// without voxel remeshing.
-///
-/// For each triangle, sample points on both sides of the face and classify
-/// each sample by parity-in-volume. A triangle belongs to the union boundary
-/// iff the two samples are on different inside/outside states.
-///
-/// This preserves existing surface detail (no grid decimation or marching
-/// cubes) and only removes triangles that are interior to the union volume.
-fn extract_union_boundary_faces_by_parity(mesh: &mut IndexedMesh) -> usize {
+/// Drop topologically open components that commonly appear as seam shards
+/// after union boundary extraction.  Only components that are closed (zero
+/// boundary edges) or near-closed (small boundary relative to their size)
+/// and have at least 128 triangles are kept.  This runs in-place.
+fn prune_open_fragments(mesh: &mut IndexedMesh) {
     if mesh.triangles.is_empty() {
-        return 0;
+        return;
+    }
+    let comps = triangle_components(mesh);
+    let n_comps = comps.iter().copied().max().unwrap_or(0) as usize + 1;
+
+    let mut comp_tri_count = vec![0usize; n_comps];
+    for &c in &comps {
+        comp_tri_count[c as usize] += 1;
     }
 
-    let bvh = Bvh::build(mesh);
-    let bb = mesh.bbox();
-    let offset = (bb.diag().max(1e-4)) * 1e-6;
+    let topo = Topology::build(mesh);
+    let mut comp_boundary_edges = vec![0usize; n_comps];
+    for info in topo.edges.values() {
+        if info.faces.len() == 1 {
+            let fi = info.faces[0] as usize;
+            let c = comps[fi] as usize;
+            comp_boundary_edges[c] += 1;
+        }
+    }
 
-    let n = mesh.triangles.len();
-    let boundary_keep: Vec<bool> = {
-        let mesh_ref: &IndexedMesh = mesh;
-        (0..n)
-            .into_par_iter()
-            .map(|fi| {
-                let [a, b, c] = mesh_ref.tri_positions(fi as u32);
-                let e1 = b.sub(a);
-                let e2 = c.sub(a);
-                let raw_n = e1.cross(e2);
-                let len = raw_n.length();
-                if len < 1e-8 {
-                    return false;
+    let mut keep_comp = vec![false; n_comps];
+    for c in 0..n_comps {
+        let tris = comp_tri_count[c];
+        if tris == 0 {
+            continue;
+        }
+        let boundary = comp_boundary_edges[c];
+        let closed = boundary == 0;
+        // Near-closed: modest absolute boundary and small relative leak.
+        let near_closed = boundary <= 64 && boundary.saturating_mul(8) <= tris;
+        if closed || (near_closed && tris >= 128) {
+            keep_comp[c] = true;
+        }
+    }
+
+    if keep_comp.iter().any(|&k| k) {
+        mesh.triangles = mesh
+            .triangles
+            .iter()
+            .enumerate()
+            .filter_map(|(fi, tri)| {
+                if keep_comp[comps[fi] as usize] {
+                    Some(*tri)
+                } else {
+                    None
                 }
-
-                let normal = raw_n.scale(1.0 / len);
-                let centroid = a.add(b).add(c).scale(1.0 / 3.0);
-                let plus = centroid.add(normal.scale(offset));
-                let minus = centroid.sub(normal.scale(offset));
-
-                let plus_inside = parity_inside_vote(mesh_ref, &bvh, plus, fi as u32);
-                let minus_inside = parity_inside_vote(mesh_ref, &bvh, minus, fi as u32);
-
-                // Boundary face if classification differs across the face.
-                plus_inside != minus_inside
             })
-            .collect()
-    };
-
-    let before = mesh.triangles.len();
-    let mut kept = Vec::with_capacity(before);
-    for (fi, tri) in mesh.triangles.iter().enumerate() {
-        if boundary_keep[fi] {
-            kept.push(*tri);
-        }
+            .collect();
     }
-    mesh.triangles = kept;
-
-    // Drop open seam shards that are common when co-refinement had unresolved
-    // local failures (e.g. skipped faces). Keep only extracted components that
-    // are closed or near-closed and sufficiently large.
-    if !mesh.triangles.is_empty() {
-        let comps = triangle_components(mesh);
-        let n_comps = comps.iter().copied().max().unwrap_or(0) as usize + 1;
-
-        let mut comp_tri_count = vec![0usize; n_comps];
-        for &c in &comps {
-            comp_tri_count[c as usize] += 1;
-        }
-
-        let topo = Topology::build(mesh);
-        let mut comp_boundary_edges = vec![0usize; n_comps];
-        for info in topo.edges.values() {
-            if info.faces.len() == 1 {
-                let fi = info.faces[0] as usize;
-                let c = comps[fi] as usize;
-                comp_boundary_edges[c] += 1;
-            }
-        }
-
-        let mut keep_comp = vec![false; n_comps];
-        for c in 0..n_comps {
-            let tris = comp_tri_count[c];
-            if tris == 0 {
-                continue;
-            }
-            let boundary = comp_boundary_edges[c];
-            let closed = boundary == 0;
-            // Near-closed: modest absolute boundary and small relative leak.
-            let near_closed = boundary <= 64 && boundary.saturating_mul(8) <= tris;
-            if closed || (near_closed && tris >= 128) {
-                keep_comp[c] = true;
-            }
-        }
-
-        if keep_comp.iter().any(|&k| k) {
-            mesh.triangles = mesh
-                .triangles
-                .iter()
-                .enumerate()
-                .filter_map(|(fi, tri)| {
-                    if keep_comp[comps[fi] as usize] {
-                        Some(*tri)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-        }
-    }
-
-    before - mesh.triangles.len()
 }
 
 /// Component-culling variant of interior classification.

@@ -244,6 +244,12 @@ pub struct CorefineStats {
     pub tri_count_after: usize,
     /// New vertices added (intersection endpoints on face interiors).
     pub new_vertices: usize,
+    /// Per-face origin: `face_origin[fi]` is the index in the *pre-refinement*
+    /// triangle list that new face `fi` was derived from.  For unrefined faces
+    /// this equals `fi` itself; for CDT sub-triangles it is the index of the
+    /// original face that was split.  Used by callers to carry per-face
+    /// metadata (e.g. component labels, interior flags) through refinement.
+    pub face_origin: Vec<u32>,
 }
 
 /// Co-refine a mesh so that intersecting triangles are split along their
@@ -336,13 +342,25 @@ pub fn corefine_self_intersections(mesh: &mut IndexedMesh) -> CorefineStats {
 
     let mut new_triangles: Vec<[u32; 3]> =
         Vec::with_capacity(mesh.triangles.len() + stats.intersecting_pairs * 2);
+    let mut face_origin: Vec<u32> =
+        Vec::with_capacity(mesh.triangles.len() + stats.intersecting_pairs * 2);
     for (fi, tri) in mesh.triangles.iter().enumerate() {
         match replacement.get(&(fi as u32)) {
-            Some(sub) => new_triangles.extend_from_slice(sub),
-            None => new_triangles.push(*tri),
+            Some(sub) => {
+                // All sub-triangles produced from face fi inherit fi's origin.
+                for _ in sub {
+                    face_origin.push(fi as u32);
+                }
+                new_triangles.extend_from_slice(sub);
+            }
+            None => {
+                face_origin.push(fi as u32);
+                new_triangles.push(*tri);
+            }
         }
     }
     mesh.triangles = new_triangles;
+    stats.face_origin = face_origin;
     stats.tri_count_after = mesh.triangles.len();
     stats
 }
@@ -593,6 +611,15 @@ fn refine_face_with_segments(
         }
     }
     // Interior segment edges.
+    //
+    // When a face is intersected by multiple other faces their intersection
+    // segments may cross each other in the face's local 2D plane. CDT
+    // requires non-crossing constraints and panics/errors otherwise — this
+    // is the main cause of `skipped_faces` on highly fragmented meshes.
+    // Greedily drop any candidate segment that properly crosses an already-
+    // accepted one.  The dropped segments stay unresolved, but the face at
+    // least gets a valid partial refinement instead of being skipped entirely.
+    let segment_pair_locals = filter_non_crossing_segments_2d(segment_pair_locals, &pts);
     for (la, lb) in segment_pair_locals {
         edges.push((la, lb));
     }
@@ -707,6 +734,48 @@ fn param_on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
         return 0.0;
     }
     (apx * abx + apy * aby) / ab_len_sq
+}
+
+/// Returns `true` iff segments (a,b) and (c,d) properly cross — i.e. they
+/// intersect at an interior point, not at a shared or coincident endpoint.
+fn segments_2d_properly_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    let ab = (b.0 - a.0, b.1 - a.1);
+    let cd = (d.0 - c.0, d.1 - c.1);
+    let denom = ab.0 * cd.1 - ab.1 * cd.0;
+    if denom.abs() < 1e-15 {
+        return false; // parallel / collinear
+    }
+    let ac = (c.0 - a.0, c.1 - a.1);
+    let t = (ac.0 * cd.1 - ac.1 * cd.0) / denom;
+    let u = (ac.0 * ab.1 - ac.1 * ab.0) / denom;
+    const EPS: f64 = 1e-9;
+    t > EPS && t < 1.0 - EPS && u > EPS && u < 1.0 - EPS
+}
+
+/// Greedy crossing filter for interior CDT constraint edges.
+///
+/// Keeps segments in order, discarding any candidate that properly crosses
+/// an already-accepted segment.  O(n²) in the number of interior segments
+/// per face — fine in practice since most faces have only a handful of
+/// constraint segments.
+fn filter_non_crossing_segments_2d(
+    segs: Vec<(usize, usize)>,
+    pts: &[(f64, f64)],
+) -> Vec<(usize, usize)> {
+    let mut kept: Vec<(usize, usize)> = Vec::with_capacity(segs.len());
+    'candidate: for (a, b) in segs {
+        for &(c, d) in &kept {
+            // Shared endpoint is fine — CDT handles T-intersections.
+            if a == c || a == d || b == c || b == d {
+                continue;
+            }
+            if segments_2d_properly_cross(pts[a], pts[b], pts[c], pts[d]) {
+                continue 'candidate;
+            }
+        }
+        kept.push((a, b));
+    }
+    kept
 }
 
 #[cfg(test)]

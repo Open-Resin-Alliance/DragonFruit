@@ -12,6 +12,12 @@ path = "src/lib.rs"
 name = "dragonfruit-mesh-repair"
 path = "src/bin/cli.rs"
 
+[features]
+# Enable the manifold-csg backend for robust N-body union on fragmented meshes.
+# Requires git + cmake + a C++ compiler (MSVC on Windows, gcc/clang on Linux/macOS).
+# First build downloads and compiles manifold3d from source (~2 min).
+manifold = ["dep:manifold-csg"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,6 +30,7 @@ quick-xml = { version = "0.31", features = ["serialize"] }
 ahash = "0.8"
 smallvec = "1"
 cdt = "0.1"
+manifold-csg = { version = "0.1.4", optional = true, default-features = false }
 
 [dev-dependencies]
 proptest = "1.9.0"
