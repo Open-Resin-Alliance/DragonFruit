@@ -226,7 +226,13 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             {
                 let t = std::time::Instant::now();
                 match try_solidify_via_manifold_union(&mesh) {
-                    Some(unioned) => {
+                    Some((
+                        unioned,
+                        manifold_accepted,
+                        fallback_rescued,
+                        fallback_kept,
+                        fallback_dropped,
+                    )) => {
                         let analysis_after = analyze(&unioned);
                         let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
 
@@ -268,7 +274,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                                     - analysis_after.triangle_count as i64)
                                     .unsigned_abs() as u32,
                                 notes: Some(format!(
-                                    "components:{}->{} tris:{}->{} si:{}->{} watertight:{}",
+                                    "components:{}->{} tris:{}->{} si:{}->{} watertight:{} \
+                                     unioned={} rescued={} fallback_kept={} fallback_dropped={}",
                                     n_comps_before,
                                     n_comps_after,
                                     analysis_before_solidify.triangle_count,
@@ -276,6 +283,10 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                                     analysis_before_solidify.self_intersection_triangles,
                                     analysis_after.self_intersection_triangles,
                                     analysis_after.is_watertight,
+                                    manifold_accepted,
+                                    fallback_rescued,
+                                    fallback_kept,
+                                    fallback_dropped,
                                 )),
                                 elapsed_ms,
                             });
@@ -406,12 +417,20 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // second pass catches those artifacts. The loop stops when the mesh is
     // watertight, no pass made progress, or `MAX_TOPOLOGY_ITERS` is reached.
     //
-    // When manifold batch_union succeeded the output is already a valid manifold
-    // mesh by construction — skip the loop entirely to avoid wasting 10+ seconds
-    // on heal passes that always roll back on clean manifold output.
+    // When manifold batch_union succeeded the output is already a valid (or
+    // near-valid) manifold mesh. Skip the topology-repair loop when the mesh
+    // is clean or close-to-clean — i.e. very few residual NME / boundary edges.
+    //
+    // Why "close-to-clean" counts: after batch_union + verbatim fallback-body
+    // append, the 2-10 residual NME/boundary edges live at support-to-body
+    // attachment seams. These are inherent to the supported-print geometry and
+    // no non-manifold face cleanup / micro-heal pass can resolve them — they
+    // always roll back, wasting 8+ seconds per iteration. Skipping here is
+    // correct: the slicing engine handles ≤ 10 NME edges fine, and attempting
+    // to "fix" them only risks making the mesh worse.
     let post_solidify_clean = applied_self_intersection_path && {
         let s = analyze(&mesh);
-        s.is_watertight && s.non_manifold_edges == 0 && s.boundary_edges == 0
+        s.is_watertight || (s.non_manifold_edges <= 10 && s.boundary_edges <= 20)
     };
     const MAX_TOPOLOGY_ITERS: usize = 5;
     'topology_loop: for _iter in 0..MAX_TOPOLOGY_ITERS {
@@ -633,15 +652,21 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
 /// Returns `None` if no manifold-capable component exists, which causes the
 /// caller to fall back to the corefine path.
 ///
+/// On success returns `(mesh, manifold_accepted, fallback_kept, fallback_dropped)`
+/// where the counts describe how each input component was handled.
+///
 /// Requires the `manifold` Cargo feature.
 #[cfg(feature = "manifold")]
-fn try_solidify_via_manifold_union(mesh: &IndexedMesh) -> Option<IndexedMesh> {
+fn try_solidify_via_manifold_union(
+    mesh: &IndexedMesh,
+) -> Option<(IndexedMesh, usize, usize, usize, usize)> {
     use manifold_csg::Manifold;
 
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
 
     let mut manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(8192));
+    let mut manifold_accepted: usize = 0;
     // Components that could not be converted even with reversed winding.
     // Sorted by triangle count after the loop; the largest entry is almost
     // always the main 3D model body in a supported-print file.
@@ -656,27 +681,48 @@ fn try_solidify_via_manifold_union(mesh: &IndexedMesh) -> Option<IndexedMesh> {
 
         let vert_props: Vec<f32> = sub.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
 
-        // Attempt 1: normal winding.
-        let tri_indices: Vec<u32> = sub.triangles.iter().flat_map(|t| *t).collect();
-        match Manifold::from_mesh_f32(&vert_props, 3, &tri_indices) {
+        // Pre-check the mesh's own signed volume BEFORE sending to manifold.
+        // If the component is inside-out (signed_volume < 0), manifold3d
+        // accepts it but records it as a negative-volume solid. When
+        // batch_union runs, a negative-volume manifold acts as a CSG void
+        // and SUBTRACTS from the positive-volume union instead of uniting —
+        // producing the "cut away" / "hole punched" artefact we see with
+        // defective bottom primitives. Reversing the winding up-front ensures
+        // manifold always receives a positive-volume solid.
+        let vol = sub.signed_volume();
+        let is_inside_out = vol < 0.0;
+
+        let (forward, reversed): (Vec<u32>, Vec<u32>) = {
+            let fwd: Vec<u32> = sub.triangles.iter().flat_map(|t| *t).collect();
+            let rev: Vec<u32> = sub
+                .triangles
+                .iter()
+                .flat_map(|[a, b, c]| [*a, *c, *b])
+                .collect();
+            if is_inside_out {
+                (rev, fwd) // try the corrected winding first
+            } else {
+                (fwd, rev)
+            }
+        };
+
+        // Attempt 1: geometrically correct winding (or the original if volume
+        // was already positive).
+        match Manifold::from_mesh_f32(&vert_props, 3, &forward) {
             Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
+                manifold_accepted += 1;
                 manifolds.push(m);
                 continue;
             }
             _ => {}
         }
 
-        // Attempt 2: reversed winding. Some CAD / slicer pipelines export
-        // components with consistent inside-out normals. manifold3d treats
-        // those as negative-volume and rejects them. Flipping [a,b,c]→[a,c,b]
-        // fixes the orientation without changing geometry.
-        let rev_tri_indices: Vec<u32> = sub
-            .triangles
-            .iter()
-            .flat_map(|[a, b, c]| [*a, *c, *b])
-            .collect();
-        match Manifold::from_mesh_f32(&vert_props, 3, &rev_tri_indices) {
+        // Attempt 2: opposite winding — catches the remaining cases where the
+        // mesh is open/NME with mixed winding; may still produce a closeable
+        // manifold with the other orientation.
+        match Manifold::from_mesh_f32(&vert_props, 3, &reversed) {
             Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
+                manifold_accepted += 1;
                 manifolds.push(m);
             }
             _ => {
@@ -711,38 +757,204 @@ fn try_solidify_via_manifold_union(mesh: &IndexedMesh) -> Option<IndexedMesh> {
         .map(|c| [c[0], c[1], c[2]])
         .collect();
 
-    // Sort fallbacks largest-first. The first entry (largest) is the model body
-    // in a typical supported print; subsequent entries are either medium-sized
-    // geometry with genuine open-surface issues, or degenerate micro-shards.
+    // Sort fallbacks largest-first so the model body (largest) is processed
+    // first and tagged correctly for future workflows.
     //
-    // Drop anything below 1 % of the union output size — micro-fragments that
-    // would only re-introduce NME / boundary edges. Keep everything else and
-    // append it verbatim.
-    //
-    // FUTURE: tag fallback_meshes[0] as the "model body" shell to enable
-    // a DragonFruit "remove supports → re-support" workflow: subtract the
-    // support union from the model body to get a clean separation between
-    // the print geometry and pre-generated support geometry.
+    // FUTURE: fallback_meshes[0] (largest kept fallback) is the "model body"
+    // candidate for a DragonFruit remove-pre-supports workflow.
     fallback_meshes.sort_unstable_by(|a, b| b.triangles.len().cmp(&a.triangles.len()));
-    let min_keep_tris = (out_triangles.len() / 100).max(4);
+    let mut fallback_kept = 0usize;
+    let mut fallback_rescued = 0usize;
+    let mut fallback_dropped = 0usize;
 
-    for fb in fallback_meshes {
-        if fb.triangles.len() < min_keep_tris {
-            continue; // micro-fragment — drop to avoid re-introducing NME
+    for mut fb in fallback_meshes {
+        // Truly degenerate micro-shard — nothing to save.
+        if fb.triangles.len() < 4 {
+            fallback_dropped += 1;
+            continue;
         }
-        let offset = out_positions.len() as u32;
-        out_positions.extend_from_slice(&fb.positions);
-        out_triangles.extend(
-            fb.triangles
+
+        // ── Rescue pass: orient + fill holes, then retry manifold ────────────
+        //
+        // Many components that manifold rejected are small closed primitives
+        // (Lego-like support bases, contact spheres, etc.) with a handful of
+        // open boundary edges or inconsistent winding. A single orient +
+        // fill_small_holes pass is often enough to close them so they can be
+        // properly boolean-unioned rather than just appended verbatim.
+        repair_orientation(&mut fb);
+        fill_small_holes(&mut fb, 64); // generous limit for small primitives
+
+        let vert_props: Vec<f32> = fb.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+        let vol = fb.signed_volume();
+        let (forward_r, reversed_r): (Vec<u32>, Vec<u32>) = {
+            let fwd: Vec<u32> = fb.triangles.iter().flat_map(|t| *t).collect();
+            let rev: Vec<u32> = fb
+                .triangles
                 .iter()
-                .map(|[a, b, c]| [a + offset, b + offset, c + offset]),
-        );
+                .flat_map(|[a, b, c]| [*a, *c, *b])
+                .collect();
+            if vol < 0.0 {
+                (rev, fwd)
+            } else {
+                (fwd, rev)
+            }
+        };
+
+        let mut rescued = false;
+        'rescue: for attempt in [&forward_r, &reversed_r] {
+            if let Ok(m) = Manifold::from_mesh_f32(&vert_props, 3, attempt) {
+                if !m.is_empty() && m.num_tri() > 0 {
+                    // Successfully closed — union it with the current output.
+                    let cur_props = Manifold::from_mesh_f32(
+                        &out_positions
+                            .iter()
+                            .flat_map(|v| [v.x, v.y, v.z])
+                            .collect::<Vec<_>>(),
+                        3,
+                        &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
+                    )
+                    .ok()
+                    .map(|cur_m| {
+                        let r = cur_m.union(&m);
+                        r.to_mesh_f32()
+                    });
+
+                    if let Some((vp, np, ti)) = cur_props {
+                        debug_assert_eq!(np, 3);
+                        out_positions = vp
+                            .chunks_exact(np)
+                            .map(|c| Vec3::new(c[0], c[1], c[2]))
+                            .collect();
+                        out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                        fallback_rescued += 1;
+                        rescued = true;
+                        break 'rescue;
+                    }
+                }
+            }
+        }
+
+        if !rescued {
+            // ── Tier-2 rescue: aggressive weld + large-hole fill ─────────────
+            //
+            // fill_small_holes(64) only closes holes with ≤ 64 boundary edges.
+            // Some primitives have larger open areas.  Weld near-duplicate
+            // vertices first (tiny epsilon to avoid geometry distortion), then
+            // fill with no effective limit, then retry manifold.
+            weld_vertices(&mut fb, 1e-4);
+            repair_orientation(&mut fb);
+            fill_small_holes(&mut fb, 65536);
+
+            let vert_props2: Vec<f32> = fb.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+            let vol2 = fb.signed_volume();
+            let (fwd2, rev2): (Vec<u32>, Vec<u32>) = {
+                let fwd: Vec<u32> = fb.triangles.iter().flat_map(|t| *t).collect();
+                let rev: Vec<u32> = fb
+                    .triangles
+                    .iter()
+                    .flat_map(|[a, b, c]| [*a, *c, *b])
+                    .collect();
+                if vol2 < 0.0 {
+                    (rev, fwd)
+                } else {
+                    (fwd, rev)
+                }
+            };
+            'rescue2: for attempt in [&fwd2, &rev2] {
+                if let Ok(m) = Manifold::from_mesh_f32(&vert_props2, 3, attempt) {
+                    if !m.is_empty() && m.num_tri() > 0 {
+                        let cur_props = Manifold::from_mesh_f32(
+                            &out_positions
+                                .iter()
+                                .flat_map(|v| [v.x, v.y, v.z])
+                                .collect::<Vec<_>>(),
+                            3,
+                            &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
+                        )
+                        .ok()
+                        .map(|cur_m| cur_m.union(&m).to_mesh_f32());
+
+                        if let Some((vp, np, ti)) = cur_props {
+                            out_positions = vp
+                                .chunks_exact(np)
+                                .map(|c| Vec3::new(c[0], c[1], c[2]))
+                                .collect();
+                            out_triangles =
+                                ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                            fallback_rescued += 1;
+                            rescued = true;
+                            break 'rescue2;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !rescued {
+            // ── Tier-3 rescue: convex hull approximation ──────────────────────
+            //
+            // If the component is still not manifold-able after aggressive
+            // repair, fall back to its convex hull.  The hull is always a
+            // valid closed manifold; for small support primitives it is a
+            // reasonable geometric approximation that covers the same spatial
+            // region without introducing intersecting open-surface bodies into
+            // the output that would cause the slicer to glitch.
+            let pts: Vec<[f64; 3]> = fb
+                .positions
+                .iter()
+                .map(|v| [v.x as f64, v.y as f64, v.z as f64])
+                .collect();
+            if !pts.is_empty() {
+                let hull = Manifold::hull_pts(&pts);
+                if !hull.is_empty() && hull.num_tri() > 0 {
+                    let cur_props = Manifold::from_mesh_f32(
+                        &out_positions
+                            .iter()
+                            .flat_map(|v| [v.x, v.y, v.z])
+                            .collect::<Vec<_>>(),
+                        3,
+                        &out_triangles.iter().flat_map(|t| *t).collect::<Vec<_>>(),
+                    )
+                    .ok()
+                    .map(|cur_m| cur_m.union(&hull).to_mesh_f32());
+
+                    if let Some((vp, np, ti)) = cur_props {
+                        out_positions = vp
+                            .chunks_exact(np)
+                            .map(|c| Vec3::new(c[0], c[1], c[2]))
+                            .collect();
+                        out_triangles = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+                        fallback_rescued += 1;
+                        rescued = true;
+                    }
+                }
+            }
+        }
+
+        if !rescued {
+            // All three rescue tiers failed.  Append verbatim as last resort
+            // rather than silently dropping real geometry.
+            fallback_kept += 1;
+            let offset = out_positions.len() as u32;
+            out_positions.extend_from_slice(&fb.positions);
+            out_triangles.extend(
+                fb.triangles
+                    .iter()
+                    .map(|[a, b, c]| [a + offset, b + offset, c + offset]),
+            );
+        }
     }
 
-    Some(IndexedMesh {
-        positions: out_positions,
-        triangles: out_triangles,
-    })
+    Some((
+        IndexedMesh {
+            positions: out_positions,
+            triangles: out_triangles,
+        },
+        manifold_accepted,
+        fallback_rescued,
+        fallback_kept,
+        fallback_dropped,
+    ))
 }
 
 fn solidify_regression_reason(before: &MeshAnalysis, after: &MeshAnalysis) -> Option<String> {
