@@ -734,11 +734,14 @@ export default function Home() {
     const profile = activePrinterProfile;
     if (!profile || !profile.networkSupport) return null;
     if (profile.networkConnection?.connected !== true) return null;
+    const selectedMaterialId = profile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return null;
     const candidate = Number(profile.networkConnection?.selectedMaterialLayerHeightMm);
     if (!Number.isFinite(candidate) || candidate <= 0) return null;
     return candidate;
   }, [
     activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialId,
     activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
     activePrinterProfile?.networkSupport,
   ]);
