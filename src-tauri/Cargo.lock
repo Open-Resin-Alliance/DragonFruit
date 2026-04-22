@@ -1405,6 +1405,7 @@ dependencies = [
  "bytemuck",
  "cdt",
  "clap",
+ "manifold-csg",
  "quick-xml 0.31.0",
  "rayon",
  "serde",
@@ -2858,6 +2859,26 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
+
+[[package]]
+name = "manifold-csg"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce6e9625392f12ccc678993bff3b06d81c988bc620db18394acfc0b2ac7ff95"
+dependencies = [
+ "log",
+ "manifold-csg-sys",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "manifold-csg-sys"
+version = "3.4.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67be081da3159d603fc152c0564e0db9224611c4c253370fbdb2ea7703c8e211"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "markup5ever"
