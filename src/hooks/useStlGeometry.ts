@@ -10,6 +10,7 @@ import { repairGeometryWithManifold } from '@/utils/manifoldRepair';
 import {
   analyzeFromGeometry,
   applyRepairedPositions,
+  classifyFromGeometry,
   isHeavyRepair,
   isTauriRuntime,
   repairFromGeometry,
@@ -160,7 +161,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // Manifold WASM path (which only activates when NaN defects were detected).
   if (isTauriRuntime()) {
     try {
-      let skipRepair = false;
+      let classifyOnly = false;
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
@@ -175,8 +176,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
             );
             const confirmed = await options.onConfirmHeavyRepair(analysis);
             if (!confirmed) {
-              console.log('[processGeometry] User declined heavy repair — loading as-is.');
-              skipRepair = true;
+              console.log('[processGeometry] User declined heavy repair — running classify-only shell split pass.');
+              classifyOnly = true;
             }
           }
         } catch (analysisErr) {
@@ -184,38 +185,40 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
       }
 
-      if (!skipRepair) {
-        console.log(`[${new Date().toISOString()}] [processGeometry] Running native mesh repair`);
-        const nativeStart = performance.now();
-        const result = await repairFromGeometry(geometry);
-        if (result) {
-          applyRepairedPositions(geometry, result.positions);
-          const { report } = result;
-          console.log(
-            `[processGeometry] Native repair finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
-            `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
-            `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
-            `watertight=${report.post.is_watertight}`,
-          );
-          meshDefects = {
-            ...meshDefects,
-            hasDefects: meshDefects.hasDefects || !report.fully_repaired || report.residual_issues.length > 0,
-            nativeRepairReport: report,
-          };
+      console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
+      const nativeStart = performance.now();
+      const result = classifyOnly
+        ? await classifyFromGeometry(geometry)
+        : await repairFromGeometry(geometry);
+      if (result) {
+        applyRepairedPositions(geometry, result.positions);
+        const { report } = result;
+        console.log(
+          `[processGeometry] Native ${classifyOnly ? 'classification' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
+          `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
+          `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
+          `watertight=${report.post.is_watertight}`,
+        );
+        meshDefects = {
+          ...meshDefects,
+          hasDefects: classifyOnly
+            ? meshDefects.hasDefects
+            : (meshDefects.hasDefects || !report.fully_repaired || report.residual_issues.length > 0),
+          nativeRepairReport: report,
+        };
 
-          // If the repaired mesh has a model/support split, extract the support
-          // section as a separate geometry for orange overlay rendering.
-          if (report.model_triangle_count != null && report.model_triangle_count > 0) {
-            const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-            const allPos = posAttr.array as Float32Array;
-            const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
-            if (modelFloatEnd < allPos.length) {
-              const supportPositions = allPos.slice(modelFloatEnd);
-              const supportGeo = new THREE.BufferGeometry();
-              supportGeo.setAttribute('position', new THREE.BufferAttribute(supportPositions, 3));
-              supportGeo.computeVertexNormals();
-              meshDefects = { ...meshDefects, supportSectionGeometry: supportGeo };
-            }
+        // If the repaired mesh has a model/support split, extract the support
+        // section as a separate geometry for orange overlay rendering.
+        if (report.model_triangle_count != null && report.model_triangle_count > 0) {
+          const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+          const allPos = posAttr.array as Float32Array;
+          const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
+          if (modelFloatEnd < allPos.length) {
+            const supportPositions = allPos.slice(modelFloatEnd);
+            const supportGeo = new THREE.BufferGeometry();
+            supportGeo.setAttribute('position', new THREE.BufferAttribute(supportPositions, 3));
+            supportGeo.computeVertexNormals();
+            meshDefects = { ...meshDefects, supportSectionGeometry: supportGeo };
           }
         }
       }

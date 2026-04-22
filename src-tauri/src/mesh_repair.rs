@@ -7,12 +7,16 @@
 //! - `mesh_repair_staged` — repair whatever is currently in the staging buffer
 //!   (in-memory or on-disk), replace the buffer with the cleaned mesh, return
 //!   the report JSON.
+//! - `mesh_classify_staged` — classify-only pass over staged mesh (no repair),
+//!   optionally reorders model/support sections and returns a report JSON.
 //! - `mesh_repair_read_positions` — raw-binary response of the current staged
 //!   positions (little-endian f32, 9 per triangle), for frontend hydration.
 
 use std::path::PathBuf;
 
-use dragonfruit_mesh_repair::{analyze, io, repair, IndexedMesh, RepairOptions};
+use dragonfruit_mesh_repair::{
+    analyze, classify_support_split, io, repair, IndexedMesh, RepairOptions,
+};
 use serde::Deserialize;
 use tauri::ipc::Response;
 
@@ -128,6 +132,23 @@ pub async fn mesh_repair_staged(options_json: String) -> Result<String, String> 
     })
     .await
     .map_err(|e| format!("repair task panicked: {e}"))??;
+    replace_staging_with_mesh(&mesh)?;
+    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+}
+
+/// Runs a lightweight model/support section classifier over the current staged
+/// mesh without executing the heavy repair pipeline.
+#[tauri::command]
+pub async fn mesh_classify_staged() -> Result<String, String> {
+    let bytes = read_staging_bytes()?;
+    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let outcome = classify_support_split(mesh);
+        Ok::<_, String>((outcome.mesh, outcome.report))
+    })
+    .await
+    .map_err(|e| format!("classify task panicked: {e}"))??;
+
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
 }

@@ -9,6 +9,9 @@
  *   - `repairFromGeometry(geometry)` — Uploads the existing
  *     `THREE.BufferGeometry` position buffer via the existing staging IPC
  *     (`stage_mesh_binary_set`) and runs `mesh_repair_staged`.
+ *   - `classifyFromGeometry(geometry)` — Uploads geometry and runs
+ *     `mesh_classify_staged`, a lightweight model/support section classifier
+ *     that does not execute the heavy repair pipeline.
  *
  * In the browser (non-Tauri) this module is inert — call sites fall back to
  * the WASM Manifold repair path.
@@ -65,6 +68,9 @@ export interface MeshRepairOptions {
   keepLargestNComponents?: number | null;
   repairOrientation?: boolean;
   resolveSelfIntersections?: boolean;
+  solidifyFragmentedComponents?: boolean;
+  solidifyComponentThreshold?: number;
+  solidifySelfIntersectionThreshold?: number;
 }
 
 export interface MeshRepairResult {
@@ -326,6 +332,33 @@ export async function repairFromGeometry(
   const reportJson = await core.invoke<string>('mesh_repair_staged', {
     optionsJson,
   });
+  const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+  const positions = await readStagedPositions(core.invoke);
+  return { report, positions };
+}
+
+/**
+ * Runs a lightweight model/support section classifier over an existing
+ * THREE.BufferGeometry by staging positions and invoking `mesh_classify_staged`.
+ * This does not run the expensive repair pipeline.
+ */
+export async function classifyFromGeometry(
+  geometry: THREE.BufferGeometry,
+): Promise<MeshRepairResult | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
+  if (!posAttr) throw new Error('classifyFromGeometry: geometry has no position attribute');
+
+  const soup = expandGeometryToTriangleSoup(geometry);
+  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
+
+  await core.invoke('stage_mesh_binary_set', bytes, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+
+  const reportJson = await core.invoke<string>('mesh_classify_staged');
   const report = normalizeMeshHealthReport(JSON.parse(reportJson));
   const positions = await readStagedPositions(core.invoke);
   return { report, positions };

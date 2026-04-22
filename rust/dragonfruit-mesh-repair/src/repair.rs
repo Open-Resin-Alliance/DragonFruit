@@ -663,6 +663,33 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
     });
 
+    // 10. Fallback model/support section split classification.
+    //
+    // Manifold batch-union already emits `model_triangle_count` for mixed
+    // model+support imports. For non-manifold paths (or when manifold does
+    // not run), attempt a conservative component-level split so frontend
+    // per-section tinting can still work.
+    if report.model_triangle_count.is_none() {
+        let t = std::time::Instant::now();
+        if let Some((model_tri_count, likely_support_geometry)) =
+            classify_and_reorder_model_support_triangles(&mut mesh)
+        {
+            report.model_triangle_count = Some(model_tri_count);
+            if !report.likely_support_geometry {
+                report.likely_support_geometry = likely_support_geometry;
+            }
+            report.steps.push(RepairStepReport {
+                name: "classify_support_geometry_split".into(),
+                changed: 0,
+                notes: Some(format!(
+                    "fallback split: first {} triangles tagged as model section",
+                    model_tri_count
+                )),
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+        }
+    }
+
     // Post-analysis.
     report.post = analyze(&mesh);
 
@@ -708,6 +735,49 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
 
     report.fully_repaired = residuals.is_empty();
     report.residual_issues = residuals;
+    report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    RepairOutcome { mesh, report }
+}
+
+/// Lightweight model/support section classification pass.
+///
+/// This does **not** run the repair pipeline. It only attempts to classify and
+/// reorder triangles into model-first / support-second sections so the frontend
+/// can apply section-specific tinting while honoring "Load As-Is" behavior.
+pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
+    let t_start = std::time::Instant::now();
+    let pre = analyze(&mesh);
+    let mut report = MeshHealthReport::new(pre);
+
+    let t = std::time::Instant::now();
+    if let Some((model_tri_count, likely_support_geometry)) =
+        classify_and_reorder_model_support_triangles(&mut mesh)
+    {
+        report.model_triangle_count = Some(model_tri_count);
+        report.likely_support_geometry = likely_support_geometry;
+        report.steps.push(RepairStepReport {
+            name: "classify_support_geometry_split".into(),
+            changed: 0,
+            notes: Some(format!(
+                "classify-only split: first {} triangles tagged as model section",
+                model_tri_count
+            )),
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+    } else {
+        report.steps.push(RepairStepReport {
+            name: "classify_support_geometry_split".into(),
+            changed: 0,
+            notes: Some("classify-only split: no reliable model/support partition found".into()),
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+    }
+
+    report.post = analyze(&mesh);
+    // Classification-only path does not attempt topology repair.
+    report.fully_repaired = true;
+    report.residual_issues = Vec::new();
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     RepairOutcome { mesh, report }
@@ -2044,6 +2114,133 @@ fn cull_interior_components(mesh: &mut IndexedMesh) -> (usize, usize) {
     let removed_tris = before - kept.len();
     mesh.triangles = kept;
     (removed_tris, removed_comps)
+}
+
+/// Conservative fallback classifier that partitions triangles into model and
+/// support sections by connected component height bands, then reorders the
+/// mesh triangles so model section comes first and support section follows.
+///
+/// Returns `(model_triangle_count, likely_support_geometry)` on success.
+fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Option<(usize, bool)> {
+    if mesh.triangles.len() < 8 || mesh.positions.is_empty() {
+        return None;
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum GeometryGroup {
+        Model,
+        Support,
+    }
+
+    let components = triangle_components(mesh);
+    let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
+    if n_comps < 2 {
+        return None;
+    }
+
+    const RAFT_Z_CUTOFF_MM: f32 = 2.0;
+    const TOP_MODEL_BAND_MM: f32 = 1.0;
+
+    let global_min_z = mesh
+        .positions
+        .iter()
+        .map(|p| p.z)
+        .fold(f32::INFINITY, f32::min);
+    let raft_z_cut = global_min_z + RAFT_Z_CUTOFF_MM;
+
+    let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
+    let mut comp_tri_count = vec![0usize; n_comps];
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let cid = components[fi] as usize;
+        comp_tri_count[cid] += 1;
+        let z0 = mesh.positions[tri[0] as usize].z;
+        let z1 = mesh.positions[tri[1] as usize].z;
+        let z2 = mesh.positions[tri[2] as usize].z;
+        comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
+    }
+
+    let model_seed = (0..n_comps)
+        .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
+        .max_by(|&a, &b| {
+            comp_max_z[a]
+                .partial_cmp(&comp_max_z[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+
+    let classify_group = |cid: usize| -> GeometryGroup {
+        if comp_max_z[cid] <= raft_z_cut {
+            return GeometryGroup::Support;
+        }
+
+        let top_z = comp_max_z[model_seed];
+        if cid == model_seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
+            GeometryGroup::Model
+        } else {
+            GeometryGroup::Support
+        }
+    };
+
+    let mut model_comp_count = 0usize;
+    let mut support_comp_count = 0usize;
+    let mut model_input_triangles = 0usize;
+    let mut support_input_triangles = 0usize;
+
+    for cid in 0..n_comps {
+        let tri_count = comp_tri_count[cid];
+        if tri_count == 0 {
+            continue;
+        }
+        match classify_group(cid) {
+            GeometryGroup::Model => {
+                model_comp_count += 1;
+                model_input_triangles += tri_count;
+            }
+            GeometryGroup::Support => {
+                support_comp_count += 1;
+                support_input_triangles += tri_count;
+            }
+        }
+    }
+
+    // Conservative guard against false positives on ordinary multi-part models.
+    if support_comp_count < model_comp_count.max(1)
+        || support_comp_count < 8
+        || n_comps < 12
+        || support_input_triangles < 2_000
+    {
+        return None;
+    }
+
+    let mut model_tris: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangles.len());
+    let mut support_tris: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangles.len());
+
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let cid = components[fi] as usize;
+        match classify_group(cid) {
+            GeometryGroup::Model => model_tris.push(*tri),
+            GeometryGroup::Support => support_tris.push(*tri),
+        }
+    }
+
+    if model_tris.is_empty() || support_tris.is_empty() {
+        return None;
+    }
+
+    let model_triangles_out = model_tris.len();
+    let support_triangles_out = support_tris.len();
+
+    mesh.triangles.clear();
+    mesh.triangles.extend(model_tris);
+    mesh.triangles.extend(support_tris);
+
+    let likely_support_geometry = support_triangles_out > 0
+        && (model_triangles_out == 0
+            || (support_triangles_out >= model_triangles_out.saturating_mul(2)
+                && support_comp_count >= model_comp_count)
+            || (support_comp_count >= model_comp_count.saturating_mul(8)
+                && support_input_triangles >= model_input_triangles));
+
+    Some((model_triangles_out, likely_support_geometry))
 }
 
 /// Assign a component id to each triangle via union-find over shared edges;

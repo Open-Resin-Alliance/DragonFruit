@@ -13,7 +13,7 @@ pub mod report;
 
 pub use crate::analysis::{analyze, MeshAnalysis};
 pub use crate::core::mesh::{IndexedMesh, Vec3};
-pub use crate::repair::{repair, RepairOptions, RepairOutcome};
+pub use crate::repair::{classify_support_split, repair, RepairOptions, RepairOutcome};
 pub use crate::report::MeshHealthReport;
 
 use std::path::Path;
