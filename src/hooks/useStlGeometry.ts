@@ -100,6 +100,10 @@ export interface ProcessGeometryOptions {
 // Above this threshold we process the source geometry in place to avoid
 // allocating a second full copy before normals/BVH work begins.
 const IN_PLACE_PROCESSING_VERTEX_THRESHOLD = 12_000_000;
+// Native analyze/repair on extremely large meshes can take minutes with little
+// practical benefit in auto-import flows. In auto mode, skip native processing
+// beyond this size and let users opt-in via manual Repair.
+const AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD = 3_000_000;
 
 function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
   // DragonFruit controls model tinting centrally via mesh settings.
@@ -127,6 +131,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const startPrep = performance.now();
   const sourcePosition = bufferGeometry.getAttribute('position') as THREE.BufferAttribute | null;
   const sourceVertexCount = sourcePosition?.count ?? 0;
+  const sourceIndex = bufferGeometry.getIndex();
+  const sourceTriangleEstimate = Math.floor((sourceIndex?.count ?? sourceVertexCount) / 3);
 
   let geometry: THREE.BufferGeometry;
   if (sourceVertexCount >= IN_PLACE_PROCESSING_VERTEX_THRESHOLD) {
@@ -164,15 +170,26 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     );
   }
 
-  // Always attempt a full analyze+repair pass via the native Rust engine
-  // when running under Tauri. In the browser we fall back to the legacy
-  // Manifold WASM path (which only activates when NaN defects were detected).
+  // In Tauri we usually run native analyze/repair/classification. For gigantic
+  // meshes, auto mode now skips this expensive path and leaves the mesh as-is
+  // unless the user explicitly requests manual repair.
+  // In the browser we fall back to the legacy Manifold WASM path (which only
+  // activates when NaN defects were detected).
   if (isTauriRuntime()) {
-    if (options.nativeProcessingMode === 'none') {
+    const nativeMode = options.nativeProcessingMode ?? 'auto';
+    const skipAutoNativeProcessingForSize = nativeMode === 'auto'
+      && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
+
+    if (nativeMode === 'none') {
       console.log('[processGeometry] Native processing skipped (mode=none)');
+    } else if (skipAutoNativeProcessingForSize) {
+      console.warn(
+        `[processGeometry] Skipping native auto repair/classification for gigantic mesh (` +
+        `${sourceTriangleEstimate.toLocaleString()} triangles). Use manual Repair to force.`
+      );
     } else try {
-      let classifyOnly = options.nativeProcessingMode === 'classify-only';
-      const forceRepair = options.nativeProcessingMode === 'repair';
+      let classifyOnly = nativeMode === 'classify-only';
+      const forceRepair = nativeMode === 'repair';
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
