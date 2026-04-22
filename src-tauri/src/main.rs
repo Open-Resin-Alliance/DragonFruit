@@ -292,6 +292,8 @@ struct SliceJobMetadata {
     output_format: String,
     #[serde(default)]
     format_version: Option<String>,
+    #[serde(default)]
+    output_path: Option<String>,
     source_width_px: u32,
     source_height_px: u32,
     width_px: u32,
@@ -1189,6 +1191,12 @@ async fn slice_solid_native_to_temp_path(
         let meta: SliceJobMetadata = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
         let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
+        let requested_output_path = meta
+            .output_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
 
         let mesh_decode_start = std::time::Instant::now();
         let triangles_xyz = decode_mesh_bytes(mesh_bytes, &meta)?;
@@ -1219,6 +1227,7 @@ async fn slice_solid_native_to_temp_path(
         };
 
         let progress_cb = make_throttled_progress_cb(win);
+        let requested_output_path = requested_output_path.clone();
 
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {
@@ -1229,7 +1238,16 @@ async fn slice_solid_native_to_temp_path(
             } else {
                 job.output_format.trim_start_matches('.')
             };
-            let path = temp_artifact_path(ext);
+            let path = if let Some(requested_path) = requested_output_path.as_deref() {
+                let requested = std::path::PathBuf::from(requested_path);
+                if let Some(parent) = requested.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|err| format!("Failed creating output folder: {err}"))?;
+                }
+                requested
+            } else {
+                temp_artifact_path(ext)
+            };
 
             let perf_raw = dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path(
                 &job,

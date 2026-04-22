@@ -53,6 +53,7 @@ interface SlicingPanelProps {
   canPrint?: boolean;
   onSliceIntentChanged?: (intent: SliceIntent) => void;
   onBeforeSliceStart?: (intent: SliceIntent) => Promise<boolean> | boolean;
+  resolveOutputPathForIntent?: (intent: SliceIntent) => string | null | undefined;
 }
 
 type LifetimeTelemetry = {
@@ -312,6 +313,7 @@ export function SlicingPanel({
   canPrint = false,
   onSliceIntentChanged,
   onBeforeSliceStart,
+  resolveOutputPathForIntent,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
@@ -945,6 +947,8 @@ export function SlicingPanel({
       return;
     }
 
+    const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
+
     setIsSlicingZip(true);
     setCurrentPhase('Preparing');
     setSliceStatus('Preparing');
@@ -1001,6 +1005,7 @@ export function SlicingPanel({
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
+        outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent

@@ -442,6 +442,14 @@ function getFileNameFromPath(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function isDragonfruitTempArtifactPath(path: string | null | undefined): boolean {
+  if (typeof path !== 'string') return false;
+  const trimmed = path.trim();
+  if (!trimmed) return false;
+  const name = getFileNameFromPath(trimmed).toLowerCase();
+  return name.startsWith('dragonfruit-slice-');
+}
+
 function isSupportedPrepareDropName(name: string): boolean {
   return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name));
 }
@@ -2593,8 +2601,7 @@ export default function Home() {
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-    scene.setMode('printing');
-  }, [scene]);
+  }, []);
 
   const handleSliceRunStartedForPrinting = React.useCallback(() => {
     setShouldAutoSliceOnExportEntry(false);
@@ -3034,6 +3041,20 @@ export default function Home() {
       // 'file': write to pre-selected destination, then navigate to printing workspace.
       const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
       preSliceFileDestinationPathRef.current = null;
+
+      const nativePathForIntent = artifact.nativeTempPath?.trim() || '';
+      const normalizePathForCompare = (value: string) => value.replace(/\\/g, '/').toLowerCase();
+      if (
+        destinationPath
+        && nativePathForIntent
+        && normalizePathForCompare(destinationPath) === normalizePathForCompare(nativePathForIntent)
+      ) {
+        setCompletedSaveDestinationPath(destinationPath);
+        setShouldAutoSliceOnExportEntry(false);
+        scene.setMode('printing');
+        return;
+      }
+
       const saveAndNavigate = async (a: SliceExportArtifact) => {
         let savedPath: string | null = null;
 
@@ -3055,8 +3076,8 @@ export default function Home() {
           const nativePath = a.nativeTempPath?.trim() || '';
           if (nativePath) {
             try {
-              await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
-              savedPath = a.outputName;
+              const resolvedPath = await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
+              savedPath = resolvedPath || a.outputName;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err ?? '');
               if (msg.toLowerCase().includes('cancel')) return;
@@ -3069,8 +3090,8 @@ export default function Home() {
                 ? new Uint8Array(await a.blob.arrayBuffer())
                 : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
               if (!bytes) throw new Error('No artifact bytes');
-              await savePrintArtifactWithNativeDialog(bytes, a.outputName);
-              savedPath = a.outputName;
+              const resolvedPath = await savePrintArtifactWithNativeDialog(bytes, a.outputName);
+              savedPath = resolvedPath || a.outputName;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err ?? '');
               if (msg.toLowerCase().includes('cancel')) return;
@@ -5014,7 +5035,8 @@ export default function Home() {
 
   // Delete previously-owned temp artifacts once replaced or cleared.
   React.useEffect(() => {
-    const currentPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const currentArtifactPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const currentPath = isDragonfruitTempArtifactPath(currentArtifactPath) ? currentArtifactPath : null;
     const previousPath = lastOwnedPrintTempPathRef.current;
 
     if (previousPath && previousPath !== currentPath) {
@@ -13535,6 +13557,11 @@ export default function Home() {
               canPrint={canSliceAndPrint}
               onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
               onBeforeSliceStart={handleBeforeSliceStart}
+              resolveOutputPathForIntent={(intent) => (
+                intent === 'file'
+                  ? (preSliceFileDestinationPathRef.current?.trim() || null)
+                  : null
+              )}
             />
           </>
 
