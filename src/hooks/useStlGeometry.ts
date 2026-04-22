@@ -30,6 +30,9 @@ export type MeshDefects = {
   degeneratesRemoved?: number;
   /** Full health report from the native Rust repair engine (Tauri only) */
   nativeRepairReport?: MeshHealthReport;
+  /** When the repaired mesh has a model/support split (model_triangle_count in the report),
+   *  this geometry holds only the support-section triangles for separate orange rendering. */
+  supportSectionGeometry?: THREE.BufferGeometry;
 };
 
 export type GeometryWithBounds = {
@@ -199,6 +202,21 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
             hasDefects: meshDefects.hasDefects || !report.fully_repaired || report.residual_issues.length > 0,
             nativeRepairReport: report,
           };
+
+          // If the repaired mesh has a model/support split, extract the support
+          // section as a separate geometry for orange overlay rendering.
+          if (report.model_triangle_count != null && report.model_triangle_count > 0) {
+            const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+            const allPos = posAttr.array as Float32Array;
+            const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
+            if (modelFloatEnd < allPos.length) {
+              const supportPositions = allPos.slice(modelFloatEnd);
+              const supportGeo = new THREE.BufferGeometry();
+              supportGeo.setAttribute('position', new THREE.BufferAttribute(supportPositions, 3));
+              supportGeo.computeVertexNormals();
+              meshDefects = { ...meshDefects, supportSectionGeometry: supportGeo };
+            }
+          }
         }
       }
     } catch (err) {

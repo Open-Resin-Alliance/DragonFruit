@@ -12,6 +12,16 @@ pub struct MeshHealthReport {
     pub pre: MeshAnalysis,
     pub post: MeshAnalysis,
     pub steps: Vec<RepairStepReport>,
+    /// Heuristic flag indicating this imported mesh is likely support-only or
+    /// strongly support-dominant geometry.
+    #[serde(default)]
+    pub likely_support_geometry: bool,
+    /// When the manifold repair pipeline produced a mixed model+support output,
+    /// the first `model_triangle_count` triangles in the repaired geometry are
+    /// the model body; the remainder are support geometry. `None` means the
+    /// geometry has no spatial split (all one group, or repair did not run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_triangle_count: Option<usize>,
     /// If any defect classes remain after repair, they are listed here as
     /// human-readable strings so the UI can surface them.
     pub residual_issues: Vec<String>,
@@ -37,6 +47,8 @@ impl MeshHealthReport {
             pre: pre.clone(),
             post: pre,
             steps: Vec::new(),
+            likely_support_geometry: false,
+            model_triangle_count: None,
             residual_issues: Vec::new(),
             fully_repaired: false,
             total_ms: 0.0,

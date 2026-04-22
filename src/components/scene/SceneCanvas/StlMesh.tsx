@@ -176,6 +176,7 @@ function StlMeshComponent({
   suppressModelInteraction,
   isExternallyHovered,
   deferExternalTransformUpdates,
+  supportSectionGeometry,
   children,
 }: {
   geometry: THREE.BufferGeometry;
@@ -238,6 +239,9 @@ function StlMeshComponent({
   isExternallyHovered?: boolean;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
   deferExternalTransformUpdates?: boolean;
+  /** When present (model+support mixed import), this geometry contains only the support-section
+   *  triangles and is rendered as an orange overlay on top of the main mesh. */
+  supportSectionGeometry?: THREE.BufferGeometry | null;
   children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
@@ -640,6 +644,36 @@ if (uDitherAmount > 0.0) {
 
     return base.getStyle();
   }, [hoverTintColor, hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, meshColor, selectedTintColor, selectedTintStrength]);
+
+  const supportSectionTintColor = React.useMemo(() => {
+    const base = new THREE.Color('#a3a3a3');
+    const supportTint = new THREE.Color('#c8752a');
+
+    // Support sections need a stronger tint response than the base model
+    // color blend so orange remains legible under scene lighting.
+    const selectionStrength = Math.min(1, Math.max(0.88, selectedTintStrength ?? 0.75));
+    const hoverStrength = Math.min(1, Math.max(0.65, hoverTintStrength ?? 0.5));
+
+    if (isSelected) {
+      return base.clone().lerp(supportTint, selectionStrength).getStyle();
+    }
+
+    if (isHoveredModel || isMarqueeHovered) {
+      return base.clone().lerp(supportTint, hoverStrength).getStyle();
+    }
+
+    return base.getStyle();
+  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, selectedTintStrength]);
+
+  const supportSectionOpacity = React.useMemo(() => {
+    if (typeof revealGhostOpacity === 'number') {
+      return Math.min(0.95, Math.max(0.04, revealGhostOpacity));
+    }
+    if (typeof supportNonSelectedOpacity === 'number') {
+      return Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity));
+    }
+    return 1;
+  }, [revealGhostOpacity, supportNonSelectedOpacity]);
 
   const outOfBoundsMaterial = React.useMemo(() => {
     if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
@@ -1172,6 +1206,23 @@ if (uDitherAmount > 0.0) {
       {supportPlacementGuideEnabled && supportPlacementGuideMaterial && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={4} raycast={() => null}>
           <primitive object={supportPlacementGuideMaterial} attach="material" />
+        </mesh>
+      )}
+
+      {supportSectionGeometry && (
+        <mesh geometry={supportSectionGeometry} position={meshLocalOffset} renderOrder={2} raycast={() => null}>
+          <meshStandardMaterial
+            color={supportSectionTintColor}
+            transparent={supportSectionOpacity < 0.999}
+            opacity={supportSectionOpacity}
+            roughness={materialRoughness ?? 0.9}
+            metalness={0.02}
+            clippingPlanes={planes}
+            side={THREE.FrontSide}
+            polygonOffset
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
+          />
         </mesh>
       )}
 

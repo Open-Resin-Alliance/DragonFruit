@@ -50,6 +50,10 @@ export interface MeshHealthReport {
   pre: MeshAnalysisJson;
   post: MeshAnalysisJson;
   steps: MeshRepairStep[];
+  likely_support_geometry: boolean;
+  /** When present, the first N triangles in the repaired mesh are model body;
+   *  the remainder are support geometry. Used to bake per-triangle vertex colors. */
+  model_triangle_count?: number | null;
   residual_issues: string[];
   fully_repaired: boolean;
   total_ms: number;
@@ -107,6 +111,9 @@ interface RawMeshHealthReport extends UnknownRecord {
   pre?: unknown;
   post?: unknown;
   steps?: unknown;
+  likely_support_geometry?: unknown;
+  likelySupportGeometry?: unknown;
+  model_triangle_count?: unknown;
   residual_issues?: unknown;
   fully_repaired?: unknown;
   total_ms?: unknown;
@@ -182,12 +189,18 @@ function normalizeMeshRepairStep(input: unknown): MeshRepairStep {
 
 function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
   const raw = asRecord(input) as RawMeshHealthReport;
+  const pre = normalizeMeshAnalysis(raw.pre);
+  const post = normalizeMeshAnalysis(raw.post);
   return {
     version: asNumber(raw.version, 1),
     source_path: typeof raw.source_path === 'string' ? raw.source_path : null,
-    pre: normalizeMeshAnalysis(raw.pre),
-    post: normalizeMeshAnalysis(raw.post),
+    pre,
+    post,
     steps: Array.isArray(raw.steps) ? raw.steps.map(normalizeMeshRepairStep) : [],
+    likely_support_geometry: asBoolean(raw.likely_support_geometry ?? raw.likelySupportGeometry),
+    model_triangle_count: typeof raw.model_triangle_count === 'number' && raw.model_triangle_count > 0
+      ? raw.model_triangle_count
+      : null,
     residual_issues: asStringArray(raw.residual_issues),
     fully_repaired: asBoolean(raw.fully_repaired),
     total_ms: asNumber(raw.total_ms),

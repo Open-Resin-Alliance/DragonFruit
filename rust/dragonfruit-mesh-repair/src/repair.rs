@@ -92,6 +92,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         && pre.self_intersection_triangles >= options.solidify_self_intersection_threshold;
     let run_self_intersection_path = options.resolve_self_intersections || auto_fragmented_solidify;
     let mut applied_self_intersection_path = false;
+    let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
     let mut report = MeshHealthReport::new(pre);
 
@@ -131,14 +132,34 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     });
 
     // 3. Fill small holes.
-    let t = std::time::Instant::now();
-    let filled = fill_small_holes(&mut mesh, options.fill_holes_max_edges);
-    report.steps.push(RepairStepReport {
-        name: "fill_holes".into(),
-        changed: filled as u32,
-        notes: None,
-        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-    });
+    //
+    // Perf fast-path: in highly fragmented solidify workloads with no
+    // pre-existing open boundaries, this pass is usually wasted work because
+    // manifold solidify handles closure downstream. Skipping here saves a
+    // few hundred ms on very large support-heavy meshes.
+    let skip_fill_holes_fast = run_self_intersection_path
+        && report.pre.boundary_edges == 0
+        && report.pre.boundary_loops == 0
+        && report.pre.connected_components >= options.solidify_component_threshold;
+    if skip_fill_holes_fast {
+        report.steps.push(RepairStepReport {
+            name: "fill_holes".into(),
+            changed: 0,
+            notes: Some(
+                "skipped: fragmented solidify fast-path (no pre-existing boundary loops)".into(),
+            ),
+            elapsed_ms: 0.0,
+        });
+    } else {
+        let t = std::time::Instant::now();
+        let filled = fill_small_holes(&mut mesh, options.fill_holes_max_edges);
+        report.steps.push(RepairStepReport {
+            name: "fill_holes".into(),
+            changed: filled as u32,
+            notes: None,
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+        });
+    }
 
     // 4. Optional solidify (self-intersection path).
     //
@@ -151,54 +172,142 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     //             intersections, then keep only faces that separate inside and
     //             outside volume states. No voxel remeshing.
     if run_self_intersection_path {
-        // Orient first so face normals are reliable for the winding test.
-        if options.repair_orientation {
+        // Fast-path: try manifold batch union before expensive orientation and
+        // component-culling passes. On highly fragmented meshes this typically
+        // succeeds directly and saves several seconds.
+        #[cfg(feature = "manifold")]
+        {
+            let analysis_before_fast = analyze(&mesh);
             let t = std::time::Instant::now();
-            let flipped = repair_orientation(&mut mesh);
-            report.steps.push(RepairStepReport {
-                name: "orient_pre_solidify".into(),
-                changed: flipped as u32,
-                notes: None,
-                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-            });
-        }
+            match try_solidify_via_manifold_union(&mesh) {
+                Some((
+                    unioned,
+                    manifold_accepted,
+                    fallback_rescued,
+                    fallback_kept,
+                    fallback_dropped,
+                    likely_support_geometry,
+                    model_tri_count,
+                )) => {
+                    let analysis_after = analyze(&unioned);
+                    let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-        let mesh_before_solidify = mesh.clone();
-        let analysis_before_solidify = analyze(&mesh);
+                    let tri_before = analysis_before_fast.triangle_count;
+                    let tri_after = analysis_after.triangle_count;
+                    let manifold_regression = if tri_after < 4 {
+                        Some(format!("manifold result has only {tri_after} triangles"))
+                    } else if tri_before > 0 && tri_after * 200 < tri_before {
+                        Some(format!(
+                            "manifold result collapsed {tri_before} -> {tri_after} triangles"
+                        ))
+                    } else {
+                        None
+                    };
 
-        // Phase A: Component-level interior culling.
-        let t = std::time::Instant::now();
-        let (comp_removed_tris, comp_removed_count) = cull_interior_components(&mut mesh);
-        let elapsed_comp = t.elapsed().as_secs_f64() * 1000.0;
-
-        if comp_removed_count > 0 {
-            let analysis_after_comp = analyze(&mesh);
-            if let Some(reason) =
-                solidify_regression_reason(&analysis_before_solidify, &analysis_after_comp)
-            {
-                // Regression — roll back Phase A and let Phase B try.
-                mesh = mesh_before_solidify.clone();
-                report.steps.push(RepairStepReport {
-                    name: "rollback_component_solidify".into(),
-                    changed: 0,
-                    notes: Some(format!("rolled back component solidify: {reason}")),
-                    elapsed_ms: elapsed_comp,
-                });
-            } else {
-                applied_self_intersection_path = true;
-                report.steps.push(RepairStepReport {
-                    name: "cull_interior_components".into(),
-                    changed: comp_removed_tris as u32,
-                    notes: Some(format!(
-                        "{comp_removed_count} interior components removed \
-                         ({comp_removed_tris} triangles), {} -> {} components",
-                        analysis_before_solidify.connected_components,
-                        analysis_after_comp.connected_components,
-                    )),
-                    elapsed_ms: elapsed_comp,
-                });
+                    if let Some(reason) = manifold_regression {
+                        report.steps.push(RepairStepReport {
+                            name: "rollback_manifold_batch_union".into(),
+                            changed: 0,
+                            notes: Some(format!("manifold batch_union output rejected: {reason}")),
+                            elapsed_ms,
+                        });
+                    } else {
+                        let n_comps_before = analysis_before_fast.connected_components;
+                        let n_comps_after = analysis_after.connected_components;
+                        report.steps.push(RepairStepReport {
+                            name: "manifold_batch_union".into(),
+                            changed: (analysis_before_fast.triangle_count as i64
+                                - analysis_after.triangle_count as i64)
+                                .unsigned_abs() as u32,
+                            notes: Some(format!(
+                                "components:{}->{} tris:{}->{} si:{}->{} watertight:{} \
+                                 unioned={} rescued={} fallback_kept={} fallback_dropped={}",
+                                n_comps_before,
+                                n_comps_after,
+                                analysis_before_fast.triangle_count,
+                                analysis_after.triangle_count,
+                                analysis_before_fast.self_intersection_triangles,
+                                analysis_after.self_intersection_triangles,
+                                analysis_after.is_watertight,
+                                manifold_accepted,
+                                fallback_rescued,
+                                fallback_kept,
+                                fallback_dropped,
+                            )),
+                            elapsed_ms,
+                        });
+                        mesh = unioned;
+                        applied_self_intersection_path = true;
+                        report.likely_support_geometry = likely_support_geometry;
+                        if model_tri_count < mesh.triangles.len() {
+                            report.model_triangle_count = Some(model_tri_count);
+                        }
+                        skip_final_orientation = analysis_after.inconsistent_winding_edges == 0;
+                    }
+                }
+                None => {
+                    // Keep the report clean in this common miss case; we just
+                    // continue with the existing orientation + Phase-A/B path.
+                }
             }
         }
+
+        if !applied_self_intersection_path {
+            // Orient first so face normals are reliable for the winding test.
+            if options.repair_orientation {
+                let t = std::time::Instant::now();
+                let flipped = repair_orientation(&mut mesh);
+                report.steps.push(RepairStepReport {
+                    name: "orient_pre_solidify".into(),
+                    changed: flipped as u32,
+                    notes: None,
+                    elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+                });
+            }
+
+            let mesh_before_solidify = mesh.clone();
+            let analysis_before_solidify = analyze(&mesh);
+
+            // Phase A: Component-level interior culling.
+            let t = std::time::Instant::now();
+            let (comp_removed_tris, comp_removed_count) = cull_interior_components(&mut mesh);
+            let elapsed_comp = t.elapsed().as_secs_f64() * 1000.0;
+
+            if comp_removed_count > 0 {
+                let analysis_after_comp = analyze(&mesh);
+                if let Some(reason) =
+                    solidify_regression_reason(&analysis_before_solidify, &analysis_after_comp)
+                {
+                    // Regression — roll back Phase A and let Phase B try.
+                    mesh = mesh_before_solidify.clone();
+                    report.steps.push(RepairStepReport {
+                        name: "rollback_component_solidify".into(),
+                        changed: 0,
+                        notes: Some(format!("rolled back component solidify: {reason}")),
+                        elapsed_ms: elapsed_comp,
+                    });
+                } else {
+                    applied_self_intersection_path = true;
+                    report.steps.push(RepairStepReport {
+                        name: "cull_interior_components".into(),
+                        changed: comp_removed_tris as u32,
+                        notes: Some(format!(
+                            "{comp_removed_count} interior components removed \
+                             ({comp_removed_tris} triangles), {} -> {} components",
+                            analysis_before_solidify.connected_components,
+                            analysis_after_comp.connected_components,
+                        )),
+                        elapsed_ms: elapsed_comp,
+                    });
+                }
+            }
+        }
+
+        // Baseline for Phase B (manifold fallback / corefine). Captured after
+        // any Phase-A edits so rollbacks restore to the immediate pre-Phase-B
+        // state rather than the initial fast-path input.
+        let mesh_before_solidify = mesh.clone();
+        let analysis_before_solidify = analyze(&mesh);
 
         // Phase B: Co-refinement + component-exclusion boundary extraction.
         //
@@ -232,6 +341,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                         fallback_rescued,
                         fallback_kept,
                         fallback_dropped,
+                        likely_support_geometry,
+                        model_tri_count,
                     )) => {
                         let analysis_after = analyze(&unioned);
                         let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -292,6 +403,11 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                             });
                             mesh = unioned;
                             applied_self_intersection_path = true;
+                            report.likely_support_geometry = likely_support_geometry;
+                            if model_tri_count < mesh.triangles.len() {
+                                report.model_triangle_count = Some(model_tri_count);
+                            }
+                            skip_final_orientation = analysis_after.inconsistent_winding_edges == 0;
                         }
                     }
                     None => {
@@ -387,14 +503,23 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
 
     // 5. Orient components.
     if options.repair_orientation {
-        let t = std::time::Instant::now();
-        let flipped = repair_orientation(&mut mesh);
-        report.steps.push(RepairStepReport {
-            name: "orient_components".into(),
-            changed: flipped as u32,
-            notes: None,
-            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
-        });
+        if skip_final_orientation {
+            report.steps.push(RepairStepReport {
+                name: "orient_components".into(),
+                changed: 0,
+                notes: Some("skipped: winding already coherent after manifold solidify".into()),
+                elapsed_ms: 0.0,
+            });
+        } else {
+            let t = std::time::Instant::now();
+            let flipped = repair_orientation(&mut mesh);
+            report.steps.push(RepairStepReport {
+                name: "orient_components".into(),
+                changed: flipped as u32,
+                notes: None,
+                elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            });
+        }
     }
 
     // 6. Component filter.
@@ -645,14 +770,14 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
 /// caller to fall back to the corefine path.
 ///
 /// On success returns `(mesh, manifold_accepted, fallback_rescued,
-/// fallback_kept, fallback_dropped)` where the counts describe how each input
-/// component was handled.
+/// fallback_kept, fallback_dropped, likely_support_geometry)` where the counts
+/// describe how each input component was handled.
 ///
 /// Requires the `manifold` Cargo feature.
 #[cfg(feature = "manifold")]
 fn try_solidify_via_manifold_union(
     mesh: &IndexedMesh,
-) -> Option<(IndexedMesh, usize, usize, usize, usize)> {
+) -> Option<(IndexedMesh, usize, usize, usize, usize, bool, usize)> {
     use manifold_csg::Manifold;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -717,6 +842,10 @@ fn try_solidify_via_manifold_union(
     let mut model_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
     let mut support_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
     let mut manifold_accepted: usize = 0;
+    let mut model_input_components = 0usize;
+    let mut support_input_components = 0usize;
+    let mut model_input_triangles = 0usize;
+    let mut support_input_triangles = 0usize;
     // Components that could not be converted even with reversed winding.
     // These are rescued/kept in their original geometry group.
     let mut fallback_meshes: Vec<(IndexedMesh, GeometryGroup)> = Vec::new();
@@ -727,6 +856,17 @@ fn try_solidify_via_manifold_union(
         if sub.triangles.len() < 4 {
             // Truly degenerate micro-fragment — safe to drop.
             continue;
+        }
+
+        match group {
+            GeometryGroup::Model => {
+                model_input_components += 1;
+                model_input_triangles += sub.triangles.len();
+            }
+            GeometryGroup::Support => {
+                support_input_components += 1;
+                support_input_triangles += sub.triangles.len();
+            }
         }
 
         let vert_props: Vec<f32> = sub.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
@@ -1024,6 +1164,7 @@ fn try_solidify_via_manifold_union(
     // Preserve logical separation: model body first, then support body.
     let mut out_positions = model_out_positions;
     let mut out_triangles = model_out_triangles;
+    let model_triangles_out = out_triangles.len();
     let support_offset = out_positions.len() as u32;
     out_positions.extend_from_slice(&support_out_positions);
     out_triangles.extend(
@@ -1031,6 +1172,14 @@ fn try_solidify_via_manifold_union(
             .into_iter()
             .map(|[a, b, c]| [a + support_offset, b + support_offset, c + support_offset]),
     );
+
+    let support_triangles_out = (out_triangles.len()).saturating_sub(model_triangles_out);
+    let likely_support_geometry = support_triangles_out > 0
+        && (model_triangles_out == 0
+            || (support_triangles_out >= model_triangles_out.saturating_mul(2)
+                && support_input_components >= model_input_components)
+            || (support_input_components >= model_input_components.saturating_mul(8)
+                && support_input_triangles >= model_input_triangles));
 
     Some((
         IndexedMesh {
@@ -1041,6 +1190,8 @@ fn try_solidify_via_manifold_union(
         fallback_rescued,
         fallback_kept,
         fallback_dropped,
+        likely_support_geometry,
+        model_triangles_out,
     ))
 }
 
