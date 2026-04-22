@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -1007,6 +1007,8 @@ export default function Home() {
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
+  const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
     const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
@@ -8832,6 +8834,10 @@ export default function Home() {
     setEditorContextMenuPos(position);
   }, [scene]);
 
+  const handleRepairModel = React.useCallback((modelId: string) => {
+    setManualRepairModelId(modelId);
+  }, []);
+
   const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
     setSupportsInfoModelId(modelId);
   }, []);
@@ -9359,9 +9365,18 @@ export default function Home() {
         break;
       case 'duplicate':
       case 'arrange':
-      case 'repair':
-      default:
         // intentionally disabled in the menu for now
+        break;
+      case 'repair': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          setManualRepairModelId(targetId);
+          return;
+        }
+        break;
+      }
+      default:
         break;
     }
     closeEditorContextMenu();
@@ -13199,6 +13214,7 @@ export default function Home() {
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
               onModelContextMenu={handleModelListContextMenu}
+              onRepairModel={handleRepairModel}
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
@@ -14237,8 +14253,7 @@ export default function Home() {
         disabledActions={[
           ...(!scene.activeModelId ? (['delete', 'cut', 'copy'] as const) : []),
           'duplicate',
-          'arrange',
-          'repair',
+            'arrange',
         ]}
       />
 
@@ -14410,6 +14425,98 @@ export default function Home() {
           onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
         />
       )}
+
+      {manualRepairModelId && (() => {
+        const repairModel = scene.models.find(m => m.id === manualRepairModelId);
+        if (!repairModel) return null;
+        return (
+          <div
+            className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !isManualRepairing) {
+                setManualRepairModelId(null);
+              }
+            }}
+          >
+            <div
+              className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+              style={{
+                background: 'var(--surface-0)',
+                borderColor: 'var(--border-subtle)',
+                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Repair mesh"
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                      color: 'var(--accent)',
+                    }}
+                  >
+                    <Wrench className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 pr-2">
+                    <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>Repair Mesh</h2>
+                    <p className="mt-0.5 text-[11px] leading-snug truncate" style={{ color: 'var(--text-muted)' }} title={repairModel.name}>
+                      {repairModel.name}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Cancel"
+                  disabled={isManualRepairing}
+                  onClick={() => setManualRepairModelId(null)}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-4 p-5">
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  Runs a full native repair pass: welds open edges, resolves self-intersections, and attempts to produce a watertight solid.
+                  This may take a while for complex geometry.
+                </p>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    disabled={isManualRepairing}
+                    onClick={() => setManualRepairModelId(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button ui-button-primary !h-9 px-3 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                    disabled={isManualRepairing}
+                    onClick={() => {
+                      const id = manualRepairModelId;
+                      setIsManualRepairing(true);
+                      void scene.repairModelInPlace(id).finally(() => {
+                        setIsManualRepairing(false);
+                        setManualRepairModelId(null);
+                      });
+                    }}
+                  >
+                    {isManualRepairing
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Repairing…</>
+                      : <><Wrench className="h-3.5 w-3.5" />Repair</>
+                    }
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {scene.meshRepairReports.length > 0 && (
         <MeshRepairReportModal

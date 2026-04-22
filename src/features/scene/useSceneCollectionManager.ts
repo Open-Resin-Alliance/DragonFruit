@@ -3677,6 +3677,63 @@ export function useSceneCollectionManager() {
     }
   }, [activeModelId, setModelVisibility]);
 
+  /**
+   * Re-runs the full native repair pipeline on an already-loaded model's
+   * geometry and swaps the result back in-place.  Intended for the manual
+   * "Repair Mesh" context-menu action.
+   */
+  const repairModelInPlace = useCallback(async (modelId: string): Promise<boolean> => {
+    const model = modelsRef.current.find(m => m.id === modelId);
+    if (!model) return false;
+    try {
+      const processed = await processGeometry(model.geometry.geometry, {
+        center: false,
+        nativeProcessingMode: 'repair',
+      });
+      const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
+      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
+      const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
+
+      setModels(prev => prev.map(m =>
+        m.id === modelId ? { ...m, geometry: processed, polygonCount } : m
+      ));
+
+      if (repairReport) {
+        const reportEntry: MeshRepairReportEntry = {
+          id: modelId,
+          modelName: model.name,
+          report: repairReport,
+        };
+        const needsAttention = repairReportNeedsAttention(repairReport);
+        if (needsAttention) {
+          const anyResidual = !repairReport.fully_repaired;
+          setPendingMeshRepairReports([reportEntry]);
+          emitSceneImportReport(
+            anyResidual
+              ? `Repair finished with remaining issues - Click for details (${model.name})`
+              : `Repair finished - Click for details (${model.name}).`,
+            anyResidual ? 'warning' : 'success',
+            { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
+          );
+        } else {
+          setPendingMeshRepairReports([]);
+          emitSceneImportReport(`Repaired ${model.name}.`, 'success');
+        }
+      } else {
+        setPendingMeshRepairReports([]);
+        emitSceneImportReport(`Repaired ${model.name}.`, 'success');
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[repairModelInPlace] Repair failed:', err);
+      setPendingMeshRepairReports([]);
+      const message = err instanceof Error ? err.message : String(err);
+      emitSceneImportReport(`Repair failed: ${message}`, 'error', { durationMs: 6_000 });
+      return false;
+    }
+  }, [emitSceneImportReport]);
+
   // Cleanup on unmount
   useEffect(() => {
     const previous = trackedGeometriesRef.current;
@@ -3820,6 +3877,7 @@ export function useSceneCollectionManager() {
     resolveSceneImportPlacementPrompt,
     meshRepairConfirmPrompt,
     resolveMeshRepairConfirmPrompt,
+    repairModelInPlace,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     view3dSettings,
