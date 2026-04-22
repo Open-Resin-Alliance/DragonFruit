@@ -2140,6 +2140,7 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
 
     const RAFT_Z_CUTOFF_MM: f32 = 2.0;
     const TOP_MODEL_BAND_MM: f32 = 1.0;
+    const BASE_TOUCH_EPS_MM: f32 = 0.25;
 
     let global_min_z = mesh
         .positions
@@ -2149,6 +2150,7 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     let raft_z_cut = global_min_z + RAFT_Z_CUTOFF_MM;
 
     let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
+    let mut comp_min_z = vec![f32::INFINITY; n_comps];
     let mut comp_tri_count = vec![0usize; n_comps];
     for (fi, tri) in mesh.triangles.iter().enumerate() {
         let cid = components[fi] as usize;
@@ -2157,6 +2159,7 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
         let z1 = mesh.positions[tri[1] as usize].z;
         let z2 = mesh.positions[tri[2] as usize].z;
         comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
+        comp_min_z[cid] = comp_min_z[cid].min(z0.min(z1).min(z2));
     }
 
     let model_seed = (0..n_comps)
@@ -2167,9 +2170,22 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
 
+    // Components with at least 1/8 of the seed's triangle count are "high-poly"
+    // and treated as model shells even if they don't reach the top Z band.
+    // This handles multi-shell models where parts sit at different heights while
+    // still separating them from the low-poly support scaffold. Support posts,
+    // cylinders, and contact tips are far below this threshold.
+    let model_min_tris = (comp_tri_count[model_seed] / 8).max(200);
+
     let classify_group = |cid: usize| -> GeometryGroup {
         if comp_max_z[cid] <= raft_z_cut {
             return GeometryGroup::Support;
+        }
+
+        // High-poly components above the raft base are model shells regardless
+        // of whether they reach the absolute top of the scene.
+        if comp_tri_count[cid] >= model_min_tris {
+            return GeometryGroup::Model;
         }
 
         let top_z = comp_max_z[model_seed];
@@ -2184,6 +2200,9 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     let mut support_comp_count = 0usize;
     let mut model_input_triangles = 0usize;
     let mut support_input_triangles = 0usize;
+    let mut support_base_touch_components = 0usize;
+    let mut support_base_touch_triangles = 0usize;
+    let base_touch_cut = global_min_z + BASE_TOUCH_EPS_MM;
 
     for cid in 0..n_comps {
         let tri_count = comp_tri_count[cid];
@@ -2198,15 +2217,41 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
             GeometryGroup::Support => {
                 support_comp_count += 1;
                 support_input_triangles += tri_count;
+                if comp_min_z[cid] <= base_touch_cut {
+                    support_base_touch_components += 1;
+                    support_base_touch_triangles += tri_count;
+                }
             }
         }
     }
 
-    // Conservative guard against false positives on ordinary multi-part models.
-    if support_comp_count < model_comp_count.max(1)
-        || support_comp_count < 8
+    let model_avg_tris = if model_comp_count > 0 {
+        model_input_triangles / model_comp_count
+    } else {
+        0
+    };
+    let support_avg_tris = if support_comp_count > 0 {
+        support_input_triangles / support_comp_count
+    } else {
+        0
+    };
+
+    // Primary discriminator: support scaffolds (posts, cylinders, contact tips) are
+    // inherently low-poly compared to model geometry. If the two groups have similar
+    // average triangle density per component this is almost certainly a multi-shell
+    // model, not a model+support file. Require support comps to average at least 3×
+    // fewer triangles than model comps before considering anything else.
+    let density_ok = model_comp_count > 0
+        && model_avg_tris > 0
+        && support_avg_tris.saturating_mul(3) < model_avg_tris;
+
+    // Remaining guards are sanity bounds; density_ok does the heavy lifting.
+    if !density_ok
+        || support_comp_count < model_comp_count.saturating_mul(2).max(4)
         || n_comps < 12
         || support_input_triangles < 2_000
+        || support_base_touch_components < support_comp_count.saturating_div(4).max(3)
+        || support_base_touch_triangles < 500
     {
         return None;
     }
@@ -2233,11 +2278,16 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     mesh.triangles.extend(model_tris);
     mesh.triangles.extend(support_tris);
 
+    // A strong density signal (support comps ≥4× lower-poly than model) gives high
+    // confidence this is a model+support file, even if triangle counts are uneven.
+    let strong_density = model_avg_tris > 0 && support_avg_tris.saturating_mul(4) < model_avg_tris;
+
     let likely_support_geometry = support_triangles_out > 0
         && (model_triangles_out == 0
-            || (support_triangles_out >= model_triangles_out.saturating_mul(2)
+            || (strong_density
+                && support_triangles_out >= model_triangles_out
                 && support_comp_count >= model_comp_count)
-            || (support_comp_count >= model_comp_count.saturating_mul(8)
+            || (support_comp_count >= model_comp_count.saturating_mul(6)
                 && support_input_triangles >= model_input_triangles));
 
     Some((model_triangles_out, likely_support_geometry))
