@@ -80,6 +80,14 @@ function sanitizePositionAttribute(geometry: THREE.BufferGeometry): MeshDefects 
 export interface ProcessGeometryOptions {
   center?: boolean;
   /**
+   * Controls native Tauri mesh processing behavior:
+   * - `auto` (default): standard flow; may run repair path.
+   * - `classify-only`: lightweight shell split classification (no heavy repair).
+    * - `none`: skip native repair/classification entirely.
+   * - `repair`: force full repair/classification path.
+   */
+    nativeProcessingMode?: 'auto' | 'classify-only' | 'none' | 'repair';
+  /**
    * Called when analysis indicates a heavy solidification repair is needed.
    * Return true to proceed with repair, false to skip repair and load as-is.
    * Only invoked when running under Tauri.
@@ -160,12 +168,15 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // when running under Tauri. In the browser we fall back to the legacy
   // Manifold WASM path (which only activates when NaN defects were detected).
   if (isTauriRuntime()) {
-    try {
-      let classifyOnly = false;
+    if (options.nativeProcessingMode === 'none') {
+      console.log('[processGeometry] Native processing skipped (mode=none)');
+    } else try {
+      let classifyOnly = options.nativeProcessingMode === 'classify-only';
+      const forceRepair = options.nativeProcessingMode === 'repair';
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
-      if (options.onConfirmHeavyRepair) {
+      if (!classifyOnly && !forceRepair && options.onConfirmHeavyRepair) {
         try {
           console.log(`[${new Date().toISOString()}] [processGeometry] Running pre-repair analysis`);
           const analysis = await analyzeFromGeometry(geometry);

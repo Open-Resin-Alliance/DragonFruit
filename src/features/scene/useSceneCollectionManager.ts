@@ -3037,7 +3037,10 @@ export function useSceneCollectionManager() {
         const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId, supportData } = result;
 
         // Process geometry (bounds, center, normals, BVH)
-        const processed = await processGeometry(rawGeom, { center: false });
+        const processed = await processGeometry(rawGeom, {
+          center: false,
+          nativeProcessingMode: 'none',
+        });
 
         // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
         const color = '#a3a3a3';
@@ -3273,7 +3276,9 @@ export function useSceneCollectionManager() {
           const blob = new Blob([blobData], { type: mimeType });
           url = URL.createObjectURL(blob);
 
-          const geometry = await loadMeshGeometry(url, embeddedName);
+          const geometry = await loadMeshGeometry(url, embeddedName, {
+            nativeProcessingMode: 'none',
+          });
 
           let resolvedId = model.id;
           if (!resolvedId || existingIds.has(resolvedId)) {
