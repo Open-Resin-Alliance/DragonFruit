@@ -607,20 +607,31 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
 /// Attempt to solidify a fragmented mesh by converting each connected
 /// component into a `Manifold` solid and computing their union.
 ///
-/// This is the robust path for meshes with hundreds or thousands of
-/// interpenetrating shells (e.g. support structures exported as separate
-/// bodies), where parity-based classification is unreliable. manifold3d's
-/// union uses generalized winding numbers internally and is guaranteed to
-/// produce a valid manifold output.
+/// Two conversion attempts are made per component — normal winding then
+/// reversed winding — because some CAD / slicer pipelines export components
+/// with consistently inverted normals that manifold3d rejects as
+/// negative-volume solids. Reversing `[a,b,c]→[a,c,b]` fixes this class of
+/// failure without altering geometry.
 ///
-/// Components that manifold rejects (open surfaces, non-manifold geometry)
-/// are NOT discarded — they are appended back into the final mesh verbatim
-/// so no geometry is lost.  Self-intersections between those fallback
-/// components and the union result may remain, but the caller's
-/// `topology_loop` and subsequent passes can clean those up.
+/// Components that are genuinely non-manifold (open surfaces, NME) even after
+/// both winding attempts are sorted by size and treated differently:
 ///
-/// Returns `None` only if zero components were manifold-capable AND zero
-/// fallback geometry existed (i.e. the mesh was entirely degenerate).
+/// * **Significant fallbacks** (≥ 1 % of the union triangle count) are
+///   appended verbatim. For typical supported print files the largest of
+///   these is the main model body — an open / NME mesh that cannot be
+///   boolean-unioned but must not be discarded.
+///
+/// * **Micro-fragments** (< 1 % threshold) are dropped. They are almost
+///   always degenerate shards that would only re-introduce boundary / NME
+///   edges without contributing real geometry.
+///
+/// **Future**: the largest significant fallback is the prime candidate for a
+/// "model body" tag, enabling remove-pre-supports workflows in DragonFruit
+/// (subtract the support union from the tagged body, then re-support with
+/// native DragonFruit supports).
+///
+/// Returns `None` if no manifold-capable component exists, which causes the
+/// caller to fall back to the corefine path.
 ///
 /// Requires the `manifold` Cargo feature.
 #[cfg(feature = "manifold")]
@@ -631,8 +642,9 @@ fn try_solidify_via_manifold_union(mesh: &IndexedMesh) -> Option<IndexedMesh> {
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
 
     let mut manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(8192));
-    // Components that manifold rejected (open surfaces, NME geometry, etc.)
-    // are preserved here so no geometry is silently lost.
+    // Components that could not be converted even with reversed winding.
+    // Sorted by triangle count after the loop; the largest entry is almost
+    // always the main 3D model body in a supported-print file.
     let mut fallback_meshes: Vec<IndexedMesh> = Vec::new();
 
     for comp_id in 0..n_comps as u32 {
@@ -642,63 +654,82 @@ fn try_solidify_via_manifold_union(mesh: &IndexedMesh) -> Option<IndexedMesh> {
             continue;
         }
 
-        // Flatten to the format manifold-csg expects: [x,y,z, x,y,z, ...]
-        // and flat triangle indices.
         let vert_props: Vec<f32> = sub.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
-        let tri_indices: Vec<u32> = sub.triangles.iter().flat_map(|t| *t).collect();
 
+        // Attempt 1: normal winding.
+        let tri_indices: Vec<u32> = sub.triangles.iter().flat_map(|t| *t).collect();
         match Manifold::from_mesh_f32(&vert_props, 3, &tri_indices) {
+            Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
+                manifolds.push(m);
+                continue;
+            }
+            _ => {}
+        }
+
+        // Attempt 2: reversed winding. Some CAD / slicer pipelines export
+        // components with consistent inside-out normals. manifold3d treats
+        // those as negative-volume and rejects them. Flipping [a,b,c]→[a,c,b]
+        // fixes the orientation without changing geometry.
+        let rev_tri_indices: Vec<u32> = sub
+            .triangles
+            .iter()
+            .flat_map(|[a, b, c]| [*a, *c, *b])
+            .collect();
+        match Manifold::from_mesh_f32(&vert_props, 3, &rev_tri_indices) {
             Ok(m) if !m.is_empty() && m.num_tri() > 0 => {
                 manifolds.push(m);
             }
             _ => {
-                // Manifold rejected this component (open surface, NME, etc.).
-                // Keep it verbatim so nothing is lost (body mesh, primitives…).
                 fallback_meshes.push(sub);
             }
         }
     }
 
-    // If absolutely nothing was usable, signal the caller to try corefine.
-    if manifolds.is_empty() && fallback_meshes.is_empty() {
-        return None;
-    }
-
-    // Start building the output positions/triangles from the union result
-    // (if any), then append every fallback component.
-    let mut out_positions: Vec<Vec3>;
-    let mut out_triangles: Vec<[u32; 3]>;
-
     if manifolds.is_empty() {
-        // No closeable component — nothing to union; signal corefine fallback.
         return None;
     }
 
-    // Batch union: combine all valid component manifolds in one pass.
-    // manifold3d parallelises this internally with TBB when available.
+    // Batch union all manifold-capable components (supports, closed primitives)
+    // in one pass. manifold3d uses a robust winding-number classification
+    // internally, so N-body overlap is handled correctly regardless of how
+    // many components interpenetrate.
     let result = Manifold::batch_union(&manifolds);
-
     if result.is_empty() || result.num_tri() == 0 {
         return None;
     }
 
-    // Extract the unioned mesh back into our IndexedMesh format.
     let (vert_props_out, n_props, tri_indices_out) = result.to_mesh_f32();
     debug_assert_eq!(n_props, 3);
 
-    out_positions = vert_props_out
+    let mut out_positions: Vec<Vec3> = vert_props_out
         .chunks_exact(n_props)
         .map(|c| Vec3::new(c[0], c[1], c[2]))
         .collect();
 
-    out_triangles = tri_indices_out
+    let mut out_triangles: Vec<[u32; 3]> = tri_indices_out
         .chunks_exact(3)
         .map(|c| [c[0], c[1], c[2]])
         .collect();
 
-    // Append any fallback (non-manifoldable) components verbatim so that
-    // body meshes / primitives rejected by manifold3d are not silently lost.
+    // Sort fallbacks largest-first. The first entry (largest) is the model body
+    // in a typical supported print; subsequent entries are either medium-sized
+    // geometry with genuine open-surface issues, or degenerate micro-shards.
+    //
+    // Drop anything below 1 % of the union output size — micro-fragments that
+    // would only re-introduce NME / boundary edges. Keep everything else and
+    // append it verbatim.
+    //
+    // FUTURE: tag fallback_meshes[0] as the "model body" shell to enable
+    // a DragonFruit "remove supports → re-support" workflow: subtract the
+    // support union from the model body to get a clean separation between
+    // the print geometry and pre-generated support geometry.
+    fallback_meshes.sort_unstable_by(|a, b| b.triangles.len().cmp(&a.triangles.len()));
+    let min_keep_tris = (out_triangles.len() / 100).max(4);
+
     for fb in fallback_meshes {
+        if fb.triangles.len() < min_keep_tris {
+            continue; // micro-fragment — drop to avoid re-introducing NME
+        }
         let offset = out_positions.len() as u32;
         out_positions.extend_from_slice(&fb.positions);
         out_triangles.extend(
