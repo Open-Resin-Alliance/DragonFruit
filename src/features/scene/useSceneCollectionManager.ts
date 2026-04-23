@@ -1460,6 +1460,7 @@ export function useSceneCollectionManager() {
           normal: plane.normal.clone(),
           center: plane.center.clone(),
         })),
+        meshDefects: source.meshDefects,
       };
     }
 
@@ -1490,6 +1491,7 @@ export function useSceneCollectionManager() {
         normal: plane.normal.clone(),
         center: plane.center.clone(),
       })),
+      meshDefects: source.meshDefects,
     };
   }, []);
 
