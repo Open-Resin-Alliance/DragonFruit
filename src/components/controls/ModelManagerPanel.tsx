@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -585,7 +586,10 @@ export function ModelManagerPanel({
                               {model.name}
                             </div>
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {model.polygonCount.toLocaleString()} polys
+                              {formatMeshStatsForDisplay({
+                                polygonCount: model.polygonCount,
+                                componentCount: model.geometry.meshDefects?.nativeRepairReport?.post.component_count,
+                              })}
                             </div>
                           </div>
 

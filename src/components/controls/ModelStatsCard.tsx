@@ -1,6 +1,7 @@
 
 import React from 'react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -560,7 +561,10 @@ export function ModelStatsCard({
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
               <span>Polygons:</span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
+
+              <span>Shells:</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.geometry.meshDefects?.nativeRepairReport?.post.component_count ?? '-'}</span>
 
               <span>Height:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
