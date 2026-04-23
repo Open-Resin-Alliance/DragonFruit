@@ -53,6 +53,7 @@ interface SlicingPanelProps {
   canPrint?: boolean;
   onSliceIntentChanged?: (intent: SliceIntent) => void;
   onBeforeSliceStart?: (intent: SliceIntent) => Promise<boolean> | boolean;
+  onBeforeSlicingRun?: () => Promise<void> | void;
   resolveOutputPathForIntent?: (intent: SliceIntent) => string | null | undefined;
 }
 
@@ -128,6 +129,7 @@ type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'encoding' | 'fina
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
   if (lower.includes('slicing')) return 'slicing';
+  if (lower.includes('saving scene')) return 'preparing';
   if (lower.includes('preparing')) return 'preparing';
   if (lower.includes('staging mesh') || lower.includes('transferring mesh')) return 'staging';
   if (lower.includes('slicing layer') || lower.includes('raster')) return 'slicing';
@@ -313,6 +315,7 @@ export function SlicingPanel({
   canPrint = false,
   onSliceIntentChanged,
   onBeforeSliceStart,
+  onBeforeSlicingRun,
   resolveOutputPathForIntent,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -373,6 +376,7 @@ export function SlicingPanel({
   const autoSliceTriggeredRef = useRef(false);
   const autoSliceTimeoutRef = useRef<number | null>(null);
   const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
+  const hasSlicingProgressStartedRef = useRef(false);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
@@ -950,10 +954,11 @@ export function SlicingPanel({
     const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
 
     setIsSlicingZip(true);
-    setCurrentPhase('Preparing');
-    setSliceStatus('Preparing');
+    setCurrentPhase('Saving Scene');
+    setSliceStatus('Saving Scene');
     setProgressDone(0);
     setProgressTotal(1);
+    hasSlicingProgressStartedRef.current = false;
     setSlicingLayerDone(0);
     setSlicingLayerTotal(1);
     setCurrentElapsedMs(0);
@@ -969,6 +974,17 @@ export function SlicingPanel({
     setPreviewSelectedLayer(1);
     onSliceIntentChanged?.(effectiveSliceIntent);
     onSliceRunStarted?.();
+
+    try {
+      await Promise.resolve(onBeforeSlicingRun?.());
+    } catch (error) {
+      console.warn('[Slicing] Pre-slice save step failed; continuing to slicing.', error);
+    }
+
+    setCurrentPhase('Preparing');
+    setSliceStatus('Preparing');
+    setProgressDone(0);
+    setProgressTotal(1);
 
     const runStartMs = performance.now();
     const abortController = new AbortController();
@@ -1021,8 +1037,16 @@ export function SlicingPanel({
           const safeDone = Math.max(0, Math.min(done, safeTotal));
           setCurrentPhase(phase);
           setSliceStatus(phase);
-          setProgressDone(safeDone);
-          setProgressTotal(safeTotal);
+
+          if (isSlicingPhase) {
+            hasSlicingProgressStartedRef.current = true;
+            setProgressDone(safeDone);
+            setProgressTotal(safeTotal);
+          } else if (!hasSlicingProgressStartedRef.current) {
+            // Keep pre-slice phases (Saving Scene / Preparing / Staging) at zero progress.
+            setProgressDone(0);
+            setProgressTotal(1);
+          }
 
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('dragonfruit:slicing-progress', {
