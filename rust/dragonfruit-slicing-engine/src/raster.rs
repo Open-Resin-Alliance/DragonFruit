@@ -705,15 +705,15 @@ pub fn rasterize_layer(
 /// Functionally equivalent to `rasterize_layer_with_stats` but uses a single
 /// row-wide scratch buffer instead of a full WH-pixel mask.  This eliminates
 /// the dominant 40-56 MB allocation at 8 K resolution for CTB and other
-/// formats that do not need PNG.  Area stats component analysis (8-connected
-/// flood fill) is not performed; basic pixel-count bounding-box stats are
-/// still returned.
+/// formats that do not need PNG. When `compute_area_stats` is true, a binary
+/// stats mask is captured and 8-connected component analysis is applied.
 #[allow(unused_assignments)]
 pub fn rasterize_layer_rle(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
     layer_index: u32,
+    compute_area_stats: bool,
 ) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
@@ -755,6 +755,11 @@ pub fn rasterize_layer_rle(
     let scanline_starts = scanline_index.starts;
     let y_start = scanline_index.y_start;
     let y_end_exclusive = scanline_index.y_end_exclusive;
+    let mut stats_mask = if compute_area_stats {
+        Some(vec![0u8; width * height])
+    } else {
+        None
+    };
 
     let first_physical_y = y_start / aa_steps;
     // Emit zero rows before the rasterized region.
@@ -829,6 +834,14 @@ pub fn rasterize_layer_rle(
         let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
 
         for span in spans {
+            if let Some(ref mut binary) = stats_mask {
+                let b_start = physical_y * width + span.start;
+                let b_end = physical_y * width + span.end;
+                if b_end < binary.len() {
+                    binary[b_start..=b_end].fill(255);
+                }
+            }
+
             if !aa_enabled {
                 row_buf[span.start..=span.end].fill(255);
             } else {
@@ -897,11 +910,35 @@ pub fn rasterize_layer_rle(
         stats.max_x = max_x;
         stats.max_y = max_y;
 
-        let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
-        stats.total_solid_area_mm2 = total_area;
-        stats.largest_area_mm2 = total_area;
-        stats.smallest_area_mm2 = total_area;
-        stats.area_count = 1;
+        if compute_area_stats {
+            let stats_source = stats_mask
+                .as_deref()
+                .expect("stats mask must exist when compute_area_stats is true");
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                compute_component_area_stats_8_connected(
+                    stats_source,
+                    width,
+                    height,
+                    min_x as usize,
+                    max_x as usize,
+                    min_y as usize,
+                    max_y as usize,
+                    pixel_area_mm2,
+                );
+
+            stats.total_solid_pixels = total_pixels;
+            let total_area = (total_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = largest_area_mm2;
+            stats.smallest_area_mm2 = smallest_area_mm2;
+            stats.area_count = area_count;
+        } else {
+            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = total_area;
+            stats.smallest_area_mm2 = total_area;
+            stats.area_count = 1;
+        }
     }
 
     (rle.finish(), stats)
@@ -909,7 +946,7 @@ pub fn rasterize_layer_rle(
 
 #[cfg(test)]
 mod tests {
-    use super::{rasterize_layer, rasterize_layer_with_stats};
+    use super::{rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats};
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
     use crate::types::SliceJobV3;
@@ -1076,6 +1113,36 @@ mod tests {
         assert_eq!(
             stats.area_count, 2,
             "disconnected solids should produce two 8-connected components"
+        );
+        assert!(
+            stats.largest_area_mm2 > stats.smallest_area_mm2,
+            "largest area should exceed smallest area for differently sized disconnected islands"
+        );
+        assert!(
+            (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
+                < 1e-6,
+            "total area should equal the sum of component areas"
+        );
+    }
+
+    #[test]
+    fn disconnected_islands_report_component_stats_in_rle_path() {
+        let job = job_for_single_layer();
+
+        let mut flat = Vec::<f32>::new();
+        // Large island
+        push_box_triangles(&mut flat, -20.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+        // Smaller, disconnected island
+        push_box_triangles(&mut flat, 20.0, 0.0, 0.0, 1.0, 8.0, 8.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (_runs, stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+
+        assert_eq!(
+            stats.area_count, 2,
+            "disconnected solids should produce two 8-connected components in RLE path"
         );
         assert!(
             stats.largest_area_mm2 > stats.smallest_area_mm2,

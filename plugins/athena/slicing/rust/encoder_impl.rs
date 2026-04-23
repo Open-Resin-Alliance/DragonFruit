@@ -499,7 +499,7 @@ impl FormatEncoder for AthenaPluginEncoder {
     }
 
     fn requires_area_stats(&self) -> bool {
-        false
+        true
     }
 
     fn requires_png_layers(&self) -> bool {

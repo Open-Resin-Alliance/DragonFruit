@@ -193,6 +193,9 @@ type PrintingMonitorRecentPlate = {
   layerCount: number | null;
   printTimeSec: number | null;
   usedMaterialMl: number | null;
+  totalSolidAreaMm2: number | null;
+  smallestAreaMm2: number | null;
+  largestAreaMm2: number | null;
 };
 
 type PrintingMonitorPendingConfirmation =
@@ -640,6 +643,13 @@ function formatPrintingMonitorUsedMaterial(ml: number | null): string {
   return `${ml.toFixed(2)} mL`;
 }
 
+function formatPrintingMonitorAreaMm2(areaMm2: number | null): string {
+  if (areaMm2 == null || !Number.isFinite(areaMm2) || areaMm2 <= 0) return '—';
+  if (areaMm2 >= 1000) return `${areaMm2.toFixed(0)} mm²`;
+  if (areaMm2 >= 100) return `${areaMm2.toFixed(1)} mm²`;
+  return `${areaMm2.toFixed(2)} mm²`;
+}
+
 function parsePrintingMonitorSeconds(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return Math.round(value);
@@ -682,6 +692,26 @@ function parsePrintingMonitorSeconds(value: unknown): number | null {
 }
 
 function parsePrintingMonitorMaterialMl(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+
+  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
+  if (!extracted) return null;
+  const parsed = Number(extracted[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parsePrintingMonitorAreaMm2(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return value;
   }
@@ -862,6 +892,7 @@ export default function Home() {
   const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
   const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
+  const [isPreSliceSceneSaveInProgress, setIsPreSliceSceneSaveInProgress] = React.useState(false);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
   const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
@@ -920,12 +951,17 @@ export default function Home() {
   const sceneSaveQueuedRef = React.useRef(false);
   const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
   const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
+  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
 
-  const { isAutosaving, clearAutosave } = useSceneAutosave({
+  const sceneAutosaveEnabled = sceneAutosaveSettings.enabled
+    && !isSlicingBusy
+    && scene.mode !== 'printing';
+
+  const { isAutosaving, clearAutosave, flushAutosave } = useSceneAutosave({
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
-    enabled: sceneAutosaveSettings.enabled,
+    enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     capMs: sceneAutosaveSettings.capMs,
     preferredSavePath: preferredOverwriteScenePathRef.current,
@@ -934,7 +970,7 @@ export default function Home() {
   React.useEffect(() => {
     const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
     const TOAST_ANIMATION_MS = 220;
-    const hasActiveSaveWork = isSceneSaveInProgress || isAutosaving;
+    const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
 
     if (hasActiveSaveWork) {
       if (saveToastHideTimeoutRef.current !== null) {
@@ -990,7 +1026,7 @@ export default function Home() {
         setIsSaveToastVisible(false);
       }, TOAST_ANIMATION_MS);
     }, remaining);
-  }, [isAutosaving, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+  }, [isAutosaving, isPreSliceSceneSaveInProgress, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
 
   React.useEffect(() => {
     return () => {
@@ -1049,7 +1085,6 @@ export default function Home() {
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
   const [printingPngLoadedUrl, setPrintingPngLoadedUrl] = React.useState<string | null>(null);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
-  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
@@ -4116,6 +4151,17 @@ export default function Home() {
     && printingTargetDevice?.connected === true,
   );
 
+  const handlePreSliceSceneSave = React.useCallback(async (): Promise<void> => {
+    setIsPreSliceSceneSaveInProgress(true);
+    try {
+      await flushAutosave();
+    } catch (error) {
+      console.warn('[Slicing] Failed to flush autosave before slicing; continuing.', error);
+    } finally {
+      setIsPreSliceSceneSaveInProgress(false);
+    }
+  }, [flushAutosave]);
+
   const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
     if (shouldReturnToPrintingAfterSliceRef.current) {
       return true;
@@ -5579,8 +5625,32 @@ export default function Home() {
             ?? fileData?.MaterialUsage
             ?? fileData?.materialUsage
             ?? fileData?.material_usage;
+          const rawTotalSolidArea =
+            plate.TotalSolidArea
+            ?? plate.totalSolidArea
+            ?? plate.total_solid_area
+            ?? fileData?.TotalSolidArea
+            ?? fileData?.totalSolidArea
+            ?? fileData?.total_solid_area;
+          const rawLargestArea =
+            plate.LargestArea
+            ?? plate.largestArea
+            ?? plate.largest_area
+            ?? fileData?.LargestArea
+            ?? fileData?.largestArea
+            ?? fileData?.largest_area;
+          const rawSmallestArea =
+            plate.SmallestArea
+            ?? plate.smallestArea
+            ?? plate.smallest_area
+            ?? fileData?.SmallestArea
+            ?? fileData?.smallestArea
+            ?? fileData?.smallest_area;
           const parsedPrintTimeSec = parsePrintingMonitorSeconds(rawPrintTime);
           const parsedUsedMaterialMl = parsePrintingMonitorMaterialMl(rawUsedMaterial);
+          const parsedTotalSolidAreaMm2 = parsePrintingMonitorAreaMm2(rawTotalSolidArea);
+          const parsedLargestAreaMm2 = parsePrintingMonitorAreaMm2(rawLargestArea);
+          const parsedSmallestAreaMm2 = parsePrintingMonitorAreaMm2(rawSmallestArea);
 
           return {
             plateId: Math.round(plateId),
@@ -5594,6 +5664,9 @@ export default function Home() {
               : null,
             printTimeSec: parsedPrintTimeSec,
             usedMaterialMl: parsedUsedMaterialMl,
+            totalSolidAreaMm2: parsedTotalSolidAreaMm2,
+            smallestAreaMm2: parsedSmallestAreaMm2,
+            largestAreaMm2: parsedLargestAreaMm2,
           } satisfies PrintingMonitorRecentPlate;
         })
         .filter((item: PrintingMonitorRecentPlate | null): item is PrintingMonitorRecentPlate => item !== null)
@@ -13557,6 +13630,7 @@ export default function Home() {
               canPrint={canSliceAndPrint}
               onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
               onBeforeSliceStart={handleBeforeSliceStart}
+              onBeforeSlicingRun={handlePreSliceSceneSave}
               resolveOutputPathForIntent={(intent) => (
                 intent === 'file'
                   ? (preSliceFileDestinationPathRef.current?.trim() || null)
@@ -16265,6 +16339,9 @@ export default function Home() {
                                           </div>
                                           <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
                                             {`Est. ${formatPrintingMonitorEstimatedTime(plate.printTimeSec)} • ${formatPrintingMonitorUsedMaterial(plate.usedMaterialMl)}`}
+                                          </div>
+                                          <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                            {`Area Σ ${formatPrintingMonitorAreaMm2(plate.totalSolidAreaMm2)} • Min ${formatPrintingMonitorAreaMm2(plate.smallestAreaMm2)} • Max ${formatPrintingMonitorAreaMm2(plate.largestAreaMm2)}`}
                                           </div>
                                         </div>
 

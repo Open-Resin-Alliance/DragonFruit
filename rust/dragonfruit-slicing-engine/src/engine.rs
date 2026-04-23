@@ -129,6 +129,7 @@ pub fn slice_with_progress_v3(
                 };
                 slice_and_rasterize_rle_encoded_v3(
                     job,
+                    requires_area_stats,
                     encode_fn,
                     &mut store_sink,
                     slicing_progress,
@@ -137,7 +138,13 @@ pub fn slice_with_progress_v3(
             } else {
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
-                slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
+                slice_and_rasterize_rle_v3(
+                    job,
+                    requires_area_stats,
+                    &mut rle_sink,
+                    slicing_progress,
+                    cancel_flag,
+                )?
             };
 
             rle_enc.set_area_stats(layer_area_stats);
@@ -283,6 +290,7 @@ pub fn slice_with_progress_v3(
 /// Fast raster stage that produces RLE runs per layer — no pixel buffers.
 pub fn slice_and_rasterize_rle_v3(
     job: &SliceJobV3,
+    compute_area_stats: bool,
     on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
@@ -299,6 +307,7 @@ pub fn slice_and_rasterize_rle_v3(
         job,
         &triangles,
         &layer_index,
+        compute_area_stats,
         on_rle_layer,
         on_progress,
         cancel_flag,
@@ -311,6 +320,7 @@ pub fn slice_and_rasterize_rle_v3(
 /// Fast raster stage that encodes RLE runs into layer bytes in parallel rayon workers.
 pub fn slice_and_rasterize_rle_encoded_v3(
     job: &SliceJobV3,
+    compute_area_stats: bool,
     encode_fn: Arc<
         dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
     >,
@@ -330,6 +340,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         job,
         &triangles,
         &layer_index,
+        compute_area_stats,
         encode_fn,
         on_encoded_layer,
         on_progress,
@@ -497,6 +508,7 @@ pub fn slice_with_progress_v3_to_path(
                 };
                 slice_and_rasterize_rle_encoded_v3(
                     job,
+                    requires_area_stats,
                     encode_fn,
                     &mut store_sink,
                     slicing_progress,
@@ -505,7 +517,13 @@ pub fn slice_with_progress_v3_to_path(
             } else {
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
-                slice_and_rasterize_rle_v3(job, &mut rle_sink, slicing_progress, cancel_flag)?
+                slice_and_rasterize_rle_v3(
+                    job,
+                    requires_area_stats,
+                    &mut rle_sink,
+                    slicing_progress,
+                    cancel_flag,
+                )?
             };
 
             rle_enc.set_area_stats(layer_area_stats);
