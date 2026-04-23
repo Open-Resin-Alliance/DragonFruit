@@ -1136,6 +1136,7 @@ export default function Home() {
   const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
+  const printingSendCancelRequestedRef = React.useRef(false);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
   const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
   const [printingUploadTelemetry, setPrintingUploadTelemetry] = React.useState<{
@@ -4122,6 +4123,11 @@ export default function Home() {
     printingArtifact
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
+  );
+  const canRetrySendToPrinter = Boolean(
+    printingUploadDialogStage === 'failed'
+    && !printingSendBusy
+    && canSendToPrinter,
   );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
   const canSliceAndUpload = Boolean(
@@ -7672,6 +7678,13 @@ export default function Home() {
       return;
     }
 
+    const isCancelRequested = () => printingSendCancelRequestedRef.current;
+    const throwIfCanceled = () => {
+      if (isCancelRequested()) {
+        throw new Error('Upload canceled by user.');
+      }
+    };
+
     setPrintingTargetDeviceId(targetDevice.id);
     selectPrinterNetworkDevice(activePrinterProfile.id, targetDevice.id);
 
@@ -7691,6 +7704,7 @@ export default function Home() {
     }
 
     setPrintingReadyPlateId(null);
+  printingSendCancelRequestedRef.current = false;
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
@@ -7705,6 +7719,7 @@ export default function Home() {
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
       let zipBlob = printingArtifact.blob;
+      throwIfCanceled();
 
       // If we have a local temp path and no blob, read the blob from native bridge
       if (!zipBlob && nativeTempPath) {
@@ -7722,6 +7737,8 @@ export default function Home() {
       if (!zipBlob) {
         throw new Error('No print artifact blob available for printer upload.');
       }
+
+      throwIfCanceled();
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
       const networkMode = (activeNetworkUiAdapter.mode || '').trim();
@@ -7743,6 +7760,7 @@ export default function Home() {
         profileId: selectedMaterialId,
         callbacks: {
           onProgress: (event: PluginUploadProgressEvent) => {
+            if (isCancelRequested()) return;
             const progress = event.percentComplete / 100;
             const clampedProgress = Math.min(progress, 0.9999);
             if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
@@ -7758,6 +7776,7 @@ export default function Home() {
             });
           },
           onStatusUpdate: (update) => {
+            if (isCancelRequested()) return;
             if (update.stage === 'processing') {
               setPrintingSendProgress(1);
               setPrintingUploadDisplayProgress(1);
@@ -7786,10 +7805,13 @@ export default function Home() {
             }
           },
           onComplete: (plateId) => {
+            if (isCancelRequested()) return;
             resolvedPlateId = plateId;
           },
         },
       });
+
+      throwIfCanceled();
 
       if (!uploadResult.ok) {
         throw new Error('Upload failed on printer backend');
@@ -7802,6 +7824,7 @@ export default function Home() {
       let pollFailureCount = 0;
 
       while ((Date.now() - startedAt) < timeoutMs) {
+        throwIfCanceled();
         try {
           const responseReady = await pluginNetworkFetch({
             pluginId: printingMonitoringAdapter.pluginId,
@@ -7824,6 +7847,8 @@ export default function Home() {
             resolvedPlateId = matchedPlateId;
           }
 
+          throwIfCanceled();
+
           metadataReady = readyPayload?.metadataReady === true;
           pollFailureCount = 0;
 
@@ -7840,6 +7865,8 @@ export default function Home() {
         await new Promise<void>((resolve) => {
           window.setTimeout(resolve, pollMs);
         });
+
+        throwIfCanceled();
       }
 
       if (resolvedPlateId) {
@@ -7878,8 +7905,14 @@ export default function Home() {
         printingUploadProcessingHandoffTimeoutRef.current = null;
       }
       const message = error instanceof Error ? error.message : 'Unknown error';
-      setPrintingSendStatusText(`Send failed: ${message}`);
-      setPrintingSendStageText('Upload failed');
+      const canceled = printingSendCancelRequestedRef.current || /cancel|abort/i.test(message);
+      if (canceled) {
+        setPrintingSendStatusText('Upload canceled. You can retry when ready.');
+        setPrintingSendStageText('Upload canceled');
+      } else {
+        setPrintingSendStatusText(`Send failed: ${message}`);
+        setPrintingSendStageText('Upload failed');
+      }
       setPrintingUploadDialogStage('failed');
       setPrintingDeviceProcessingStartedAtMs(null);
       setPrintingUploadTelemetry(null);
@@ -7887,6 +7920,7 @@ export default function Home() {
       setPrintingUploadDisplayProgress(0);
     } finally {
       setPrintingSendBusy(false);
+      printingSendCancelRequestedRef.current = false;
     }
   }, [
     activeNetworkUiAdapter,
@@ -7930,6 +7964,26 @@ export default function Home() {
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
   ]);
+
+  const handleCancelSendToPrinter = React.useCallback(() => {
+    if (!printingSendBusy) return;
+
+    printingSendCancelRequestedRef.current = true;
+    setPrintingSendStageText('Canceling upload…');
+    setPrintingSendStatusText('Canceling upload…');
+
+    if (activeNetworkUiAdapter?.pluginId === 'athena') {
+      void import('../../plugins/athena/network')
+        .then((mod) => {
+          if (typeof mod.abortUpload === 'function') {
+            mod.abortUpload();
+          }
+        })
+        .catch(() => {
+          // Ignore; cooperative cancellation checks still stop follow-up work.
+        });
+    }
+  }, [activeNetworkUiAdapter?.pluginId, printingSendBusy]);
 
   const openPrintingMonitorForTargetDevice = React.useCallback((deviceId: string | null) => {
     printingMonitorStartFocusDeviceIdRef.current = deviceId;
@@ -13657,6 +13711,7 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
+              sendCanRetry={canRetrySendToPrinter}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
               onOpenSendTargetPicker={() => {
@@ -13665,6 +13720,8 @@ export default function Home() {
               }}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
+              onCancelSendToPrinter={handleCancelSendToPrinter}
+              onRetrySendToPrinter={handleSendToPrinter}
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
