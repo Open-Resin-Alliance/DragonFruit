@@ -14196,6 +14196,7 @@ export default function Home() {
                 onChange={handlePrintingLayerChange}
                 onScrubStart={handlePrintingLayerScrubStart}
                 onScrubEnd={handlePrintingLayerScrubEnd}
+                allowTrackClickJump
                 currentHeightMm={printingCurrentHeightMm ?? undefined}
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
