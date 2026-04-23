@@ -25,6 +25,7 @@ import {
 } from '@/features/slicing/sliceExportOrchestrator';
 import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
+import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
@@ -162,44 +163,6 @@ function formatElapsedClock(ms: number): string {
   }
 
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-function formatResinFamilyLabel(resinFamily: string | null | undefined): string {
-  const normalized = (resinFamily ?? '').trim().toLowerCase();
-  if (!normalized) return '';
-  if (normalized === 'standard') return 'Standard';
-  if (normalized === 'abs-like') return 'ABS-like';
-  if (normalized === 'tough') return 'Tough';
-  if (normalized === 'flexible') return 'Flexible';
-  if (normalized === 'engineering') return 'Engineering';
-  if (normalized === 'other') return 'Other';
-  return normalized;
-}
-
-function resolveCompositeMaterialLabel(material: {
-  brand?: string;
-  resinFamily?: string;
-  name?: string;
-} | null | undefined): string | null {
-  if (!material) return null;
-
-  const brand = (material.brand ?? '').trim();
-  const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
-  const name = (material.name ?? '').trim();
-
-  const parts: string[] = [];
-  const pushUnique = (value: string) => {
-    if (!value) return;
-    if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
-    parts.push(value);
-  };
-
-  pushUnique(brand);
-  pushUnique(resinFamilyLabel);
-  pushUnique(name);
-
-  if (parts.length === 0) return null;
-  return parts.join(' ');
 }
 
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
