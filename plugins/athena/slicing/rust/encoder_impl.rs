@@ -461,21 +461,12 @@ fn encode_layer_png(
             crate::encode::encode_grayscale_averaged_png_from_rle(logical_width, height, runs)
         }
         _ => {
-            // Grayscale: expand RLE and use libdeflate.
-            let total_pixels = (width as usize).saturating_mul(height as usize);
-            let mut pixels = Vec::with_capacity(total_pixels);
-            for run in runs {
-                let len = run.length as usize;
-                let end = (pixels.len() + len).min(total_pixels);
-                let fill = end - pixels.len();
-                pixels.extend(std::iter::repeat(run.value).take(fill));
-            }
-            pixels.resize(total_pixels, 0);
-
-            crate::encode::encode_grayscale_png(
+            // Full-resolution grayscale path: stay on direct RLE->PNG encoding
+            // to preserve the fast O(num_runs + height) behavior.
+            crate::encode::encode_grayscale_png_from_rle(
                 width,
                 height,
-                &pixels,
+                runs,
                 &job.png_compression_strategy,
                 binary_png,
             )
