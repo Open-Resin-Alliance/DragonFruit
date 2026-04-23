@@ -415,6 +415,7 @@ export type ProfileStoreState = {
   materialProfiles: MaterialProfile[];
   activePrinterProfileId: string;
   activeMaterialProfileId: string;
+  activeMaterialProfileIdByPrinterId: Record<string, string>;
 };
 
 type PersistedProfileStoreEnvelope = {
@@ -801,6 +802,7 @@ function createDefaultState(): ProfileStoreState {
     materialProfiles,
     activePrinterProfileId: '',
     activeMaterialProfileId: '',
+    activeMaterialProfileIdByPrinterId: {},
   };
 }
 
@@ -996,11 +998,34 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
       ? input.activeMaterialProfileId
       : fallbackActiveMaterialId ?? '';
 
+  const rawActiveMaterialByPrinter = (input as { activeMaterialProfileIdByPrinterId?: unknown } | null | undefined)
+    ?.activeMaterialProfileIdByPrinterId;
+  const activeMaterialProfileIdByPrinterId: Record<string, string> = {};
+  const rawMap = rawActiveMaterialByPrinter && typeof rawActiveMaterialByPrinter === 'object'
+    ? rawActiveMaterialByPrinter as Record<string, unknown>
+    : {};
+
+  printerProfiles.forEach((printer) => {
+    const printerId = printer.id;
+    const materialsForPrinter = ensuredMaterials.filter((profile) => profile.printerProfileId === printerId);
+    if (materialsForPrinter.length === 0) return;
+
+    const mappedId = typeof rawMap[printerId] === 'string' ? String(rawMap[printerId]).trim() : '';
+    const mappedValid = mappedId.length > 0 && materialsForPrinter.some((profile) => profile.id === mappedId);
+    const fallbackMaterialId = materialsForPrinter[0]!.id;
+    activeMaterialProfileIdByPrinterId[printerId] = mappedValid ? mappedId : fallbackMaterialId;
+  });
+
+  if (activePrinterProfileId && activeMaterialProfileId) {
+    activeMaterialProfileIdByPrinterId[activePrinterProfileId] = activeMaterialProfileId;
+  }
+
   return {
     printerProfiles,
     materialProfiles: ensuredMaterials,
     activePrinterProfileId,
     activeMaterialProfileId,
+    activeMaterialProfileIdByPrinterId,
   };
 }
 
@@ -1113,10 +1138,17 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       ...nextState,
       materialProfiles: [],
       activeMaterialProfileId: '',
+      activeMaterialProfileIdByPrinterId: {},
     };
   }
 
-  const materialForActivePrinter = getFirstMaterialForPrinter(nextState.activePrinterProfileId, nextState);
+  const materialsForActivePrinter = nextState.materialProfiles.filter(
+    (profile) => profile.printerProfileId === nextState.activePrinterProfileId,
+  );
+  const materialForActivePrinter = materialsForActivePrinter[0] ?? null;
+  const activeMaterialByPrinter = {
+    ...(nextState.activeMaterialProfileIdByPrinterId ?? {}),
+  };
 
   if (!materialForActivePrinter) {
     const createdMaterial: MaterialProfile = {
@@ -1142,10 +1174,13 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       localSettingsByOutput: undefined,
     };
 
+    activeMaterialByPrinter[nextState.activePrinterProfileId] = createdMaterial.id;
+
     return {
       ...nextState,
       materialProfiles: [...nextState.materialProfiles, createdMaterial],
       activeMaterialProfileId: createdMaterial.id,
+      activeMaterialProfileIdByPrinterId: activeMaterialByPrinter,
     };
   }
 
@@ -1153,11 +1188,29 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
     (profile) => profile.id === nextState.activeMaterialProfileId && profile.printerProfileId === nextState.activePrinterProfileId,
   );
 
-  if (activeMaterialValid) return nextState;
+  if (activeMaterialValid) {
+    if (activeMaterialByPrinter[nextState.activePrinterProfileId] === nextState.activeMaterialProfileId) {
+      return nextState;
+    }
+
+    activeMaterialByPrinter[nextState.activePrinterProfileId] = nextState.activeMaterialProfileId;
+    return {
+      ...nextState,
+      activeMaterialProfileIdByPrinterId: activeMaterialByPrinter,
+    };
+  }
+
+  const rememberedMaterialId = activeMaterialByPrinter[nextState.activePrinterProfileId];
+  const rememberedMaterialStillExists = typeof rememberedMaterialId === 'string'
+    && rememberedMaterialId.trim().length > 0
+    && materialsForActivePrinter.some((profile) => profile.id === rememberedMaterialId);
+  const restoredMaterialId = rememberedMaterialStillExists ? rememberedMaterialId : materialForActivePrinter.id;
+  activeMaterialByPrinter[nextState.activePrinterProfileId] = restoredMaterialId;
 
   return {
     ...nextState,
-    activeMaterialProfileId: materialForActivePrinter.id,
+    activeMaterialProfileId: restoredMaterialId,
+    activeMaterialProfileIdByPrinterId: activeMaterialByPrinter,
   };
 }
 
@@ -1187,6 +1240,10 @@ export function setActiveMaterialProfile(id: string): void {
   setState({
     ...state,
     activeMaterialProfileId: id,
+    activeMaterialProfileIdByPrinterId: {
+      ...(state.activeMaterialProfileIdByPrinterId ?? {}),
+      [state.activePrinterProfileId]: id,
+    },
   });
 }
 
@@ -1736,11 +1793,17 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
     ];
 
   setState({
-    ...state,
-    printerProfiles: [...state.printerProfiles, duplicatedPrinter],
-    materialProfiles: [...state.materialProfiles, ...duplicatedMaterials],
-    activePrinterProfileId: duplicateId,
-    activeMaterialProfileId: duplicatedMaterials[0].id,
+    ...ensureActiveMaterialForActivePrinter({
+      ...state,
+      printerProfiles: [...state.printerProfiles, duplicatedPrinter],
+      materialProfiles: [...state.materialProfiles, ...duplicatedMaterials],
+      activePrinterProfileId: duplicateId,
+      activeMaterialProfileId: duplicatedMaterials[0].id,
+      activeMaterialProfileIdByPrinterId: {
+        ...(state.activeMaterialProfileIdByPrinterId ?? {}),
+        [duplicateId]: duplicatedMaterials[0].id,
+      },
+    }),
   });
 
   return duplicateId;

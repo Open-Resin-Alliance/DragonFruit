@@ -2623,10 +2623,14 @@ export function ProfileSettingsModal({
     setSelectedPrinterId(printerId);
     setIsEditingPrinter(false);
     setActivePrinterProfile(printerId);
-    const materials = getMaterialProfilesForPrinter(printerId, getProfileStoreSnapshot());
-    const first = materials[0] ?? null;
-    setSelectedMaterialId(first?.id ?? null);
-    if (first) setActiveMaterialProfile(first.id);
+    const snapshot = getProfileStoreSnapshot();
+    const materials = getMaterialProfilesForPrinter(printerId, snapshot);
+    const restored = materials.find((material) => material.id === snapshot.activeMaterialProfileId) ?? materials[0] ?? null;
+    setSelectedMaterialId(restored?.id ?? null);
+    if (restored) {
+      setSelectedManufacturer((restored.brand || 'Default').trim() || 'Default');
+      setSelectedResinFamily(restored.resinFamily);
+    }
   }, []);
 
   const handleAddPrinter = React.useCallback(() => {
