@@ -14554,6 +14554,7 @@ export default function Home() {
           prompt={scene.meshRepairConfirmPrompt}
           onRepair={() => scene.resolveMeshRepairConfirmPrompt('repair')}
           onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
+          onCancelImport={() => scene.resolveMeshRepairConfirmPrompt('cancel_import')}
         />
       )}
 

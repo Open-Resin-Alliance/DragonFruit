@@ -718,7 +718,7 @@ export type MeshRepairConfirmPrompt = {
   analysis: MeshAnalysisJson;
 };
 
-type MeshRepairConfirmChoice = 'repair' | 'load_as_is';
+type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
 
 type ModelClipboardEntry = {
   sourceId: string;
@@ -1784,6 +1784,9 @@ export function useSceneCollectionManager() {
           const geom = await loadMeshGeometry(url, file.name, {
             onConfirmHeavyRepair: async (analysis) => {
               const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
+              if (choice === 'cancel_import') {
+                throw new Error('MESH_IMPORT_CANCELLED_BY_USER');
+              }
               if (choice === 'repair') {
                 setImportProgress({
                   active: true,
@@ -1886,7 +1889,14 @@ export function useSceneCollectionManager() {
             });
           }
         } catch (err) {
-          console.error(`Failed to load ${file.name}`, err);
+          const message = err instanceof Error ? err.message : String(err);
+          if (message === 'MESH_IMPORT_CANCELLED_BY_USER') {
+            console.log(`[SceneCollection] Import cancelled for ${file.name}`);
+            URL.revokeObjectURL(url); // Cleanup if cancelled
+            continue;
+          } else {
+            console.error(`Failed to load ${file.name}`, err);
+          }
           URL.revokeObjectURL(url); // Cleanup if failed
         }
 

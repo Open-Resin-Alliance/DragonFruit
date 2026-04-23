@@ -209,6 +209,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
             }
           }
         } catch (analysisErr) {
+          const analysisErrMsg = analysisErr instanceof Error ? analysisErr.message : String(analysisErr);
+          if (analysisErrMsg === 'MESH_IMPORT_CANCELLED_BY_USER') {
+            throw analysisErr; // Propagate cancellation — do not proceed with repair.
+          }
           console.warn('[processGeometry] Pre-repair analysis failed; proceeding with repair.', analysisErr);
         }
       }
@@ -251,6 +255,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
       }
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg === 'MESH_IMPORT_CANCELLED_BY_USER') {
+        throw err; // Propagate cancellation — do not fall back to loading the model.
+      }
       console.warn('[processGeometry] Native mesh repair failed; falling back to sanitized geometry.', err);
     }
   } else if (meshDefects.hasDefects) {

@@ -8,6 +8,7 @@ type Props = {
   prompt: MeshRepairConfirmPrompt;
   onRepair: () => void;
   onLoadAsIs: () => void;
+  onCancelImport: () => void;
 };
 
 function StatRow({ label, value }: { label: string; value: string | number }) {
@@ -21,7 +22,7 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs }: Props) {
+export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs, onCancelImport }: Props) {
   const { fileName, analysis } = prompt;
 
   return (
@@ -29,7 +30,7 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs }: Props) 
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
-          onLoadAsIs();
+          onCancelImport();
         }
       }}
     >
@@ -60,10 +61,10 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs }: Props) 
 
             <div className="min-w-0 pr-2">
               <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                Complex mesh detected
+                Repair recommended before slicing
               </h2>
               <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                This model may require an intensive repair pass.
+                This model has severe mesh issues and is likely to need heavy repair.
               </p>
             </div>
           </div>
@@ -76,8 +77,8 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs }: Props) 
               background: 'var(--surface-1)',
               color: 'var(--text-muted)',
             }}
-            aria-label="Skip repair and load as-is"
-            onClick={onLoadAsIs}
+            aria-label="Cancel importing this model"
+            onClick={onCancelImport}
           >
             <X className="w-4 h-4" />
           </button>
@@ -102,15 +103,22 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs }: Props) 
             <StatRow label="Boundary loops" value={analysis.boundary_loops} />
           </div>
 
-          {/* Explanation */}
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            <strong style={{ color: 'var(--text-strong)' }}>Repair</strong> will attempt to weld components, resolve
-            self-intersections, and produce a watertight solid. This may take a while for complex geometry.
-            <span className="mt-1 block">
-              <strong style={{ color: 'var(--text-strong)' }}>Load As-Is</strong> skips repair and imports the
-              mesh exactly as stored in the file.
-            </span>
-          </p>
+          {/* Disclaimer */}
+          <div
+            className="rounded-md border px-3 py-2"
+            style={{
+              borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
+              background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+            }}
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#d97706' }} />
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                <strong style={{ color: 'var(--text-strong)' }}>Disclaimer:</strong> Repair is recommended.
+                Loading this mesh as-is may cause slicing errors or print failures, and successful output cannot be guaranteed.
+              </p>
+            </div>
+          </div>
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-2 pt-1">
