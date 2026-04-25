@@ -6840,18 +6840,56 @@ export default function Home() {
   }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
+    const recoverySnapshot = autosaveRecovery;
+    setAutosaveRecovery(null);
+    setNativePickerPreparationState({
+      active: true,
+      label: 'Loading Scene…',
+      detail: 'Reading autosaved scene…',
+      progress: null,
+    });
+
+    // Let React commit the modal dismissal/loading UI before native file IO begins.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const bytes = await invoke<number[]>('scene_autosave_read_voxl_bytes');
+      const bytes = await invoke<ArrayBuffer>('scene_autosave_read_voxl_bytes');
       const uint8 = new Uint8Array(bytes);
+      if (uint8.byteLength === 0) {
+        throw new Error('Autosaved VOXL file is empty.');
+      }
       const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
       suppressSceneAutosave(60_000);
-      await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
-      await clearAutosave();
+      setNativePickerPreparationState({
+        active: false,
+        label: '',
+        detail: '',
+        progress: null,
+      });
+      const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true, suppressRepair: true });
+      if (restored) {
+        await clearAutosave();
+      } else if (recoverySnapshot) {
+        console.warn('[Autosave] Restore failed; keeping recovery prompt available.');
+        setAutosaveRecovery(recoverySnapshot);
+      }
+    } catch (error) {
+      console.error('[Autosave] Failed to restore autosaved scene.', error);
+      if (recoverySnapshot) {
+        setAutosaveRecovery(recoverySnapshot);
+      }
     } finally {
-      setAutosaveRecovery(null);
+      setNativePickerPreparationState({
+        active: false,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
-  }, [clearAutosave, importSceneFile]);
+  }, [autosaveRecovery, clearAutosave, importSceneFile]);
 
   const handleAutosaveDiscard = React.useCallback(async () => {
     setAutosaveRecovery(null);
@@ -9021,6 +9059,10 @@ export default function Home() {
     scene.renameGroup(groupId, nextName);
   }, [scene]);
 
+  const handleRenameModel = React.useCallback((modelId: string, nextName: string) => {
+    scene.renameModel(modelId, nextName);
+  }, [scene]);
+
   const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
     if (modelId == null) {
       scene.clearModelSelection();
@@ -9506,10 +9548,6 @@ export default function Home() {
         break;
       case 'paste':
         scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-        break;
-      case 'duplicate':
-      case 'arrange':
-        // intentionally disabled in the menu for now
         break;
       case 'repair': {
         const targetId = scene.activeModelId;
@@ -12809,6 +12847,7 @@ export default function Home() {
     };
 
     const handleClipboardHotkeys = (event: KeyboardEvent) => {
+      if (event.repeat) return;
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.altKey) return;
       if (isEditableTarget(event.target)) return;
@@ -13357,6 +13396,7 @@ export default function Home() {
               onUngroupModels={handleUngroupSelectedModels}
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
+              onRenameModel={handleRenameModel}
               onModelContextMenu={handleModelListContextMenu}
               onRepairModel={handleRepairModel}
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
@@ -14405,9 +14445,8 @@ export default function Home() {
         position={editorContextMenuPos}
         onAction={handleEditorMenuAction}
         disabledActions={[
-          ...(!scene.activeModelId ? (['delete', 'cut', 'copy'] as const) : []),
-          'duplicate',
-            'arrange',
+          ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
+          ...(!scene.canPasteModel ? (['paste'] as const) : []),
         ]}
       />
 
@@ -14601,7 +14640,7 @@ export default function Home() {
             }}
           >
             <div
-              className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
               style={{
                 background: 'var(--surface-0)',
                 borderColor: 'var(--border-subtle)',
@@ -14616,36 +14655,67 @@ export default function Home() {
                   <span
                     className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                     style={{
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                      color: 'var(--accent)',
+                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 88%)',
+                      color: '#d97706',
                     }}
                   >
-                    <Wrench className="h-4 w-4" />
+                    <AlertTriangle className="h-4 w-4" />
                   </span>
+
                   <div className="min-w-0 pr-2">
-                    <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>Repair Mesh</h2>
-                    <p className="mt-0.5 text-[11px] leading-snug truncate" style={{ color: 'var(--text-muted)' }} title={repairModel.name}>
-                      {repairModel.name}
+                    <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                      Repair this mesh?
+                    </h2>
+                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                      DragonFruit will try to fix common geometry issues before you keep working.
                     </p>
                   </div>
                 </div>
+
                 <button
                   type="button"
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Cancel"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+                  aria-label="Close repair mesh dialog"
                   disabled={isManualRepairing}
                   onClick={() => setManualRepairModelId(null)}
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
+
               <div className="space-y-4 p-5">
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Model</div>
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={repairModel.name}>
+                    {repairModel.name}
+                  </div>
+                </div>
+
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  Runs a full native repair pass: welds open edges, resolves self-intersections, and attempts to produce a watertight solid.
-                  This may take a while for complex geometry.
+                  Repair can help with holes, broken surfaces, and other mesh problems that may lead to slicing or print issues.
                 </p>
+
+                <div
+                  className="rounded-md border px-3 py-2"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#d97706' }} />
+                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      <strong style={{ color: 'var(--text-strong)' }}>Heads up:</strong> The repaired result will replace this model in your current scene. Large or badly damaged meshes can take longer, and some files may still need manual cleanup afterward.
+                    </p>
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-end gap-2 pt-1">
                   <button
                     type="button"
@@ -14653,11 +14723,11 @@ export default function Home() {
                     disabled={isManualRepairing}
                     onClick={() => setManualRepairModelId(null)}
                   >
-                    Cancel
+                    Keep Original
                   </button>
                   <button
                     type="button"
-                    className="ui-button ui-button-primary !h-9 px-3 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
                     disabled={isManualRepairing}
                     onClick={() => {
                       const id = manualRepairModelId;
@@ -14683,6 +14753,7 @@ export default function Home() {
       {scene.meshRepairReports.length > 0 && (
         <MeshRepairReportModal
           reports={scene.meshRepairReports}
+          presentation={scene.meshRepairReportPresentation}
           onDismiss={scene.dismissMeshRepairReports}
         />
       )}

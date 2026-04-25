@@ -692,6 +692,8 @@ export type MeshRepairReportEntry = {
   report: MeshHealthReport;
 };
 
+type MeshRepairReportPresentation = 'default' | 'optimistic';
+
 function repairReportNeedsAttention(report: MeshHealthReport): boolean {
   if (!report.fully_repaired) return true;
 
@@ -776,6 +778,7 @@ export function useSceneCollectionManager() {
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
   const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
+  const [meshRepairReportPresentation, setMeshRepairReportPresentation] = useState<MeshRepairReportPresentation>('default');
   const [pendingMeshRepairReports, setPendingMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
@@ -837,12 +840,14 @@ export function useSceneCollectionManager() {
 
   const dismissMeshRepairReports = useCallback(() => {
     setMeshRepairReports([]);
+    setMeshRepairReportPresentation('default');
   }, []);
 
   const openPendingMeshRepairReports = useCallback(() => {
     if (pendingMeshRepairReports.length === 0) {
       return;
     }
+    setMeshRepairReportPresentation('default');
     setMeshRepairReports(pendingMeshRepairReports);
     setPendingMeshRepairReports([]);
     clearSceneImportReport();
@@ -1733,8 +1738,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
-      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
+      label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
+      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing Geometry…',
       progress: null,
     });
 
@@ -1772,7 +1777,7 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
           detail: files.length > 1
             ? `${i + 1}/${files.length}: ${file.name}`
             : `Loading ${file.name}`,
@@ -1782,6 +1787,45 @@ export function useSceneCollectionManager() {
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
           const geom = await loadMeshGeometry(url, file.name, {
+            onNativeProcessingStage: (stage) => {
+              if (stage === 'repairing') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Auto-Repairing ${file.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'analyzing') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Inspecting Meshes…' : 'Inspecting Mesh…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Inspecting ${file.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'classifying') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Classifying Mesh Shells…' : 'Classifying Mesh Shell…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Classifying ${file.name}`,
+                  progress: null,
+                });
+              }
+            },
             onConfirmHeavyRepair: async (analysis) => {
               const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
               if (choice === 'cancel_import') {
@@ -1791,10 +1835,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Repairing meshes…' : 'Repairing mesh…',
+                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
                   detail: files.length > 1
                     ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Repairing ${file.name}`,
+                    : `Auto-Repairing ${file.name}`,
                   progress: null,
                 });
               }
@@ -1903,10 +1947,10 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
           detail: files.length > 1
             ? `${Math.min(i + 1, files.length)}/${files.length} processed`
-            : 'Finalizing model…',
+            : 'Finalizing Model…',
           progress: null,
         });
       }
@@ -3017,6 +3061,7 @@ export function useSceneCollectionManager() {
     suppressReport?: boolean;
     suppressRecentTracking?: boolean;
     suppressPlacementPrompt?: boolean;
+    suppressRepair?: boolean;
     sourcePath?: string | null;
     sourcePaths?: Array<string | null | undefined>;
   };
@@ -3030,7 +3075,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing scene…',
+        label: 'Importing Scene…',
         detail: file.name,
         progress: null,
       });
@@ -3198,7 +3243,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing VOXL scene…',
+        label: 'Importing VOXL Scene…',
         detail: file.name,
         progress: null,
       });
@@ -3246,7 +3291,7 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'scene',
-          label: 'Importing VOXL scene…',
+          label: 'Importing VOXL Scene…',
           detail: `Model ${i + 1}/${document.models.length}: ${model.name}`,
           progress: null,
         });
@@ -3289,7 +3334,40 @@ export function useSceneCollectionManager() {
           url = URL.createObjectURL(blob);
 
           const geometry = await loadMeshGeometry(url, embeddedName, {
-            nativeProcessingMode: 'none',
+            nativeProcessingMode: options?.suppressRepair ? 'none' : 'auto',
+            onNativeProcessingStage: (stage) => {
+              if (stage === 'repairing') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: 'Importing VOXL Scene…',
+                  detail: `Auto-Repairing Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'analyzing') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: 'Importing VOXL Scene…',
+                  detail: `Inspecting Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'classifying') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: 'Importing VOXL Scene…',
+                  detail: `Classifying Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  progress: null,
+                });
+              }
+            },
           });
 
           let resolvedId = model.id;
@@ -3467,7 +3545,7 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'scene',
-      label: 'Importing scenes…',
+      label: 'Importing Scenes…',
       detail: `Preparing 0/${files.length}`,
       progress: null,
     });
@@ -3481,7 +3559,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing scenes…',
+        label: 'Importing Scenes…',
         detail: `${i + 1}/${files.length}: ${file.name}`,
         progress: null,
       });
@@ -3716,21 +3794,10 @@ export function useSceneCollectionManager() {
           modelName: model.name,
           report: repairReport,
         };
-        const needsAttention = repairReportNeedsAttention(repairReport);
-        if (needsAttention) {
-          const anyResidual = !repairReport.fully_repaired;
-          setPendingMeshRepairReports([reportEntry]);
-          emitSceneImportReport(
-            anyResidual
-              ? `Repair finished with remaining issues - Click for details (${model.name})`
-              : `Repair finished - Click for details (${model.name}).`,
-            anyResidual ? 'warning' : 'success',
-            { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
-          );
-        } else {
-          setPendingMeshRepairReports([]);
-          emitSceneImportReport(`Repaired ${model.name}.`, 'success');
-        }
+        setPendingMeshRepairReports([]);
+        clearSceneImportReport();
+        setMeshRepairReportPresentation('optimistic');
+        setMeshRepairReports([reportEntry]);
       } else {
         setPendingMeshRepairReports([]);
         emitSceneImportReport(`Repaired ${model.name}.`, 'success');
@@ -3744,7 +3811,7 @@ export function useSceneCollectionManager() {
       emitSceneImportReport(`Repair failed: ${message}`, 'error', { durationMs: 6_000 });
       return false;
     }
-  }, [emitSceneImportReport]);
+  }, [clearSceneImportReport, emitSceneImportReport]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -3883,6 +3950,7 @@ export function useSceneCollectionManager() {
     sceneImportReport,
     clearSceneImportReport,
     meshRepairReports,
+    meshRepairReportPresentation,
     openPendingMeshRepairReports,
     dismissMeshRepairReports,
     sceneImportPlacementPrompt,

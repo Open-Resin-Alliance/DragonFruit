@@ -93,6 +93,11 @@ export interface ProcessGeometryOptions {
    * Only invoked when running under Tauri.
    */
   onConfirmHeavyRepair?: (analysis: MeshAnalysisJson) => Promise<boolean>;
+  /**
+   * Optional status callback for native mesh processing stages.
+   * Useful for surfacing progress text in import loading overlays.
+   */
+  onNativeProcessingStage?: (stage: 'analyzing' | 'repairing' | 'classifying' | 'postprocess') => void;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -195,6 +200,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       // so we can ask the user before committing to a heavy solidification pass.
       if (!classifyOnly && !forceRepair && options.onConfirmHeavyRepair) {
         try {
+          options.onNativeProcessingStage?.('analyzing');
           console.log(`[${new Date().toISOString()}] [processGeometry] Running pre-repair analysis`);
           const analysis = await analyzeFromGeometry(geometry);
           if (analysis && isHeavyRepair(analysis)) {
@@ -217,6 +223,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
       }
 
+      options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : 'repairing');
       console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
       const nativeStart = performance.now();
       const result = classifyOnly
@@ -260,6 +267,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         throw err; // Propagate cancellation — do not fall back to loading the model.
       }
       console.warn('[processGeometry] Native mesh repair failed; falling back to sanitized geometry.', err);
+    } finally {
+      options.onNativeProcessingStage?.('postprocess');
     }
   } else if (meshDefects.hasDefects) {
     // Attempt full topology repair via Manifold (welds open edges, collapses
