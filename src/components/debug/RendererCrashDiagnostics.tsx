@@ -201,11 +201,8 @@ export function RendererCrashDiagnostics() {
 
       const lower = message.toLowerCase();
       if (lower.includes("couldn't find callback id") && lower.includes('[tauri]')) {
-        addEvent({
-          at: new Date().toISOString(),
-          kind: 'tauri-callback-warning',
-          message,
-        });
+        // Suppress: expected during hard-refresh while Rust async ops are in flight.
+        return;
       } else if (lower.includes('texture marked for update') && lower.includes('no image data')) {
         addEvent({
           at: new Date().toISOString(),
