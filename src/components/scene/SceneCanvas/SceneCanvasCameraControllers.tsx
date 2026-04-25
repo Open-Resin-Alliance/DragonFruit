@@ -76,6 +76,13 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
         -worldHalfW, worldHalfW, worldHalfH, -worldHalfH,
         ORTHO_NEAR, ORTHO_FAR,
       );
+      // Prevent R3F's internal updateCamera() from overwriting camera.top with
+      // size.height/2 (pixel units) on the first window resize.  Our frustum
+      // uses world-space mm, so R3F's pixel-mapped values would cause a sudden
+      // scale jump that makes the build plate appear to zoom far out.  With
+      // manual=true R3F skips updateCamera entirely and our resize handler in
+      // this same effect is the sole authority on left/right/top/bottom.
+      (next as any).manual = true;
       next.zoom = preserveZoom;
       next.position.copy(camera.position);
       // Preserve view direction. Without copying quaternion, the new camera has identity
