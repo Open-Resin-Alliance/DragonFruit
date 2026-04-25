@@ -83,8 +83,12 @@ function computeViewCullState(
     move[axis] = quantizeOpacity(1 - smoothstep(0.82, 0.97, alignment));
     scale[axis] = quantizeOpacity(1 - smoothstep(0.78, 0.95, alignment));
 
-    // Rotation rings stay around longer and only fade near a truly edge-on view.
-    rotate[axis] = quantizeOpacity(smoothstep(0.03, 0.16, alignment));
+    // Rotation rings use axis-specific fade tuning:
+    // - X/Y should get out of the way sooner (helps top-down and near-top-down usability)
+    // - Z can stay visible a bit longer to avoid feeling like it disappears too eagerly.
+    const rotateFadeStart = axis === 'z' ? 0.03 : 0.03;
+    const rotateFadeEnd = axis === 'z' ? 0.14 : 0.55;
+    rotate[axis] = quantizeOpacity(smoothstep(rotateFadeStart, rotateFadeEnd, alignment));
   }
 
   return { move, scale, rotate };
