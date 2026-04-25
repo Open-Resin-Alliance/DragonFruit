@@ -39,6 +39,7 @@ interface ModelManagerPanelProps {
   onUngroupModels?: (modelIds: string[]) => void;
   onUngroupGroup?: (groupId: string) => void;
   onRenameGroup?: (groupId: string, nextName: string) => void;
+  onRenameModel?: (id: string, nextName: string) => void;
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
   onRepairModel?: (id: string) => void;
   onOpenSupportsInfo?: (id: string) => void;
@@ -71,6 +72,20 @@ type PanelContextMenuState = {
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
 
+const splitModelNameSuffix = (name: string): { base: string; suffix: string } => {
+  const trimmed = name.trim();
+  const match = trimmed.match(/^(.*?)(\.[^.\s]+)$/);
+  if (!match) {
+    return { base: trimmed, suffix: '' };
+  }
+
+  const base = match[1].trim();
+  return {
+    base: base.length > 0 ? base : 'Model',
+    suffix: match[2],
+  };
+};
+
 export function ModelManagerPanel({
   models,
   outsidePlateModelIds = [],
@@ -83,6 +98,7 @@ export function ModelManagerPanel({
   onUngroupModels,
   onUngroupGroup,
   onRenameGroup,
+  onRenameModel,
   onModelContextMenu,
   onRepairModel,
   onOpenSupportsInfo,
@@ -99,6 +115,9 @@ export function ModelManagerPanel({
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
+  const [renamingModelId, setRenamingModelId] = useState<string | null>(null);
+  const [renamingModelName, setRenamingModelName] = useState('');
+  const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
   const [useCompactQuickActionLabels, setUseCompactQuickActionLabels] = useState(false);
   const quickActionsGridRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +188,12 @@ export function ModelManagerPanel({
 
   const closeContextMenu = () => setContextMenu(null);
 
+  // Smart context menu visibility:
+  // showGroupSection — show Group/Ungroup Selected only when there are grouped/multi-selected models or a folder is involved
+  // showFolderSection — show folder actions only when the right-clicked item has a group context
+  const showGroupSection = !!(contextMenu?.groupId || selectedModelIds.length >= 2 || selectedGroupedCount > 0 || !contextMenu?.modelId);
+  const showFolderSection = !!contextMenu?.groupId;
+
   const orderedModelIds = useMemo(() => grouped.flatMap((group) => group.models.map((model) => model.id)), [grouped]);
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
   const panelMaxHeight = `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)`;
@@ -188,6 +213,9 @@ export function ModelManagerPanel({
   };
 
   const beginRenameGroup = (groupId: string, currentName: string) => {
+    setRenamingModelId(null);
+    setRenamingModelName('');
+    setRenamingModelSuffix('');
     setRenamingGroupId(groupId);
     setRenamingGroupName(currentName);
     closeContextMenu();
@@ -209,6 +237,35 @@ export function ModelManagerPanel({
       onRenameGroup(renamingGroupId, trimmed);
     }
     cancelRenameGroup();
+  };
+
+  const beginRenameModel = (modelId: string, currentName: string) => {
+    const { base, suffix } = splitModelNameSuffix(currentName);
+    setRenamingGroupId(null);
+    setRenamingGroupName('');
+    setRenamingModelId(modelId);
+    setRenamingModelName(base);
+    setRenamingModelSuffix(suffix);
+    closeContextMenu();
+  };
+
+  const cancelRenameModel = () => {
+    setRenamingModelId(null);
+    setRenamingModelName('');
+    setRenamingModelSuffix('');
+  };
+
+  const commitRenameModel = () => {
+    if (!renamingModelId || !onRenameModel) {
+      cancelRenameModel();
+      return;
+    }
+
+    const trimmedBase = renamingModelName.trim();
+    if (trimmedBase.length > 0) {
+      onRenameModel(renamingModelId, `${trimmedBase}${renamingModelSuffix}`);
+    }
+    cancelRenameModel();
   };
 
   const selectFolder = (group: GroupedEntry, mode: GroupSelectMode) => {
@@ -582,9 +639,44 @@ export function ModelManagerPanel({
                             )}
 
                           <div className="flex-1 min-w-0">
-                            <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
-                              {model.name}
-                            </div>
+                            {renamingModelId === model.id ? (
+                              <div className="flex w-full min-w-0 items-center gap-1">
+                                <input
+                                  value={renamingModelName}
+                                  onChange={(e) => setRenamingModelName(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      commitRenameModel();
+                                    }
+                                    if (e.key === 'Escape') {
+                                      e.preventDefault();
+                                      cancelRenameModel();
+                                    }
+                                  }}
+                                  onBlur={commitRenameModel}
+                                  autoFocus
+                                  className="min-w-0 flex-1 rounded border px-1.5 py-0.5 text-xs font-medium"
+                                  style={{
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-strong)',
+                                  }}
+                                  aria-label="Rename model base name"
+                                />
+                                {renamingModelSuffix && (
+                                  <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                                    {renamingModelSuffix}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                                {model.name}
+                              </div>
+                            )}
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                               {formatMeshStatsForDisplay({
                                 polygonCount: model.polygonCount,
@@ -649,87 +741,108 @@ export function ModelManagerPanel({
           </div>
 
           <div className="space-y-0.5">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: selectedModelIds.length >= 2 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedModelIds.length >= 2 ? 1 : 0.6 }}
-              disabled={selectedModelIds.length < 2}
-              onClick={() => {
-                if (selectedModelIds.length < 2 || !onGroupModels) return;
-                onGroupModels(selectedModelIds);
-                closeContextMenu();
-              }}
-            >
-              <FolderPlus className="h-3.5 w-3.5" />
-              <span>Group Selected</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: selectedGroupedCount > 0 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedGroupedCount > 0 ? 1 : 0.6 }}
-              disabled={selectedGroupedCount === 0}
-              onClick={() => {
-                if (selectedGroupedCount === 0 || !onUngroupModels) return;
-                onUngroupModels(selectedModelIds);
-                closeContextMenu();
-              }}
-            >
-              <FolderMinus className="h-3.5 w-3.5" />
-              <span>Ungroup Selected</span>
-            </button>
-
-            <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId}
-              onClick={() => {
-                if (!contextMenu.groupId) return;
-                const target = contextGroup ?? grouped.find((g) => g.id === contextMenu.groupId);
-                if (!target) return;
-                selectFolder(target, 'single');
-                closeContextMenu();
-              }}
-            >
-              <PanelsTopLeft className="h-3.5 w-3.5" />
-              <span>Select Folder</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId && !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId && !contextMenu.isSystemGroup ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId || !!contextMenu.isSystemGroup}
-              onClick={() => {
-                if (!contextMenu.groupId || !onRenameGroup || contextMenu.isSystemGroup) return;
-                beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
-              }}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              <span>Rename Folder</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId && !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId && !contextMenu.isSystemGroup ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId || !!contextMenu.isSystemGroup}
-              onClick={() => {
-                if (!contextMenu.groupId || !onUngroupGroup || contextMenu.isSystemGroup) return;
-                onUngroupGroup(contextMenu.groupId);
-                closeContextMenu();
-              }}
-            >
-              <FolderMinus className="h-3.5 w-3.5" />
-              <span>Ungroup Folder</span>
-            </button>
-
-            {contextModel && (onModelContextMenu || onRepairModel) && (
+            {showGroupSection && (
               <>
-                <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: selectedModelIds.length >= 2 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedModelIds.length >= 2 ? 1 : 0.6 }}
+                  disabled={selectedModelIds.length < 2}
+                  onClick={() => {
+                    if (selectedModelIds.length < 2 || !onGroupModels) return;
+                    onGroupModels(selectedModelIds);
+                    closeContextMenu();
+                  }}
+                >
+                  <FolderPlus className="h-3.5 w-3.5" />
+                  <span>Group Selected</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: selectedGroupedCount > 0 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedGroupedCount > 0 ? 1 : 0.6 }}
+                  disabled={selectedGroupedCount === 0}
+                  onClick={() => {
+                    if (selectedGroupedCount === 0 || !onUngroupModels) return;
+                    onUngroupModels(selectedModelIds);
+                    closeContextMenu();
+                  }}
+                >
+                  <FolderMinus className="h-3.5 w-3.5" />
+                  <span>Ungroup Selected</span>
+                </button>
+              </>
+            )}
+
+            {showFolderSection && (
+              <>
+                {showGroupSection && <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />}
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: 'var(--text-strong)' }}
+                  onClick={() => {
+                    if (!contextMenu.groupId) return;
+                    const target = contextGroup ?? grouped.find((g) => g.id === contextMenu.groupId);
+                    if (!target) return;
+                    selectFolder(target, 'single');
+                    closeContextMenu();
+                  }}
+                >
+                  <PanelsTopLeft className="h-3.5 w-3.5" />
+                  <span>Select Folder</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: !contextMenu.isSystemGroup ? 1 : 0.6 }}
+                  disabled={!!contextMenu.isSystemGroup}
+                  onClick={() => {
+                    if (!contextMenu.groupId || !onRenameGroup || contextMenu.isSystemGroup) return;
+                    beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
+                  }}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  <span>Rename Folder</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: !contextMenu.isSystemGroup ? 1 : 0.6 }}
+                  disabled={!!contextMenu.isSystemGroup}
+                  onClick={() => {
+                    if (!contextMenu.groupId || !onUngroupGroup || contextMenu.isSystemGroup) return;
+                    onUngroupGroup(contextMenu.groupId);
+                    closeContextMenu();
+                  }}
+                >
+                  <FolderMinus className="h-3.5 w-3.5" />
+                  <span>Ungroup Folder</span>
+                </button>
+              </>
+            )}
+
+            {contextModel && (onRenameModel || onModelContextMenu || onRepairModel) && (
+              <>
+                {(showGroupSection || showFolderSection) && <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />}
+
+                {onRenameModel && (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => {
+                      beginRenameModel(contextModel.id, contextModel.name ?? 'Model');
+                    }}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span>Rename Model</span>
+                  </button>
+                )}
 
                 {onRepairModel && (
                   <button

@@ -9021,6 +9021,10 @@ export default function Home() {
     scene.renameGroup(groupId, nextName);
   }, [scene]);
 
+  const handleRenameModel = React.useCallback((modelId: string, nextName: string) => {
+    scene.renameModel(modelId, nextName);
+  }, [scene]);
+
   const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
     if (modelId == null) {
       scene.clearModelSelection();
@@ -9506,10 +9510,6 @@ export default function Home() {
         break;
       case 'paste':
         scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-        break;
-      case 'duplicate':
-      case 'arrange':
-        // intentionally disabled in the menu for now
         break;
       case 'repair': {
         const targetId = scene.activeModelId;
@@ -12809,6 +12809,7 @@ export default function Home() {
     };
 
     const handleClipboardHotkeys = (event: KeyboardEvent) => {
+      if (event.repeat) return;
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.altKey) return;
       if (isEditableTarget(event.target)) return;
@@ -13357,6 +13358,7 @@ export default function Home() {
               onUngroupModels={handleUngroupSelectedModels}
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
+              onRenameModel={handleRenameModel}
               onModelContextMenu={handleModelListContextMenu}
               onRepairModel={handleRepairModel}
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
@@ -14405,9 +14407,8 @@ export default function Home() {
         position={editorContextMenuPos}
         onAction={handleEditorMenuAction}
         disabledActions={[
-          ...(!scene.activeModelId ? (['delete', 'cut', 'copy'] as const) : []),
-          'duplicate',
-            'arrange',
+          ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
+          ...(!scene.canPasteModel ? (['paste'] as const) : []),
         ]}
       />
 
