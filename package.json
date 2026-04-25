@@ -1,6 +1,6 @@
 {
   "name": "dragonfruit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "buildChannel": "beta",
   "private": true,
   "scripts": {
@@ -30,7 +30,7 @@
     "tauri:build": "node scripts/tauri-build.mjs",
     "tauri:bundle": "node scripts/tauri-bundle-all.mjs",
     "tauri:bundle:windows": "tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis",
-    "tauri:bundle:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage",
+    "tauri:bundle:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm",
     "tauri:bundle:macos": "tauri build --target x86_64-apple-darwin --bundles app,dmg",
     "tauri:bundle:macos:arm64": "tauri build --target aarch64-apple-darwin --bundles app,dmg",
     "macos:thumbnails": "node scripts/macos-thumbnails.mjs",
