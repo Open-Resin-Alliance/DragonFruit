@@ -917,8 +917,8 @@ export function SlicingPanel({
     const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
 
     setIsSlicingZip(true);
-    setCurrentPhase('Saving Scene');
-    setSliceStatus('Saving Scene');
+    setCurrentPhase('Preparing');
+    setSliceStatus('Preparing');
     setProgressDone(0);
     setProgressTotal(1);
     hasSlicingProgressStartedRef.current = false;
@@ -938,16 +938,11 @@ export function SlicingPanel({
     onSliceIntentChanged?.(effectiveSliceIntent);
     onSliceRunStarted?.();
 
-    try {
-      await Promise.resolve(onBeforeSlicingRun?.());
-    } catch (error) {
+    // Fire scene save concurrently — it's best-effort and independent of mesh preparation.
+    // The orchestrator uses visibleModels already captured in memory, so there's no ordering dependency.
+    void Promise.resolve(onBeforeSlicingRun?.()).catch((error) => {
       console.warn('[Slicing] Pre-slice save step failed; continuing to slicing.', error);
-    }
-
-    setCurrentPhase('Preparing');
-    setSliceStatus('Preparing');
-    setProgressDone(0);
-    setProgressTotal(1);
+    });
 
     const runStartMs = performance.now();
     const abortController = new AbortController();
@@ -1006,7 +1001,7 @@ export function SlicingPanel({
             setProgressDone(safeDone);
             setProgressTotal(safeTotal);
           } else if (!hasSlicingProgressStartedRef.current) {
-            // Keep pre-slice phases (Saving Scene / Preparing / Staging) at zero progress.
+            // Keep pre-slice phases (Preparing / Staging) at zero progress.
             setProgressDone(0);
             setProgressTotal(1);
           }
