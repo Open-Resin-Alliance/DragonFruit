@@ -6840,18 +6840,56 @@ export default function Home() {
   }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
+    const recoverySnapshot = autosaveRecovery;
+    setAutosaveRecovery(null);
+    setNativePickerPreparationState({
+      active: true,
+      label: 'Loading Scene…',
+      detail: 'Reading autosaved scene…',
+      progress: null,
+    });
+
+    // Let React commit the modal dismissal/loading UI before native file IO begins.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const bytes = await invoke<number[]>('scene_autosave_read_voxl_bytes');
+      const bytes = await invoke<ArrayBuffer>('scene_autosave_read_voxl_bytes');
       const uint8 = new Uint8Array(bytes);
+      if (uint8.byteLength === 0) {
+        throw new Error('Autosaved VOXL file is empty.');
+      }
       const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
       suppressSceneAutosave(60_000);
-      await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
-      await clearAutosave();
+      setNativePickerPreparationState({
+        active: false,
+        label: '',
+        detail: '',
+        progress: null,
+      });
+      const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
+      if (restored) {
+        await clearAutosave();
+      } else if (recoverySnapshot) {
+        console.warn('[Autosave] Restore failed; keeping recovery prompt available.');
+        setAutosaveRecovery(recoverySnapshot);
+      }
+    } catch (error) {
+      console.error('[Autosave] Failed to restore autosaved scene.', error);
+      if (recoverySnapshot) {
+        setAutosaveRecovery(recoverySnapshot);
+      }
     } finally {
-      setAutosaveRecovery(null);
+      setNativePickerPreparationState({
+        active: false,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
-  }, [clearAutosave, importSceneFile]);
+  }, [autosaveRecovery, clearAutosave, importSceneFile]);
 
   const handleAutosaveDiscard = React.useCallback(async () => {
     setAutosaveRecovery(null);
