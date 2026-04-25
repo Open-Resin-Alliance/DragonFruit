@@ -9,7 +9,7 @@ const AXIS_COLORS: Record<string, string> = {
 
 function wrapRotationDegrees(degrees: number): number {
   if (!Number.isFinite(degrees)) return 0;
-  const wrapped = degrees % 360;
+  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
   return Object.is(wrapped, -0) ? 0 : wrapped;
 }
 

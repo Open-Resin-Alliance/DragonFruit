@@ -138,7 +138,7 @@ export function TransformControls({
   const toRadians = (deg: number) => (deg * Math.PI) / 180;
   const wrapRotationDegrees = (deg: number) => {
     if (!Number.isFinite(deg)) return 0;
-    const wrapped = deg % 360;
+    const wrapped = ((((deg + 180) % 360) + 360) % 360) - 180;
     return Object.is(wrapped, -0) ? 0 : wrapped;
   };
 
