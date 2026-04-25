@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, processGeometry, type GeometryWithBounds, type MeshDefects } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
@@ -681,7 +682,27 @@ type SceneImportReport = {
   id: number;
   text: string;
   tone: SceneImportReportTone;
+  durationMs?: number;
+  clickAction?: 'openMeshRepairReport';
 };
+
+export type MeshRepairReportEntry = {
+  id: string;
+  modelName: string;
+  report: MeshHealthReport;
+};
+
+function repairReportNeedsAttention(report: MeshHealthReport): boolean {
+  if (!report.fully_repaired) return true;
+
+  const pre = report.pre;
+  const post = report.post;
+  return post.vertex_count < pre.vertex_count
+    || post.triangle_count < pre.triangle_count
+    || post.non_manifold_edges < pre.non_manifold_edges
+    || post.boundary_loops < pre.boundary_loops
+    || post.inconsistent_edges < pre.inconsistent_edges;
+}
 
 type SceneImportPlacementChoice = 'auto_arrange' | 'load_as_is';
 
@@ -691,6 +712,13 @@ export type SceneImportPlacementPrompt = {
   modelCount: number;
   offPlateModelCount: number;
 };
+
+export type MeshRepairConfirmPrompt = {
+  fileName: string;
+  analysis: MeshAnalysisJson;
+};
+
+type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
 
 type ModelClipboardEntry = {
   sourceId: string;
@@ -746,8 +774,12 @@ export function useSceneCollectionManager() {
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
+  const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
+  const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
+  const [pendingMeshRepairReports, setPendingMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
+  const meshRepairConfirmResolveRef = useRef<((choice: MeshRepairConfirmChoice) => void) | null>(null);
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
@@ -767,8 +799,19 @@ export function useSceneCollectionManager() {
     }
   }, []);
 
-  const emitSceneImportReport = useCallback((text: string, tone: SceneImportReportTone = 'success') => {
-    setSceneImportReport({ id: Date.now(), text, tone });
+  const emitSceneImportReport = useCallback((
+    text: string,
+    tone: SceneImportReportTone = 'success',
+    options?: { durationMs?: number; clickAction?: SceneImportReport['clickAction'] },
+  ) => {
+    const durationMs = options?.durationMs ?? 4200;
+    setSceneImportReport({
+      id: Date.now(),
+      text,
+      tone,
+      durationMs,
+      clickAction: options?.clickAction,
+    });
 
     if (typeof window !== 'undefined') {
       if (sceneImportReportTimeoutRef.current !== null) {
@@ -777,8 +820,9 @@ export function useSceneCollectionManager() {
 
       sceneImportReportTimeoutRef.current = window.setTimeout(() => {
         setSceneImportReport(null);
+        setPendingMeshRepairReports([]);
         sceneImportReportTimeoutRef.current = null;
-      }, 4200);
+      }, durationMs);
     }
   }, []);
 
@@ -791,11 +835,49 @@ export function useSceneCollectionManager() {
     }
   }, []);
 
+  const dismissMeshRepairReports = useCallback(() => {
+    setMeshRepairReports([]);
+  }, []);
+
+  const openPendingMeshRepairReports = useCallback(() => {
+    if (pendingMeshRepairReports.length === 0) {
+      return;
+    }
+    setMeshRepairReports(pendingMeshRepairReports);
+    setPendingMeshRepairReports([]);
+    clearSceneImportReport();
+  }, [clearSceneImportReport, pendingMeshRepairReports]);
+
   const resolveSceneImportPlacementPrompt = useCallback((choice: SceneImportPlacementChoice) => {
     const resolve = sceneImportPlacementResolveRef.current;
     sceneImportPlacementResolveRef.current = null;
     setSceneImportPlacementPrompt(null);
     resolve?.(choice);
+  }, []);
+
+  const resolveMeshRepairConfirmPrompt = useCallback((choice: MeshRepairConfirmChoice) => {
+    const resolve = meshRepairConfirmResolveRef.current;
+    meshRepairConfirmResolveRef.current = null;
+    setMeshRepairConfirmPrompt(null);
+    resolve?.(choice);
+  }, []);
+
+  const requestMeshRepairConfirmation = useCallback(async (
+    prompt: MeshRepairConfirmPrompt,
+  ): Promise<MeshRepairConfirmChoice> => {
+    if (typeof window === 'undefined') return 'repair';
+
+    if (meshRepairConfirmResolveRef.current) {
+      // Fail-safe: resolve a stale unresolved prompt so imports never deadlock.
+      meshRepairConfirmResolveRef.current('repair');
+      meshRepairConfirmResolveRef.current = null;
+    }
+
+    setMeshRepairConfirmPrompt(prompt);
+
+    return new Promise<MeshRepairConfirmChoice>((resolve) => {
+      meshRepairConfirmResolveRef.current = resolve;
+    });
   }, []);
 
   const requestSceneImportPlacementChoice = useCallback(async (
@@ -1378,6 +1460,7 @@ export function useSceneCollectionManager() {
           normal: plane.normal.clone(),
           center: plane.center.clone(),
         })),
+        meshDefects: source.meshDefects,
       };
     }
 
@@ -1408,6 +1491,7 @@ export function useSceneCollectionManager() {
         normal: plane.normal.clone(),
         center: plane.center.clone(),
       })),
+      meshDefects: source.meshDefects,
     };
   }, []);
 
@@ -1675,7 +1759,7 @@ export function useSceneCollectionManager() {
     }
 
     const stagedNewModels: LoadedModel[] = [];
-    const defectiveModels: { name: string; defects: MeshDefects }[] = [];
+    const repairReports: MeshRepairReportEntry[] = [];
     const hadActiveModelAtStart = Boolean(activeModelIdRef.current);
     let firstLoadedModelId: string | null = null;
 
@@ -1697,7 +1781,26 @@ export function useSceneCollectionManager() {
 
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
-          const geom = await loadMeshGeometry(url, file.name);
+          const geom = await loadMeshGeometry(url, file.name, {
+            onConfirmHeavyRepair: async (analysis) => {
+              const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
+              if (choice === 'cancel_import') {
+                throw new Error('MESH_IMPORT_CANCELLED_BY_USER');
+              }
+              if (choice === 'repair') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Repairing meshes…' : 'Repairing mesh…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Repairing ${file.name}`,
+                  progress: null,
+                });
+              }
+              return choice === 'repair';
+            },
+          });
 
           // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
           const color = preferredMeshColor;
@@ -1778,11 +1881,22 @@ export function useSceneCollectionManager() {
 
           setModels((prev) => [...prev, model]);
 
-          if (geom.meshDefects?.hasDefects) {
-            defectiveModels.push({ name: file.name, defects: geom.meshDefects });
+          if (geom.meshDefects?.nativeRepairReport) {
+            repairReports.push({
+              id: model.id,
+              modelName: file.name,
+              report: geom.meshDefects.nativeRepairReport,
+            });
           }
         } catch (err) {
-          console.error(`Failed to load ${file.name}`, err);
+          const message = err instanceof Error ? err.message : String(err);
+          if (message === 'MESH_IMPORT_CANCELLED_BY_USER') {
+            console.log(`[SceneCollection] Import cancelled for ${file.name}`);
+            URL.revokeObjectURL(url); // Cleanup if cancelled
+            continue;
+          } else {
+            console.error(`Failed to load ${file.name}`, err);
+          }
           URL.revokeObjectURL(url); // Cleanup if failed
         }
 
@@ -1811,24 +1925,18 @@ export function useSceneCollectionManager() {
           setSelectedModelIds([firstLoadedModelId]);
         }
 
-        if (defectiveModels.length > 0) {
-          if (defectiveModels.length === 1) {
-            const { name, defects } = defectiveModels[0];
-            const status = defects.repairedByManifold ? 'Auto-Repaired' : 'Defective';
+        if (repairReports.length > 0) {
+          const attentionReports = repairReports.filter(({ report }) => repairReportNeedsAttention(report));
+          if (attentionReports.length > 0) {
+            const anyResidual = attentionReports.some(({ report }) => !report.fully_repaired);
+            setPendingMeshRepairReports(attentionReports);
             emitSceneImportReport(
-              `"${name}" — ${status} — ${defects.repairedFloats.toLocaleString()} errors`,
-              'warning',
+              'Auto Repaired - Click for Details',
+              anyResidual ? 'warning' : 'success',
+              { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
             );
           } else {
-            const repairedCount = defectiveModels.filter(m => m.defects.repairedByManifold).length;
-            const defectiveCount = defectiveModels.length - repairedCount;
-            const parts: string[] = [];
-            if (repairedCount > 0) parts.push(`${repairedCount} auto-repaired`);
-            if (defectiveCount > 0) parts.push(`${defectiveCount} defective`);
-            emitSceneImportReport(
-              `${defectiveModels.length} files with defective geometry — ${parts.join(', ')}`,
-              'warning',
-            );
+            setPendingMeshRepairReports([]);
           }
         }
       }
@@ -1841,7 +1949,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -2941,7 +3049,10 @@ export function useSceneCollectionManager() {
         const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId, supportData } = result;
 
         // Process geometry (bounds, center, normals, BVH)
-        const processed = await processGeometry(rawGeom, { center: false });
+        const processed = await processGeometry(rawGeom, {
+          center: false,
+          nativeProcessingMode: 'none',
+        });
 
         // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
         const color = '#a3a3a3';
@@ -3177,7 +3288,9 @@ export function useSceneCollectionManager() {
           const blob = new Blob([blobData], { type: mimeType });
           url = URL.createObjectURL(blob);
 
-          const geometry = await loadMeshGeometry(url, embeddedName);
+          const geometry = await loadMeshGeometry(url, embeddedName, {
+            nativeProcessingMode: 'none',
+          });
 
           let resolvedId = model.id;
           if (!resolvedId || existingIds.has(resolvedId)) {
@@ -3576,6 +3689,63 @@ export function useSceneCollectionManager() {
     }
   }, [activeModelId, setModelVisibility]);
 
+  /**
+   * Re-runs the full native repair pipeline on an already-loaded model's
+   * geometry and swaps the result back in-place.  Intended for the manual
+   * "Repair Mesh" context-menu action.
+   */
+  const repairModelInPlace = useCallback(async (modelId: string): Promise<boolean> => {
+    const model = modelsRef.current.find(m => m.id === modelId);
+    if (!model) return false;
+    try {
+      const processed = await processGeometry(model.geometry.geometry, {
+        center: false,
+        nativeProcessingMode: 'repair',
+      });
+      const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
+      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
+      const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
+
+      setModels(prev => prev.map(m =>
+        m.id === modelId ? { ...m, geometry: processed, polygonCount } : m
+      ));
+
+      if (repairReport) {
+        const reportEntry: MeshRepairReportEntry = {
+          id: modelId,
+          modelName: model.name,
+          report: repairReport,
+        };
+        const needsAttention = repairReportNeedsAttention(repairReport);
+        if (needsAttention) {
+          const anyResidual = !repairReport.fully_repaired;
+          setPendingMeshRepairReports([reportEntry]);
+          emitSceneImportReport(
+            anyResidual
+              ? `Repair finished with remaining issues - Click for details (${model.name})`
+              : `Repair finished - Click for details (${model.name}).`,
+            anyResidual ? 'warning' : 'success',
+            { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
+          );
+        } else {
+          setPendingMeshRepairReports([]);
+          emitSceneImportReport(`Repaired ${model.name}.`, 'success');
+        }
+      } else {
+        setPendingMeshRepairReports([]);
+        emitSceneImportReport(`Repaired ${model.name}.`, 'success');
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[repairModelInPlace] Repair failed:', err);
+      setPendingMeshRepairReports([]);
+      const message = err instanceof Error ? err.message : String(err);
+      emitSceneImportReport(`Repair failed: ${message}`, 'error', { durationMs: 6_000 });
+      return false;
+    }
+  }, [emitSceneImportReport]);
+
   // Cleanup on unmount
   useEffect(() => {
     const previous = trackedGeometriesRef.current;
@@ -3712,8 +3882,14 @@ export function useSceneCollectionManager() {
     importProgress,
     sceneImportReport,
     clearSceneImportReport,
+    meshRepairReports,
+    openPendingMeshRepairReports,
+    dismissMeshRepairReports,
     sceneImportPlacementPrompt,
     resolveSceneImportPlacementPrompt,
+    meshRepairConfirmPrompt,
+    resolveMeshRepairConfirmPrompt,
+    repairModelInPlace,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     view3dSettings,

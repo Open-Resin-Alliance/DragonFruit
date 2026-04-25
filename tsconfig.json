@@ -34,6 +34,9 @@
     "node_modules",
     "2. Backup",
     "src/app/page_old.tsx",
+    "rust/target",
+    "rust/**/target",
+    "rust/**/target/**",
     "src-tauri/target",
     "src-tauri/gen",
     "src-tauri/frontend-dist"

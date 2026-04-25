@@ -160,6 +160,7 @@ export type SliceExportOrchestratorOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
+  outputPath?: string | null;
   antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
   minimumAaAlphaPercentOverride?: number;
   outputMode?: 'download' | 'return';
@@ -665,6 +666,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     trianglesXYZ: solidMesh.trianglesXYZ,
     meshEncoding: meshTransportEncoding,
     meshQuantization: meshTransportQuantization,
+    outputPath: options.outputPath?.trim() || null,
     metadataJson: mergeMetadataOverridesIntoMetadata(
       solidMesh.metadataJson,
       format.outputFormat,

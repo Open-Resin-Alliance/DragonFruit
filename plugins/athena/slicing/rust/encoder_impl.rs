@@ -75,6 +75,35 @@ fn round4(value: f64) -> f64 {
     (value * 10000.0).round() / 10000.0
 }
 
+fn should_force_full_res_gray3_output(job: &SliceJobV3) -> bool {
+    if job.x_packing_mode != "gray3_div2" {
+        return false;
+    }
+
+    if !(15000..=15400).contains(&job.source_width_px) {
+        return false;
+    }
+
+    let metadata: Value = serde_json::from_str(&job.metadata_json).unwrap_or(Value::Null);
+    let printer_name = json_string(&metadata, &["printer", "name"], "").to_lowercase();
+    let printer_id = json_string(&metadata, &["printer", "id"], "").to_lowercase();
+    let printer_bit_depth = json_at(&metadata, &["printer", "bitDepth", "bits"])
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let printer_fingerprint = format!("{} {}", printer_name, printer_id);
+    let is_athena2 = printer_fingerprint.contains("athena ii")
+        || printer_fingerprint.contains("athena 2")
+        || printer_fingerprint.contains("athena2");
+    let is_16k = printer_fingerprint.contains("16k");
+    let is_3bit = printer_bit_depth == 3
+        || printer_fingerprint.contains("3-bit")
+        || printer_fingerprint.contains("3bit")
+        || printer_fingerprint.contains("16k3b");
+
+    is_athena2 && is_16k && is_3bit
+}
+
 fn build_plate_json(
     total_solid_area: f64,
     layers_count: u32,
@@ -397,6 +426,7 @@ struct AthenaRleStreamEncoder {
     pngs: Vec<Vec<u8>>,
     area_stats: Vec<LayerAreaStatsV3>,
     binary_png: bool,
+    force_full_res_gray3_output: bool,
 }
 
 /// Encode one layer's RLE runs to a PNG byte vector.
@@ -410,6 +440,7 @@ fn encode_layer_png(
     job: &SliceJobV3,
     runs: &[crate::rle::RleRun],
     binary_png: bool,
+    force_full_res_gray3_output: bool,
 ) -> Result<Vec<u8>, SlicerV3Error> {
     let width = job.effective_render_width_px();
     let height = job.source_height_px;
@@ -422,7 +453,7 @@ fn encode_layer_png(
             let logical_width = job.width_px;
             crate::encode::encode_truecolor_packed_png_from_rle(logical_width, height, runs, 3)
         }
-        "gray3_div2" => {
+        "gray3_div2" if !force_full_res_gray3_output => {
             // RLE runs are at physical resolution (source_width_px).
             // Average every 2 adjacent grayscale sub-pixels into one output
             // pixel, producing a half-width grayscale PNG.
@@ -430,21 +461,12 @@ fn encode_layer_png(
             crate::encode::encode_grayscale_averaged_png_from_rle(logical_width, height, runs)
         }
         _ => {
-            // Grayscale: expand RLE and use libdeflate.
-            let total_pixels = (width as usize).saturating_mul(height as usize);
-            let mut pixels = Vec::with_capacity(total_pixels);
-            for run in runs {
-                let len = run.length as usize;
-                let end = (pixels.len() + len).min(total_pixels);
-                let fill = end - pixels.len();
-                pixels.extend(std::iter::repeat(run.value).take(fill));
-            }
-            pixels.resize(total_pixels, 0);
-
-            crate::encode::encode_grayscale_png(
+            // Full-resolution grayscale path: stay on direct RLE->PNG encoding
+            // to preserve the fast O(num_runs + height) behavior.
+            crate::encode::encode_grayscale_png_from_rle(
                 width,
                 height,
-                &pixels,
+                runs,
                 &job.png_compression_strategy,
                 binary_png,
             )
@@ -459,7 +481,12 @@ impl RleStreamEncoder for AthenaRleStreamEncoder {
         runs: Vec<crate::rle::RleRun>,
     ) -> Result<(), SlicerV3Error> {
         // Encode immediately so the raw runs can be dropped right away.
-        let png = encode_layer_png(&self.job, &runs, self.binary_png)?;
+        let png = encode_layer_png(
+            &self.job,
+            &runs,
+            self.binary_png,
+            self.force_full_res_gray3_output,
+        )?;
         self.pngs[layer_index as usize] = png;
         Ok(())
     }
@@ -475,9 +502,10 @@ impl RleStreamEncoder for AthenaRleStreamEncoder {
     > {
         let job = self.job.clone();
         let binary_png = self.binary_png;
+        let force_full_res_gray3_output = self.force_full_res_gray3_output;
         Some(Arc::new(
             move |_layer_index: u32, runs: &[crate::rle::RleRun]| {
-                encode_layer_png(&job, runs, binary_png)
+                encode_layer_png(&job, runs, binary_png, force_full_res_gray3_output)
             },
         ))
     }
@@ -499,7 +527,7 @@ impl FormatEncoder for AthenaPluginEncoder {
     }
 
     fn requires_area_stats(&self) -> bool {
-        false
+        true
     }
 
     fn requires_png_layers(&self) -> bool {
@@ -511,11 +539,13 @@ impl FormatEncoder for AthenaPluginEncoder {
         job: &SliceJobV3,
     ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
         let binary_png = job.anti_aliasing_level.trim() == "Off";
+        let force_full_res_gray3_output = should_force_full_res_gray3_output(job);
         Ok(Some(Box::new(AthenaRleStreamEncoder {
             job: job.clone(),
             pngs: vec![Vec::new(); job.total_layers as usize],
             area_stats: vec![LayerAreaStatsV3::default(); job.total_layers as usize],
             binary_png,
+            force_full_res_gray3_output,
         })))
     }
 

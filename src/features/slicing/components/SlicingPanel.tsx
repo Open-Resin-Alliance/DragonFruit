@@ -25,6 +25,7 @@ import {
 } from '@/features/slicing/sliceExportOrchestrator';
 import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
+import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
@@ -53,6 +54,8 @@ interface SlicingPanelProps {
   canPrint?: boolean;
   onSliceIntentChanged?: (intent: SliceIntent) => void;
   onBeforeSliceStart?: (intent: SliceIntent) => Promise<boolean> | boolean;
+  onBeforeSlicingRun?: () => Promise<void> | void;
+  resolveOutputPathForIntent?: (intent: SliceIntent) => string | null | undefined;
 }
 
 type LifetimeTelemetry = {
@@ -127,6 +130,7 @@ type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'encoding' | 'fina
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
   if (lower.includes('slicing')) return 'slicing';
+  if (lower.includes('saving scene')) return 'preparing';
   if (lower.includes('preparing')) return 'preparing';
   if (lower.includes('staging mesh') || lower.includes('transferring mesh')) return 'staging';
   if (lower.includes('slicing layer') || lower.includes('raster')) return 'slicing';
@@ -159,44 +163,6 @@ function formatElapsedClock(ms: number): string {
   }
 
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-function formatResinFamilyLabel(resinFamily: string | null | undefined): string {
-  const normalized = (resinFamily ?? '').trim().toLowerCase();
-  if (!normalized) return '';
-  if (normalized === 'standard') return 'Standard';
-  if (normalized === 'abs-like') return 'ABS-like';
-  if (normalized === 'tough') return 'Tough';
-  if (normalized === 'flexible') return 'Flexible';
-  if (normalized === 'engineering') return 'Engineering';
-  if (normalized === 'other') return 'Other';
-  return normalized;
-}
-
-function resolveCompositeMaterialLabel(material: {
-  brand?: string;
-  resinFamily?: string;
-  name?: string;
-} | null | undefined): string | null {
-  if (!material) return null;
-
-  const brand = (material.brand ?? '').trim();
-  const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
-  const name = (material.name ?? '').trim();
-
-  const parts: string[] = [];
-  const pushUnique = (value: string) => {
-    if (!value) return;
-    if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
-    parts.push(value);
-  };
-
-  pushUnique(brand);
-  pushUnique(resinFamilyLabel);
-  pushUnique(name);
-
-  if (parts.length === 0) return null;
-  return parts.join(' ');
 }
 
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
@@ -312,6 +278,8 @@ export function SlicingPanel({
   canPrint = false,
   onSliceIntentChanged,
   onBeforeSliceStart,
+  onBeforeSlicingRun,
+  resolveOutputPathForIntent,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
@@ -371,6 +339,7 @@ export function SlicingPanel({
   const autoSliceTriggeredRef = useRef(false);
   const autoSliceTimeoutRef = useRef<number | null>(null);
   const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
+  const hasSlicingProgressStartedRef = useRef(false);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
@@ -945,11 +914,14 @@ export function SlicingPanel({
       return;
     }
 
+    const resolvedOutputPath = (resolveOutputPathForIntent?.(effectiveSliceIntent) ?? '').trim();
+
     setIsSlicingZip(true);
     setCurrentPhase('Preparing');
     setSliceStatus('Preparing');
     setProgressDone(0);
     setProgressTotal(1);
+    hasSlicingProgressStartedRef.current = false;
     setSlicingLayerDone(0);
     setSlicingLayerTotal(1);
     setCurrentElapsedMs(0);
@@ -965,6 +937,12 @@ export function SlicingPanel({
     setPreviewSelectedLayer(1);
     onSliceIntentChanged?.(effectiveSliceIntent);
     onSliceRunStarted?.();
+
+    // Fire scene save concurrently — it's best-effort and independent of mesh preparation.
+    // The orchestrator uses visibleModels already captured in memory, so there's no ordering dependency.
+    void Promise.resolve(onBeforeSlicingRun?.()).catch((error) => {
+      console.warn('[Slicing] Pre-slice save step failed; continuing to slicing.', error);
+    });
 
     const runStartMs = performance.now();
     const abortController = new AbortController();
@@ -1001,6 +979,7 @@ export function SlicingPanel({
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
+        outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
@@ -1016,8 +995,16 @@ export function SlicingPanel({
           const safeDone = Math.max(0, Math.min(done, safeTotal));
           setCurrentPhase(phase);
           setSliceStatus(phase);
-          setProgressDone(safeDone);
-          setProgressTotal(safeTotal);
+
+          if (isSlicingPhase) {
+            hasSlicingProgressStartedRef.current = true;
+            setProgressDone(safeDone);
+            setProgressTotal(safeTotal);
+          } else if (!hasSlicingProgressStartedRef.current) {
+            // Keep pre-slice phases (Preparing / Staging) at zero progress.
+            setProgressDone(0);
+            setProgressTotal(1);
+          }
 
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('dragonfruit:slicing-progress', {

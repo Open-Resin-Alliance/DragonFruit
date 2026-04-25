@@ -93,11 +93,42 @@ struct ActiveEdge {
     end_exclusive: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RowSpan {
+    a: f32,
+    b: f32,
+    start: usize,
+    end: usize,
+}
+
 #[derive(Debug)]
 struct ScanlineSegmentIndex {
     starts: Vec<Vec<ActiveEdge>>,
     y_start: usize,
     y_end_exclusive: usize,
+}
+
+#[inline]
+fn make_row_span(x0: f32, x1: f32, width: usize) -> Option<RowSpan> {
+    let a = x0.min(x1).max(0.0);
+    let b = x0.max(x1).min(width as f32);
+    if b <= a {
+        return None;
+    }
+
+    let start_px = a.floor() as i32;
+    let end_px = b.ceil() as i32;
+    if end_px <= start_px || end_px <= 0 || start_px >= width as i32 {
+        return None;
+    }
+
+    let start = start_px.max(0) as usize;
+    let end = ((end_px - 1).min(width as i32 - 1)) as usize;
+    if end < start {
+        return None;
+    }
+
+    Some(RowSpan { a, b, start, end })
 }
 
 #[inline]
@@ -131,14 +162,62 @@ fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candida
     }
 }
 
+/// Build filled spans for one scanline using non-zero winding.
+///
+/// Iterates every consecutive edge pair. When `snap_to_integer` is
+/// true (non-AA path) we round each edge's x to the nearest integer pixel
+/// and skip the pair if both round to the same pixel,
+/// eliminating the 1-px bogus spans that near-coincident crossings on
+/// defective meshes used to produce.
+fn build_row_spans_nonzero(
+    active_edges: &[ActiveEdge],
+    width: usize,
+    snap_to_integer: bool,
+) -> Vec<RowSpan> {
+    let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
+    let mut winding = 0i32;
+    let n = active_edges.len();
+
+    for i in 0..n.saturating_sub(1) {
+        let x_left = active_edges[i].x;
+        if !x_left.is_finite() {
+            break;
+        }
+
+        winding += active_edges[i].wind;
+        if winding == 0 {
+            continue;
+        }
+
+        let x_right = active_edges[i + 1].x;
+        if !x_right.is_finite() {
+            break;
+        }
+
+        if snap_to_integer {
+            let a = x_left.round() as i64;
+            let b = x_right.round() as i64;
+            if a >= b {
+                continue;
+            }
+        }
+
+        if let Some(span) = make_row_span(x_left, x_right, width) {
+            spans.push(span);
+        }
+    }
+
+    spans
+}
+
 fn build_segments_for_layer(
-    _job: &SliceJobV3,
+    job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
     layer_index: u32,
     layer_height_mm: f32,
 ) -> Vec<Segment> {
-    let z_mm = ((layer_index as f32) + 0.5) * layer_height_mm;
+    let z_mm = (layer_index as f32 + 0.5) * layer_height_mm;
     let mut segments = Vec::with_capacity(layer_indices.len());
 
     for tri_idx in layer_indices {
@@ -209,13 +288,18 @@ fn build_segments_for_layer(
             continue;
         }
 
+        let mut wind = tri.fill_wind;
+        if job.mirror_x {
+            wind = -wind;
+        }
+
         segments.push(Segment {
             x1,
             y1,
             dx_dy: (x2 - x1) / dy,
             y_min: y1.min(y2),
             y_max: y1.max(y2),
-            wind: if dy > 0.0 { 1 } else { -1 },
+            wind,
         });
     }
 
@@ -405,12 +489,17 @@ pub fn rasterize_layer_with_stats(
         return (mask, stats);
     }
 
-    let segments = build_segments_for_layer(job, triangles, layer_indices, layer_index, job.layer_height_mm);
+    let segments = build_segments_for_layer(
+        job,
+        triangles,
+        layer_indices,
+        layer_index,
+        job.layer_height_mm,
+    );
     if segments.is_empty() {
         return (mask, stats);
     }
 
-    let x_eps = 1e-6f32;
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
     let aa_steps = (aa_level_steps as usize).max(1);
     let aa_enabled = aa_steps > 1;
@@ -482,105 +571,61 @@ pub fn rasterize_layer_with_stats(
 
         let row_start = physical_y * width;
 
-        let mut winding = 0i32;
-        let mut i = 0usize;
-        while i < active_edges.len() {
-            let x0 = active_edges[i].x;
-            if !x0.is_finite() {
-                break;
-            }
+        let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
 
-            let mut delta = 0i32;
-            while i < active_edges.len() {
-                let xi = active_edges[i].x;
-                if !xi.is_finite() || (xi - x0).abs() > x_eps {
-                    break;
+        for span in spans {
+            if let Some(ref mut binary) = stats_mask {
+                let b_start = row_start + span.start;
+                let b_end = row_start + span.end;
+                if b_end < binary.len() {
+                    binary[b_start..=b_end].fill(255);
                 }
-                delta += active_edges[i].wind;
-                i += 1;
             }
 
-            winding += delta;
-            if winding == 0 {
-                continue;
-            }
+            if !aa_enabled {
+                let row = &mut mask[row_start..row_start + width];
+                row[span.start..=span.end].fill(255);
+            } else {
+                // 2D Uniform Supersampling combining exact analytic X with N-stepped Y
+                let left_i = span.a.floor() as i32;
+                let right_i = span.b.ceil() as i32 - 1;
 
-            if i >= active_edges.len() {
-                break;
-            }
+                if left_i <= right_i {
+                    if left_i == right_i {
+                        if left_i >= 0 && left_i < width as i32 {
+                            let cov = (span.b - span.a).clamp(0.0, 1.0) * 255.0;
+                            row_accum[left_i as usize] += cov as u32;
+                        }
+                    } else {
+                        let left_cov = ((left_i as f32 + 1.0) - span.a).clamp(0.0, 1.0) * 255.0;
+                        let right_cov = (span.b - right_i as f32).clamp(0.0, 1.0) * 255.0;
 
-            let x1 = active_edges[i].x;
-            if !x1.is_finite() {
-                break;
-            }
+                        if left_i >= 0 && left_i < width as i32 {
+                            row_accum[left_i as usize] += left_cov as u32;
+                        }
 
-            let a = x0.min(x1).max(0.0);
-            let b = x0.max(x1).min(width as f32);
-            if b <= a {
-                continue;
-            }
-
-            let start_px = a.floor() as i32;
-            let end_px = b.ceil() as i32;
-            if end_px <= start_px || end_px <= 0 || start_px >= width as i32 {
-                continue;
-            }
-            let clamped_start = start_px.max(0) as usize;
-            let clamped_end = ((end_px - 1).min(width as i32 - 1)) as usize;
-            if clamped_end >= clamped_start {
-                if let Some(ref mut binary) = stats_mask {
-                    let b_start = row_start + clamped_start;
-                    let b_end = row_start + clamped_end;
-                    if b_end < binary.len() {
-                        binary[b_start..=b_end].fill(255);
-                    }
-                }
-
-                if !aa_enabled {
-                    let row = &mut mask[row_start..row_start + width];
-                    row[clamped_start..=clamped_end].fill(255);
-                } else {
-                    // 2D Uniform Supersampling combining exact analytic X with N-stepped Y
-                    let left_i = a.floor() as i32;
-                    let right_i = b.ceil() as i32 - 1;
-
-                    if left_i <= right_i {
-                        if left_i == right_i {
-                            if left_i >= 0 && left_i < width as i32 {
-                                let cov = (b - a).clamp(0.0, 1.0) * 255.0;
-                                row_accum[left_i as usize] += cov as u32;
+                        let interior_start = (left_i + 1).max(0) as usize;
+                        let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
+                        if interior_end >= interior_start {
+                            for x in interior_start..=interior_end {
+                                row_accum[x] += 255;
                             }
-                        } else {
-                            let left_cov = ((left_i as f32 + 1.0) - a).clamp(0.0, 1.0) * 255.0;
-                            let right_cov = (b - right_i as f32).clamp(0.0, 1.0) * 255.0;
+                        }
 
-                            if left_i >= 0 && left_i < width as i32 {
-                                row_accum[left_i as usize] += left_cov as u32;
-                            }
-
-                            let interior_start = (left_i + 1).max(0) as usize;
-                            let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
-                            if interior_end >= interior_start {
-                                for x in interior_start..=interior_end {
-                                    row_accum[x] += 255;
-                                }
-                            }
-
-                            if right_i >= 0 && right_i < width as i32 {
-                                row_accum[right_i as usize] += right_cov as u32;
-                            }
+                        if right_i >= 0 && right_i < width as i32 {
+                            row_accum[right_i as usize] += right_cov as u32;
                         }
                     }
                 }
-
-                let filled = (clamped_end - clamped_start + 1) as u32;
-                stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
-
-                min_x = min_x.min(clamped_start as i32);
-                max_x = max_x.max(clamped_end as i32);
-                min_y = min_y.min(physical_y as i32);
-                max_y = max_y.max(physical_y as i32);
             }
+
+            let filled = (span.end - span.start + 1) as u32;
+            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+
+            min_x = min_x.min(span.start as i32);
+            max_x = max_x.max(span.end as i32);
+            min_y = min_y.min(physical_y as i32);
+            max_y = max_y.max(physical_y as i32);
         }
 
         for edge in &mut active_edges {
@@ -660,15 +705,15 @@ pub fn rasterize_layer(
 /// Functionally equivalent to `rasterize_layer_with_stats` but uses a single
 /// row-wide scratch buffer instead of a full WH-pixel mask.  This eliminates
 /// the dominant 40-56 MB allocation at 8 K resolution for CTB and other
-/// formats that do not need PNG.  Area stats component analysis (8-connected
-/// flood fill) is not performed; basic pixel-count bounding-box stats are
-/// still returned.
+/// formats that do not need PNG. When `compute_area_stats` is true, a binary
+/// stats mask is captured and 8-connected component analysis is applied.
 #[allow(unused_assignments)]
 pub fn rasterize_layer_rle(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
     layer_index: u32,
+    compute_area_stats: bool,
 ) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
@@ -682,13 +727,18 @@ pub fn rasterize_layer_rle(
         return (rle.finish(), stats);
     }
 
-    let segments = build_segments_for_layer(job, triangles, layer_indices, layer_index, job.layer_height_mm);
+    let segments = build_segments_for_layer(
+        job,
+        triangles,
+        layer_indices,
+        layer_index,
+        job.layer_height_mm,
+    );
     if segments.is_empty() {
         emit_zero_rows(&mut rle, height, width);
         return (rle.finish(), stats);
     }
 
-    let x_eps = 1e-6f32;
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
     let aa_steps = (aa_level_steps as usize).max(1);
     let aa_enabled = aa_steps > 1;
@@ -705,12 +755,18 @@ pub fn rasterize_layer_rle(
     let scanline_starts = scanline_index.starts;
     let y_start = scanline_index.y_start;
     let y_end_exclusive = scanline_index.y_end_exclusive;
+    let mut stats_mask = if compute_area_stats {
+        Some(vec![0u8; width * height])
+    } else {
+        None
+    };
 
     let first_physical_y = y_start / aa_steps;
     // Emit zero rows before the rasterized region.
     emit_zero_rows(&mut rle, first_physical_y, width);
 
-    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64))
+    let pixel_area_mm2 = ((job.build_width_mm as f64)
+        / (job.effective_render_width_px().max(1) as f64))
         * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
 
     let mut min_x = i32::MAX;
@@ -775,95 +831,58 @@ pub fn rasterize_layer_rle(
             continue;
         }
 
-        let mut winding = 0i32;
-        let mut i = 0usize;
-        while i < active_edges.len() {
-            let x0 = active_edges[i].x;
-            if !x0.is_finite() {
-                break;
-            }
+        let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
 
-            let mut delta = 0i32;
-            while i < active_edges.len() {
-                let xi = active_edges[i].x;
-                if !xi.is_finite() || (xi - x0).abs() > x_eps {
-                    break;
+        for span in spans {
+            if let Some(ref mut binary) = stats_mask {
+                let b_start = physical_y * width + span.start;
+                let b_end = physical_y * width + span.end;
+                if b_end < binary.len() {
+                    binary[b_start..=b_end].fill(255);
                 }
-                delta += active_edges[i].wind;
-                i += 1;
             }
 
-            winding += delta;
-            if winding == 0 {
-                continue;
-            }
+            if !aa_enabled {
+                row_buf[span.start..=span.end].fill(255);
+            } else {
+                let left_i = span.a.floor() as i32;
+                let right_i = span.b.ceil() as i32 - 1;
 
-            if i >= active_edges.len() {
-                break;
-            }
+                if left_i <= right_i {
+                    if left_i == right_i {
+                        if left_i >= 0 && left_i < width as i32 {
+                            let cov = (span.b - span.a).clamp(0.0, 1.0) * 255.0;
+                            row_accum[left_i as usize] += cov as u32;
+                        }
+                    } else {
+                        let left_cov = ((left_i as f32 + 1.0) - span.a).clamp(0.0, 1.0) * 255.0;
+                        let right_cov = (span.b - right_i as f32).clamp(0.0, 1.0) * 255.0;
 
-            let x1 = active_edges[i].x;
-            if !x1.is_finite() {
-                break;
-            }
+                        if left_i >= 0 && left_i < width as i32 {
+                            row_accum[left_i as usize] += left_cov as u32;
+                        }
 
-            let a = x0.min(x1).max(0.0);
-            let b = x0.max(x1).min(width as f32);
-            if b <= a {
-                continue;
-            }
-
-            let start_px = a.floor() as i32;
-            let end_px = b.ceil() as i32;
-            if end_px <= start_px || end_px <= 0 || start_px >= width as i32 {
-                continue;
-            }
-            let clamped_start = start_px.max(0) as usize;
-            let clamped_end = ((end_px - 1).min(width as i32 - 1)) as usize;
-
-            if clamped_end >= clamped_start {
-                if !aa_enabled {
-                    row_buf[clamped_start..=clamped_end].fill(255);
-                } else {
-                    let left_i = a.floor() as i32;
-                    let right_i = b.ceil() as i32 - 1;
-
-                    if left_i <= right_i {
-                        if left_i == right_i {
-                            if left_i >= 0 && left_i < width as i32 {
-                                let cov = (b - a).clamp(0.0, 1.0) * 255.0;
-                                row_accum[left_i as usize] += cov as u32;
+                        let interior_start = (left_i + 1).max(0) as usize;
+                        let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
+                        if interior_end >= interior_start {
+                            for x in interior_start..=interior_end {
+                                row_accum[x] += 255;
                             }
-                        } else {
-                            let left_cov = ((left_i as f32 + 1.0) - a).clamp(0.0, 1.0) * 255.0;
-                            let right_cov = (b - right_i as f32).clamp(0.0, 1.0) * 255.0;
+                        }
 
-                            if left_i >= 0 && left_i < width as i32 {
-                                row_accum[left_i as usize] += left_cov as u32;
-                            }
-
-                            let interior_start = (left_i + 1).max(0) as usize;
-                            let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
-                            if interior_end >= interior_start {
-                                for x in interior_start..=interior_end {
-                                    row_accum[x] += 255;
-                                }
-                            }
-
-                            if right_i >= 0 && right_i < width as i32 {
-                                row_accum[right_i as usize] += right_cov as u32;
-                            }
+                        if right_i >= 0 && right_i < width as i32 {
+                            row_accum[right_i as usize] += right_cov as u32;
                         }
                     }
                 }
-
-                let filled = (clamped_end - clamped_start + 1) as u32;
-                stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
-                min_x = min_x.min(clamped_start as i32);
-                max_x = max_x.max(clamped_end as i32);
-                min_y = min_y.min(physical_y as i32);
-                max_y = max_y.max(physical_y as i32);
             }
+
+            let filled = (span.end - span.start + 1) as u32;
+            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+            min_x = min_x.min(span.start as i32);
+            max_x = max_x.max(span.end as i32);
+            min_y = min_y.min(physical_y as i32);
+            max_y = max_y.max(physical_y as i32);
         }
 
         for edge in &mut active_edges {
@@ -891,11 +910,35 @@ pub fn rasterize_layer_rle(
         stats.max_x = max_x;
         stats.max_y = max_y;
 
-        let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
-        stats.total_solid_area_mm2 = total_area;
-        stats.largest_area_mm2 = total_area;
-        stats.smallest_area_mm2 = total_area;
-        stats.area_count = 1;
+        if compute_area_stats {
+            let stats_source = stats_mask
+                .as_deref()
+                .expect("stats mask must exist when compute_area_stats is true");
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                compute_component_area_stats_8_connected(
+                    stats_source,
+                    width,
+                    height,
+                    min_x as usize,
+                    max_x as usize,
+                    min_y as usize,
+                    max_y as usize,
+                    pixel_area_mm2,
+                );
+
+            stats.total_solid_pixels = total_pixels;
+            let total_area = (total_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = largest_area_mm2;
+            stats.smallest_area_mm2 = smallest_area_mm2;
+            stats.area_count = area_count;
+        } else {
+            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = total_area;
+            stats.smallest_area_mm2 = total_area;
+            stats.area_count = 1;
+        }
     }
 
     (rle.finish(), stats)
@@ -903,7 +946,7 @@ pub fn rasterize_layer_rle(
 
 #[cfg(test)]
 mod tests {
-    use super::{rasterize_layer, rasterize_layer_with_stats};
+    use super::{rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats};
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
     use crate::types::SliceJobV3;
@@ -1070,6 +1113,36 @@ mod tests {
         assert_eq!(
             stats.area_count, 2,
             "disconnected solids should produce two 8-connected components"
+        );
+        assert!(
+            stats.largest_area_mm2 > stats.smallest_area_mm2,
+            "largest area should exceed smallest area for differently sized disconnected islands"
+        );
+        assert!(
+            (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
+                < 1e-6,
+            "total area should equal the sum of component areas"
+        );
+    }
+
+    #[test]
+    fn disconnected_islands_report_component_stats_in_rle_path() {
+        let job = job_for_single_layer();
+
+        let mut flat = Vec::<f32>::new();
+        // Large island
+        push_box_triangles(&mut flat, -20.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+        // Smaller, disconnected island
+        push_box_triangles(&mut flat, 20.0, 0.0, 0.0, 1.0, 8.0, 8.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (_runs, stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+
+        assert_eq!(
+            stats.area_count, 2,
+            "disconnected solids should produce two 8-connected components in RLE path"
         );
         assert!(
             stats.largest_area_mm2 > stats.smallest_area_mm2,

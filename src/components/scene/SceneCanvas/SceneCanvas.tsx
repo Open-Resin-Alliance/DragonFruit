@@ -1192,6 +1192,7 @@ export function SceneCanvas({
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
+  const likelySupportGeometryTintColor = '#c8752a';
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
@@ -4744,6 +4745,9 @@ export function SceneCanvas({
                   && duplicatePreviewModel
                   && model.id === duplicatePreviewModel.id,
                 );
+                const likelySupportGeometry = !!model.geometry.meshDefects?.nativeRepairReport?.likely_support_geometry;
+                const modelHoverTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : hoverTintColor;
+                const modelSelectedTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : selectedTintColor;
                 // Use live drag transform only during active/guarded gizmo interaction.
                 // Otherwise stale refs can mask immediate panel-driven updates (e.g. reset scale).
                 const liveDragTransformForRender = (
@@ -4830,8 +4834,8 @@ export function SceneCanvas({
                       isBracePlacementActive={isBracePlacementActive}
                       onModelHoverPointChange={onModelHoverPointChange}
                       onModelHoverModelChange={onModelHoverModelChange}
-                      hoverTintColor={hoverTintColor}
-                      selectedTintColor={selectedTintColor}
+                      hoverTintColor={modelHoverTintColor}
+                      selectedTintColor={modelSelectedTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
@@ -4853,6 +4857,7 @@ export function SceneCanvas({
                         && !!liveDragTransformRef.current
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
+                      supportSectionGeometry={model.geometry.meshDefects?.supportSectionGeometry ?? null}
                     >
                       {useActiveModelAttachedSupportProxy && isActive && (
                         <group

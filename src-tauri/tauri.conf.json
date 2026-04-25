@@ -4,7 +4,7 @@
   "version": "0.1.4",
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
-    "beforeDevCommand": "node scripts/build-thumbnail-providers.mjs && npm run dev",
+    "beforeDevCommand": "npm run predev:once && npm run dev",
     "beforeBuildCommand": "npm run build:tauri && node scripts/build-thumbnail-providers.mjs",
     "devUrl": "http://localhost:3005",
     "frontendDist": "frontend-dist"
@@ -13,9 +13,7 @@
     "active": true,
     "fileAssociations": [
       {
-        "ext": [
-          "voxl"
-        ],
+        "ext": ["voxl"],
         "name": "DragonFruit Scene File",
         "description": "DragonFruit scene",
         "mimeType": "application/vnd.dragonfruit.voxl+json"
@@ -64,7 +62,7 @@
         "height": 800,
         "minWidth": 960,
         "minHeight": 600,
-        "maximized": false,
+        "maximized": true,
         "resizable": true,
         "decorations": true,
         "hiddenTitle": true,
@@ -77,10 +75,7 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": [
-        "default",
-        "logging"
-      ]
+      "capabilities": ["default", "logging"]
     }
   }
 }

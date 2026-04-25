@@ -7,6 +7,16 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { repairGeometryWithManifold } from '@/utils/manifoldRepair';
+import {
+  analyzeFromGeometry,
+  applyRepairedPositions,
+  classifyFromGeometry,
+  isHeavyRepair,
+  isTauriRuntime,
+  repairFromGeometry,
+  type MeshAnalysisJson,
+  type MeshHealthReport,
+} from '@/utils/meshRepair';
 
 export type MeshDefects = {
   /** Whether any non-finite vertex position values were found */
@@ -19,6 +29,11 @@ export type MeshDefects = {
   repairedByManifold?: boolean;
   /** Number of degenerate triangles collapsed by Manifold */
   degeneratesRemoved?: number;
+  /** Full health report from the native Rust repair engine (Tauri only) */
+  nativeRepairReport?: MeshHealthReport;
+  /** When the repaired mesh has a model/support split (model_triangle_count in the report),
+   *  this geometry holds only the support-section triangles for separate orange rendering. */
+  supportSectionGeometry?: THREE.BufferGeometry;
 };
 
 export type GeometryWithBounds = {
@@ -64,6 +79,20 @@ function sanitizePositionAttribute(geometry: THREE.BufferGeometry): MeshDefects 
 
 export interface ProcessGeometryOptions {
   center?: boolean;
+  /**
+   * Controls native Tauri mesh processing behavior:
+   * - `auto` (default): standard flow; may run repair path.
+   * - `classify-only`: lightweight shell split classification (no heavy repair).
+    * - `none`: skip native repair/classification entirely.
+   * - `repair`: force full repair/classification path.
+   */
+    nativeProcessingMode?: 'auto' | 'classify-only' | 'none' | 'repair';
+  /**
+   * Called when analysis indicates a heavy solidification repair is needed.
+   * Return true to proceed with repair, false to skip repair and load as-is.
+   * Only invoked when running under Tauri.
+   */
+  onConfirmHeavyRepair?: (analysis: MeshAnalysisJson) => Promise<boolean>;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -71,6 +100,10 @@ export interface ProcessGeometryOptions {
 // Above this threshold we process the source geometry in place to avoid
 // allocating a second full copy before normals/BVH work begins.
 const IN_PLACE_PROCESSING_VERTEX_THRESHOLD = 12_000_000;
+// Native analyze/repair on extremely large meshes can take minutes with little
+// practical benefit in auto-import flows. In auto mode, skip native processing
+// beyond this size and let users opt-in via manual Repair.
+const AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD = 3_000_000;
 
 function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
   // DragonFruit controls model tinting centrally via mesh settings.
@@ -98,6 +131,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const startPrep = performance.now();
   const sourcePosition = bufferGeometry.getAttribute('position') as THREE.BufferAttribute | null;
   const sourceVertexCount = sourcePosition?.count ?? 0;
+  const sourceIndex = bufferGeometry.getIndex();
+  const sourceTriangleEstimate = Math.floor((sourceIndex?.count ?? sourceVertexCount) / 3);
 
   let geometry: THREE.BufferGeometry;
   if (sourceVertexCount >= IN_PLACE_PROCESSING_VERTEX_THRESHOLD) {
@@ -133,7 +168,100 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       `[processGeometry] Defective mesh detected: ${meshDefects.repairedFloats} non-finite position` +
       ` values (out of ${meshDefects.totalVertices * 3} floats) replaced with 0.`,
     );
+  }
 
+  // In Tauri we usually run native analyze/repair/classification. For gigantic
+  // meshes, auto mode now skips this expensive path and leaves the mesh as-is
+  // unless the user explicitly requests manual repair.
+  // In the browser we fall back to the legacy Manifold WASM path (which only
+  // activates when NaN defects were detected).
+  if (isTauriRuntime()) {
+    const nativeMode = options.nativeProcessingMode ?? 'auto';
+    const skipAutoNativeProcessingForSize = nativeMode === 'auto'
+      && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
+
+    if (nativeMode === 'none') {
+      console.log('[processGeometry] Native processing skipped (mode=none)');
+    } else if (skipAutoNativeProcessingForSize) {
+      console.warn(
+        `[processGeometry] Skipping native auto repair/classification for gigantic mesh (` +
+        `${sourceTriangleEstimate.toLocaleString()} triangles). Use manual Repair to force.`
+      );
+    } else try {
+      let classifyOnly = nativeMode === 'classify-only';
+      const forceRepair = nativeMode === 'repair';
+
+      // If a confirmation callback is wired up, run a quick pre-repair analysis
+      // so we can ask the user before committing to a heavy solidification pass.
+      if (!classifyOnly && !forceRepair && options.onConfirmHeavyRepair) {
+        try {
+          console.log(`[${new Date().toISOString()}] [processGeometry] Running pre-repair analysis`);
+          const analysis = await analyzeFromGeometry(geometry);
+          if (analysis && isHeavyRepair(analysis)) {
+            console.log(
+              `[processGeometry] Heavy repair detected (components=${analysis.component_count}, ` +
+              `self_intersections=${analysis.self_intersections}). Requesting user confirmation.`,
+            );
+            const confirmed = await options.onConfirmHeavyRepair(analysis);
+            if (!confirmed) {
+              console.log('[processGeometry] User declined heavy repair — running classify-only shell split pass.');
+              classifyOnly = true;
+            }
+          }
+        } catch (analysisErr) {
+          const analysisErrMsg = analysisErr instanceof Error ? analysisErr.message : String(analysisErr);
+          if (analysisErrMsg === 'MESH_IMPORT_CANCELLED_BY_USER') {
+            throw analysisErr; // Propagate cancellation — do not proceed with repair.
+          }
+          console.warn('[processGeometry] Pre-repair analysis failed; proceeding with repair.', analysisErr);
+        }
+      }
+
+      console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
+      const nativeStart = performance.now();
+      const result = classifyOnly
+        ? await classifyFromGeometry(geometry)
+        : await repairFromGeometry(geometry);
+      if (result) {
+        applyRepairedPositions(geometry, result.positions);
+        const { report } = result;
+        console.log(
+          `[processGeometry] Native ${classifyOnly ? 'classification' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
+          `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
+          `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
+          `watertight=${report.post.is_watertight}`,
+        );
+        meshDefects = {
+          ...meshDefects,
+          hasDefects: classifyOnly
+            ? meshDefects.hasDefects
+            : (meshDefects.hasDefects || !report.fully_repaired || report.residual_issues.length > 0),
+          nativeRepairReport: report,
+        };
+
+        // If the repaired mesh has a model/support split, extract the support
+        // section as a separate geometry for orange overlay rendering.
+        if (report.model_triangle_count != null && report.model_triangle_count > 0) {
+          const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+          const allPos = posAttr.array as Float32Array;
+          const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
+          if (modelFloatEnd < allPos.length) {
+            const supportPositions = allPos.slice(modelFloatEnd);
+            const supportGeo = new THREE.BufferGeometry();
+            supportGeo.setAttribute('position', new THREE.BufferAttribute(supportPositions, 3));
+            supportGeo.computeVertexNormals();
+            meshDefects = { ...meshDefects, supportSectionGeometry: supportGeo };
+          }
+        }
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg === 'MESH_IMPORT_CANCELLED_BY_USER') {
+        throw err; // Propagate cancellation — do not fall back to loading the model.
+      }
+      console.warn('[processGeometry] Native mesh repair failed; falling back to sanitized geometry.', err);
+    }
+  } else if (meshDefects.hasDefects) {
     // Attempt full topology repair via Manifold (welds open edges, collapses
     // degenerate triangles, rebuilds a valid watertight solid).
     console.log(`[${new Date().toISOString()}] [processGeometry] Attempting Manifold repair`);
@@ -194,10 +322,11 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const flatteningPlanes = computeFlatteningPlanes(geometry);
   console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
 
-  return { geometry, bbox, center, size, flatteningPlanes, ...(meshDefects.hasDefects ? { meshDefects } : {}) };
+  const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
+  return { geometry, bbox, center, size, flatteningPlanes, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 
-export async function loadStlGeometry(fileUrl: string): Promise<GeometryWithBounds> {
+export async function loadStlGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
   return new Promise((resolve, reject) => {
     const loader = new STLLoader();
     console.log(`[${new Date().toISOString()}] [loadStlGeometry] Starting STLLoader load for ${fileUrl}`);
@@ -207,7 +336,7 @@ export async function loadStlGeometry(fileUrl: string): Promise<GeometryWithBoun
       fileUrl,
       (bufferGeometry) => {
         console.log(`[${new Date().toISOString()}] [loadStlGeometry] STLLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
-        processGeometry(bufferGeometry).then(resolve).catch(reject);
+        processGeometry(bufferGeometry, options).then(resolve).catch(reject);
       },
       undefined,
       (error) => {
@@ -262,7 +391,7 @@ function collectMergedGeometryFromObject3d(root: THREE.Object3D, sourceLabel: '3
   return merged;
 }
 
-export async function load3mfGeometry(fileUrl: string): Promise<GeometryWithBounds> {
+export async function load3mfGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
   return new Promise((resolve, reject) => {
     const loader = new ThreeMFLoader();
     console.log(`[${new Date().toISOString()}] [load3mfGeometry] Starting ThreeMFLoader load for ${fileUrl}`);
@@ -275,7 +404,7 @@ export async function load3mfGeometry(fileUrl: string): Promise<GeometryWithBoun
 
         try {
           const mergedGeometry = collectMergedGeometryFromObject3d(object, '3MF');
-          void processGeometry(mergedGeometry)
+          void processGeometry(mergedGeometry, options)
             .then(resolve)
             .catch(reject);
         } catch (error) {
@@ -290,7 +419,7 @@ export async function load3mfGeometry(fileUrl: string): Promise<GeometryWithBoun
   });
 }
 
-export async function loadObjGeometry(fileUrl: string): Promise<GeometryWithBounds> {
+export async function loadObjGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
   return new Promise((resolve, reject) => {
     const loader = new OBJLoader();
     console.log(`[${new Date().toISOString()}] [loadObjGeometry] OBJLoader load for ${fileUrl}`);
@@ -303,7 +432,7 @@ export async function loadObjGeometry(fileUrl: string): Promise<GeometryWithBoun
 
         try {
           const mergedGeometry = collectMergedGeometryFromObject3d(object, 'OBJ');
-          void processGeometry(mergedGeometry)
+          void processGeometry(mergedGeometry, options)
             .then(resolve)
             .catch(reject);
         } catch (error) {
@@ -318,15 +447,15 @@ export async function loadObjGeometry(fileUrl: string): Promise<GeometryWithBoun
   });
 }
 
-export async function loadMeshGeometry(fileUrl: string, fileName?: string): Promise<GeometryWithBounds> {
+export async function loadMeshGeometry(fileUrl: string, fileName?: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
   const ext = (fileName ?? '').trim().toLowerCase();
   if (ext.endsWith('.3mf')) {
-    return load3mfGeometry(fileUrl);
+    return load3mfGeometry(fileUrl, options);
   }
   if (ext.endsWith('.obj')) {
-    return loadObjGeometry(fileUrl);
+    return loadObjGeometry(fileUrl, options);
   }
-  return loadStlGeometry(fileUrl);
+  return loadStlGeometry(fileUrl, options);
 }
 
 export function useStlGeometry(fileUrl: string | null, directGeometry?: THREE.BufferGeometry | null): GeometryWithBounds | null {
