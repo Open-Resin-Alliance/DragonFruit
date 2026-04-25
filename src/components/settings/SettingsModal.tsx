@@ -666,7 +666,7 @@ export function SettingsModal({
     setDraftCameraTrackpadOrbitAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration);
     setDraftCameraTrackpadZoomAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration);
     setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
-    setDraftThemePreference('system');
+    setDraftThemePreference('dark');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
     setDraftCustomThemeName('');

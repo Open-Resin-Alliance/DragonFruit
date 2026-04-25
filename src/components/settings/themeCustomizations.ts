@@ -3,7 +3,7 @@ export const THEME_COLORS_STORAGE_KEY = 'app-theme-colors';
 export const THEME_PRESET_STORAGE_KEY = 'app-theme-preset';
 export const THEME_CUSTOM_PROFILES_STORAGE_KEY = 'app-theme-custom-profiles';
 
-export type ThemePreference = 'system' | 'dark' | 'light';
+export type ThemePreference = 'dark' | 'light';
 export type BuiltInThemePreset = 'dragonfruit-dark' | 'dragonfruit-light';
 export type ThemePreset = BuiltInThemePreset | string;
 
@@ -157,7 +157,7 @@ export function isBuiltInThemePreset(preset: ThemePreset): preset is BuiltInThem
 }
 
 function normalizeThemePreference(value: unknown, fallback: ThemePreference): ThemePreference {
-  return value === 'dark' || value === 'light' || value === 'system' ? value : fallback;
+  return value === 'dark' || value === 'light' ? value : fallback;
 }
 
 function normalizeThemeCustomColors(parsed: Partial<ThemeCustomColors> | undefined, defaults: ThemeCustomColors): ThemeCustomColors {
@@ -261,7 +261,7 @@ export function getSavedCustomThemeProfiles(): SavedCustomThemeProfile[] {
       next.push({
         id,
         name: sanitizeCustomThemeName(typeof candidate.name === 'string' ? candidate.name : 'Custom Theme'),
-        preference: normalizeThemePreference(candidate.preference, 'system'),
+        preference: normalizeThemePreference(candidate.preference, 'dark'),
         colors: normalizeThemeCustomColors(candidate.colors, DEFAULT_THEME_CUSTOM_COLORS),
       });
     }
@@ -321,7 +321,7 @@ export function exportThemeProfileToJson(params: {
     },
     theme: {
       name: sanitizeCustomThemeName(params.name),
-      preference: normalizeThemePreference(params.preference, 'system'),
+      preference: normalizeThemePreference(params.preference, 'dark'),
       colors: normalizeThemeCustomColors(params.colors, fallbackDefaults),
       sourcePresetId: params.sourcePresetId,
     },
@@ -368,7 +368,7 @@ export function importThemeProfileFromJson(jsonText: string): {
 
   return {
     name: sanitizeCustomThemeName(typeof theme.name === 'string' ? theme.name : 'Imported Theme'),
-    preference: normalizeThemePreference(theme.preference, 'system'),
+    preference: normalizeThemePreference(theme.preference, 'dark'),
     colors: normalizeThemeCustomColors(
       (theme.colors && typeof theme.colors === 'object' ? theme.colors : undefined) as Partial<ThemeCustomColors> | undefined,
       defaults,
@@ -489,9 +489,9 @@ function darkenHex(hexColor: string, factor: number): string {
 }
 
 export function getSavedThemePreference(): ThemePreference {
-  if (typeof window === 'undefined') return 'system';
+  if (typeof window === 'undefined') return 'dark';
   const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
-  if (raw === 'dark' || raw === 'light' || raw === 'system') return raw;
+  if (raw === 'dark' || raw === 'light') return raw;
   return getThemeProfile(getSavedThemePreset()).preference;
 }
 
@@ -509,11 +509,6 @@ export function getSavedThemePreset(): ThemePreset {
 
 export function applyThemePreference(preference: ThemePreference) {
   if (typeof document === 'undefined') return;
-
-  if (preference === 'system') {
-    document.documentElement.removeAttribute('data-theme');
-    return;
-  }
 
   document.documentElement.setAttribute('data-theme', preference);
 }

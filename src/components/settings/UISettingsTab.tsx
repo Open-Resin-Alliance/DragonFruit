@@ -295,15 +295,15 @@ export function UISettingsTab({
 						/>
 					</div>
 
-					<div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+					<div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', opacity: isBuiltInThemePreset ? 0.5 : 1 }}>
 						<label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
 							Color scheme
 						</label>
 						<Select
 							value={themePreference}
 							onChange={(event) => onThemePreferenceChange(event.target.value as ThemePreference)}
+							disabled={isBuiltInThemePreset}
 						>
-							<option value="system">System</option>
 							<option value="dark">Dark</option>
 							<option value="light">Light</option>
 						</Select>
