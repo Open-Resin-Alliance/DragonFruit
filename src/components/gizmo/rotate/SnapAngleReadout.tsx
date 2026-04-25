@@ -7,6 +7,12 @@ const AXIS_COLORS: Record<string, string> = {
   z: '#1596ff',
 };
 
+function wrapRotationDegrees(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0;
+  const wrapped = degrees % 360;
+  return Object.is(wrapped, -0) ? 0 : wrapped;
+}
+
 export function SnapAngleReadout() {
   const [snap, setSnap] = useState<{ active: boolean; angle?: number; axis?: string }>({ active: false });
 
@@ -20,7 +26,7 @@ export function SnapAngleReadout() {
 
   if (!snap.active || snap.angle === undefined) return null;
 
-  const degrees = Math.round((snap.angle * 180) / Math.PI);
+  const degrees = Math.round(wrapRotationDegrees((snap.angle * 180) / Math.PI));
   const color = AXIS_COLORS[snap.axis ?? 'x'] ?? '#ffffff';
 
   return (

@@ -76,6 +76,7 @@ export function GizmoScale({
   const [isDragging, setIsDragging] = useState(false);
   const [isUniformScale, setIsUniformScale] = useState(false);
   const startDistance = useRef<number>(0);
+  const startDirectionRef = useRef(new THREE.Vector2(1, 0));
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -186,7 +187,9 @@ export function GizmoScale({
     const deltaX = e.clientX - gizmoCenterX;
     const deltaY = e.clientY - gizmoCenterY;
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    startDistance.current = distance;
+    const safeDistance = Math.max(distance, 1e-6);
+    startDistance.current = safeDistance;
+    startDirectionRef.current.set(deltaX / safeDistance, deltaY / safeDistance);
     
     const allowed = onDragStart(isUniform);
     if (allowed === false) {
@@ -196,19 +199,13 @@ export function GizmoScale({
   };
 
   const getScaleFactor = useCallback((clientX: number, clientY: number, gizmoCenterX: number, gizmoCenterY: number): number => {
-    // Absolute distance-based scaling:
-    // - Distance from center directly controls scale
-    // - At center = scale approaches 0
-    // - Away from center = scale increases proportionally
-    
-    // Current distance from mouse to gizmo center
+    // Scale along the original drag ray so crossing over the gizmo center does
+    // not invert back into growth on the opposite side.
     const currentDeltaX = clientX - gizmoCenterX;
     const currentDeltaY = clientY - gizmoCenterY;
-    const currentDistance = Math.sqrt(currentDeltaX * currentDeltaX + currentDeltaY * currentDeltaY);
-    
-    // Calculate scale factor as ratio of current distance to start distance
-    // This makes scaling proportional to distance from center
-    const ratio = currentDistance / startDistance.current;
+    const startDirection = startDirectionRef.current;
+    const projectedDistance = (currentDeltaX * startDirection.x) + (currentDeltaY * startDirection.y);
+    const ratio = projectedDistance / Math.max(startDistance.current, 1e-6);
     
     // Clamp to reasonable values (0.01 to 100x)
     return Math.max(0.01, Math.min(100.0, ratio));
