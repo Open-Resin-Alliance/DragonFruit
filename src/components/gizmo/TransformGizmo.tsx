@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import * as THREE from 'three';
+import { useFrame, useThree } from '@react-three/fiber';
 import { DEFAULT_GIZMO_CONFIG } from './constants';
 import type { TransformGizmoProps, GizmoAxis } from './types';
 import { GizmoCenter } from './move/GizmoCenter';
@@ -9,6 +10,104 @@ import { GizmoMove } from './move/GizmoMove';
 import { GizmoRotation } from './rotate/GizmoRotation';
 import { GizmoScale } from './scale/GizmoScale';
 import { usePicking } from '@/components/picking';
+
+type AxisVisibility = Record<GizmoAxis, number>;
+
+type ViewCullState = {
+  move: AxisVisibility;
+  scale: AxisVisibility;
+  rotate: AxisVisibility;
+};
+
+const VIEW_CULL_HIDE_THRESHOLD = 0.02;
+
+function createAxisVisibility(value = 1): AxisVisibility {
+  return { x: value, y: value, z: value };
+}
+
+function createDefaultViewCullState(): ViewCullState {
+  return {
+    move: createAxisVisibility(),
+    scale: createAxisVisibility(),
+    rotate: createAxisVisibility(),
+  };
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  if (edge0 === edge1) {
+    return value >= edge1 ? 1 : 0;
+  }
+
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function quantizeOpacity(value: number): number {
+  return Math.round(Math.min(1, Math.max(0, value)) * 40) / 40;
+}
+
+function getAxisWorldDirection(axis: GizmoAxis, rotationEuler: THREE.Euler): THREE.Vector3 {
+  const direction = axis === 'x'
+    ? new THREE.Vector3(1, 0, 0)
+    : axis === 'y'
+      ? new THREE.Vector3(0, 1, 0)
+      : new THREE.Vector3(0, 0, 1);
+
+  return direction.applyEuler(rotationEuler).normalize();
+}
+
+function getViewDirection(camera: THREE.Camera, gizmoPosition: THREE.Vector3): THREE.Vector3 {
+  if ('isPerspectiveCamera' in camera && camera.isPerspectiveCamera) {
+    return new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
+  }
+
+  return camera.getWorldDirection(new THREE.Vector3()).normalize();
+}
+
+function computeViewCullState(
+  camera: THREE.Camera,
+  gizmoPosition: THREE.Vector3,
+  rotationEuler: THREE.Euler,
+): ViewCullState {
+  const viewDirection = getViewDirection(camera, gizmoPosition);
+  const axes: GizmoAxis[] = ['x', 'y', 'z'];
+  const move = createAxisVisibility();
+  const scale = createAxisVisibility();
+  const rotate = createAxisVisibility();
+
+  for (const axis of axes) {
+    const alignment = Math.abs(viewDirection.dot(getAxisWorldDirection(axis, rotationEuler)));
+
+    // Axis arrows and scale cubes should only get out of the way when they're
+    // very close to collapsing into the center from the current view.
+    move[axis] = quantizeOpacity(1 - smoothstep(0.82, 0.97, alignment));
+    scale[axis] = quantizeOpacity(1 - smoothstep(0.78, 0.95, alignment));
+
+    // Rotation rings stay around longer and only fade near a truly edge-on view.
+    rotate[axis] = quantizeOpacity(smoothstep(0.03, 0.16, alignment));
+  }
+
+  return { move, scale, rotate };
+}
+
+function viewCullStatesEqual(a: ViewCullState, b: ViewCullState): boolean {
+  return a.move.x === b.move.x
+    && a.move.y === b.move.y
+    && a.move.z === b.move.z
+    && a.scale.x === b.scale.x
+    && a.scale.y === b.scale.y
+    && a.scale.z === b.scale.z
+    && a.rotate.x === b.rotate.x
+    && a.rotate.y === b.rotate.y
+    && a.rotate.z === b.rotate.z;
+}
+
+function getAxisFromPart(part: string): GizmoAxis | undefined {
+  if (part.endsWith('-x')) return 'x';
+  if (part.endsWith('-y')) return 'y';
+  if (part.endsWith('-z')) return 'z';
+  return undefined;
+}
 
 /**
  * TransformGizmo - Unified 3D transform widget
@@ -69,12 +168,29 @@ export function TransformGizmo({
   rootRef,
 }: TransformGizmoProps) {
   const { isDragging: isGlobalDragging } = usePicking();
+  const { camera } = useThree();
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<string | null>(null);
   const [isUniformScale, setIsUniformScale] = useState(false);
+  const [viewCullState, setViewCullState] = useState<ViewCullState>(() => createDefaultViewCullState());
   const activePartRef = React.useRef<string | null>(null);
   const hoverClearRafRef = React.useRef<number | null>(null);
+  const viewCullStateRef = React.useRef<ViewCullState>(createDefaultViewCullState());
+
+  const posArray: [number, number, number] = Array.isArray(position)
+    ? position
+    : [position.x, position.y, position.z];
+
+  const posVec = Array.isArray(position)
+    ? new THREE.Vector3(...position)
+    : position;
+
+  const rotEuler = Array.isArray(rotation)
+    ? new THREE.Euler(...rotation)
+    : rotation;
+
+  const rotArray: [number, number, number] = [rotEuler.x, rotEuler.y, rotEuler.z];
 
   React.useEffect(() => {
     if (!gizmoRootRef.current) return;
@@ -128,19 +244,19 @@ export function TransformGizmo({
     }
   }, [rootRef]);
 
+  useFrame(() => {
+    if (!visible) return;
+
+    const nextViewCullState = computeViewCullState(camera, posVec, rotEuler);
+    if (viewCullStatesEqual(viewCullStateRef.current, nextViewCullState)) {
+      return;
+    }
+
+    viewCullStateRef.current = nextViewCullState;
+    setViewCullState(nextViewCullState);
+  });
+
   if (!visible) return null;
-
-  const posArray: [number, number, number] = Array.isArray(position)
-    ? position
-    : [position.x, position.y, position.z];
-
-  const posVec = Array.isArray(position)
-    ? new THREE.Vector3(...position)
-    : position;
-
-  const rotArray: [number, number, number] = Array.isArray(rotation)
-    ? rotation
-    : [rotation.x, rotation.y, rotation.z];
 
   const handlePointerEnter = (part: string) => {
     if (isGlobalDragging) return;
@@ -171,13 +287,7 @@ export function TransformGizmo({
   };
 
   const handleDragStart = (part: string, isUniform?: boolean): boolean => {
-    const axisFromPart = part.endsWith('-x')
-      ? 'x'
-      : part.endsWith('-y')
-        ? 'y'
-        : part.endsWith('-z')
-          ? 'z'
-          : undefined;
+    const axisFromPart = getAxisFromPart(part);
 
     if ((part === 'center' || part.startsWith('axis-')) && onMoveStart) {
       const allowed = onMoveStart(axisFromPart);
@@ -268,6 +378,45 @@ export function TransformGizmo({
   const suppressHover = isGlobalDragging;
   const dragOpacityScale = isGlobalDragging ? 0.6 : 1;
 
+  const getViewCullOpacity = (part: string): number => {
+    if (part === activePart) {
+      return 1;
+    }
+
+    const axis = getAxisFromPart(part);
+    if (!axis) {
+      return 1;
+    }
+
+    if (part.startsWith('axis-')) {
+      return viewCullState.move[axis];
+    }
+
+    if (part.startsWith('scale-')) {
+      return viewCullState.scale[axis];
+    }
+
+    if (part.startsWith('ring-')) {
+      return viewCullState.rotate[axis];
+    }
+
+    return 1;
+  };
+
+  const isViewHidden = (part: string) => {
+    if (part === activePart) {
+      return false;
+    }
+
+    return getViewCullOpacity(part) <= VIEW_CULL_HIDE_THRESHOLD;
+  };
+
+  const partOpacityScale = (part: string) => dragOpacityScale * getViewCullOpacity(part);
+
+  const partIsHidden = (part: string) => isHidden(part) || isViewHidden(part);
+
+  const shouldRenderPart = (part: string) => !isViewHidden(part);
+
   React.useEffect(() => {
     if (!suppressHover) return;
     if (hoverClearRafRef.current !== null) {
@@ -298,15 +447,15 @@ export function TransformGizmo({
 
       {enableMove && (
         <>
-          {isAxisAllowed('x') && (
+          {isAxisAllowed('x') && shouldRenderPart('axis-x') && (
             <GizmoMove
               axis="x"
               isHovered={!suppressHover && hoveredPart === 'axis-x'}
               isActive={activePart === 'axis-x'}
               isDimmed={isDimmed('axis-x')}
-              isHidden={isHidden('axis-x')}
+              isHidden={partIsHidden('axis-x')}
               suppressHover={suppressHover}
-              opacityScale={dragOpacityScale}
+              opacityScale={partOpacityScale('axis-x')}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -320,15 +469,15 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {isAxisAllowed('y') && (
+          {isAxisAllowed('y') && shouldRenderPart('axis-y') && (
             <GizmoMove
               axis="y"
               isHovered={!suppressHover && hoveredPart === 'axis-y'}
               isActive={activePart === 'axis-y'}
               isDimmed={isDimmed('axis-y')}
-              isHidden={isHidden('axis-y')}
+              isHidden={partIsHidden('axis-y')}
               suppressHover={suppressHover}
-              opacityScale={dragOpacityScale}
+              opacityScale={partOpacityScale('axis-y')}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -342,15 +491,15 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {isAxisAllowed('z') && (
+          {isAxisAllowed('z') && shouldRenderPart('axis-z') && (
             <GizmoMove
               axis="z"
               isHovered={!suppressHover && hoveredPart === 'axis-z'}
               isActive={activePart === 'axis-z'}
               isDimmed={isDimmed('axis-z')}
-              isHidden={isHidden('axis-z')}
+              isHidden={partIsHidden('axis-z')}
               suppressHover={suppressHover}
-              opacityScale={dragOpacityScale}
+              opacityScale={partOpacityScale('axis-z')}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -369,104 +518,116 @@ export function TransformGizmo({
 
       {enableRotate && (
         <>
-          <GizmoRotation
-            axis="x"
-            isHovered={!suppressHover && hoveredPart === 'ring-x'}
-            isActive={activePart === 'ring-x'}
-            isDimmed={isDimmed('ring-x')}
-            isHidden={isHidden('ring-x')}
-            suppressHover={suppressHover}
-            opacityScale={dragOpacityScale}
-            suppressAxisAnimations={suppressAxisAnimations}
-            gizmoPosition={posVec}
-            onDragStart={() => handleDragStart('ring-x')}
-            onDrag={(angle: number) => handleRotate('x', angle)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('ring-x')}
-            onPointerLeave={handlePointerLeave}
-          />
-          <GizmoRotation
-            axis="y"
-            isHovered={!suppressHover && hoveredPart === 'ring-y'}
-            isActive={activePart === 'ring-y'}
-            isDimmed={isDimmed('ring-y')}
-            isHidden={isHidden('ring-y')}
-            suppressHover={suppressHover}
-            opacityScale={dragOpacityScale}
-            suppressAxisAnimations={suppressAxisAnimations}
-            gizmoPosition={posVec}
-            onDragStart={() => handleDragStart('ring-y')}
-            onDrag={(angle: number) => handleRotate('y', angle)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('ring-y')}
-            onPointerLeave={handlePointerLeave}
-          />
-          <GizmoRotation
-            axis="z"
-            isHovered={!suppressHover && hoveredPart === 'ring-z'}
-            isActive={activePart === 'ring-z'}
-            isDimmed={isDimmed('ring-z')}
-            isHidden={isHidden('ring-z')}
-            suppressHover={suppressHover}
-            opacityScale={dragOpacityScale}
-            suppressAxisAnimations={suppressAxisAnimations}
-            gizmoPosition={posVec}
-            onDragStart={() => handleDragStart('ring-z')}
-            onDrag={(angle: number) => handleRotate('z', angle)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('ring-z')}
-            onPointerLeave={handlePointerLeave}
-          />
+          {shouldRenderPart('ring-x') && (
+            <GizmoRotation
+              axis="x"
+              isHovered={!suppressHover && hoveredPart === 'ring-x'}
+              isActive={activePart === 'ring-x'}
+              isDimmed={isDimmed('ring-x')}
+              isHidden={partIsHidden('ring-x')}
+              suppressHover={suppressHover}
+              opacityScale={partOpacityScale('ring-x')}
+              suppressAxisAnimations={suppressAxisAnimations}
+              gizmoPosition={posVec}
+              onDragStart={() => handleDragStart('ring-x')}
+              onDrag={(angle: number) => handleRotate('x', angle)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('ring-x')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
+          {shouldRenderPart('ring-y') && (
+            <GizmoRotation
+              axis="y"
+              isHovered={!suppressHover && hoveredPart === 'ring-y'}
+              isActive={activePart === 'ring-y'}
+              isDimmed={isDimmed('ring-y')}
+              isHidden={partIsHidden('ring-y')}
+              suppressHover={suppressHover}
+              opacityScale={partOpacityScale('ring-y')}
+              suppressAxisAnimations={suppressAxisAnimations}
+              gizmoPosition={posVec}
+              onDragStart={() => handleDragStart('ring-y')}
+              onDrag={(angle: number) => handleRotate('y', angle)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('ring-y')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
+          {shouldRenderPart('ring-z') && (
+            <GizmoRotation
+              axis="z"
+              isHovered={!suppressHover && hoveredPart === 'ring-z'}
+              isActive={activePart === 'ring-z'}
+              isDimmed={isDimmed('ring-z')}
+              isHidden={partIsHidden('ring-z')}
+              suppressHover={suppressHover}
+              opacityScale={partOpacityScale('ring-z')}
+              suppressAxisAnimations={suppressAxisAnimations}
+              gizmoPosition={posVec}
+              onDragStart={() => handleDragStart('ring-z')}
+              onDrag={(angle: number) => handleRotate('z', angle)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('ring-z')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
         </>
       )}
 
       {enableScale && (
         <>
-          <GizmoScale
-            axis="x"
-            isHovered={!suppressHover && hoveredPart === 'scale-x'}
-            isActive={activePart === 'scale-x'}
-            isDimmed={isDimmed('scale-x')}
-            isHidden={isHidden('scale-x')}
-            suppressHover={suppressHover}
-            opacityScale={dragOpacityScale}
-            gizmoPosition={posVec}
-            onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
-            onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('scale-x')}
-            onPointerLeave={handlePointerLeave}
-          />
-          <GizmoScale
-            axis="y"
-            isHovered={!suppressHover && hoveredPart === 'scale-y'}
-            isActive={activePart === 'scale-y'}
-            isDimmed={isDimmed('scale-y')}
-            isHidden={isHidden('scale-y')}
-            suppressHover={suppressHover}
-            opacityScale={dragOpacityScale}
-            gizmoPosition={posVec}
-            onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
-            onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('scale-y')}
-            onPointerLeave={handlePointerLeave}
-          />
-          <GizmoScale
-            axis="z"
-            isHovered={!suppressHover && hoveredPart === 'scale-z'}
-            isActive={activePart === 'scale-z'}
-            isDimmed={isDimmed('scale-z')}
-            isHidden={isHidden('scale-z')}
-            suppressHover={suppressHover}
-            opacityScale={dragOpacityScale}
-            gizmoPosition={posVec}
-            onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
-            onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('scale-z')}
-            onPointerLeave={handlePointerLeave}
-          />
+          {shouldRenderPart('scale-x') && (
+            <GizmoScale
+              axis="x"
+              isHovered={!suppressHover && hoveredPart === 'scale-x'}
+              isActive={activePart === 'scale-x'}
+              isDimmed={isDimmed('scale-x')}
+              isHidden={partIsHidden('scale-x')}
+              suppressHover={suppressHover}
+              opacityScale={partOpacityScale('scale-x')}
+              gizmoPosition={posVec}
+              onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
+              onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('scale-x')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
+          {shouldRenderPart('scale-y') && (
+            <GizmoScale
+              axis="y"
+              isHovered={!suppressHover && hoveredPart === 'scale-y'}
+              isActive={activePart === 'scale-y'}
+              isDimmed={isDimmed('scale-y')}
+              isHidden={partIsHidden('scale-y')}
+              suppressHover={suppressHover}
+              opacityScale={partOpacityScale('scale-y')}
+              gizmoPosition={posVec}
+              onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
+              onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('scale-y')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
+          {shouldRenderPart('scale-z') && (
+            <GizmoScale
+              axis="z"
+              isHovered={!suppressHover && hoveredPart === 'scale-z'}
+              isActive={activePart === 'scale-z'}
+              isDimmed={isDimmed('scale-z')}
+              isHidden={partIsHidden('scale-z')}
+              suppressHover={suppressHover}
+              opacityScale={partOpacityScale('scale-z')}
+              gizmoPosition={posVec}
+              onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
+              onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('scale-z')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
         </>
       )}
     </group>
