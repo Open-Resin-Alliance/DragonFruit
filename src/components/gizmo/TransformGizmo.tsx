@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { DEFAULT_GIZMO_CONFIG } from './constants';
-import type { TransformGizmoProps, GizmoAxis } from './types';
+import type { TransformGizmoProps, GizmoAxis, GizmoOperation } from './types';
 import { GizmoCenter } from './move/GizmoCenter';
 import { GizmoMove } from './move/GizmoMove';
 import { GizmoRotation } from './rotate/GizmoRotation';
@@ -107,6 +107,13 @@ function getAxisFromPart(part: string): GizmoAxis | undefined {
   if (part.endsWith('-y')) return 'y';
   if (part.endsWith('-z')) return 'z';
   return undefined;
+}
+
+function getOperationFromPart(part: string): GizmoOperation | null {
+  if (part === 'center' || part.startsWith('axis-')) return 'move';
+  if (part.startsWith('ring-')) return 'rotate';
+  if (part.startsWith('scale-')) return 'scale';
+  return null;
 }
 
 /**
@@ -314,7 +321,8 @@ export function TransformGizmo({
       setIsUniformScale(isUniform);
     }
 
-    if (onDragStateChange) onDragStateChange(true);
+    const operation = getOperationFromPart(part);
+    if (onDragStateChange && operation) onDragStateChange(true, { operation });
 
     return true;
   };
@@ -329,7 +337,8 @@ export function TransformGizmo({
       hoverClearRafRef.current = null;
     }
 
-    if (onDragStateChange) onDragStateChange(false);
+    const operation = part ? getOperationFromPart(part) : null;
+    if (onDragStateChange) onDragStateChange(false, operation ? { operation } : undefined);
 
     if (part === 'center' && onMoveEnd) onMoveEnd();
     if (part?.startsWith('axis-') && onMoveEnd) onMoveEnd();

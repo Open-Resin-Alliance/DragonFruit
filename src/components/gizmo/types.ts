@@ -9,6 +9,10 @@ export type GizmoAxis = 'x' | 'y' | 'z';
 export type GizmoPlane = 'xy' | 'xz' | 'yz';
 export type GizmoOperation = 'move' | 'rotate' | 'scale';
 
+export interface GizmoDragStateChangeDetails {
+  operation: GizmoOperation;
+}
+
 export interface GizmoColors {
   // Axis gradients (start → end)
   xAxis: {
@@ -101,7 +105,7 @@ export interface GizmoConfig {
   onScaleEnd?: () => void;
   
   // Drag state callback (for disabling OrbitControls during drag)
-  onDragStateChange?: (isDragging: boolean) => void;
+  onDragStateChange?: (isDragging: boolean, details?: GizmoDragStateChangeDetails) => void;
 }
 
 export interface TransformGizmoProps extends GizmoConfig {
