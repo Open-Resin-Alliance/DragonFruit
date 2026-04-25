@@ -64,6 +64,7 @@ export type UseSceneAutosaveResult = {
   isAutosaving: boolean;
   lastAutosaveAt: string | null;
   clearAutosave: () => Promise<void>;
+  flushAutosave: () => Promise<void>;
 };
 
 export function useSceneAutosave({
@@ -97,52 +98,69 @@ export function useSceneAutosave({
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const capRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = React.useRef(false);
+  const autosavePromiseRef = React.useRef<Promise<void> | null>(null);
   const dirtyRef = React.useRef(false);
 
   const performAutosave = React.useCallback(async () => {
-    if (!enabledRef.current) return;
-    if (!isDesktopRuntime()) return;
-    if (inFlightRef.current) return;
-    if (Date.now() < sceneAutosaveSuppressRef.current) return;
+    if (autosavePromiseRef.current) {
+      await autosavePromiseRef.current;
+      return;
+    }
 
-    const currentModels = modelsRef.current;
-    if (currentModels.length === 0) return;
+    const run = async () => {
+      if (!enabledRef.current) return;
+      if (!isDesktopRuntime()) return;
+      if (Date.now() < sceneAutosaveSuppressRef.current) return;
 
-    inFlightRef.current = true;
-    dirtyRef.current = false;
-    setIsAutosaving(true);
+      const currentModels = modelsRef.current;
+      if (currentModels.length === 0) return;
 
+      inFlightRef.current = true;
+      dirtyRef.current = false;
+      setIsAutosaving(true);
+
+      try {
+        const { voxlPath } = await getAutosavePaths(preferredSavePathRef.current);
+
+        await ExportManager.exportScene(
+          null,
+          null,
+          {
+            filename: 'autosave',
+            format: 'voxl',
+            binary: true,
+            separateFiles: false,
+            includeRaft: false,
+            includeSupports: true,
+            includeModel: true,
+          },
+          {
+            models: currentModels,
+            activeModelId: activeModelIdRef.current,
+            selectedModelIds: selectedModelIdsRef.current,
+          },
+          { nativePath: voxlPath },
+        );
+
+        const savedAt = new Date().toISOString();
+        await writeManifest(savedAt, false);
+        setLastAutosaveAt(savedAt);
+      } catch (err) {
+        console.warn('[SceneAutosave] Autosave failed:', err);
+      } finally {
+        inFlightRef.current = false;
+        setIsAutosaving(false);
+      }
+    };
+
+    const promise = run();
+    autosavePromiseRef.current = promise;
     try {
-      const { voxlPath } = await getAutosavePaths(preferredSavePathRef.current);
-
-      await ExportManager.exportScene(
-        null,
-        null,
-        {
-          filename: 'autosave',
-          format: 'voxl',
-          binary: true,
-          separateFiles: false,
-          includeRaft: false,
-          includeSupports: true,
-          includeModel: true,
-        },
-        {
-          models: currentModels,
-          activeModelId: activeModelIdRef.current,
-          selectedModelIds: selectedModelIdsRef.current,
-        },
-        { nativePath: voxlPath },
-      );
-
-      const savedAt = new Date().toISOString();
-      await writeManifest(savedAt, false);
-      setLastAutosaveAt(savedAt);
-    } catch (err) {
-      console.warn('[SceneAutosave] Autosave failed:', err);
+      await promise;
     } finally {
-      inFlightRef.current = false;
-      setIsAutosaving(false);
+      if (autosavePromiseRef.current === promise) {
+        autosavePromiseRef.current = null;
+      }
     }
   }, []);
 
@@ -209,7 +227,23 @@ export function useSceneAutosave({
     }
   }, []);
 
-  return { isAutosaving, lastAutosaveAt, clearAutosave };
+  const flushAutosave = React.useCallback(async () => {
+    if (!enabledRef.current || !isDesktopRuntime()) return;
+
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    if (capRef.current !== null) {
+      clearTimeout(capRef.current);
+      capRef.current = null;
+    }
+
+    dirtyRef.current = true;
+    await performAutosave();
+  }, [performAutosave]);
+
+  return { isAutosaving, lastAutosaveAt, clearAutosave, flushAutosave };
 }
 
 // ---------------------------------------------------------------------------

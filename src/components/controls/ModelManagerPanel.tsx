@@ -17,9 +17,11 @@ import {
   PanelsTopLeft,
   Info,
   Crosshair,
+  Wrench,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -38,6 +40,7 @@ interface ModelManagerPanelProps {
   onUngroupGroup?: (groupId: string) => void;
   onRenameGroup?: (groupId: string, nextName: string) => void;
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
+  onRepairModel?: (id: string) => void;
   onOpenSupportsInfo?: (id: string) => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
@@ -81,6 +84,7 @@ export function ModelManagerPanel({
   onUngroupGroup,
   onRenameGroup,
   onModelContextMenu,
+  onRepairModel,
   onOpenSupportsInfo,
   onDelete,
   onVisibilityChange,
@@ -582,7 +586,10 @@ export function ModelManagerPanel({
                               {model.name}
                             </div>
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {model.polygonCount.toLocaleString()} polys
+                              {formatMeshStatsForDisplay({
+                                polygonCount: model.polygonCount,
+                                componentCount: model.geometry.meshDefects?.nativeRepairReport?.post.component_count,
+                              })}
                             </div>
                           </div>
 
@@ -720,21 +727,39 @@ export function ModelManagerPanel({
               <span>Ungroup Folder</span>
             </button>
 
-            {contextModel && onModelContextMenu && (
+            {contextModel && (onModelContextMenu || onRepairModel) && (
               <>
                 <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-                  style={{ color: 'var(--text-strong)' }}
-                  onClick={() => {
-                    onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
-                    closeContextMenu();
-                  }}
-                >
-                  <Box className="h-3.5 w-3.5" />
-                  <span>Model Actions…</span>
-                </button>
+
+                {onRepairModel && (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => {
+                      onRepairModel(contextModel.id);
+                      closeContextMenu();
+                    }}
+                  >
+                    <Wrench className="h-3.5 w-3.5" />
+                    <span>Repair Mesh…</span>
+                  </button>
+                )}
+
+                {onModelContextMenu && (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => {
+                      onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
+                      closeContextMenu();
+                    }}
+                  >
+                    <Box className="h-3.5 w-3.5" />
+                    <span>Model Actions…</span>
+                  </button>
+                )}
               </>
             )}
           </div>

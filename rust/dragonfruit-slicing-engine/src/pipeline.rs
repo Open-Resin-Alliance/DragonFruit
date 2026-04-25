@@ -285,6 +285,7 @@ pub fn render_layers_bounded(
                                     triangles,
                                     layer_candidates,
                                     layer,
+                                    compute_area_stats,
                                 );
                                 raster_ns.fetch_add(
                                     raster_start.elapsed().as_nanos() as u64,
@@ -487,6 +488,7 @@ pub fn render_layers_rle(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_index: &LayerIndex,
+    compute_area_stats: bool,
     mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
@@ -528,8 +530,13 @@ pub fn render_layers_rle(
 
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
-                                let (runs, stats) =
-                                    rasterize_layer_rle(job, triangles, layer_candidates, layer);
+                                let (runs, stats) = rasterize_layer_rle(
+                                    job,
+                                    triangles,
+                                    layer_candidates,
+                                    layer,
+                                    compute_area_stats,
+                                );
                                 raster_ns.fetch_add(
                                     raster_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,
@@ -620,6 +627,7 @@ pub fn render_layers_rle_encoded(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_index: &LayerIndex,
+    compute_area_stats: bool,
     encode_fn: std::sync::Arc<
         dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
     >,
@@ -663,8 +671,13 @@ pub fn render_layers_rle_encoded(
 
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
-                                let (runs, stats) =
-                                    rasterize_layer_rle(job, triangles, layer_candidates, layer);
+                                let (runs, stats) = rasterize_layer_rle(
+                                    job,
+                                    triangles,
+                                    layer_candidates,
+                                    layer,
+                                    compute_area_stats,
+                                );
                                 raster_ns.fetch_add(
                                     raster_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,

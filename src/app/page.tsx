@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -48,6 +48,7 @@ import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
+import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
@@ -160,11 +161,14 @@ import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
+import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
+import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
+import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -191,6 +195,9 @@ type PrintingMonitorRecentPlate = {
   layerCount: number | null;
   printTimeSec: number | null;
   usedMaterialMl: number | null;
+  totalSolidAreaMm2: number | null;
+  smallestAreaMm2: number | null;
+  largestAreaMm2: number | null;
 };
 
 type PrintingMonitorPendingConfirmation =
@@ -440,6 +447,14 @@ function getFileNameFromPath(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function isDragonfruitTempArtifactPath(path: string | null | undefined): boolean {
+  if (typeof path !== 'string') return false;
+  const trimmed = path.trim();
+  if (!trimmed) return false;
+  const name = getFileNameFromPath(trimmed).toLowerCase();
+  return name.startsWith('dragonfruit-slice-');
+}
+
 function isSupportedPrepareDropName(name: string): boolean {
   return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name));
 }
@@ -630,6 +645,13 @@ function formatPrintingMonitorUsedMaterial(ml: number | null): string {
   return `${ml.toFixed(2)} mL`;
 }
 
+function formatPrintingMonitorAreaMm2(areaMm2: number | null): string {
+  if (areaMm2 == null || !Number.isFinite(areaMm2) || areaMm2 <= 0) return '—';
+  if (areaMm2 >= 1000) return `${areaMm2.toFixed(0)} mm²`;
+  if (areaMm2 >= 100) return `${areaMm2.toFixed(1)} mm²`;
+  return `${areaMm2.toFixed(2)} mm²`;
+}
+
 function parsePrintingMonitorSeconds(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return Math.round(value);
@@ -691,6 +713,26 @@ function parsePrintingMonitorMaterialMl(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parsePrintingMonitorAreaMm2(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+
+  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
+  if (!extracted) return null;
+  const parsed = Number(extracted[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizePrintingMonitorWebcamAspectRatio(value: number | null | undefined): number | null {
   if (value == null || !Number.isFinite(value) || value <= 0) return null;
   // Keep practical camera bounds and reject pathological stream metadata.
@@ -732,11 +774,14 @@ export default function Home() {
     const profile = activePrinterProfile;
     if (!profile || !profile.networkSupport) return null;
     if (profile.networkConnection?.connected !== true) return null;
+    const selectedMaterialId = profile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return null;
     const candidate = Number(profile.networkConnection?.selectedMaterialLayerHeightMm);
     if (!Number.isFinite(candidate) || candidate <= 0) return null;
     return candidate;
   }, [
     activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialId,
     activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
     activePrinterProfile?.networkSupport,
   ]);
@@ -849,6 +894,7 @@ export default function Home() {
   const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
   const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
+  const [isPreSliceSceneSaveInProgress, setIsPreSliceSceneSaveInProgress] = React.useState(false);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
   const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
@@ -907,12 +953,17 @@ export default function Home() {
   const sceneSaveQueuedRef = React.useRef(false);
   const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
   const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
+  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
 
-  const { isAutosaving, clearAutosave } = useSceneAutosave({
+  const sceneAutosaveEnabled = sceneAutosaveSettings.enabled
+    && !isSlicingBusy
+    && scene.mode !== 'printing';
+
+  const { isAutosaving, clearAutosave, flushAutosave } = useSceneAutosave({
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
-    enabled: sceneAutosaveSettings.enabled,
+    enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     capMs: sceneAutosaveSettings.capMs,
     preferredSavePath: preferredOverwriteScenePathRef.current,
@@ -921,7 +972,7 @@ export default function Home() {
   React.useEffect(() => {
     const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
     const TOAST_ANIMATION_MS = 220;
-    const hasActiveSaveWork = isSceneSaveInProgress || isAutosaving;
+    const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
 
     if (hasActiveSaveWork) {
       if (saveToastHideTimeoutRef.current !== null) {
@@ -977,7 +1028,7 @@ export default function Home() {
         setIsSaveToastVisible(false);
       }, TOAST_ANIMATION_MS);
     }, remaining);
-  }, [isAutosaving, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+  }, [isAutosaving, isPreSliceSceneSaveInProgress, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
 
   React.useEffect(() => {
     return () => {
@@ -1005,6 +1056,8 @@ export default function Home() {
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
+  const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
     const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
@@ -1034,7 +1087,6 @@ export default function Home() {
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
   const [printingPngLoadedUrl, setPrintingPngLoadedUrl] = React.useState<string | null>(null);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
-  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
@@ -1083,9 +1135,15 @@ export default function Home() {
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
+  const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
+  const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
+    filePath: string | null;
+    slicingTimeMs: number | null;
+  }>({ filePath: null, slicingTimeMs: null });
   const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
+  const printingSendCancelRequestedRef = React.useRef(false);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
   const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
   const [printingUploadTelemetry, setPrintingUploadTelemetry] = React.useState<{
@@ -2586,8 +2644,7 @@ export default function Home() {
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-    scene.setMode('printing');
-  }, [scene]);
+  }, []);
 
   const handleSliceRunStartedForPrinting = React.useCallback(() => {
     setShouldAutoSliceOnExportEntry(false);
@@ -3027,6 +3084,20 @@ export default function Home() {
       // 'file': write to pre-selected destination, then navigate to printing workspace.
       const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
       preSliceFileDestinationPathRef.current = null;
+
+      const nativePathForIntent = artifact.nativeTempPath?.trim() || '';
+      const normalizePathForCompare = (value: string) => value.replace(/\\/g, '/').toLowerCase();
+      if (
+        destinationPath
+        && nativePathForIntent
+        && normalizePathForCompare(destinationPath) === normalizePathForCompare(nativePathForIntent)
+      ) {
+        setCompletedSaveDestinationPath(destinationPath);
+        setShouldAutoSliceOnExportEntry(false);
+        scene.setMode('printing');
+        return;
+      }
+
       const saveAndNavigate = async (a: SliceExportArtifact) => {
         let savedPath: string | null = null;
 
@@ -3048,8 +3119,8 @@ export default function Home() {
           const nativePath = a.nativeTempPath?.trim() || '';
           if (nativePath) {
             try {
-              await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
-              savedPath = a.outputName;
+              const resolvedPath = await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
+              savedPath = resolvedPath || a.outputName;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err ?? '');
               if (msg.toLowerCase().includes('cancel')) return;
@@ -3062,8 +3133,8 @@ export default function Home() {
                 ? new Uint8Array(await a.blob.arrayBuffer())
                 : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
               if (!bytes) throw new Error('No artifact bytes');
-              await savePrintArtifactWithNativeDialog(bytes, a.outputName);
-              savedPath = a.outputName;
+              const resolvedPath = await savePrintArtifactWithNativeDialog(bytes, a.outputName);
+              savedPath = resolvedPath || a.outputName;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err ?? '');
               if (msg.toLowerCase().includes('cancel')) return;
@@ -3092,6 +3163,23 @@ export default function Home() {
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
   }, []);
+
+  React.useEffect(() => {
+    if (completedSliceIntent !== 'file' || !completedSaveDestinationPath) {
+      return;
+    }
+
+    const slicingTimeMs = printingSlicingBenchmark?.totalElapsedMs ?? null;
+    if (slicingTimeMs === null || !Number.isFinite(slicingTimeMs)) {
+      return;
+    }
+
+    setSliceCompletedModalData({
+      filePath: completedSaveDestinationPath,
+      slicingTimeMs,
+    });
+    setShowSliceCompletedModal(true);
+  }, [completedSliceIntent, completedSaveDestinationPath, printingSlicingBenchmark?.totalElapsedMs]);
 
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';
@@ -4009,39 +4097,7 @@ export default function Home() {
       return selectedName;
     }
 
-    const formatResinFamilyLabel = (resinFamily: string | null | undefined): string => {
-      const normalized = (resinFamily ?? '').trim().toLowerCase();
-      if (!normalized) return '';
-      if (normalized === 'standard') return 'Standard';
-      if (normalized === 'abs-like') return 'ABS-like';
-      if (normalized === 'tough') return 'Tough';
-      if (normalized === 'flexible') return 'Flexible';
-      if (normalized === 'engineering') return 'Engineering';
-      if (normalized === 'other') return 'Other';
-      return normalized;
-    };
-
-    const compositeLocalMaterialName = (() => {
-      if (!activeMaterialProfile) return null;
-
-      const brand = (activeMaterialProfile.brand ?? '').trim();
-      const resinFamilyLabel = formatResinFamilyLabel(activeMaterialProfile.resinFamily);
-      const name = (activeMaterialProfile.name ?? '').trim();
-
-      const parts: string[] = [];
-      const pushUnique = (value: string) => {
-        if (!value) return;
-        if (parts.some((part) => part.toLowerCase() === value.toLowerCase())) return;
-        parts.push(value);
-      };
-
-      pushUnique(brand);
-      pushUnique(resinFamilyLabel);
-      pushUnique(name);
-
-      if (parts.length === 0) return null;
-      return parts.join(' ');
-    })();
+    const compositeLocalMaterialName = resolveCompositeMaterialLabel(activeMaterialProfile);
 
     return compositeLocalMaterialName ?? activeMaterialProfile?.name ?? 'No resin selected';
   }, [
@@ -4059,6 +4115,11 @@ export default function Home() {
     printingArtifact
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
+  );
+  const canRetrySendToPrinter = Boolean(
+    printingUploadDialogStage === 'failed'
+    && !printingSendBusy
+    && canSendToPrinter,
   );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
   const canSliceAndUpload = Boolean(
@@ -4087,6 +4148,17 @@ export default function Home() {
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
   );
+
+  const handlePreSliceSceneSave = React.useCallback(async (): Promise<void> => {
+    setIsPreSliceSceneSaveInProgress(true);
+    try {
+      await flushAutosave();
+    } catch (error) {
+      console.warn('[Slicing] Failed to flush autosave before slicing; continuing.', error);
+    } finally {
+      setIsPreSliceSceneSaveInProgress(false);
+    }
+  }, [flushAutosave]);
 
   const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
     if (shouldReturnToPrintingAfterSliceRef.current) {
@@ -5007,7 +5079,8 @@ export default function Home() {
 
   // Delete previously-owned temp artifacts once replaced or cleared.
   React.useEffect(() => {
-    const currentPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const currentArtifactPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const currentPath = isDragonfruitTempArtifactPath(currentArtifactPath) ? currentArtifactPath : null;
     const previousPath = lastOwnedPrintTempPathRef.current;
 
     if (previousPath && previousPath !== currentPath) {
@@ -5550,8 +5623,32 @@ export default function Home() {
             ?? fileData?.MaterialUsage
             ?? fileData?.materialUsage
             ?? fileData?.material_usage;
+          const rawTotalSolidArea =
+            plate.TotalSolidArea
+            ?? plate.totalSolidArea
+            ?? plate.total_solid_area
+            ?? fileData?.TotalSolidArea
+            ?? fileData?.totalSolidArea
+            ?? fileData?.total_solid_area;
+          const rawLargestArea =
+            plate.LargestArea
+            ?? plate.largestArea
+            ?? plate.largest_area
+            ?? fileData?.LargestArea
+            ?? fileData?.largestArea
+            ?? fileData?.largest_area;
+          const rawSmallestArea =
+            plate.SmallestArea
+            ?? plate.smallestArea
+            ?? plate.smallest_area
+            ?? fileData?.SmallestArea
+            ?? fileData?.smallestArea
+            ?? fileData?.smallest_area;
           const parsedPrintTimeSec = parsePrintingMonitorSeconds(rawPrintTime);
           const parsedUsedMaterialMl = parsePrintingMonitorMaterialMl(rawUsedMaterial);
+          const parsedTotalSolidAreaMm2 = parsePrintingMonitorAreaMm2(rawTotalSolidArea);
+          const parsedLargestAreaMm2 = parsePrintingMonitorAreaMm2(rawLargestArea);
+          const parsedSmallestAreaMm2 = parsePrintingMonitorAreaMm2(rawSmallestArea);
 
           return {
             plateId: Math.round(plateId),
@@ -5565,6 +5662,9 @@ export default function Home() {
               : null,
             printTimeSec: parsedPrintTimeSec,
             usedMaterialMl: parsedUsedMaterialMl,
+            totalSolidAreaMm2: parsedTotalSolidAreaMm2,
+            smallestAreaMm2: parsedSmallestAreaMm2,
+            largestAreaMm2: parsedLargestAreaMm2,
           } satisfies PrintingMonitorRecentPlate;
         })
         .filter((item: PrintingMonitorRecentPlate | null): item is PrintingMonitorRecentPlate => item !== null)
@@ -7570,6 +7670,13 @@ export default function Home() {
       return;
     }
 
+    const isCancelRequested = () => printingSendCancelRequestedRef.current;
+    const throwIfCanceled = () => {
+      if (isCancelRequested()) {
+        throw new Error('Upload canceled by user.');
+      }
+    };
+
     setPrintingTargetDeviceId(targetDevice.id);
     selectPrinterNetworkDevice(activePrinterProfile.id, targetDevice.id);
 
@@ -7589,6 +7696,7 @@ export default function Home() {
     }
 
     setPrintingReadyPlateId(null);
+  printingSendCancelRequestedRef.current = false;
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
@@ -7603,6 +7711,7 @@ export default function Home() {
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
       let zipBlob = printingArtifact.blob;
+      throwIfCanceled();
 
       // If we have a local temp path and no blob, read the blob from native bridge
       if (!zipBlob && nativeTempPath) {
@@ -7620,6 +7729,8 @@ export default function Home() {
       if (!zipBlob) {
         throw new Error('No print artifact blob available for printer upload.');
       }
+
+      throwIfCanceled();
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
       const networkMode = (activeNetworkUiAdapter.mode || '').trim();
@@ -7641,6 +7752,7 @@ export default function Home() {
         profileId: selectedMaterialId,
         callbacks: {
           onProgress: (event: PluginUploadProgressEvent) => {
+            if (isCancelRequested()) return;
             const progress = event.percentComplete / 100;
             const clampedProgress = Math.min(progress, 0.9999);
             if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
@@ -7656,6 +7768,7 @@ export default function Home() {
             });
           },
           onStatusUpdate: (update) => {
+            if (isCancelRequested()) return;
             if (update.stage === 'processing') {
               setPrintingSendProgress(1);
               setPrintingUploadDisplayProgress(1);
@@ -7684,10 +7797,13 @@ export default function Home() {
             }
           },
           onComplete: (plateId) => {
+            if (isCancelRequested()) return;
             resolvedPlateId = plateId;
           },
         },
       });
+
+      throwIfCanceled();
 
       if (!uploadResult.ok) {
         throw new Error('Upload failed on printer backend');
@@ -7700,6 +7816,7 @@ export default function Home() {
       let pollFailureCount = 0;
 
       while ((Date.now() - startedAt) < timeoutMs) {
+        throwIfCanceled();
         try {
           const responseReady = await pluginNetworkFetch({
             pluginId: printingMonitoringAdapter.pluginId,
@@ -7722,6 +7839,8 @@ export default function Home() {
             resolvedPlateId = matchedPlateId;
           }
 
+          throwIfCanceled();
+
           metadataReady = readyPayload?.metadataReady === true;
           pollFailureCount = 0;
 
@@ -7738,6 +7857,8 @@ export default function Home() {
         await new Promise<void>((resolve) => {
           window.setTimeout(resolve, pollMs);
         });
+
+        throwIfCanceled();
       }
 
       if (resolvedPlateId) {
@@ -7776,8 +7897,14 @@ export default function Home() {
         printingUploadProcessingHandoffTimeoutRef.current = null;
       }
       const message = error instanceof Error ? error.message : 'Unknown error';
-      setPrintingSendStatusText(`Send failed: ${message}`);
-      setPrintingSendStageText('Upload failed');
+      const canceled = printingSendCancelRequestedRef.current || /cancel|abort/i.test(message);
+      if (canceled) {
+        setPrintingSendStatusText('Upload canceled. You can retry when ready.');
+        setPrintingSendStageText('Upload canceled');
+      } else {
+        setPrintingSendStatusText(`Send failed: ${message}`);
+        setPrintingSendStageText('Upload failed');
+      }
       setPrintingUploadDialogStage('failed');
       setPrintingDeviceProcessingStartedAtMs(null);
       setPrintingUploadTelemetry(null);
@@ -7785,6 +7912,7 @@ export default function Home() {
       setPrintingUploadDisplayProgress(0);
     } finally {
       setPrintingSendBusy(false);
+      printingSendCancelRequestedRef.current = false;
     }
   }, [
     activeNetworkUiAdapter,
@@ -7828,6 +7956,26 @@ export default function Home() {
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
   ]);
+
+  const handleCancelSendToPrinter = React.useCallback(() => {
+    if (!printingSendBusy) return;
+
+    printingSendCancelRequestedRef.current = true;
+    setPrintingSendStageText('Canceling upload…');
+    setPrintingSendStatusText('Canceling upload…');
+
+    if (activeNetworkUiAdapter?.pluginId === 'athena') {
+      void import('../../plugins/athena/network')
+        .then((mod) => {
+          if (typeof mod.abortUpload === 'function') {
+            mod.abortUpload();
+          }
+        })
+        .catch(() => {
+          // Ignore; cooperative cancellation checks still stop follow-up work.
+        });
+    }
+  }, [activeNetworkUiAdapter?.pluginId, printingSendBusy]);
 
   const openPrintingMonitorForTargetDevice = React.useCallback((deviceId: string | null) => {
     printingMonitorStartFocusDeviceIdRef.current = deviceId;
@@ -8830,6 +8978,10 @@ export default function Home() {
     setEditorContextMenuPos(position);
   }, [scene]);
 
+  const handleRepairModel = React.useCallback((modelId: string) => {
+    setManualRepairModelId(modelId);
+  }, []);
+
   const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
     setSupportsInfoModelId(modelId);
   }, []);
@@ -9166,10 +9318,13 @@ export default function Home() {
       window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
     }
 
+    const sceneImportToastDurationMs = scene.sceneImportReport.durationMs ?? 4200;
+    const sceneImportToastFadeMs = Math.max(0, sceneImportToastDurationMs - 400);
+
     sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
       setIsSceneImportToastVisible(false);
       sceneImportToastFadeTimeoutRef.current = null;
-    }, 3800);
+    }, sceneImportToastFadeMs);
 
     return () => {
       if (sceneImportToastFadeTimeoutRef.current !== null) {
@@ -9354,9 +9509,18 @@ export default function Home() {
         break;
       case 'duplicate':
       case 'arrange':
-      case 'repair':
-      default:
         // intentionally disabled in the menu for now
+        break;
+      case 'repair': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          setManualRepairModelId(targetId);
+          return;
+        }
+        break;
+      }
+      default:
         break;
     }
     closeEditorContextMenu();
@@ -13194,6 +13358,7 @@ export default function Home() {
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
               onModelContextMenu={handleModelListContextMenu}
+              onRepairModel={handleRepairModel}
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
@@ -13511,6 +13676,12 @@ export default function Home() {
               canPrint={canSliceAndPrint}
               onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
               onBeforeSliceStart={handleBeforeSliceStart}
+              onBeforeSlicingRun={handlePreSliceSceneSave}
+              resolveOutputPathForIntent={(intent) => (
+                intent === 'file'
+                  ? (preSliceFileDestinationPathRef.current?.trim() || null)
+                  : null
+              )}
             />
           </>
 
@@ -13532,6 +13703,7 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
+              sendCanRetry={canRetrySendToPrinter}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
               onOpenSendTargetPicker={() => {
@@ -13540,6 +13712,8 @@ export default function Home() {
               }}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
+              onCancelSendToPrinter={handleCancelSendToPrinter}
+              onRetrySendToPrinter={handleSendToPrinter}
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
@@ -14071,6 +14245,7 @@ export default function Home() {
                 onChange={handlePrintingLayerChange}
                 onScrubStart={handlePrintingLayerScrubStart}
                 onScrubEnd={handlePrintingLayerScrubEnd}
+                allowTrackClickJump
                 currentHeightMm={printingCurrentHeightMm ?? undefined}
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
@@ -14232,8 +14407,7 @@ export default function Home() {
         disabledActions={[
           ...(!scene.activeModelId ? (['delete', 'cut', 'copy'] as const) : []),
           'duplicate',
-          'arrange',
-          'repair',
+            'arrange',
         ]}
       />
 
@@ -14276,6 +14450,13 @@ export default function Home() {
         benchmark={printingSlicingBenchmark}
         outputName={printingArtifact?.outputName ?? null}
         outputSizeLabel={printingOutputSizeLabel}
+      />
+
+      <SliceCompletedModal
+        isOpen={showSliceCompletedModal}
+        onClose={() => setShowSliceCompletedModal(false)}
+        filePath={sliceCompletedModalData.filePath}
+        slicingTimeMs={sliceCompletedModalData.slicingTimeMs}
       />
 
       <ModelSupportsModal
@@ -14395,6 +14576,114 @@ export default function Home() {
           savedAt={autosaveRecovery.savedAt}
           onRestore={handleAutosaveRestore}
           onDiscard={handleAutosaveDiscard}
+        />
+      )}
+
+      {scene.meshRepairConfirmPrompt && (
+        <MeshRepairConfirmModal
+          prompt={scene.meshRepairConfirmPrompt}
+          onRepair={() => scene.resolveMeshRepairConfirmPrompt('repair')}
+          onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
+          onCancelImport={() => scene.resolveMeshRepairConfirmPrompt('cancel_import')}
+        />
+      )}
+
+      {manualRepairModelId && (() => {
+        const repairModel = scene.models.find(m => m.id === manualRepairModelId);
+        if (!repairModel) return null;
+        return (
+          <div
+            className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !isManualRepairing) {
+                setManualRepairModelId(null);
+              }
+            }}
+          >
+            <div
+              className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+              style={{
+                background: 'var(--surface-0)',
+                borderColor: 'var(--border-subtle)',
+                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Repair mesh"
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                      color: 'var(--accent)',
+                    }}
+                  >
+                    <Wrench className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 pr-2">
+                    <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>Repair Mesh</h2>
+                    <p className="mt-0.5 text-[11px] leading-snug truncate" style={{ color: 'var(--text-muted)' }} title={repairModel.name}>
+                      {repairModel.name}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Cancel"
+                  disabled={isManualRepairing}
+                  onClick={() => setManualRepairModelId(null)}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-4 p-5">
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  Runs a full native repair pass: welds open edges, resolves self-intersections, and attempts to produce a watertight solid.
+                  This may take a while for complex geometry.
+                </p>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    disabled={isManualRepairing}
+                    onClick={() => setManualRepairModelId(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button ui-button-primary !h-9 px-3 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
+                    disabled={isManualRepairing}
+                    onClick={() => {
+                      const id = manualRepairModelId;
+                      setIsManualRepairing(true);
+                      void scene.repairModelInPlace(id).finally(() => {
+                        setIsManualRepairing(false);
+                        setManualRepairModelId(null);
+                      });
+                    }}
+                  >
+                    {isManualRepairing
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Repairing…</>
+                      : <><Wrench className="h-3.5 w-3.5" />Repair</>
+                    }
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {scene.meshRepairReports.length > 0 && (
+        <MeshRepairReportModal
+          reports={scene.meshRepairReports}
+          onDismiss={scene.dismissMeshRepairReports}
         />
       )}
 
@@ -16109,6 +16398,9 @@ export default function Home() {
                                           <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
                                             {`Est. ${formatPrintingMonitorEstimatedTime(plate.printTimeSec)} • ${formatPrintingMonitorUsedMaterial(plate.usedMaterialMl)}`}
                                           </div>
+                                          <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                            {`Area Σ ${formatPrintingMonitorAreaMm2(plate.totalSolidAreaMm2)} • Min ${formatPrintingMonitorAreaMm2(plate.smallestAreaMm2)} • Max ${formatPrintingMonitorAreaMm2(plate.largestAreaMm2)}`}
+                                          </div>
                                         </div>
 
                                         <div className="flex w-[56px] shrink-0 items-center justify-end gap-1">
@@ -17082,7 +17374,27 @@ export default function Home() {
             }
             animated
             visible={isSceneImportToastVisible}
-            className="flex items-center gap-2"
+            className={`flex items-center gap-2 ${
+              scene.sceneImportReport.clickAction === 'openMeshRepairReport'
+                ? 'pointer-events-auto cursor-pointer select-none'
+                : ''
+            }`}
+            role={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 'button' : undefined}
+            tabIndex={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 0 : undefined}
+            onClick={() => {
+              if (scene.sceneImportReport?.clickAction === 'openMeshRepairReport') {
+                scene.openPendingMeshRepairReports();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (scene.sceneImportReport?.clickAction !== 'openMeshRepairReport') {
+                return;
+              }
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                scene.openPendingMeshRepairReports();
+              }
+            }}
           >
             {scene.sceneImportReport.tone === 'error' ? (
               <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />

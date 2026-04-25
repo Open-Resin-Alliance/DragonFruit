@@ -149,7 +149,9 @@ export function useLycheeImport() {
 
       // Load STL geometry
       const url = URL.createObjectURL(file);
-      const geometry = await loadStlGeometry(url);
+      const geometry = await loadStlGeometry(url, {
+        nativeProcessingMode: 'none',
+      });
 
       // Calculate transform from Lychee data
       const { center, position, scale, rotation } = pending.objectTransform;

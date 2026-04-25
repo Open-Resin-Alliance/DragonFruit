@@ -1178,8 +1178,8 @@ export function TopBar({
             aria-modal="true"
             aria-label="Changing printer profile requires re-slice"
           >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5">
+            <div className="flex items-start justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex min-w-0 items-start gap-2.5 pr-2">
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
@@ -1190,19 +1190,19 @@ export function TopBar({
                 >
                   <AlertTriangle className="h-4 w-4" />
                 </span>
-                <div>
-                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                <div className="min-w-0 pr-2">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
                     Re-slice required after profile change
                   </h2>
-                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    Changing printer model and/or material profile invalidates the current sliced file.
+                  <p className="mt-1 max-w-[40ch] text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    Changing print settings invalidates the current sliced file.
                   </p>
                 </div>
               </div>
 
               <button
                 type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors"
                 style={{
                   borderColor: 'var(--border-subtle)',
                   background: 'var(--surface-1)',

@@ -20,6 +20,9 @@ pub struct Triangle {
     pub dir_x: f32,
     /// Precomputed in-plane direction for tri-plane ∩ z-plane line.
     pub dir_y: f32,
+    /// Scanline fill direction contribution (derived from
+    /// face normal X sign before projection/mirroring adjustments).
+    pub fill_wind: i32,
     /// Pixel-space coordinates of vertex A (set by `project_triangles_inplace`).
     pub px_ax: f32,
     pub px_ay: f32,
@@ -64,6 +67,7 @@ pub fn parse_triangles(flat: &[f32]) -> Vec<Triangle> {
         let ny = uz * vx - ux * vz;
         let dir_x = ny;
         let dir_y = -nx;
+        let fill_wind = if nx > 0.0 { -1 } else { 1 };
 
         out.push(Triangle {
             a,
@@ -73,6 +77,7 @@ pub fn parse_triangles(flat: &[f32]) -> Vec<Triangle> {
             z_max: a.z.max(b.z).max(c.z),
             dir_x,
             dir_y,
+            fill_wind,
             px_ax: 0.0,
             px_ay: 0.0,
             px_bx: 0.0,

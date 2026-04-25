@@ -28,9 +28,10 @@ type LayerSliderProps = {
   onToggleCrossSection?: () => void;
   layerHeightMm?: number;
   compactMinimalRail?: boolean;
+  allowTrackClickJump?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const isCompactMinimalRail = isMinimalRail && compactMinimalRail;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -352,12 +353,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         const { grabThreshold: thumbGrabThreshold } = getThumbHitThresholds(rect.height);
 
         if (Math.abs(clickInv - upperPos) > thumbGrabThreshold) {
-          // Not near thumb — ignore completely
-          setIsDraggingThumb(false);
-          dragShiftModeRef.current = false;
-          setIsShiftHeld(false);
-          onScrubEnd?.();
-          return;
+          if (allowTrackClickJump) {
+            // Jump directly to clicked position, then allow immediate drag from there.
+            setByClientY(e.clientY, false);
+          } else {
+            // Not near thumb — ignore completely
+            setIsDraggingThumb(false);
+            dragShiftModeRef.current = false;
+            setIsShiftHeld(false);
+            onScrubEnd?.();
+            return;
+          }
         }
       }
       activeDraggingThumbRef.current = 'upper';
@@ -469,7 +475,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
+  }, [allowTrackClickJump, dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
