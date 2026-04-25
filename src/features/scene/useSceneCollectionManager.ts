@@ -1738,8 +1738,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
-      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
+      label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
+      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing Geometry…',
       progress: null,
     });
 
@@ -1777,7 +1777,7 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
           detail: files.length > 1
             ? `${i + 1}/${files.length}: ${file.name}`
             : `Loading ${file.name}`,
@@ -1787,6 +1787,45 @@ export function useSceneCollectionManager() {
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
           const geom = await loadMeshGeometry(url, file.name, {
+            onNativeProcessingStage: (stage) => {
+              if (stage === 'repairing') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Auto-Repairing ${file.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'analyzing') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Inspecting Meshes…' : 'Inspecting Mesh…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Inspecting ${file.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'classifying') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: files.length > 1 ? 'Classifying Mesh Shells…' : 'Classifying Mesh Shell…',
+                  detail: files.length > 1
+                    ? `${i + 1}/${files.length}: ${file.name}`
+                    : `Classifying ${file.name}`,
+                  progress: null,
+                });
+              }
+            },
             onConfirmHeavyRepair: async (analysis) => {
               const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
               if (choice === 'cancel_import') {
@@ -1796,10 +1835,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Repairing meshes…' : 'Repairing mesh…',
+                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
                   detail: files.length > 1
                     ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Repairing ${file.name}`,
+                    : `Auto-Repairing ${file.name}`,
                   progress: null,
                 });
               }
@@ -1908,10 +1947,10 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
           detail: files.length > 1
             ? `${Math.min(i + 1, files.length)}/${files.length} processed`
-            : 'Finalizing model…',
+            : 'Finalizing Model…',
           progress: null,
         });
       }
@@ -3035,7 +3074,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing scene…',
+        label: 'Importing Scene…',
         detail: file.name,
         progress: null,
       });
@@ -3203,7 +3242,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing VOXL scene…',
+        label: 'Importing VOXL Scene…',
         detail: file.name,
         progress: null,
       });
@@ -3251,7 +3290,7 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'scene',
-          label: 'Importing VOXL scene…',
+          label: 'Importing VOXL Scene…',
           detail: `Model ${i + 1}/${document.models.length}: ${model.name}`,
           progress: null,
         });
@@ -3294,7 +3333,39 @@ export function useSceneCollectionManager() {
           url = URL.createObjectURL(blob);
 
           const geometry = await loadMeshGeometry(url, embeddedName, {
-            nativeProcessingMode: 'none',
+            onNativeProcessingStage: (stage) => {
+              if (stage === 'repairing') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: 'Importing VOXL Scene…',
+                  detail: `Auto-Repairing Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'analyzing') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: 'Importing VOXL Scene…',
+                  detail: `Inspecting Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  progress: null,
+                });
+                return;
+              }
+
+              if (stage === 'classifying') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: 'Importing VOXL Scene…',
+                  detail: `Classifying Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  progress: null,
+                });
+              }
+            },
           });
 
           let resolvedId = model.id;
@@ -3472,7 +3543,7 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'scene',
-      label: 'Importing scenes…',
+      label: 'Importing Scenes…',
       detail: `Preparing 0/${files.length}`,
       progress: null,
     });
@@ -3486,7 +3557,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing scenes…',
+        label: 'Importing Scenes…',
         detail: `${i + 1}/${files.length}: ${file.name}`,
         progress: null,
       });
