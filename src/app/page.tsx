@@ -48,6 +48,7 @@ import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
+import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
@@ -1134,6 +1135,11 @@ export default function Home() {
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
+  const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
+  const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
+    filePath: string | null;
+    slicingTimeMs: number | null;
+  }>({ filePath: null, slicingTimeMs: null });
   const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
@@ -3157,6 +3163,23 @@ export default function Home() {
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
   }, []);
+
+  React.useEffect(() => {
+    if (completedSliceIntent !== 'file' || !completedSaveDestinationPath) {
+      return;
+    }
+
+    const slicingTimeMs = printingSlicingBenchmark?.totalElapsedMs ?? null;
+    if (slicingTimeMs === null || !Number.isFinite(slicingTimeMs)) {
+      return;
+    }
+
+    setSliceCompletedModalData({
+      filePath: completedSaveDestinationPath,
+      slicingTimeMs,
+    });
+    setShowSliceCompletedModal(true);
+  }, [completedSliceIntent, completedSaveDestinationPath, printingSlicingBenchmark?.totalElapsedMs]);
 
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';
@@ -14427,6 +14450,13 @@ export default function Home() {
         benchmark={printingSlicingBenchmark}
         outputName={printingArtifact?.outputName ?? null}
         outputSizeLabel={printingOutputSizeLabel}
+      />
+
+      <SliceCompletedModal
+        isOpen={showSliceCompletedModal}
+        onClose={() => setShowSliceCompletedModal(false)}
+        filePath={sliceCompletedModalData.filePath}
+        slicingTimeMs={sliceCompletedModalData.slicingTimeMs}
       />
 
       <ModelSupportsModal
