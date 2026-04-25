@@ -41,6 +41,11 @@ export const RESIN_FAMILY_COLOR: Record<string, string> = {
 
 export const CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CNY'];
 
+const FIELD_TAG_TONES = {
+  slow: { icon: Snail, fallbackColor: '#f59e0b' },
+  fast: { icon: CarFront, fallbackColor: '#22c55e' },
+} as const;
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 export function clampNonNegativeNumber(value: number): number {
@@ -58,21 +63,10 @@ export function sanitizePluginNumericValue(field: PluginNumericFieldSchema, valu
   return next;
 }
 
-export function isSlowFastPair(firstTag?: string, secondTag?: string): boolean {
-  const first = typeof firstTag === 'string' ? firstTag.trim().toLowerCase() : '';
-  const second = typeof secondTag === 'string' ? secondTag.trim().toLowerCase() : '';
-  return (first === 'slow' && second === 'fast') || (first === 'fast' && second === 'slow');
-}
-
 export function resolveFieldTagTone(tag?: string): { icon: typeof CarFront | typeof Snail; fallbackColor: string } | null {
   const normalized = typeof tag === 'string' ? tag.trim().toLowerCase() : '';
   if (!normalized) return null;
-
-  if (normalized === 'slow') {
-    return { icon: Snail, fallbackColor: '#f59e0b' };
-  }
-
-  return { icon: CarFront, fallbackColor: '#22c55e' };
+  return FIELD_TAG_TONES[normalized as keyof typeof FIELD_TAG_TONES] ?? null;
 }
 
 // ─── FieldTagChip ─────────────────────────────────────────────────────────────
@@ -914,45 +908,10 @@ export function PluginLocalMaterialSettingsSections({
                                   secondColor={pairedField.color}
                                   onFirstChange={(next) => {
                                     const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
-                                    const pairedClamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(sanitizedPairedValue));
-
-                                    if (isSlowFastPair(field.tag, pairedField.tag)) {
-                                      const fieldTag = field.tag?.trim().toLowerCase();
-                                      if (fieldTag === 'slow' && clamped > pairedClamped) {
-                                        setFieldValue(field.key, clamped);
-                                        setFieldValue(pairedField.key, clamped);
-                                        return;
-                                      }
-                                      if (fieldTag === 'fast' && clamped < pairedClamped) {
-                                        setFieldValue(field.key, clamped);
-                                        setFieldValue(pairedField.key, clamped);
-                                        return;
-                                      }
-                                    }
-
                                     setFieldValue(field.key, clamped);
                                   }}
                                   onSecondChange={(next) => {
                                     const clamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, next);
-                                    const fieldClamped = sanitizePluginNumericValue(
-                                      field as PluginNumericFieldSchema,
-                                      Number(sanitizedFieldValue),
-                                    );
-
-                                    if (isSlowFastPair(field.tag, pairedField.tag)) {
-                                      const pairedTag = pairedField.tag?.trim().toLowerCase();
-                                      if (pairedTag === 'slow' && clamped > fieldClamped) {
-                                        setFieldValue(field.key, clamped);
-                                        setFieldValue(pairedField.key, clamped);
-                                        return;
-                                      }
-                                      if (pairedTag === 'fast' && clamped < fieldClamped) {
-                                        setFieldValue(field.key, clamped);
-                                        setFieldValue(pairedField.key, clamped);
-                                        return;
-                                      }
-                                    }
-
                                     setFieldValue(pairedField.key, clamped);
                                   }}
                                 />
