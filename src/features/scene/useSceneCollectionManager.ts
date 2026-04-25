@@ -3061,6 +3061,7 @@ export function useSceneCollectionManager() {
     suppressReport?: boolean;
     suppressRecentTracking?: boolean;
     suppressPlacementPrompt?: boolean;
+    suppressRepair?: boolean;
     sourcePath?: string | null;
     sourcePaths?: Array<string | null | undefined>;
   };
@@ -3333,6 +3334,7 @@ export function useSceneCollectionManager() {
           url = URL.createObjectURL(blob);
 
           const geometry = await loadMeshGeometry(url, embeddedName, {
+            nativeProcessingMode: options?.suppressRepair ? 'none' : 'auto',
             onNativeProcessingStage: (stage) => {
               if (stage === 'repairing') {
                 setImportProgress({

@@ -6869,7 +6869,7 @@ export default function Home() {
         detail: '',
         progress: null,
       });
-      const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
+      const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true, suppressRepair: true });
       if (restored) {
         await clearAutosave();
       } else if (recoverySnapshot) {
