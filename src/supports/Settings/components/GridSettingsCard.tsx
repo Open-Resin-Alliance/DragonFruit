@@ -27,7 +27,7 @@ export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
                         ? {
                             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 36%)',
                             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                            color: 'var(--accent-contrast)',
+                            color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                         }
                         : {
                             borderColor: 'var(--border-subtle)',

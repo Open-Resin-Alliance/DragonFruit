@@ -1,4 +1,5 @@
-import type { MaterialProfile, PrinterPreset } from '@/features/profiles/profileStore';
+import type { MaterialPreset, MaterialProfile, PrinterPreset } from '@/features/profiles/profileStore';
+export type { MaterialPreset };
 import type {
   PluginLocalMaterialSettingsAdapterContract,
   PluginMonitoringSnapshotContract,
@@ -25,6 +26,7 @@ export type PluginManifest = {
   homepage?: string;
   printerPresets?: PrinterPreset[];
   materialTemplates?: Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
+  materialPresets?: MaterialPreset[];
 };
 
 export type ProfileNetworkUiAdapter = {
@@ -213,6 +215,7 @@ const STORAGE_KEY = 'dragonfruit-plugins-v1';
 const STORAGE_VERSION = 1;
 const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
+const MAX_MATERIAL_PRESETS = 2048;
 
 function shouldUseBundledAssetPaths(): boolean {
   if (typeof window === 'undefined') return false;
@@ -393,6 +396,46 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
   };
 }
 
+function sanitizeMaterialPreset(input: unknown): MaterialPreset | null {
+  const base = sanitizeMaterialTemplate(input);
+  if (!base) return null;
+
+  const value = (input ?? {}) as Record<string, unknown>;
+  const templateId = boundedString(value.templateId as string | undefined, 200) || undefined;
+  const profileVersion = Number.isFinite(Number(value.profileVersion)) ? Number(value.profileVersion) : undefined;
+  const validForPresets = Array.isArray(value.validForPresets)
+    ? (value.validForPresets as unknown[])
+      .slice(0, 256)
+      .map((v) => boundedString(v as string, 120))
+      .filter((v): v is string => v.length > 0)
+    : undefined;
+
+  const localSettingsByOutput = value.localSettingsByOutput && typeof value.localSettingsByOutput === 'object' && !Array.isArray(value.localSettingsByOutput)
+    ? Object.fromEntries(
+        Object.entries(value.localSettingsByOutput as Record<string, unknown>)
+          .slice(0, 32)
+          .map(([format, settings]) => [
+            format,
+            settings && typeof settings === 'object' && !Array.isArray(settings)
+              ? Object.fromEntries(
+                  Object.entries(settings as Record<string, unknown>)
+                    .slice(0, 256)
+                    .map(([k, v]) => [k, typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string' ? v : 0]),
+                )
+              : {},
+          ]),
+      )
+    : undefined;
+
+  return {
+    ...base,
+    ...(templateId !== undefined ? { templateId } : {}),
+    ...(profileVersion !== undefined ? { profileVersion } : {}),
+    ...(validForPresets !== undefined ? { validForPresets } : {}),
+    ...(localSettingsByOutput !== undefined ? { localSettingsByOutput } : {}),
+  };
+}
+
 function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 'printerProfileId'> | null {
   const value = (input ?? {}) as Record<string, unknown>;
   const name = boundedString(value.name, 120);
@@ -471,6 +514,13 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
       .filter((template: Omit<MaterialProfile, 'id' | 'printerProfileId'> | null): template is Omit<MaterialProfile, 'id' | 'printerProfileId'> => template !== null)
     : [];
 
+  const materialPresets = Array.isArray(value.materialPresets)
+    ? value.materialPresets
+      .slice(0, MAX_MATERIAL_PRESETS)
+      .map((preset: unknown) => sanitizeMaterialPreset(preset))
+      .filter((preset: MaterialPreset | null): preset is MaterialPreset => preset !== null)
+    : [];
+
   return {
     schemaVersion,
     id,
@@ -481,6 +531,7 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
     homepage: boundedString(value.homepage, 500) || undefined,
     printerPresets,
     materialTemplates,
+    materialPresets,
   };
 }
 
@@ -644,4 +695,31 @@ export function getRuntimeMaterialTemplates(baseTemplates: Array<Omit<MaterialPr
     ...baseTemplates,
     ...pluginTemplates,
   ];
+}
+
+/**
+ * Returns true if the given presetId matches a pattern.
+ * Supports exact strings and glob patterns containing `*`.
+ */
+export function matchesPresetPattern(pattern: string, presetId: string): boolean {
+  if (!pattern.includes('*')) return pattern === presetId;
+  const regex = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+  return regex.test(presetId);
+}
+
+/**
+ * Returns all MaterialPresets from enabled plugins, optionally filtered
+ * to only those whose `validForPresets` contains a pattern matching the given presetId.
+ */
+export function getRuntimeMaterialPresets(printerPresetId?: string): MaterialPreset[] {
+  hydratePluginRegistry();
+  const allPresets = getInstalledProfilePlugins()
+    .flatMap((plugin) => plugin.enabled ? (plugin.manifest.materialPresets ?? []) : []);
+
+  if (!printerPresetId) return allPresets;
+
+  return allPresets.filter((preset) => {
+    if (!preset.validForPresets || preset.validForPresets.length === 0) return true;
+    return preset.validForPresets.some((pattern) => matchesPresetPattern(pattern, printerPresetId));
+  });
 }

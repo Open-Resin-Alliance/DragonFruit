@@ -29,6 +29,10 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       camera.near = ORTHO_NEAR;
       camera.far = ORTHO_FAR;
       camera.updateProjectionMatrix();
+      // NOTE: Do NOT call controls.update() here. If we do, and the user
+      // hasn't interacted with the camera since the intro animation,
+      // OrbitControls may apply internal constraints that cause the view
+      // to zoom out unexpectedly when the frustum changes.
       return;
     }
 
@@ -52,20 +56,34 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       // old normalised-frustum approach produced, which degraded GPU pick
       // precision via setViewOffset floating-point arithmetic.
       let worldHalfH: number;
+      let preserveZoom = 1;
       if (camera instanceof THREE.PerspectiveCamera) {
         const distance = Math.max(0.001, camera.position.distanceTo(target));
         const fov = THREE.MathUtils.degToRad(camera.fov);
         worldHalfH = Math.max(1, Math.tan(fov * 0.5) * distance);
+        // When switching from perspective to ortho, calculate the ortho zoom
+        // to preserve the same view scale (visual size of objects on screen).
+        // This prevents zoom-out/zoom-in when transitioning between projections.
+        preserveZoom = Math.max(0.0001, worldHalfH / Math.max(1, Math.tan(fov * 0.5) * distance));
       } else {
         // Already ortho (type mismatch shouldn't happen, but be safe)
         worldHalfH = Math.max(1, camera.top);
+        // Preserve existing zoom when already in ortho mode
+        preserveZoom = (camera as THREE.OrthographicCamera).zoom;
       }
       const worldHalfW = worldHalfH * aspect;
       const next = new THREE.OrthographicCamera(
         -worldHalfW, worldHalfW, worldHalfH, -worldHalfH,
         ORTHO_NEAR, ORTHO_FAR,
       );
-      next.zoom = 1;
+      // Prevent R3F's internal updateCamera() from overwriting camera.top with
+      // size.height/2 (pixel units) on the first window resize.  Our frustum
+      // uses world-space mm, so R3F's pixel-mapped values would cause a sudden
+      // scale jump that makes the build plate appear to zoom far out.  With
+      // manual=true R3F skips updateCamera entirely and our resize handler in
+      // this same effect is the sole authority on left/right/top/bottom.
+      (next as any).manual = true;
+      next.zoom = preserveZoom;
       next.position.copy(camera.position);
       // Preserve view direction. Without copying quaternion, the new camera has identity
       // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
@@ -100,8 +118,15 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
 
     if (camera instanceof THREE.OrthographicCamera) {
       const span = Math.max(1e-6, (camera.top - camera.bottom) / Math.max(1e-6, camera.zoom));
-      const fov = THREE.MathUtils.degToRad(next.fov);
-      const distance = Math.max(0.001, span / (2 * Math.tan(fov * 0.5)));
+      const distance = Math.max(0.001, span / 2);
+      
+      // When switching from ortho to perspective, calculate FOV to match
+      // the ortho zoom level so objects appear the same visual size.
+      // This prevents zoom-out/zoom-in when transitioning between projections.
+      const requiredHalfFov = Math.atan(span / (2 * distance));
+      const calculatedFov = THREE.MathUtils.radToDeg(2 * requiredHalfFov);
+      next.fov = THREE.MathUtils.clamp(calculatedFov, 5, 175);
+      
       const direction = camera.position.clone().sub(target);
       if (direction.lengthSq() < 1e-10) direction.set(-1, -1, 1);
       direction.normalize();
@@ -212,6 +237,7 @@ export function CameraModeEntryFramingController({
   plateDepthMm: number;
 }) {
   const { camera, controls, size } = useThree();
+  const sizeRef = React.useRef(size);
 
   const activeRunIdRef = React.useRef<number | null>(null);
   const completedFrameRunIdRef = React.useRef(0);
@@ -228,6 +254,10 @@ export function CameraModeEntryFramingController({
     target: THREE.Vector3;
     zoom: number | null;
   } | null>(null);
+
+  React.useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
 
   const cancelAnimation = React.useCallback(() => {
     animatingRef.current = false;
@@ -371,7 +401,8 @@ export function CameraModeEntryFramingController({
     const fov = camera instanceof THREE.PerspectiveCamera
       ? THREE.MathUtils.degToRad(camera.fov)
       : THREE.MathUtils.degToRad(50);
-    const aspect = size.width / Math.max(1, size.height);
+    const viewport = sizeRef.current;
+    const aspect = viewport.width / Math.max(1, viewport.height);
     const hFov = 2 * Math.atan(Math.tan(fov * 0.5) * aspect);
     const minFov = Math.max(0.0001, Math.min(fov, hFov));
 
@@ -412,7 +443,7 @@ export function CameraModeEntryFramingController({
         activeRunIdRef.current = null;
       }
     };
-  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, size.height, size.width, target]);
+  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, target]);
 
   React.useLayoutEffect(() => {
     if (!restoreRunId) return;

@@ -119,6 +119,26 @@ async function buildManifestFromAllowlistEntry(entry) {
             };
       });
 
+      const resolvedMaterialPresets = [];
+
+      if (Array.isArray(manifest.materialPresets)) {
+            resolvedMaterialPresets.push(...manifest.materialPresets);
+      }
+
+      if (Array.isArray(manifest.materialPresetPaths)) {
+            for (const rawPath of manifest.materialPresetPaths) {
+                  const relativePath = sanitizeRelativeJsonPath(rawPath);
+                  if (!relativePath) continue;
+
+                  const presetData = await readJsonFile(path.join(pluginRoot, relativePath));
+                  if (presetData && typeof presetData === 'object' && !Array.isArray(presetData)) {
+                        resolvedMaterialPresets.push(presetData);
+                  } else if (Array.isArray(presetData)) {
+                        resolvedMaterialPresets.push(...presetData);
+                  }
+            }
+      }
+
       return {
             schemaVersion: Number.isFinite(Number(manifest.schemaVersion)) ? Number(manifest.schemaVersion) : 1,
             id: typeof manifest.id === 'string' ? manifest.id : id,
@@ -129,6 +149,7 @@ async function buildManifestFromAllowlistEntry(entry) {
             homepage: typeof manifest.homepage === 'string' ? manifest.homepage : undefined,
             printerPresets: resolvedPrinterPresets,
             materialTemplates: Array.isArray(manifest.materialTemplates) ? manifest.materialTemplates : [],
+            materialPresets: resolvedMaterialPresets,
       };
 }
 

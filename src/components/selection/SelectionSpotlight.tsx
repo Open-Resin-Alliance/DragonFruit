@@ -2,7 +2,7 @@
 
 import React from 'react';
 import * as THREE from 'three';
-import { useThree, useFrame } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
 
 interface SelectionSpotlightProps {
   /** Ref to the mesh to illuminate */
@@ -28,7 +28,7 @@ interface SelectionSpotlightProps {
 /**
  * SelectionSpotlight
  *
- * Illuminates the selected model with a camera-tracking spotlight.
+ * Illuminates the selected model with a camera-following spotlight.
  *
  * WebGLRenderer does NOT filter lights per-object via layers, so we bound
  * spotlight distance to cover only the selected model and taper out before
@@ -51,7 +51,6 @@ export function SelectionSpotlight({
   const helperRef = React.useRef<THREE.SpotLightHelper | null>(null);
   const hasValidPlacementRef = React.useRef(false);
   const lastMeshIdRef = React.useRef<string | null>(null);
-  const { camera } = useThree();
 
   React.useEffect(() => {
     hasValidPlacementRef.current = false;
@@ -92,37 +91,22 @@ export function SelectionSpotlight({
     const worldSize = worldBox.getSize(new THREE.Vector3());
     const fitRadius = 0.5 * Math.max(worldSize.x, worldSize.y, worldSize.z);
 
-    // Camera-mounted spotlight: source follows camera position,
-    // direction follows camera forward vector.
-    const camForward = new THREE.Vector3();
-    camera.getWorldDirection(camForward);
-    const targetDistance = Math.max(120, Math.min(420, worldCenter.distanceTo(camera.position) + fitRadius));
-    const targetPoint = camera.position.clone().addScaledVector(camForward.normalize(), targetDistance);
+    // Place the light at a fixed world-space offset above the model center.
+    // Position is derived entirely from the model bounding box -- camera movement
+    // (orbit, zoom, F-focus) has zero effect on illumination.
+    const lightZ = worldCenter.z + Math.max(elevation, fitRadius * 1.2);
+    // Slight -Y bias gives a natural top-front key-light look.
+    const horizontalOffset = radius > 0 ? radius : fitRadius * 0.3;
+    light.position.set(worldCenter.x, worldCenter.y - horizontalOffset, lightZ);
+    target.position.copy(worldCenter);
+    light.target = target;
 
-    light.position.copy(camera.position);
-    target.position.copy(targetPoint);
-    light.target = target as any;
-
-    // Keep cone wide enough for selected model, but stable.
-    const distToModel = Math.max(1e-3, worldCenter.distanceTo(camera.position));
+    // Auto-fit cone angle to the model from the fixed light position.
+    const distToModel = Math.max(1e-3, light.position.distanceTo(worldCenter));
     const halfAngle = Math.atan((fitRadius * 1.2) / distToModel);
     light.angle = THREE.MathUtils.clamp(halfAngle, THREE.MathUtils.degToRad(10), THREE.MathUtils.degToRad(55));
     light.penumbra = THREE.MathUtils.clamp(penumbra, 0.2, 0.6);
-
-    // ---- bounded distance: keep model lit, limit floor spill ----
-    // Floor plane at z = 0.  Compute distance from light to the point on the
-    // floor directly beneath the model centre.
-    const floorBeneath = new THREE.Vector3(worldCenter.x, worldCenter.y, 0);
-    const distToFloor = camera.position.distanceTo(floorBeneath);
-
-    // Ensure we always light model center + silhouette, but keep reach tight.
-    const minReach = distToModel + Math.min(fitRadius * 0.25, 5);
-    const desiredCoverage = distToModel + fitRadius * 0.95;
-
-    // Keep distance short so floor illumination is strongly suppressed.
-    const floorSafe = Math.max(distToModel * 1.015, distToFloor * 0.78);
-
-    light.distance = Math.max(minReach, Math.min(desiredCoverage, floorSafe));
+    light.distance = distToModel + fitRadius * 1.5;
     light.decay = 0;
 
     if (!hasValidPlacementRef.current) {
@@ -153,7 +137,7 @@ export function SelectionSpotlight({
         intensity={0}
         angle={angle}
         distance={0}
-        position={[camera.position.x, camera.position.y, camera.position.z]}
+        position={[0, 0, 0]}
         penumbra={penumbra}
         decay={0}
         visible={false}

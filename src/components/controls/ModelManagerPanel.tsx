@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Eye,
   EyeOff,
@@ -16,9 +16,12 @@ import {
   FolderMinus,
   PanelsTopLeft,
   Info,
+  Crosshair,
+  Wrench,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -36,7 +39,9 @@ interface ModelManagerPanelProps {
   onUngroupModels?: (modelIds: string[]) => void;
   onUngroupGroup?: (groupId: string) => void;
   onRenameGroup?: (groupId: string, nextName: string) => void;
+  onRenameModel?: (id: string, nextName: string) => void;
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
+  onRepairModel?: (id: string) => void;
   onOpenSupportsInfo?: (id: string) => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
@@ -67,6 +72,20 @@ type PanelContextMenuState = {
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
 
+const splitModelNameSuffix = (name: string): { base: string; suffix: string } => {
+  const trimmed = name.trim();
+  const match = trimmed.match(/^(.*?)(\.[^.\s]+)$/);
+  if (!match) {
+    return { base: trimmed, suffix: '' };
+  }
+
+  const base = match[1].trim();
+  return {
+    base: base.length > 0 ? base : 'Model',
+    suffix: match[2],
+  };
+};
+
 export function ModelManagerPanel({
   models,
   outsidePlateModelIds = [],
@@ -79,7 +98,9 @@ export function ModelManagerPanel({
   onUngroupModels,
   onUngroupGroup,
   onRenameGroup,
+  onRenameModel,
   onModelContextMenu,
+  onRepairModel,
   onOpenSupportsInfo,
   onDelete,
   onVisibilityChange,
@@ -94,7 +115,12 @@ export function ModelManagerPanel({
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
+  const [renamingModelId, setRenamingModelId] = useState<string | null>(null);
+  const [renamingModelName, setRenamingModelName] = useState('');
+  const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
+  const [useCompactQuickActionLabels, setUseCompactQuickActionLabels] = useState(false);
+  const quickActionsGridRef = useRef<HTMLDivElement | null>(null);
 
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
 
@@ -162,6 +188,12 @@ export function ModelManagerPanel({
 
   const closeContextMenu = () => setContextMenu(null);
 
+  // Smart context menu visibility:
+  // showGroupSection — show Group/Ungroup Selected only when there are grouped/multi-selected models or a folder is involved
+  // showFolderSection — show folder actions only when the right-clicked item has a group context
+  const showGroupSection = !!(contextMenu?.groupId || selectedModelIds.length >= 2 || selectedGroupedCount > 0 || !contextMenu?.modelId);
+  const showFolderSection = !!contextMenu?.groupId;
+
   const orderedModelIds = useMemo(() => grouped.flatMap((group) => group.models.map((model) => model.id)), [grouped]);
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
   const panelMaxHeight = `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)`;
@@ -181,6 +213,9 @@ export function ModelManagerPanel({
   };
 
   const beginRenameGroup = (groupId: string, currentName: string) => {
+    setRenamingModelId(null);
+    setRenamingModelName('');
+    setRenamingModelSuffix('');
     setRenamingGroupId(groupId);
     setRenamingGroupName(currentName);
     closeContextMenu();
@@ -202,6 +237,35 @@ export function ModelManagerPanel({
       onRenameGroup(renamingGroupId, trimmed);
     }
     cancelRenameGroup();
+  };
+
+  const beginRenameModel = (modelId: string, currentName: string) => {
+    const { base, suffix } = splitModelNameSuffix(currentName);
+    setRenamingGroupId(null);
+    setRenamingGroupName('');
+    setRenamingModelId(modelId);
+    setRenamingModelName(base);
+    setRenamingModelSuffix(suffix);
+    closeContextMenu();
+  };
+
+  const cancelRenameModel = () => {
+    setRenamingModelId(null);
+    setRenamingModelName('');
+    setRenamingModelSuffix('');
+  };
+
+  const commitRenameModel = () => {
+    if (!renamingModelId || !onRenameModel) {
+      cancelRenameModel();
+      return;
+    }
+
+    const trimmedBase = renamingModelName.trim();
+    if (trimmedBase.length > 0) {
+      onRenameModel(renamingModelId, `${trimmedBase}${renamingModelSuffix}`);
+    }
+    cancelRenameModel();
   };
 
   const selectFolder = (group: GroupedEntry, mode: GroupSelectMode) => {
@@ -237,6 +301,33 @@ export function ModelManagerPanel({
       window.removeEventListener('keydown', handleEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    const grid = quickActionsGridRef.current;
+    if (!grid) return;
+
+    const computeCompactMode = (width: number) => {
+      const compactThreshold = onImportSceneChange ? 312 : 184;
+      const nextCompact = width < compactThreshold;
+      setUseCompactQuickActionLabels((prev) => (prev === nextCompact ? prev : nextCompact));
+    };
+
+    computeCompactMode(grid.clientWidth);
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (typeof width === 'number') {
+        computeCompactMode(width);
+      }
+    });
+
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [onImportSceneChange]);
 
   const triggerMeshPicker = React.useCallback(() => {
     if (onLoadMeshClick) {
@@ -317,23 +408,23 @@ export function ModelManagerPanel({
             className="rounded-md border p-2"
             style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
           >
-            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Quick Actions
-            </div>
-
-            <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <div
+              ref={quickActionsGridRef}
+              className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}
+            >
               <button
                 type="button"
                 onClick={triggerMeshPicker}
                 className="ui-button ui-button-primary inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
+                title="Load Mesh"
               >
                 <Upload className="w-3.5 h-3.5 shrink-0" />
-                <span className="whitespace-nowrap">Load Mesh</span>
+                <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Mesh' : 'Load Mesh'}</span>
               </button>
               <input
                 id="models-card-mesh-input"
                 type="file"
-                accept=".stl,.3mf"
+                accept=".stl,.obj,.3mf,.zip"
                 multiple
                 onChange={onLoadMeshChange}
                 className="hidden"
@@ -345,14 +436,15 @@ export function ModelManagerPanel({
                     type="button"
                     onClick={triggerScenePicker}
                     className="ui-button ui-button-accent inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
+                    title="Import Scene"
                   >
                     <FolderInput className="w-3.5 h-3.5 shrink-0" />
-                    <span className="whitespace-nowrap">Import Scene</span>
+                    <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Scene' : 'Import Scene'}</span>
                   </button>
                   <input
                     id="models-card-scene-input"
                     type="file"
-                    accept=".voxl,.lys"
+                    accept=".voxl,.lys,.zip"
                     onChange={onImportSceneChange}
                     className="hidden"
                   />
@@ -360,16 +452,6 @@ export function ModelManagerPanel({
               )}
             </div>
 
-            <div className={`mt-1.5 grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                Mesh Files (.stl, .3mf)
-              </div>
-              {onImportSceneChange && (
-                <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                  Scene Files (.voxl, .lys)
-                </div>
-              )}
-            </div>
           </div>
 
           <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 flex-1 min-h-0">
@@ -396,34 +478,36 @@ export function ModelManagerPanel({
                         }
                       : undefined}
                   >
-                    {showHeader && (
-                      <div
-                        className={`px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors ${
-                          isGroupFullySelected
-                            ? 'bg-blue-500/12 border-blue-500/45'
-                            : isGroupPartiallySelected
-                              ? 'bg-blue-500/8 border-blue-500/30'
-                              : 'hover:bg-neutral-700/60'
-                        }`}
-                        style={isGroupFullySelected || isGroupPartiallySelected
-                          ? undefined
-                          : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                        onClick={(e) => {
-                          const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
-                          selectFolder(group, mode);
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setContextMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                            groupId: group.id,
-                            groupName: group.name,
-                            isSystemGroup: group.isSystemGroup,
-                          });
-                        }}
-                      >
+                        {showHeader && (
+                          <div
+                            className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                            style={isGroupFullySelected
+                              ? {
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                                }
+                              : isGroupPartiallySelected
+                                ? {
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                                  }
+                                : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                            onClick={(e) => {
+                              const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                              selectFolder(group, mode);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                groupId: group.id,
+                                groupName: group.name,
+                                isSystemGroup: group.isSystemGroup,
+                              });
+                            }}
+                          >
                         <button
                           type="button"
                           className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
@@ -492,17 +576,16 @@ export function ModelManagerPanel({
                       return (
                         <div
                           key={model.id}
-                          className={`p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer ${
-                            isSelected
-                              ? 'bg-blue-500/10 border-blue-500/50'
-                              : 'hover:bg-neutral-700/70'
-                          }`}
-                          style={!isSelected
-                            ? {
-                                background: 'var(--surface-1)',
-                                borderColor: 'var(--border-subtle)',
-                              }
-                            : undefined}
+                            className="p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer"
+                            style={isSelected
+                              ? {
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+                                }
+                              : {
+                                  background: 'var(--surface-1)',
+                                  borderColor: 'var(--border-subtle)',
+                                }}
                           onClick={(e) => {
                             if (e.shiftKey) {
                               const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
@@ -544,17 +627,61 @@ export function ModelManagerPanel({
                             });
                           }}
                         >
-                          <div className={`p-1 rounded ${isSelected ? 'bg-blue-500/20 text-blue-300' : ''}`} style={!isSelected ? { background: 'var(--surface-2)', color: 'var(--text-muted)' } : undefined}>
-                            <Box className="w-3.5 h-3.5" />
-                          </div>
+                          {isActive
+                            ? (
+                              <div className="p-1 rounded" style={{ background: 'color-mix(in srgb, var(--accent), var(--surface-2) 72%)', color: 'var(--accent)' }}>
+                                <Crosshair className="w-3.5 h-3.5" />
+                              </div>
+                            ) : (
+                              <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                                <Box className="w-3.5 h-3.5" />
+                              </div>
+                            )}
 
                           <div className="flex-1 min-w-0">
-                            <div className={`text-xs font-medium truncate ${isSelected ? 'text-blue-100' : ''}`} style={!isSelected ? { color: 'var(--text-strong)' } : undefined}>
-                              {model.name}
-                              {isActive && <span className="ml-1 text-[10px] uppercase" style={{ color: 'var(--accent)' }}>Active</span>}
-                            </div>
+                            {renamingModelId === model.id ? (
+                              <div className="flex w-full min-w-0 items-center gap-1">
+                                <input
+                                  value={renamingModelName}
+                                  onChange={(e) => setRenamingModelName(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      commitRenameModel();
+                                    }
+                                    if (e.key === 'Escape') {
+                                      e.preventDefault();
+                                      cancelRenameModel();
+                                    }
+                                  }}
+                                  onBlur={commitRenameModel}
+                                  autoFocus
+                                  className="min-w-0 flex-1 rounded border px-1.5 py-0.5 text-xs font-medium"
+                                  style={{
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-strong)',
+                                  }}
+                                  aria-label="Rename model base name"
+                                />
+                                {renamingModelSuffix && (
+                                  <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                                    {renamingModelSuffix}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                                {model.name}
+                              </div>
+                            )}
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {model.polygonCount.toLocaleString()} polys
+                              {formatMeshStatsForDisplay({
+                                polygonCount: model.polygonCount,
+                                componentCount: model.geometry.meshDefects?.nativeRepairReport?.post.component_count,
+                              })}
                             </div>
                           </div>
 
@@ -581,16 +708,7 @@ export function ModelManagerPanel({
                             >
                               {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                             </IconButton>
-                            <IconButton
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDelete(model.id);
-                              }}
-                              className="!p-1.5 text-red-300 hover:text-red-200"
-                              title="Delete model"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </IconButton>
+
                           </div>
                         </div>
                       );
@@ -623,99 +741,138 @@ export function ModelManagerPanel({
           </div>
 
           <div className="space-y-0.5">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: selectedModelIds.length >= 2 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedModelIds.length >= 2 ? 1 : 0.6 }}
-              disabled={selectedModelIds.length < 2}
-              onClick={() => {
-                if (selectedModelIds.length < 2 || !onGroupModels) return;
-                onGroupModels(selectedModelIds);
-                closeContextMenu();
-              }}
-            >
-              <FolderPlus className="h-3.5 w-3.5" />
-              <span>Group Selected</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: selectedGroupedCount > 0 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedGroupedCount > 0 ? 1 : 0.6 }}
-              disabled={selectedGroupedCount === 0}
-              onClick={() => {
-                if (selectedGroupedCount === 0 || !onUngroupModels) return;
-                onUngroupModels(selectedModelIds);
-                closeContextMenu();
-              }}
-            >
-              <FolderMinus className="h-3.5 w-3.5" />
-              <span>Ungroup Selected</span>
-            </button>
-
-            <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId}
-              onClick={() => {
-                if (!contextMenu.groupId) return;
-                const target = contextGroup ?? grouped.find((g) => g.id === contextMenu.groupId);
-                if (!target) return;
-                selectFolder(target, 'single');
-                closeContextMenu();
-              }}
-            >
-              <PanelsTopLeft className="h-3.5 w-3.5" />
-              <span>Select Folder</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId && !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId && !contextMenu.isSystemGroup ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId || !!contextMenu.isSystemGroup}
-              onClick={() => {
-                if (!contextMenu.groupId || !onRenameGroup || contextMenu.isSystemGroup) return;
-                beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
-              }}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              <span>Rename Folder</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId && !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId && !contextMenu.isSystemGroup ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId || !!contextMenu.isSystemGroup}
-              onClick={() => {
-                if (!contextMenu.groupId || !onUngroupGroup || contextMenu.isSystemGroup) return;
-                onUngroupGroup(contextMenu.groupId);
-                closeContextMenu();
-              }}
-            >
-              <FolderMinus className="h-3.5 w-3.5" />
-              <span>Ungroup Folder</span>
-            </button>
-
-            {contextModel && onModelContextMenu && (
+            {showGroupSection && (
               <>
-                <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: selectedModelIds.length >= 2 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedModelIds.length >= 2 ? 1 : 0.6 }}
+                  disabled={selectedModelIds.length < 2}
+                  onClick={() => {
+                    if (selectedModelIds.length < 2 || !onGroupModels) return;
+                    onGroupModels(selectedModelIds);
+                    closeContextMenu();
+                  }}
+                >
+                  <FolderPlus className="h-3.5 w-3.5" />
+                  <span>Group Selected</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: selectedGroupedCount > 0 ? 'var(--text-strong)' : 'var(--text-muted)', opacity: selectedGroupedCount > 0 ? 1 : 0.6 }}
+                  disabled={selectedGroupedCount === 0}
+                  onClick={() => {
+                    if (selectedGroupedCount === 0 || !onUngroupModels) return;
+                    onUngroupModels(selectedModelIds);
+                    closeContextMenu();
+                  }}
+                >
+                  <FolderMinus className="h-3.5 w-3.5" />
+                  <span>Ungroup Selected</span>
+                </button>
+              </>
+            )}
+
+            {showFolderSection && (
+              <>
+                {showGroupSection && <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />}
+
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
                   style={{ color: 'var(--text-strong)' }}
                   onClick={() => {
-                    onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
+                    if (!contextMenu.groupId) return;
+                    const target = contextGroup ?? grouped.find((g) => g.id === contextMenu.groupId);
+                    if (!target) return;
+                    selectFolder(target, 'single');
                     closeContextMenu();
                   }}
                 >
-                  <Box className="h-3.5 w-3.5" />
-                  <span>Model Actions…</span>
+                  <PanelsTopLeft className="h-3.5 w-3.5" />
+                  <span>Select Folder</span>
                 </button>
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: !contextMenu.isSystemGroup ? 1 : 0.6 }}
+                  disabled={!!contextMenu.isSystemGroup}
+                  onClick={() => {
+                    if (!contextMenu.groupId || !onRenameGroup || contextMenu.isSystemGroup) return;
+                    beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
+                  }}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  <span>Rename Folder</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                  style={{ color: !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: !contextMenu.isSystemGroup ? 1 : 0.6 }}
+                  disabled={!!contextMenu.isSystemGroup}
+                  onClick={() => {
+                    if (!contextMenu.groupId || !onUngroupGroup || contextMenu.isSystemGroup) return;
+                    onUngroupGroup(contextMenu.groupId);
+                    closeContextMenu();
+                  }}
+                >
+                  <FolderMinus className="h-3.5 w-3.5" />
+                  <span>Ungroup Folder</span>
+                </button>
+              </>
+            )}
+
+            {contextModel && (onRenameModel || onModelContextMenu || onRepairModel) && (
+              <>
+                {(showGroupSection || showFolderSection) && <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />}
+
+                {onRenameModel && (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => {
+                      beginRenameModel(contextModel.id, contextModel.name ?? 'Model');
+                    }}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span>Rename Model</span>
+                  </button>
+                )}
+
+                {onRepairModel && (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => {
+                      onRepairModel(contextModel.id);
+                      closeContextMenu();
+                    }}
+                  >
+                    <Wrench className="h-3.5 w-3.5" />
+                    <span>Repair Mesh…</span>
+                  </button>
+                )}
+
+                {onModelContextMenu && (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => {
+                      onModelContextMenu(contextModel.id, { x: contextMenu.x, y: contextMenu.y });
+                      closeContextMenu();
+                    }}
+                  >
+                    <Box className="h-3.5 w-3.5" />
+                    <span>Model Actions…</span>
+                  </button>
+                )}
               </>
             )}
           </div>

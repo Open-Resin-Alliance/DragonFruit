@@ -1,6 +1,8 @@
 
 import React from 'react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
+import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -8,6 +10,12 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
+import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 
 interface ModelStatsCardProps {
@@ -36,8 +44,44 @@ export function ModelStatsCard({
   const inFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [estimatedResinMl, setEstimatedResinMl] = React.useState<number | null>(null);
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const networkUiAdapter = React.useMemo(
+    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
+    [activePrinterProfile?.networkSupport],
+  );
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const selectedNetworkDeviceId = React.useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedNetworkDeviceReachability = selectedNetworkDeviceId
+    ? (printerReachabilityByDeviceId[selectedNetworkDeviceId] ?? null)
+    : null;
+  const showRemoteOfflineMaterialPlaceholder = Boolean(networkUiAdapter)
+    && networkUiAdapter?.supportsRemoteMaterialProfiles !== false
+    && (
+      activePrinterProfile?.networkConnection?.connected !== true
+      || selectedNetworkDeviceReachability === false
+    );
+  const isNetworkPrinterOffline = Boolean(activePrinterProfile?.networkSupport) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedNetworkDeviceReachability === false
+  );
   const connectedHostName = React.useMemo(() => {
     const networkConnection = activePrinterProfile?.networkConnection;
     if (!networkConnection?.connected) return null;
@@ -45,12 +89,16 @@ export function ModelStatsCard({
   }, [activePrinterProfile]);
 
   const effectiveMaterialName = React.useMemo(() => {
+    if (showRemoteOfflineMaterialPlaceholder) {
+      return 'N/A';
+    }
+
     const networkConnection = activePrinterProfile?.networkConnection;
     if (activePrinterProfile?.networkSupport === 'nanodlp' && networkConnection?.connected) {
       return networkConnection.selectedMaterialName || networkConnection.selectedMaterialId || '-';
     }
-    return activeMaterialProfile?.name ?? '-';
-  }, [activeMaterialProfile, activePrinterProfile]);
+    return resolveCompositeMaterialLabel(activeMaterialProfile) ?? activeMaterialProfile?.name ?? '-';
+  }, [activeMaterialProfile, activePrinterProfile, showRemoteOfflineMaterialPlaceholder]);
 
   const effectiveLayerHeightMm = React.useMemo(() => {
     const networkConnection = activePrinterProfile?.networkConnection;
@@ -348,6 +396,9 @@ export function ModelStatsCard({
   }, [activeMaterialProfile, estimatedResinMl]);
 
   const frontHeader = connectedHostName || activePrinterProfile?.name || 'No printer connected';
+  const frontHeaderColor = isNetworkPrinterOffline
+    ? 'color-mix(in srgb, #f87171, var(--text-strong) 58%)'
+    : (connectedHostName ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' : 'var(--text-strong)');
 
   const handleToggleFlip = React.useCallback(() => {
     setIsFlipped((prev) => !prev);
@@ -385,7 +436,7 @@ export function ModelStatsCard({
               backfaceVisibility: 'hidden',
             }}
           >
-            <div className="font-semibold text-[12px] truncate" style={{ color: connectedHostName ? '#86efac' : 'var(--text-strong)' }}>
+            <div className="font-semibold text-[12px] truncate" style={{ color: frontHeaderColor }}>
               {frontHeader}
             </div>
 
@@ -473,7 +524,10 @@ export function ModelStatsCard({
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
               <span>Polygons:</span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
+
+              <span>Shells:</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.geometry.meshDefects?.nativeRepairReport?.post.component_count ?? '-'}</span>
 
               <span>Height:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
@@ -486,7 +540,9 @@ export function ModelStatsCard({
                   background: model.geometry.meshDefects.repairedByManifold
                     ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
                     : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
-                  color: model.geometry.meshDefects.repairedByManifold ? '#86efac' : '#fde68a',
+                  color: model.geometry.meshDefects.repairedByManifold
+                    ? 'color-mix(in srgb, #22c55e, var(--text-strong) 20%)'
+                    : 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                   border: model.geometry.meshDefects.repairedByManifold
                     ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
                     : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',

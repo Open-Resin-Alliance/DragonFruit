@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use dragonfruit_cli::io::*;
-use dragonfruit_slicer_v3::geometry::parse_triangles;
+use dragonfruit_slicing_engine::geometry::parse_triangles;
 use dragonfruit_islands::model::*;
 use dragonfruit_islands::rasterize::rasterize_for_island_scan;
 use dragonfruit_islands::rle;
@@ -316,6 +316,13 @@ enum SliceCommands {
         /// Anti-aliasing level (Off, 2x, 4x, 8x)
         #[arg(long, default_value = "Off")]
         anti_aliasing: String,
+        /// X-axis sub-pixel packing mode.
+        ///
+        /// - `none` (default): raw grayscale at source resolution; width_px = source_width_px.
+        /// - `rgb8_div3`: 3 sub-pixels packed into 1 RGB pixel; width_px = source_width_px / 3.
+        /// - `gray3_div2`: 2 sub-pixels packed into 1 grayscale pixel; width_px = source_width_px / 2.
+        #[arg(long, default_value = "none")]
+        x_packing_mode: String,
         /// Mirror X
         #[arg(long)]
         mirror_x: bool,
@@ -1012,6 +1019,7 @@ fn cmd_slice_run(
     source_height_px: u32,
     png_compression: &str,
     anti_aliasing: &str,
+    x_packing_mode: &str,
     mirror_x: bool,
     mirror_y: bool,
     format_version: &Option<String>,
@@ -1019,8 +1027,32 @@ fn cmd_slice_run(
     metadata_json: &str,
     json_output: bool,
 ) -> Result<(), String> {
-    use dragonfruit_slicer_v3::engine::slice_with_progress_v3_to_path;
-    use dragonfruit_slicer_v3::types::SliceJobV3;
+    let width_px = match x_packing_mode {
+        "none" => source_width_px,
+        "rgb8_div3" => {
+            if source_width_px % 3 != 0 {
+                return Err(format!(
+                    "source_width_px ({source_width_px}) must be divisible by 3 for x_packing_mode=rgb8_div3"
+                ));
+            }
+            source_width_px / 3
+        }
+        "gray3_div2" => {
+            if source_width_px % 2 != 0 {
+                return Err(format!(
+                    "source_width_px ({source_width_px}) must be divisible by 2 for x_packing_mode=gray3_div2"
+                ));
+            }
+            source_width_px / 2
+        }
+        other => {
+            return Err(format!(
+                "Invalid x_packing_mode '{other}': expected one of none, rgb8_div3, gray3_div2"
+            ));
+        }
+    };
+    use dragonfruit_slicing_engine::engine::slice_with_progress_v3_to_path;
+    use dragonfruit_slicing_engine::types::SliceJobV3;
 
     // Same flow as Tauri's slice_solid_native_to_temp_path:
     // load STL or positions.bin → build SliceJobV3 → dispatch to engine
@@ -1057,8 +1089,9 @@ fn cmd_slice_run(
         output_format: ext.clone(),
         source_width_px,
         source_height_px,
-        width_px: source_width_px,
+        width_px,
         height_px: source_height_px,
+        x_packing_mode: x_packing_mode.to_string(),
         build_width_mm,
         build_depth_mm,
         layer_height_mm: layer_height,
@@ -1147,7 +1180,7 @@ fn extract_layer_png(archive_path: &PathBuf, layer: u32, output: &PathBuf) -> Re
 }
 
 fn cmd_slice_formats() {
-    use dragonfruit_slicer_v3::encoders::registry::{find_encoder, supported_output_formats};
+    use dragonfruit_slicing_engine::encoders::registry::{find_encoder, supported_output_formats};
 
     let format_names = supported_output_formats();
     let mut formats = Vec::new();
@@ -1324,7 +1357,7 @@ fn cmd_island_batch(
 }
 
 fn cmd_slice_info() {
-    use dragonfruit_slicer_v3::encoders::registry::supported_output_formats;
+    use dragonfruit_slicing_engine::encoders::registry::supported_output_formats;
     let formats = supported_output_formats();
 
     let info = serde_json::json!({
@@ -1470,7 +1503,7 @@ fn cmd_benchmark(
     build_width_mm: f32, build_depth_mm: f32, layer_height: f32,
     cube_count: u32, json_output: bool,
 ) -> Result<(), String> {
-    use dragonfruit_slicer_v3::benchmark::{run_benchmark_v3, BenchmarkConfigV3};
+    use dragonfruit_slicing_engine::benchmark::{run_benchmark_v3, BenchmarkConfigV3};
 
     let cfg = BenchmarkConfigV3 {
         layers,
@@ -1518,7 +1551,7 @@ fn cmd_benchmark(
 }
 
 fn cmd_info() {
-    use dragonfruit_slicer_v3::encoders::registry::supported_output_formats;
+    use dragonfruit_slicing_engine::encoders::registry::supported_output_formats;
     let formats = supported_output_formats();
 
     let info = serde_json::json!({
@@ -1632,10 +1665,10 @@ fn main() {
         Commands::Slice { command } => match command {
             SliceCommands::Run { input, output, layer_height, build_width_mm, build_depth_mm,
                 source_width_px, source_height_px, png_compression, anti_aliasing,
-                mirror_x, mirror_y, format_version, min_aa_alpha, metadata_json, json } =>
+                x_packing_mode, mirror_x, mirror_y, format_version, min_aa_alpha, metadata_json, json } =>
                 cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
                     source_width_px, source_height_px, &png_compression, &anti_aliasing,
-                    mirror_x, mirror_y, &format_version, min_aa_alpha, &metadata_json, json),
+                    &x_packing_mode, mirror_x, mirror_y, &format_version, min_aa_alpha, &metadata_json, json),
             SliceCommands::Formats => { cmd_slice_formats(); Ok(()) },
             SliceCommands::PreviewLayer { input, layer, output } =>
                 extract_layer_png(&input, layer, &output),
