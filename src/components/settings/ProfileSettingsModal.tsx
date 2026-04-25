@@ -109,6 +109,36 @@ type DeleteConfirmTarget =
   | { kind: 'material'; id: string; name: string };
 
 
+const REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY = 'dragonfruit.network.remoteMaterialByPrinter.v1';
+
+function readRemoteMaterialByPrinter(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof k === 'string' && typeof v === 'string' && k.trim() && v.trim()) {
+        result[k.trim()] = v.trim();
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeRemoteMaterialByPrinter(printerId: string, materialId: string): void {
+  try {
+    const current = readRemoteMaterialByPrinter();
+    const next = { ...current, [printerId]: materialId };
+    localStorage.setItem(REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 const WEBCAM_ROTATION_OPTIONS = [
   { value: '0', label: '0°' },
@@ -866,6 +896,7 @@ export function ProfileSettingsModal({
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
+  const materialSelectionInitializedRef = React.useRef(false);
   const lastInitializedNetworkPrinterIdRef = React.useRef<string | null>(null);
   const discoveryInFlightRef = React.useRef(false);
   const discoveryRunIdRef = React.useRef(0);
@@ -873,6 +904,42 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     selectedRemoteMaterialIdRef.current = selectedRemoteMaterialId;
   }, [selectedRemoteMaterialId]);
+
+  const persistedRemoteMaterialIdForSelectedPrinter = React.useMemo(() => {
+    if (!selectedPrinter) return '';
+
+    const normalize = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+    const fromConnection = normalize(selectedPrinter.networkConnection?.selectedMaterialId);
+    if (fromConnection.length > 0) return fromConnection;
+
+    const fleet = Array.isArray(selectedPrinter.networkFleet) ? selectedPrinter.networkFleet : [];
+    const activeNetworkDeviceId = normalize(selectedPrinter.activeNetworkDeviceId);
+    if (activeNetworkDeviceId.length > 0) {
+      const fromActiveDevice = normalize(
+        fleet.find((device) => device.id === activeNetworkDeviceId)?.selectedMaterialId,
+      );
+      if (fromActiveDevice.length > 0) return fromActiveDevice;
+    }
+
+    const normalizedHost = normalize(selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress).toLowerCase();
+    if (normalizedHost.length > 0) {
+      const fromHostMatchedDevice = normalize(
+        fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === normalizedHost)?.selectedMaterialId,
+      );
+      if (fromHostMatchedDevice.length > 0) return fromHostMatchedDevice;
+    }
+
+    return normalize(fleet.find((device) => normalize(device.selectedMaterialId).length > 0)?.selectedMaterialId);
+  }, [selectedPrinter]);
+
+  React.useEffect(() => {
+    setSelectedRemoteMaterialId((current) => (
+      current === persistedRemoteMaterialIdForSelectedPrinter
+        ? current
+        : persistedRemoteMaterialIdForSelectedPrinter
+    ));
+  }, [persistedRemoteMaterialIdForSelectedPrinter, selectedPrinter?.id]);
 
   const selectedPrinterResolvedId = selectedPrinter?.id ?? '';
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
@@ -1421,24 +1488,10 @@ export function ProfileSettingsModal({
     }
   }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
 
-  React.useEffect(() => {
-    if (!selectedPrinterSupportsNetworkSettings) {
-      setPrinterRailViewMode('profiles');
-      return;
-    }
-
-    if (selectedPrinterFleetCount > 0) {
-      return;
-    }
-
-    if (printerRailViewMode === 'fleet') {
-      setPrinterRailViewMode('profiles');
-    }
-  }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
-
   React.useLayoutEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
+      materialSelectionInitializedRef.current = false;
       return;
     }
 
@@ -1447,6 +1500,7 @@ export function ProfileSettingsModal({
       return;
     }
     wasOpenRef.current = true;
+    materialSelectionInitializedRef.current = false;
 
     const shouldOpenPrinterLibrary =
       initialTab === 'printer'
@@ -1518,6 +1572,7 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     if (!isOpen) return;
     if (!selectedPrinter) {
+      materialSelectionInitializedRef.current = false;
       setSelectedMaterialId(null);
       setSelectedManufacturer(null);
       setSelectedResinFamily(null);
@@ -1525,6 +1580,7 @@ export function ProfileSettingsModal({
     }
 
     if (availableManufacturers.length === 0) {
+      materialSelectionInitializedRef.current = false;
       setSelectedMaterialId(null);
       setSelectedManufacturer(null);
       setSelectedResinFamily(null);
@@ -1540,13 +1596,46 @@ export function ProfileSettingsModal({
     }
 
     if (!selectedMaterialId || !filteredMaterialProfiles.some((material) => material.id === selectedMaterialId)) {
-      const nextSelectedMaterialId = filteredMaterialProfiles[0]?.id ?? null;
+      const shouldRestoreRememberedSelection = !materialSelectionInitializedRef.current;
+      const mappedMaterialIdForPrinter = typeof profileState.activeMaterialProfileIdByPrinterId?.[selectedPrinter.id] === 'string'
+        ? profileState.activeMaterialProfileIdByPrinterId[selectedPrinter.id]!.trim()
+        : '';
+      const fallbackActiveMaterialId = typeof profileState.activeMaterialProfileId === 'string'
+        ? profileState.activeMaterialProfileId.trim()
+        : '';
+      const rememberedMaterialId = [mappedMaterialIdForPrinter, fallbackActiveMaterialId]
+        .find((materialId) => materialId.length > 0 && printerMaterials.some((material) => material.id === materialId))
+        ?? '';
+
+      const nextSelectedMaterialId = shouldRestoreRememberedSelection
+        ? (
+          rememberedMaterialId
+          || filteredMaterialProfiles[0]?.id
+          || printerMaterials[0]?.id
+          || null
+        )
+        : (filteredMaterialProfiles[0]?.id ?? null);
       setSelectedMaterialId(nextSelectedMaterialId);
+
+      const nextMaterial = nextSelectedMaterialId
+        ? printerMaterials.find((material) => material.id === nextSelectedMaterialId) ?? null
+        : null;
+      if (nextMaterial && shouldRestoreRememberedSelection) {
+        setSelectedManufacturer(nextMaterial.brand ?? null);
+        setSelectedResinFamily(nextMaterial.resinFamily ?? null);
+      }
+
       if (nextSelectedMaterialId) {
-        setActiveMaterialProfile(nextSelectedMaterialId);
+        if (shouldRestoreRememberedSelection) {
+          materialSelectionInitializedRef.current = true;
+        } else {
+          setActiveMaterialProfile(nextSelectedMaterialId);
+        }
       }
       return;
     }
+
+    materialSelectionInitializedRef.current = true;
 
     if (profileState.activeMaterialProfileId !== selectedMaterialId) {
       setActiveMaterialProfile(selectedMaterialId);
@@ -1742,7 +1831,10 @@ export function ProfileSettingsModal({
 
       setRemoteMaterials(materials);
 
-      const preferredId = selectedRemoteMaterialIdRef.current;
+      const storedId = selectedPrinterResolvedId ? (readRemoteMaterialByPrinter()[selectedPrinterResolvedId] ?? '') : '';
+      const preferredId = storedId
+        || persistedRemoteMaterialIdForSelectedPrinter
+        || selectedRemoteMaterialIdRef.current;
       const nextSelected = materials.find((item: any) => item.id === preferredId)
         ?? materials.find((item: any) => item.locked !== true)
         ?? materials[0]
@@ -1774,7 +1866,7 @@ export function ProfileSettingsModal({
     } finally {
       setIsLoadingRemoteMaterials(false);
     }
-  }, [effectiveNetworkUiAdapter, networkUiAdapter, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
+  }, [effectiveNetworkUiAdapter, networkUiAdapter, persistedRemoteMaterialIdForSelectedPrinter, selectedPrinter, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
 
   React.useEffect(() => {
     if (!shouldUseRemoteOnDeviceMaterials || !selectedPrinterResolvedId) {
@@ -1792,6 +1884,7 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return;
     const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues(material.meta ?? {});
     setSelectedRemoteMaterialId(material.id);
+    writeRemoteMaterialByPrinter(selectedPrinter.id, material.id);
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
       selectedMaterialName: material.name,
@@ -2620,12 +2713,19 @@ export function ProfileSettingsModal({
   }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
+    materialSelectionInitializedRef.current = false;
     setSelectedPrinterId(printerId);
     setIsEditingPrinter(false);
     setActivePrinterProfile(printerId);
     const snapshot = getProfileStoreSnapshot();
     const materials = getMaterialProfilesForPrinter(printerId, snapshot);
-    const restored = materials.find((material) => material.id === snapshot.activeMaterialProfileId) ?? materials[0] ?? null;
+    const mappedId = typeof snapshot.activeMaterialProfileIdByPrinterId?.[printerId] === 'string'
+      ? snapshot.activeMaterialProfileIdByPrinterId[printerId]!.trim()
+      : '';
+    const restored = materials.find((material) => material.id === mappedId)
+      ?? materials.find((material) => material.id === snapshot.activeMaterialProfileId)
+      ?? materials[0]
+      ?? null;
     setSelectedMaterialId(restored?.id ?? null);
     if (restored) {
       setSelectedManufacturer((restored.brand || 'Default').trim() || 'Default');
