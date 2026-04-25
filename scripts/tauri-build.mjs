@@ -46,8 +46,12 @@ function rustflagsForTarget(targetTriple) {
 
 const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const cmdArgs = ["tauri", "build", ...extraArgs];
+const hasBundlesArg = extraArgs.includes("--bundles");
 
 if (isLinux) {
+  if (!hasBundlesArg) {
+    cmdArgs.push("--bundles", "deb,rpm");
+  }
   cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
 }
 
