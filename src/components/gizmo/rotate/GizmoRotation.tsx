@@ -302,8 +302,10 @@ export function GizmoRotation({
       onDragRef.current(emittedObjectDelta);
 
       // Dispatch snap readout event for DOM overlay (always active while dragging)
+      // Parent applies object rotation with -angle, so mirror that sign here so
+      // the readout matches Transform panel values and perceived rotation direction.
       window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
-        detail: { active: true, angle: lastSnappedAngleRef.current, axis },
+        detail: { active: true, angle: -lastSnappedAngleRef.current, axis },
       }));
 
       lastMouseAngle.current = currentMouseAngle;

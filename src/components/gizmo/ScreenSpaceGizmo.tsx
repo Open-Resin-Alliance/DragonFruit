@@ -4,7 +4,7 @@ import React from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { TransformGizmo } from './TransformGizmo';
-import type { TransformGizmoProps } from './types';
+import type { TransformGizmoProps, GizmoDragStateChangeDetails, GizmoOperation } from './types';
 
 function toPositionArray(position: TransformGizmoProps['position']): [number, number, number] {
   return Array.isArray(position)
@@ -56,6 +56,8 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   const switchAnimationTimeoutRef = React.useRef<number | null>(null);
   const prevTargetObjectRef = React.useRef<THREE.Group | THREE.Mesh | null>(targetObject ?? null);
   const isDraggingRef = React.useRef(false);
+  const dragOperationRef = React.useRef<GizmoOperation | null>(null);
+  const [lockedDragPosition, setLockedDragPosition] = React.useState<[number, number, number] | null>(null);
 
   const transitionRef = React.useRef<{
     active: boolean;
@@ -71,6 +73,10 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     retargetingActiveRef.current = next;
     props.onRetargetingChange?.(next);
   }, [props]);
+
+  const shouldLockDragAnchor = React.useCallback((operation: GizmoOperation | null | undefined) => {
+    return operation === 'rotate' || operation === 'scale';
+  }, []);
 
   const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
     const meshPos = followMeshRef ? props.meshRef?.current?.position : null;
@@ -147,6 +153,16 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     const root = gizmoRootRef.current;
     if (!root) return;
 
+    if (isDraggingRef.current && lockedDragPosition) {
+      root.position.set(lockedDragPosition[0], lockedDragPosition[1], lockedDragPosition[2]);
+      const nextScale = computeScreenSpaceScale(camera, lockedDragPosition, scaleFactor, scratchPointRef.current);
+      if (Math.abs(nextScale - lastScaleRef.current) > 1e-4) {
+        lastScaleRef.current = nextScale;
+        root.scale.setScalar(nextScale);
+      }
+      return;
+    }
+
     const nextPosition = resolveCurrentPosition();
     if (!transitionRef.current.active) {
       const prev = lastPositionRef.current;
@@ -162,7 +178,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       lastScaleRef.current = nextScale;
       root.scale.setScalar(nextScale);
     }
-  }, [camera, resolveCurrentPosition, scaleFactor, targetObject]);
+  }, [camera, lockedDragPosition, resolveCurrentPosition, scaleFactor, targetObject]);
 
   React.useEffect(() => {
     return () => {
@@ -175,6 +191,16 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   useFrame((_, delta) => {
     const root = gizmoRootRef.current;
     if (!root) return;
+
+    if (isDraggingRef.current && lockedDragPosition) {
+      const newScale = computeScreenSpaceScale(camera, lockedDragPosition, scaleFactor, scratchPointRef.current);
+      if (Math.abs(newScale - lastScaleRef.current) > 1e-4) {
+        lastScaleRef.current = newScale;
+        root.scale.setScalar(newScale);
+      }
+      root.position.set(lockedDragPosition[0], lockedDragPosition[1], lockedDragPosition[2]);
+      return;
+    }
 
     let effectivePosition: [number, number, number];
 
@@ -222,16 +248,27 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     }
   });
 
-  const handleDragStateChange = React.useCallback((isDragging: boolean) => {
+  const handleDragStateChange = React.useCallback((isDragging: boolean, details?: GizmoDragStateChangeDetails) => {
     isDraggingRef.current = isDragging;
     if (isDragging) {
       const snap = resolveCurrentPosition();
       stopTransition(snap);
+      dragOperationRef.current = details?.operation ?? null;
+      setLockedDragPosition(shouldLockDragAnchor(details?.operation) ? snap : null);
+    } else {
+      dragOperationRef.current = null;
+      setLockedDragPosition(null);
+      const nextPosition = resolveCurrentPosition();
+      lastPositionRef.current = nextPosition;
+      const root = gizmoRootRef.current;
+      if (root) {
+        root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+      }
     }
-    props.onDragStateChange?.(isDragging);
-  }, [props, resolveCurrentPosition, stopTransition]);
+    props.onDragStateChange?.(isDragging, details);
+  }, [props, resolveCurrentPosition, shouldLockDragAnchor, stopTransition]);
 
-  const renderPosition = lastPositionRef.current;
+  const renderPosition = lockedDragPosition ?? lastPositionRef.current;
 
   return (
     <TransformGizmo

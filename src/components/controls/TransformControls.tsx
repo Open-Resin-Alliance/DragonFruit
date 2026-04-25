@@ -136,6 +136,11 @@ export function TransformControls({
   // Conversion helpers
   const toDegrees = (rad: number) => (rad * 180) / Math.PI;
   const toRadians = (deg: number) => (deg * Math.PI) / 180;
+  const wrapRotationDegrees = (deg: number) => {
+    if (!Number.isFinite(deg)) return 0;
+    const wrapped = ((((deg + 180) % 360) + 360) % 360) - 180;
+    return Object.is(wrapped, -0) ? 0 : wrapped;
+  };
 
   // Calculate original dimensions from bbox
   const originalSize = modelBBox
@@ -155,7 +160,7 @@ export function TransformControls({
 
   // Rotation handlers
   const handleRotationChange = (axis: 'x' | 'y' | 'z', value: number) => {
-    const radians = toRadians(value);
+    const radians = toRadians(wrapRotationDegrees(value));
     const newRot = rotation.clone();
     newRot[axis] = radians;
     onRotationChange(newRot.x, newRot.y, newRot.z);
@@ -366,7 +371,7 @@ export function TransformControls({
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
                     <NumberInput
-                      value={parseFloat(toDegrees(rotation.x).toFixed(2))}
+                      value={parseFloat(wrapRotationDegrees(toDegrees(rotation.x)).toFixed(2))}
                       onChange={(val) => handleRotationChange('x', val)}
                       onBlur={() => {
                         onRotationComplete?.();
@@ -378,7 +383,7 @@ export function TransformControls({
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
                     <NumberInput
-                      value={parseFloat(toDegrees(rotation.y).toFixed(2))}
+                      value={parseFloat(wrapRotationDegrees(toDegrees(rotation.y)).toFixed(2))}
                       onChange={(val) => handleRotationChange('y', val)}
                       onBlur={() => {
                         onRotationComplete?.();
@@ -390,7 +395,7 @@ export function TransformControls({
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
                     <NumberInput
-                      value={parseFloat(toDegrees(rotation.z).toFixed(2))}
+                      value={parseFloat(wrapRotationDegrees(toDegrees(rotation.z)).toFixed(2))}
                       onChange={(val) => handleRotationChange('z', val)}
                       onBlur={() => {
                         onRotationComplete?.();

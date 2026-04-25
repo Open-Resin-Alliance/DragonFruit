@@ -2182,8 +2182,8 @@ async fn scene_autosave_read_manifest(
 }
 
 #[tauri::command]
-async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Vec<u8>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
         let path = dir.join(SCENE_AUTOSAVE_VOXL_FILE);
         if !path.exists() {
@@ -2192,7 +2192,9 @@ async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Vec
         std::fs::read(&path).map_err(|err| format!("Failed reading autosaved scene: {err}"))
     })
     .await
-    .map_err(|err| format!("scene_autosave_read_voxl_bytes task failed: {err}"))?
+    .map_err(|err| format!("scene_autosave_read_voxl_bytes task failed: {err}"))??;
+
+    Ok(Response::new(bytes))
 }
 
 fn is_scene_file_path(path: &std::path::Path) -> bool {

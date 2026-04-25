@@ -6,8 +6,6 @@ import {
   Copy,
   Scissors,
   ClipboardPaste,
-  CopyPlus,
-  LayoutGrid,
   Trash2,
   type LucideIcon,
 } from 'lucide-react';
@@ -17,8 +15,6 @@ export type EditorMenuAction =
   | 'cut'
   | 'copy'
   | 'paste'
-  | 'duplicate'
-  | 'arrange'
   | 'repair';
 
 export type EditorContextMenuPosition = {
@@ -43,13 +39,11 @@ const MENU_ITEMS: MenuItemDef[] = [
   { id: 'cut', label: 'Cut', icon: Scissors },
   { id: 'copy', label: 'Copy', icon: Copy },
   { id: 'paste', label: 'Paste', icon: ClipboardPaste },
-  { id: 'duplicate', label: 'Duplicate', icon: CopyPlus },
-  { id: 'arrange', label: 'Arrange', icon: LayoutGrid },
   { id: 'repair', label: 'Repair', icon: Wrench },
 ];
 
 const MENU_WIDTH = 176;
-const MENU_HEIGHT = 280;
+const MENU_HEIGHT = 200;
 
 export function EditorContextMenu({ position, onAction, disabledActions = [] }: EditorContextMenuProps) {
   if (!position) return null;
