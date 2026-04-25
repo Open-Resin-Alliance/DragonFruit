@@ -29,6 +29,10 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       camera.near = ORTHO_NEAR;
       camera.far = ORTHO_FAR;
       camera.updateProjectionMatrix();
+      // NOTE: Do NOT call controls.update() here. If we do, and the user
+      // hasn't interacted with the camera since the intro animation,
+      // OrbitControls may apply internal constraints that cause the view
+      // to zoom out unexpectedly when the frustum changes.
       return;
     }
 
@@ -52,20 +56,27 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       // old normalised-frustum approach produced, which degraded GPU pick
       // precision via setViewOffset floating-point arithmetic.
       let worldHalfH: number;
+      let preserveZoom = 1;
       if (camera instanceof THREE.PerspectiveCamera) {
         const distance = Math.max(0.001, camera.position.distanceTo(target));
         const fov = THREE.MathUtils.degToRad(camera.fov);
         worldHalfH = Math.max(1, Math.tan(fov * 0.5) * distance);
+        // When switching from perspective to ortho, calculate the ortho zoom
+        // to preserve the same view scale (visual size of objects on screen).
+        // This prevents zoom-out/zoom-in when transitioning between projections.
+        preserveZoom = Math.max(0.0001, worldHalfH / Math.max(1, Math.tan(fov * 0.5) * distance));
       } else {
         // Already ortho (type mismatch shouldn't happen, but be safe)
         worldHalfH = Math.max(1, camera.top);
+        // Preserve existing zoom when already in ortho mode
+        preserveZoom = (camera as THREE.OrthographicCamera).zoom;
       }
       const worldHalfW = worldHalfH * aspect;
       const next = new THREE.OrthographicCamera(
         -worldHalfW, worldHalfW, worldHalfH, -worldHalfH,
         ORTHO_NEAR, ORTHO_FAR,
       );
-      next.zoom = 1;
+      next.zoom = preserveZoom;
       next.position.copy(camera.position);
       // Preserve view direction. Without copying quaternion, the new camera has identity
       // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
@@ -100,8 +111,15 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
 
     if (camera instanceof THREE.OrthographicCamera) {
       const span = Math.max(1e-6, (camera.top - camera.bottom) / Math.max(1e-6, camera.zoom));
-      const fov = THREE.MathUtils.degToRad(next.fov);
-      const distance = Math.max(0.001, span / (2 * Math.tan(fov * 0.5)));
+      const distance = Math.max(0.001, span / 2);
+      
+      // When switching from ortho to perspective, calculate FOV to match
+      // the ortho zoom level so objects appear the same visual size.
+      // This prevents zoom-out/zoom-in when transitioning between projections.
+      const requiredHalfFov = Math.atan(span / (2 * distance));
+      const calculatedFov = THREE.MathUtils.radToDeg(2 * requiredHalfFov);
+      next.fov = THREE.MathUtils.clamp(calculatedFov, 5, 175);
+      
       const direction = camera.position.clone().sub(target);
       if (direction.lengthSq() < 1e-10) direction.set(-1, -1, 1);
       direction.normalize();
