@@ -692,6 +692,8 @@ export type MeshRepairReportEntry = {
   report: MeshHealthReport;
 };
 
+type MeshRepairReportPresentation = 'default' | 'optimistic';
+
 function repairReportNeedsAttention(report: MeshHealthReport): boolean {
   if (!report.fully_repaired) return true;
 
@@ -776,6 +778,7 @@ export function useSceneCollectionManager() {
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
   const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
+  const [meshRepairReportPresentation, setMeshRepairReportPresentation] = useState<MeshRepairReportPresentation>('default');
   const [pendingMeshRepairReports, setPendingMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
@@ -837,12 +840,14 @@ export function useSceneCollectionManager() {
 
   const dismissMeshRepairReports = useCallback(() => {
     setMeshRepairReports([]);
+    setMeshRepairReportPresentation('default');
   }, []);
 
   const openPendingMeshRepairReports = useCallback(() => {
     if (pendingMeshRepairReports.length === 0) {
       return;
     }
+    setMeshRepairReportPresentation('default');
     setMeshRepairReports(pendingMeshRepairReports);
     setPendingMeshRepairReports([]);
     clearSceneImportReport();
@@ -3716,21 +3721,10 @@ export function useSceneCollectionManager() {
           modelName: model.name,
           report: repairReport,
         };
-        const needsAttention = repairReportNeedsAttention(repairReport);
-        if (needsAttention) {
-          const anyResidual = !repairReport.fully_repaired;
-          setPendingMeshRepairReports([reportEntry]);
-          emitSceneImportReport(
-            anyResidual
-              ? `Repair finished with remaining issues - Click for details (${model.name})`
-              : `Repair finished - Click for details (${model.name}).`,
-            anyResidual ? 'warning' : 'success',
-            { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
-          );
-        } else {
-          setPendingMeshRepairReports([]);
-          emitSceneImportReport(`Repaired ${model.name}.`, 'success');
-        }
+        setPendingMeshRepairReports([]);
+        clearSceneImportReport();
+        setMeshRepairReportPresentation('optimistic');
+        setMeshRepairReports([reportEntry]);
       } else {
         setPendingMeshRepairReports([]);
         emitSceneImportReport(`Repaired ${model.name}.`, 'success');
@@ -3744,7 +3738,7 @@ export function useSceneCollectionManager() {
       emitSceneImportReport(`Repair failed: ${message}`, 'error', { durationMs: 6_000 });
       return false;
     }
-  }, [emitSceneImportReport]);
+  }, [clearSceneImportReport, emitSceneImportReport]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -3883,6 +3877,7 @@ export function useSceneCollectionManager() {
     sceneImportReport,
     clearSceneImportReport,
     meshRepairReports,
+    meshRepairReportPresentation,
     openPendingMeshRepairReports,
     dismissMeshRepairReports,
     sceneImportPlacementPrompt,
