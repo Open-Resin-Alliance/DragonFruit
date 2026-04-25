@@ -1,6 +1,6 @@
 {
   "name": "dragonfruit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "buildChannel": "beta",
   "private": true,
   "scripts": {
@@ -10,6 +10,7 @@
     "generate:plugin-registry": "node scripts/generate-plugin-registry.mjs",
     "check:plugin-allowlist": "node scripts/check-complex-plugin-allowlist.mjs",
     "check:generated-plugin-registry": "node scripts/verify-generated-plugin-registry.mjs",
+    "predev:once": "node scripts/build-thumbnail-providers.mjs",
     "predev": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
     "prebuild": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
     "prebuild:tauri": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
@@ -29,7 +30,7 @@
     "tauri:build": "node scripts/tauri-build.mjs",
     "tauri:bundle": "node scripts/tauri-bundle-all.mjs",
     "tauri:bundle:windows": "tauri build --target x86_64-pc-windows-msvc --bundles msi,nsis",
-    "tauri:bundle:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage",
+    "tauri:bundle:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm",
     "tauri:bundle:macos": "tauri build --target x86_64-apple-darwin --bundles app,dmg",
     "tauri:bundle:macos:arm64": "tauri build --target aarch64-apple-darwin --bundles app,dmg",
     "macos:thumbnails": "node scripts/macos-thumbnails.mjs",
@@ -52,6 +53,7 @@
     "express-ws": "^5.0.2",
     "fflate": "^0.8.2",
     "ffmpeg-static": "^5.3.0",
+    "highlight.js": "^11.11.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "manifold-3d": "^3.4.1",

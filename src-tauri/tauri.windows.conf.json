@@ -1,11 +1,14 @@
 {
   "bundle": {
+    "licenseFile": "nsis/assets/license.txt",
     "resources": {
       "windows-resources/dragonfruit_voxl_thumbnail_com.dll": "dragonfruit_voxl_thumbnail_com.dll"
     },
     "windows": {
       "nsis": {
-        "installerHooks": "nsis/thumbnail-hooks.nsh"
+        "installerHooks": "nsis/thumbnail-hooks.nsh",
+        "headerImage": "nsis/assets/header.bmp",
+        "sidebarImage": "nsis/assets/sidebar.bmp"
       }
     }
   }

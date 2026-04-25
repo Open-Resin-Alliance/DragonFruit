@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use dragonfruit_slicer_v3::geometry::{parse_triangles, Triangle};
+use dragonfruit_slicing_engine::geometry::{parse_triangles, Triangle};
 use dragonfruit_islands::model::{ComponentInfo, RleLabels, RleMask};
 
 // ---------------------------------------------------------------------------
@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn slice_job_format_version_field() {
         // Verify SliceJobV3 accepts format_version
-        use dragonfruit_slicer_v3::types::SliceJobV3;
+        use dragonfruit_slicing_engine::types::SliceJobV3;
 
         let job_json = r#"{
             "output_format": ".ctb",
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn slice_job_format_version_defaults_to_none() {
-        use dragonfruit_slicer_v3::types::SliceJobV3;
+        use dragonfruit_slicing_engine::types::SliceJobV3;
 
         let job_json = r#"{
             "output_format": ".nanodlp",

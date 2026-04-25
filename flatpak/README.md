@@ -24,7 +24,6 @@ install path alongside the existing `.deb`, `.rpm`, and `.AppImage` bundles.
 | `org.openresinalliance.dragonfruit.desktop` | Desktop entry |
 | `dragonfruit-voxl-mime.xml` | MIME type registration for `.voxl` files |
 | `launcher.sh` | `/app/bin/dragonfruit` wrapper — sets CEF flags and `LD_LIBRARY_PATH` |
-| `build.sh` | Orchestrator: validates metadata, runs flatpak-builder, exports bundle |
 | `FLATHUB.md` | Flathub submission checklist (blocked on GPL-3.0 LICENCE publication) |
 | `THUMBNAILER.md` | Thumbnailer-in-Flatpak investigation notes |
 
@@ -50,23 +49,31 @@ flatpak install --user -y flathub \
 
 ### Build steps
 
-From the DragonFruit repo root:
+From the DragonFruit repo root, run the standard Tauri build:
 
 ```bash
-# 1. Build the Tauri app with CEF
-node scripts/tauri-build.mjs
-bash scripts/bundle-cef-libs.sh
-
-# 2. Build the Flatpak bundle
-bash flatpak/build.sh
+npm run tauri:build
 ```
 
-Output: `dist/dragonfruit-<version>-x86_64.flatpak`
+When `flatpak-builder`, `appstreamcli`, and `desktop-file-validate` are on
+PATH, `tauri-build.mjs` automatically:
+
+1. Stages CEF shared libraries (`scripts/bundle-cef-libs.sh`)
+2. Validates `.desktop` and `metainfo.xml`
+3. Stages the binary + CEF blobs + icons into `flatpak/staging/`
+4. Runs `flatpak-builder` against the manifest
+5. Exports the bundle to `src-tauri/target/release/bundle/flatpak/`
+6. Cleans up `flatpak/staging/`
+
+If any of the three tools are missing, the Flatpak step is silently skipped
+and the Tauri build completes normally with deb/rpm/AppImage bundles only.
+
+Output: `src-tauri/target/release/bundle/flatpak/dragonfruit-<version>-x86_64.flatpak`
 
 ### Install and run
 
 ```bash
-flatpak install --user -y dist/dragonfruit-*.flatpak
+flatpak install --user -y src-tauri/target/release/bundle/flatpak/dragonfruit-*.flatpak
 flatpak run org.openresinalliance.dragonfruit
 ```
 
@@ -91,11 +98,7 @@ flatpak install --user -y flathub \
     org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
 
 cd /build
-# (re)build the Tauri app if needed
-node scripts/tauri-build.mjs
-bash scripts/bundle-cef-libs.sh
-# produce the Flatpak
-bash flatpak/build.sh
+npm run tauri:build
 ```
 
 ## Runtime permissions
@@ -130,5 +133,5 @@ xdg-desktop-portal file chooser; the `rfd` crate detects Flatpak automatically.
 
 - `FLATHUB.md` — submission checklist and blockers
 - `THUMBNAILER.md` — thumbnailer investigation
-- Root `scripts/tauri-build.mjs` — Linux build path invoking `--features tauri-cef`
+- Root `scripts/tauri-build.mjs` — Linux build path with auto Flatpak post-build
 - Root `scripts/bundle-cef-libs.sh` — CEF library staging

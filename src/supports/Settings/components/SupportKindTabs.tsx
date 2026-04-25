@@ -81,7 +81,7 @@ export function SupportKindTabs({
                         key={tab.kind}
                         type="button"
                         onClick={() => onChange(tab.kind)}
-                        className={`flex h-12 cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:-translate-y-px hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
+                        className={`flex h-12 cursor-pointer items-center justify-center rounded-md border px-2 transition-all duration-150 hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)] ${showIcons ? 'gap-2' : 'gap-0'}`}
                         style={isActive
                             ? {
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',

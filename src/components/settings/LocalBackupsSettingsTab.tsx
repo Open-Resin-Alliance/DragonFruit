@@ -1,9 +1,10 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, ArchiveRestore, CheckCircle2, CircleHelp, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive, Loader2, RefreshCcw, Trash2, UploadCloud, X } from 'lucide-react';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { generateUuid } from '@/utils/uuid';
 
 type BackupSnapshot = {
@@ -669,6 +670,16 @@ export function LocalBackupsSettingsTab() {
   }
 
   const hasAnySync = Boolean(stateUpdatedAt || lastLocalSyncAt);
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: 'var(--accent-secondary-action-color)',
+    borderColor: 'var(--accent-secondary-action-border)',
+    background: 'var(--accent-secondary-action-bg-92)',
+  };
+  const dangerActionStyle92: React.CSSProperties = {
+    color: 'color-mix(in srgb, var(--danger), var(--text-strong) 22%)',
+    borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 45%)',
+    background: 'color-mix(in srgb, var(--danger), var(--surface-1) 88%)',
+  };
 
   return (
     <div className="space-y-3">
@@ -678,27 +689,7 @@ export function LocalBackupsSettingsTab() {
             <HardDrive className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Local On-Disk Backups</h3>
-              <div className="relative group">
-                <button
-                  type="button"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-secondary)' }}
-                  aria-label="View local backup details"
-                >
-                  <CircleHelp className="h-3.5 w-3.5" />
-                </button>
-                <div
-                  className="pointer-events-none absolute left-0 top-[calc(100%+8px)] z-20 w-[min(420px,calc(100vw-32px))] rounded-md border p-3 text-xs leading-relaxed opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-strong)' }}
-                >
-                  <p>
-                    Backups are written directly to your machine. DragonFruit stores `state.json` and timestamped snapshots in `history/*.json` inside your selected backup directory.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Local On-Disk Backups</h3>
             <p className="mt-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
               Automatically saves snapshots of your settings and profiles to a folder on your computer.
             </p>
@@ -778,13 +769,20 @@ export function LocalBackupsSettingsTab() {
       </section>
 
       <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-        <div className="flex items-center gap-2">
-          <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h4>
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}
+          >
+            <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app.
+            </p>
+          </div>
         </div>
-        <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-          Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app.
-        </p>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Quick actions</div>
@@ -831,7 +829,7 @@ export function LocalBackupsSettingsTab() {
                   ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                       background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
                     }
                   : {
                       borderColor: 'var(--border-subtle)',
@@ -922,7 +920,7 @@ export function LocalBackupsSettingsTab() {
                           type="button"
                           onClick={() => { void handleViewHistory(item.id); }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border transition-colors"
-                          style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-secondary)' }}
+                          style={accentSecondaryActionStyle92}
                           title="View snapshot"
                         >
                           <Eye className="h-3.5 w-3.5" />
@@ -931,7 +929,7 @@ export function LocalBackupsSettingsTab() {
                           type="button"
                           onClick={() => { setConfirmDeleteId(item.id); }}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border"
-                          style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)', color: '#fca5a5' }}
+                          style={dangerActionStyle92}
                           title="Delete snapshot"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -946,97 +944,49 @@ export function LocalBackupsSettingsTab() {
         </div>
       </section>
 
-      {confirmDeleteId && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setConfirmDeleteId(null);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm delete snapshot"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
-                    color: '#fca5a5',
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Delete Snapshot
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {confirmDeleteId ? new Date(Number(confirmDeleteId)).toLocaleString() : ''}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Cancel delete"
-                onClick={() => { setConfirmDeleteId(null); }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                This snapshot will be permanently deleted from disk. This action cannot be undone.
-              </p>
-              <div className="flex shrink-0 items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => { setConfirmDeleteId(null); }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                    color: '#fca5a5',
-                  }}
-                  disabled={busy !== 'none'}
-                  onClick={() => {
-                    const id = confirmDeleteId;
-                    setConfirmDeleteId(null);
-                    void handleDeleteHistory(id);
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={Boolean(confirmDeleteId)}
+        ariaLabel="Confirm delete snapshot"
+        title="Delete Backup Snapshot"
+        subtitle="This action cannot be undone."
+        icon={<Trash2 className="h-4 w-4" />}
+        iconTone="danger"
+        zIndexClassName="z-[100]"
+        onClose={() => { setConfirmDeleteId(null); }}
+        closeAriaLabel="Cancel delete"
+        actions={(
+          <>
+            <button
+              type="button"
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              onClick={() => { setConfirmDeleteId(null); }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={dangerActionStyle92}
+              disabled={busy !== 'none'}
+              onClick={() => {
+                const id = confirmDeleteId;
+                setConfirmDeleteId(null);
+                if (!id) return;
+                void handleDeleteHistory(id);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {confirmDeleteId
+            ? `Backup snapshot from ${new Date(Number(confirmDeleteId)).toLocaleString()} will be permanently removed from disk.`
+            : 'This backup snapshot will be permanently removed from disk.'}
+        </p>
+      </StructuredDialogModal>
 
       {confirmRestoreId && (
         <div
@@ -1063,9 +1013,9 @@ export function LocalBackupsSettingsTab() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -1109,15 +1059,12 @@ export function LocalBackupsSettingsTab() {
                 <button
                   type="button"
                   className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: '#fde68a',
-                  }}
+                  style={accentSecondaryActionStyle92}
                   disabled={busy !== 'none'}
                   onClick={() => {
                     const id = confirmRestoreId;
                     setConfirmRestoreId(null);
+                    if (!id) return;
                     void handleRestoreHistory(id);
                   }}
                 >
@@ -1158,7 +1105,7 @@ export function LocalBackupsSettingsTab() {
                     onClick={() => { setConfirmRestoreId(selectedHistoryId); }}
                     disabled={busy !== 'none'}
                     className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
-                    style={{ color: 'var(--accent-secondary)' }}
+                    style={accentSecondaryActionStyle92}
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
                     Restore to App
@@ -1272,7 +1219,14 @@ export function LocalBackupsSettingsTab() {
                           <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>
                             {selectedStorageKey ?? 'Select a key'}
                           </div>
-                          <pre className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                          <pre
+                            className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre"
+                            style={{
+                              borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
+                              background: '#282c34',
+                              color: '#abb2bf',
+                            }}
+                          >
                             {selectedStorageKey
                               ? renderHighlightedJson(stringifyReadable((selectedHistoryDocument.snapshot.localStorage ?? {})[selectedStorageKey]))
                               : 'Select a LocalStorage key from the left to view its value.'}
@@ -1383,14 +1337,29 @@ export function LocalBackupsSettingsTab() {
                           </div>
                         </div>
                       ) : (
-                        <pre className="rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)', maxHeight: '56vh' }}>
+                        <pre
+                          className="rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar"
+                          style={{
+                            borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
+                            background: '#282c34',
+                            color: '#abb2bf',
+                            maxHeight: '56vh',
+                          }}
+                        >
                           {stringifyReadable(selectedHistoryDocument.snapshot.profiles ?? null)}
                         </pre>
                       )
                     )}
 
                     {snapshotModalTab === 'raw' && (
-                      <pre className="flex-1 min-h-0 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
+                      <pre
+                        className="flex-1 min-h-0 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre"
+                        style={{
+                          borderColor: 'color-mix(in srgb, #3f4451, var(--border-subtle) 35%)',
+                          background: '#282c34',
+                          color: '#abb2bf',
+                        }}
+                      >
                         {renderHighlightedJson(stringifyReadable(selectedHistoryDocument))}
                       </pre>
                     )}

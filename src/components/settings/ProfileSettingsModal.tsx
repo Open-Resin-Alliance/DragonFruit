@@ -1,10 +1,11 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Box, CarFront, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, RefreshCw, Search, Snail, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, ChevronLeft, ChevronRight, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, RefreshCw, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   applyOfficialMaterialProfileUpdate,
   applyOfficialPrinterProfileUpdate,
@@ -41,8 +42,10 @@ import {
 import {
   getAvailableProfileNetworkModes,
   getDefaultProfileNetworkUiAdapter,
+  getRuntimeMaterialPresets,
   getProfileLocalMaterialSettingsAdapter,
   getProfileNetworkUiAdapter,
+  type MaterialPreset,
 } from '@/features/plugins/pluginRegistry';
 import {
   getAvailableOutputFormatOptions,
@@ -72,6 +75,26 @@ import {
   type RemoteMaterialProfile,
 } from '@/features/plugins/remoteMaterialUiUtils';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
+import {
+  RESIN_FAMILY_COLOR,
+  RESIN_FAMILY_OPTIONS,
+  CURRENCY_OPTIONS,
+  type MaterialDraft,
+  type LocalSettingsByOutputDraft,
+  FieldTagChip,
+  LabeledInput,
+  LabeledNumberInput,
+  LabeledTwoStageNumberInput,
+  LabeledSelectInput,
+  LabeledToggleInput,
+  LabeledResinFamilySelect,
+  LabeledCurrencySelect,
+  MaterialProfileFormSections,
+  MaterialProfileIdentitySection,
+  PluginLocalMaterialSettingsSections,
+  ReplacementMaterialEditorShell,
+  clampNonNegativeNumber,
+} from './profileFormAtoms';
 
 type ProfileSettingsModalProps = {
   isOpen: boolean;
@@ -85,8 +108,36 @@ type DeleteConfirmTarget =
   | { kind: 'printer'; id: string; name: string }
   | { kind: 'material'; id: string; name: string };
 
-type MaterialDraft = Omit<MaterialProfile, 'id' | 'printerProfileId'>;
-type LocalSettingsByOutputDraft = NonNullable<MaterialProfile['localSettingsByOutput']>;
+
+const REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY = 'dragonfruit.network.remoteMaterialByPrinter.v1';
+
+function readRemoteMaterialByPrinter(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof k === 'string' && typeof v === 'string' && k.trim() && v.trim()) {
+        result[k.trim()] = v.trim();
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeRemoteMaterialByPrinter(printerId: string, materialId: string): void {
+  try {
+    const current = readRemoteMaterialByPrinter();
+    const next = { ...current, [printerId]: materialId };
+    localStorage.setItem(REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 const WEBCAM_ROTATION_OPTIONS = [
@@ -95,88 +146,6 @@ const WEBCAM_ROTATION_OPTIONS = [
   { value: '180', label: '180°' },
   { value: '270', label: '270°' },
 ];
-
-const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label: string }> = [
-  { value: 'standard', label: 'Standard' },
-  { value: 'abs-like', label: 'ABS-like' },
-  { value: 'tough', label: 'Tough' },
-  { value: 'flexible', label: 'Flexible' },
-  { value: 'engineering', label: 'Engineering' },
-  { value: 'other', label: 'Other' },
-];
-
-const CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CNY'];
-
-type PluginNumericFieldSchema = {
-  kind: 'number' | 'integer';
-  min?: number;
-  max?: number;
-  defaultValue: number;
-};
-
-function clampNonNegativeNumber(value: number): number {
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
-}
-
-function sanitizePluginNumericValue(field: PluginNumericFieldSchema, value: number): number {
-  let next = clampNonNegativeNumber(value);
-  if (field.kind === 'integer') next = Math.round(next);
-
-  const minimum = Math.max(0, field.min ?? 0);
-  next = Math.max(minimum, next);
-
-  if (field.max != null) next = Math.min(field.max, next);
-  return next;
-}
-
-function isSlowFastPair(firstTag?: string, secondTag?: string): boolean {
-  const first = typeof firstTag === 'string' ? firstTag.trim().toLowerCase() : '';
-  const second = typeof secondTag === 'string' ? secondTag.trim().toLowerCase() : '';
-  return (first === 'slow' && second === 'fast') || (first === 'fast' && second === 'slow');
-}
-
-function resolveFieldTagTone(tag?: string): { icon: typeof CarFront | typeof Snail; fallbackColor: string } | null {
-  const normalized = typeof tag === 'string' ? tag.trim().toLowerCase() : '';
-  if (!normalized) return null;
-
-  if (normalized === 'slow') {
-    return { icon: Snail, fallbackColor: '#f59e0b' };
-  }
-
-  return { icon: CarFront, fallbackColor: '#22c55e' };
-}
-
-type FieldTagChipProps = {
-  tag?: string;
-  color?: string;
-  compact?: boolean;
-};
-
-function FieldTagChip({ tag, color, compact = false }: FieldTagChipProps) {
-  const trimmedTag = typeof tag === 'string' ? tag.trim() : '';
-  const tone = resolveFieldTagTone(trimmedTag);
-  if (!trimmedTag || !tone) return null;
-
-  const accent = (typeof color === 'string' && color.trim().length > 0)
-    ? color.trim()
-    : tone.fallbackColor;
-  const Icon = tone.icon;
-
-  return (
-    <span
-      className={`pointer-events-none absolute top-1/2 z-10 inline-flex -translate-y-1/2 items-center gap-1 rounded-full px-2 font-semibold uppercase tracking-wide ${compact ? 'right-8 h-5 text-[9px]' : 'right-8 h-5 text-[9px]'}`}
-      style={{
-        background: `color-mix(in srgb, ${accent} 18%, var(--surface-1))`,
-        color: accent,
-      }}
-      title={trimmedTag}
-      aria-hidden="true"
-    >
-      <Icon className="h-3 w-3 shrink-0" />
-      <span>{trimmedTag}</span>
-    </span>
-  );
-}
 
 function normalizeNetworkDiscoveryName(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -340,10 +309,14 @@ export function ProfileSettingsModal({
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
   const [isCreateMaterialOpen, setIsCreateMaterialOpen] = React.useState(false);
+  const [showMaterialPresetPicker, setShowMaterialPresetPicker] = React.useState(false);
+  const [materialPresetSearch, setMaterialPresetSearch] = React.useState('');
+  const [selectedMaterialPresetBrand, setSelectedMaterialPresetBrand] = React.useState<string>('');
   const [isMaterialEditorOpen, setIsMaterialEditorOpen] = React.useState(false);
   const [materialEditorTab, setMaterialEditorTab] = React.useState<string>('meta');
   const [showOfficialLockDialog, setShowOfficialLockDialog] = React.useState(false);
   const [officialLockedProfileId, setOfficialLockedProfileId] = React.useState<string | null>(null);
+  const [showOfficialMaterialLockDialog, setShowOfficialMaterialLockDialog] = React.useState(false);
   const [isNetworkSettingsOpen, setIsNetworkSettingsOpen] = React.useState(false);
   const [isAddingNetworkPrinter, setIsAddingNetworkPrinter] = React.useState(false);
   const [networkDiscoveryEnabled, setNetworkDiscoveryEnabled] = React.useState(true);
@@ -384,7 +357,7 @@ export function ProfileSettingsModal({
     minimumAaAlphaPercent: 35,
   });
   const [newMaterialDraft, setNewMaterialDraft] = React.useState<Omit<MaterialProfile, 'id' | 'printerProfileId'>>({
-    name: 'New Resin',
+    name: 'New Material',
     brand: 'Default',
     currencyCode: 'USD',
     bottlePrice: 0,
@@ -407,6 +380,8 @@ export function ProfileSettingsModal({
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('');
+  const [selectedLibraryPresetIds, setSelectedLibraryPresetIds] = React.useState<Set<string>>(new Set());
+  const [selectedLibraryMaterialKeys, setSelectedLibraryMaterialKeys] = React.useState<Set<string>>(new Set());
   const [manualBuildDimensionsByPrinterId, setManualBuildDimensionsByPrinterId] = React.useState<Record<string, ManualBuildDimensions>>({});
   const [printerRailViewMode, setPrinterRailViewMode] = React.useState<PrinterRailViewMode>('profiles');
   const [isEditFleetUnitModalOpen, setIsEditFleetUnitModalOpen] = React.useState(false);
@@ -422,6 +397,54 @@ export function ProfileSettingsModal({
     getPrinterReachabilitySnapshot,
     getPrinterReachabilityServerSnapshot,
   );
+  const [isLightTheme, setIsLightTheme] = React.useState<boolean>(() => {
+    if (typeof document === 'undefined') return false;
+    const explicitTheme = document.documentElement.getAttribute('data-theme');
+    if (explicitTheme === 'light') return true;
+    if (explicitTheme === 'dark') return false;
+    return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches;
+  });
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const resolveLightTheme = () => {
+      const explicitTheme = document.documentElement.getAttribute('data-theme');
+      if (explicitTheme === 'light') return true;
+      if (explicitTheme === 'dark') return false;
+      return window.matchMedia('(prefers-color-scheme: light)').matches;
+    };
+
+    const syncTheme = () => setIsLightTheme(resolveLightTheme());
+    syncTheme();
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          syncTheme();
+          return;
+        }
+      }
+    });
+
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncTheme);
+    } else {
+      mediaQuery.addListener(syncTheme);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', syncTheme);
+      } else {
+        mediaQuery.removeListener(syncTheme);
+      }
+    };
+  }, []);
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
   const officialPrinterUpdates = React.useMemo(() => getOfficialPrinterProfileUpdates(profileState), [profileState]);
@@ -722,6 +745,55 @@ export function ProfileSettingsModal({
     return getMaterialProfilesForPrinter(selectedPrinter.id, profileState);
   }, [profileState, selectedPrinter]);
 
+  const availableMaterialPresets = React.useMemo(() => {
+    const printerPresetId = selectedPrinter?.officialPresetId?.trim() ?? '';
+    return getRuntimeMaterialPresets(printerPresetId.length > 0 ? printerPresetId : undefined);
+  }, [profileState, selectedPrinter?.officialPresetId]);
+
+  const materialPresetBrands = React.useMemo(() => {
+    const uniq = new Set(availableMaterialPresets.map((preset) => (preset.brand || 'Default').trim() || 'Default'));
+    return Array.from(uniq).sort((a, b) => a.localeCompare(b));
+  }, [availableMaterialPresets]);
+
+  const filteredMaterialPresets = React.useMemo(() => {
+    const search = materialPresetSearch.trim().toLowerCase();
+    return availableMaterialPresets.filter((preset) => {
+      const presetBrand = (preset.brand || 'Default').trim() || 'Default';
+      const brandMatch = search.length > 0 || selectedMaterialPresetBrand.length === 0 || presetBrand === selectedMaterialPresetBrand;
+      const searchMatch =
+        search.length === 0
+        || preset.name.toLowerCase().includes(search)
+        || presetBrand.toLowerCase().includes(search)
+        || preset.resinFamily.toLowerCase().includes(search);
+      return brandMatch && searchMatch;
+    });
+  }, [availableMaterialPresets, materialPresetSearch, selectedMaterialPresetBrand]);
+
+  const groupedFilteredMaterialPresets = React.useMemo(() => {
+    const grouped = new Map<string, typeof filteredMaterialPresets>();
+    filteredMaterialPresets.forEach((preset) => {
+      const family = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? 'Other';
+      const current = grouped.get(family);
+      if (current) current.push(preset);
+      else grouped.set(family, [preset]);
+    });
+
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([family, presets]) => ({ family, presets }));
+  }, [filteredMaterialPresets]);
+
+  const isSearchingMaterialPresets = materialPresetSearch.trim().length > 0;
+
+  const addedOfficialMaterialTemplateIds = React.useMemo(() => {
+    const set = new Set<string>();
+    printerMaterials.forEach((material) => {
+      const templateId = typeof material.officialTemplateId === 'string' ? material.officialTemplateId.trim() : '';
+      if (templateId.length > 0) set.add(templateId);
+    });
+    return set;
+  }, [printerMaterials]);
+
   const availableManufacturers = React.useMemo(() => {
     return Array.from(new Set(printerMaterials.map((material) => material.brand || 'Default'))).sort((a, b) => a.localeCompare(b));
   }, [printerMaterials]);
@@ -824,6 +896,7 @@ export function ProfileSettingsModal({
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
+  const materialSelectionInitializedRef = React.useRef(false);
   const lastInitializedNetworkPrinterIdRef = React.useRef<string | null>(null);
   const discoveryInFlightRef = React.useRef(false);
   const discoveryRunIdRef = React.useRef(0);
@@ -831,6 +904,42 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     selectedRemoteMaterialIdRef.current = selectedRemoteMaterialId;
   }, [selectedRemoteMaterialId]);
+
+  const persistedRemoteMaterialIdForSelectedPrinter = React.useMemo(() => {
+    if (!selectedPrinter) return '';
+
+    const normalize = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+    const fromConnection = normalize(selectedPrinter.networkConnection?.selectedMaterialId);
+    if (fromConnection.length > 0) return fromConnection;
+
+    const fleet = Array.isArray(selectedPrinter.networkFleet) ? selectedPrinter.networkFleet : [];
+    const activeNetworkDeviceId = normalize(selectedPrinter.activeNetworkDeviceId);
+    if (activeNetworkDeviceId.length > 0) {
+      const fromActiveDevice = normalize(
+        fleet.find((device) => device.id === activeNetworkDeviceId)?.selectedMaterialId,
+      );
+      if (fromActiveDevice.length > 0) return fromActiveDevice;
+    }
+
+    const normalizedHost = normalize(selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress).toLowerCase();
+    if (normalizedHost.length > 0) {
+      const fromHostMatchedDevice = normalize(
+        fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === normalizedHost)?.selectedMaterialId,
+      );
+      if (fromHostMatchedDevice.length > 0) return fromHostMatchedDevice;
+    }
+
+    return normalize(fleet.find((device) => normalize(device.selectedMaterialId).length > 0)?.selectedMaterialId);
+  }, [selectedPrinter]);
+
+  React.useEffect(() => {
+    setSelectedRemoteMaterialId((current) => (
+      current === persistedRemoteMaterialIdForSelectedPrinter
+        ? current
+        : persistedRemoteMaterialIdForSelectedPrinter
+    ));
+  }, [persistedRemoteMaterialIdForSelectedPrinter, selectedPrinter?.id]);
 
   const selectedPrinterResolvedId = selectedPrinter?.id ?? '';
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
@@ -1111,6 +1220,31 @@ export function ProfileSettingsModal({
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 0 ? 'Manage Fleet' : 'Network Settings';
   const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 0;
   const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
+  const accentSecondaryActionColor = isLightTheme
+    ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
+    : 'var(--accent-secondary)';
+  const accentSecondaryActionBorderColor = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--border-subtle) 34%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)';
+  const accentSecondaryActionBackground92 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 80%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)';
+  const accentSecondaryActionBackground93 = isLightTheme
+    ? 'color-mix(in srgb, #6aa20d, var(--surface-1) 82%)'
+    : 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)';
+  const accentSecondaryActionStyle92: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground92,
+  };
+  const accentSecondaryActionStyle93: React.CSSProperties = {
+    color: accentSecondaryActionColor,
+    borderColor: accentSecondaryActionBorderColor,
+    background: accentSecondaryActionBackground93,
+  };
+  const printerImageWellBackground = isLightTheme
+    ? 'color-mix(in srgb, var(--surface-2), white 20%)'
+    : '#1c2027';
   const printerSectionTitle = shouldRenderFleetRail
     ? `${selectedPrinter?.name ?? 'Printer'} Fleet`
     : '3D Printer';
@@ -1202,7 +1336,7 @@ export function ProfileSettingsModal({
             className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-lg border overflow-hidden relative"
             style={{
               borderColor: 'var(--border-subtle)',
-              background: '#1c2027',
+              background: printerImageWellBackground,
               height: 128,
               minHeight: 128,
               maxHeight: 128,
@@ -1252,7 +1386,7 @@ export function ProfileSettingsModal({
         </div>
       </div>
     );
-  }, []);
+  }, [printerImageWellBackground]);
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
@@ -1354,24 +1488,10 @@ export function ProfileSettingsModal({
     }
   }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
 
-  React.useEffect(() => {
-    if (!selectedPrinterSupportsNetworkSettings) {
-      setPrinterRailViewMode('profiles');
-      return;
-    }
-
-    if (selectedPrinterFleetCount > 0) {
-      return;
-    }
-
-    if (printerRailViewMode === 'fleet') {
-      setPrinterRailViewMode('profiles');
-    }
-  }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
-
   React.useLayoutEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
+      materialSelectionInitializedRef.current = false;
       return;
     }
 
@@ -1380,6 +1500,7 @@ export function ProfileSettingsModal({
       return;
     }
     wasOpenRef.current = true;
+    materialSelectionInitializedRef.current = false;
 
     const shouldOpenPrinterLibrary =
       initialTab === 'printer'
@@ -1424,6 +1545,12 @@ export function ProfileSettingsModal({
     presetManufacturers,
   ]);
 
+  React.useLayoutEffect(() => {
+    if (selectedMaterialPresetBrand.length === 0 && materialPresetBrands.length > 0) {
+      setSelectedMaterialPresetBrand(materialPresetBrands[0]);
+    }
+  }, [materialPresetBrands, selectedMaterialPresetBrand]);
+
   React.useEffect(() => {
     if (!isOpen) return;
 
@@ -1445,6 +1572,7 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     if (!isOpen) return;
     if (!selectedPrinter) {
+      materialSelectionInitializedRef.current = false;
       setSelectedMaterialId(null);
       setSelectedManufacturer(null);
       setSelectedResinFamily(null);
@@ -1452,6 +1580,7 @@ export function ProfileSettingsModal({
     }
 
     if (availableManufacturers.length === 0) {
+      materialSelectionInitializedRef.current = false;
       setSelectedMaterialId(null);
       setSelectedManufacturer(null);
       setSelectedResinFamily(null);
@@ -1467,13 +1596,46 @@ export function ProfileSettingsModal({
     }
 
     if (!selectedMaterialId || !filteredMaterialProfiles.some((material) => material.id === selectedMaterialId)) {
-      const nextSelectedMaterialId = filteredMaterialProfiles[0]?.id ?? null;
+      const shouldRestoreRememberedSelection = !materialSelectionInitializedRef.current;
+      const mappedMaterialIdForPrinter = typeof profileState.activeMaterialProfileIdByPrinterId?.[selectedPrinter.id] === 'string'
+        ? profileState.activeMaterialProfileIdByPrinterId[selectedPrinter.id]!.trim()
+        : '';
+      const fallbackActiveMaterialId = typeof profileState.activeMaterialProfileId === 'string'
+        ? profileState.activeMaterialProfileId.trim()
+        : '';
+      const rememberedMaterialId = [mappedMaterialIdForPrinter, fallbackActiveMaterialId]
+        .find((materialId) => materialId.length > 0 && printerMaterials.some((material) => material.id === materialId))
+        ?? '';
+
+      const nextSelectedMaterialId = shouldRestoreRememberedSelection
+        ? (
+          rememberedMaterialId
+          || filteredMaterialProfiles[0]?.id
+          || printerMaterials[0]?.id
+          || null
+        )
+        : (filteredMaterialProfiles[0]?.id ?? null);
       setSelectedMaterialId(nextSelectedMaterialId);
+
+      const nextMaterial = nextSelectedMaterialId
+        ? printerMaterials.find((material) => material.id === nextSelectedMaterialId) ?? null
+        : null;
+      if (nextMaterial && shouldRestoreRememberedSelection) {
+        setSelectedManufacturer(nextMaterial.brand ?? null);
+        setSelectedResinFamily(nextMaterial.resinFamily ?? null);
+      }
+
       if (nextSelectedMaterialId) {
-        setActiveMaterialProfile(nextSelectedMaterialId);
+        if (shouldRestoreRememberedSelection) {
+          materialSelectionInitializedRef.current = true;
+        } else {
+          setActiveMaterialProfile(nextSelectedMaterialId);
+        }
       }
       return;
     }
+
+    materialSelectionInitializedRef.current = true;
 
     if (profileState.activeMaterialProfileId !== selectedMaterialId) {
       setActiveMaterialProfile(selectedMaterialId);
@@ -1494,13 +1656,105 @@ export function ProfileSettingsModal({
   React.useEffect(() => {
     if (!isOpen) return;
 
+    const handleTopMostDialogEscape = (): boolean => {
+      if (deleteConfirmTarget) {
+        setDeleteConfirmTarget(null);
+        return true;
+      }
+
+      if (showOfficialMaterialLockDialog) {
+        setShowOfficialMaterialLockDialog(false);
+        return true;
+      }
+
+      if (showOfficialLockDialog) {
+        setShowOfficialLockDialog(false);
+        setOfficialLockedProfileId(null);
+        return true;
+      }
+
+      if (showPrinterUpdateDiffModal) {
+        setShowPrinterUpdateDiffModal(false);
+        return true;
+      }
+
+      if (isEditFleetUnitModalOpen) {
+        setIsEditFleetUnitModalOpen(false);
+        return true;
+      }
+
+      if (isRemoteMaterialEditDialogOpen) {
+        if (!isSavingRemoteMaterialEdit) {
+          setIsRemoteMaterialEditDialogOpen(false);
+        }
+        return true;
+      }
+
+      if (isNetworkSettingsOpen) {
+        setIsNetworkSettingsOpen(false);
+        return true;
+      }
+
+      if (showPresetPicker) {
+        setShowPresetPicker(false);
+        return true;
+      }
+
+      if (showMaterialPresetPicker) {
+        setShowMaterialPresetPicker(false);
+        return true;
+      }
+
+      if (isMaterialEditorOpen) {
+        setIsMaterialEditorOpen(false);
+        return true;
+      }
+
+      if (isCreateMaterialOpen) {
+        setIsCreateMaterialOpen(false);
+        return true;
+      }
+
+      if (isEditingPrinter) {
+        setIsEditingPrinter(false);
+        return true;
+      }
+
+      return false;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented) return;
+
+      if (handleTopMostDialogEscape()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      onClose();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose]);
+  }, [
+    deleteConfirmTarget,
+    isCreateMaterialOpen,
+    isEditFleetUnitModalOpen,
+    isEditingPrinter,
+    isMaterialEditorOpen,
+    isNetworkSettingsOpen,
+    isOpen,
+    isRemoteMaterialEditDialogOpen,
+    isSavingRemoteMaterialEdit,
+    onClose,
+    showMaterialPresetPicker,
+    showOfficialLockDialog,
+    showOfficialMaterialLockDialog,
+    showPresetPicker,
+    showPrinterUpdateDiffModal,
+  ]);
 
   React.useEffect(() => {
     if (!selectedPrinter) {
@@ -1577,7 +1831,10 @@ export function ProfileSettingsModal({
 
       setRemoteMaterials(materials);
 
-      const preferredId = selectedRemoteMaterialIdRef.current;
+      const storedId = selectedPrinterResolvedId ? (readRemoteMaterialByPrinter()[selectedPrinterResolvedId] ?? '') : '';
+      const preferredId = storedId
+        || persistedRemoteMaterialIdForSelectedPrinter
+        || selectedRemoteMaterialIdRef.current;
       const nextSelected = materials.find((item: any) => item.id === preferredId)
         ?? materials.find((item: any) => item.locked !== true)
         ?? materials[0]
@@ -1609,7 +1866,7 @@ export function ProfileSettingsModal({
     } finally {
       setIsLoadingRemoteMaterials(false);
     }
-  }, [effectiveNetworkUiAdapter, networkUiAdapter, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
+  }, [effectiveNetworkUiAdapter, networkUiAdapter, persistedRemoteMaterialIdForSelectedPrinter, selectedPrinter, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
 
   React.useEffect(() => {
     if (!shouldUseRemoteOnDeviceMaterials || !selectedPrinterResolvedId) {
@@ -1627,6 +1884,7 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return;
     const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues(material.meta ?? {});
     setSelectedRemoteMaterialId(material.id);
+    writeRemoteMaterialByPrinter(selectedPrinter.id, material.id);
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
       selectedMaterialName: material.name,
@@ -2455,16 +2713,28 @@ export function ProfileSettingsModal({
   }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
+    materialSelectionInitializedRef.current = false;
     setSelectedPrinterId(printerId);
     setIsEditingPrinter(false);
     setActivePrinterProfile(printerId);
-    const materials = getMaterialProfilesForPrinter(printerId, getProfileStoreSnapshot());
-    const first = materials[0] ?? null;
-    setSelectedMaterialId(first?.id ?? null);
-    if (first) setActiveMaterialProfile(first.id);
+    const snapshot = getProfileStoreSnapshot();
+    const materials = getMaterialProfilesForPrinter(printerId, snapshot);
+    const mappedId = typeof snapshot.activeMaterialProfileIdByPrinterId?.[printerId] === 'string'
+      ? snapshot.activeMaterialProfileIdByPrinterId[printerId]!.trim()
+      : '';
+    const restored = materials.find((material) => material.id === mappedId)
+      ?? materials.find((material) => material.id === snapshot.activeMaterialProfileId)
+      ?? materials[0]
+      ?? null;
+    setSelectedMaterialId(restored?.id ?? null);
+    if (restored) {
+      setSelectedManufacturer((restored.brand || 'Default').trim() || 'Default');
+      setSelectedResinFamily(restored.resinFamily);
+    }
   }, []);
 
   const handleAddPrinter = React.useCallback(() => {
+    setSelectedLibraryPresetIds(new Set());
     setShowPresetPicker(true);
   }, []);
 
@@ -2475,6 +2745,19 @@ export function ProfileSettingsModal({
     setPresetSearch('');
     if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
   }, [handlePickPrinter, presetManufacturers]);
+
+  const handleAddSelectedPrinterPresets = React.useCallback(() => {
+    if (selectedLibraryPresetIds.size === 0) return;
+    let lastId: string | null = null;
+    for (const presetId of selectedLibraryPresetIds) {
+      lastId = addPrinterProfileFromPreset(presetId);
+    }
+    if (lastId) handlePickPrinter(lastId);
+    setShowPresetPicker(false);
+    setPresetSearch('');
+    setSelectedLibraryPresetIds(new Set());
+    if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
+  }, [selectedLibraryPresetIds, handlePickPrinter, presetManufacturers]);
 
   const requestDeleteSelectedPrinter = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -2510,6 +2793,93 @@ export function ProfileSettingsModal({
     setIsCreateMaterialOpen(true);
   }, [printerMaterials.length, replacementMaterialEditorDefaultTab, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
 
+  const handleApplyMaterialLibraryPreset = React.useCallback((preset: MaterialPreset) => {
+    if (!selectedPrinter) return;
+    setShowMaterialPresetPicker(false);
+    setMaterialEditorTab('meta');
+    setNewMaterialDraft({
+      name: preset.name,
+      brand: preset.brand ?? 'Default',
+      currencyCode: preset.currencyCode ?? 'USD',
+      bottlePrice: preset.bottlePrice ?? 0,
+      bottleCapacityMl: preset.bottleCapacityMl ?? 1000,
+      resinFamily: preset.resinFamily ?? 'standard',
+      scaleCompensationPct: preset.scaleCompensationPct ?? { x: 0, y: 0, z: 0 },
+      layerHeightMm: preset.layerHeightMm ?? 0.05,
+      normalExposureSec: preset.normalExposureSec ?? 2.5,
+      bottomExposureSec: preset.bottomExposureSec ?? 28,
+      bottomLayerCount: preset.bottomLayerCount ?? 5,
+      liftDistanceMm: preset.liftDistanceMm ?? 6,
+      liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
+      retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
+      minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+      ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
+      ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
+    });
+    setNewMaterialLocalSettingsByOutput(
+      preset.localSettingsByOutput
+        ? (preset.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
+        : resolveDefaultLocalSettingsForOutput(
+            selectedPrinter.display.outputFormat,
+            selectedResolvedSettingsMode,
+          ),
+    );
+    setIsCreateMaterialOpen(true);
+  }, [selectedPrinter, selectedResolvedSettingsMode]);
+
+  const handleOpenMaterialLibrary = React.useCallback(() => {
+    setSelectedLibraryMaterialKeys(new Set());
+    setShowMaterialPresetPicker(true);
+    setMaterialPresetSearch('');
+    if (materialPresetBrands.length > 0) setSelectedMaterialPresetBrand(materialPresetBrands[0]);
+  }, [materialPresetBrands]);
+
+  const handleAddSelectedMaterialPresets = React.useCallback(() => {
+    if (!selectedPrinter || selectedLibraryMaterialKeys.size === 0) return;
+    let lastId: string | null = null;
+    let lastBrand = 'Default';
+    let lastFamily = 'standard';
+    for (const key of selectedLibraryMaterialKeys) {
+      const preset = availableMaterialPresets.find(
+        (p) => (p.templateId ?? `${p.brand}::${p.name}`) === key,
+      );
+      if (!preset) continue;
+      const newId = addMaterialProfile(selectedPrinter.id, {
+        name: preset.name,
+        brand: (preset.brand ?? 'Default').trim() || 'Default',
+        currencyCode: preset.currencyCode ?? 'USD',
+        bottlePrice: preset.bottlePrice ?? 0,
+        bottleCapacityMl: preset.bottleCapacityMl ?? 1000,
+        resinFamily: preset.resinFamily ?? 'standard',
+        scaleCompensationPct: preset.scaleCompensationPct ?? { x: 0, y: 0, z: 0 },
+        layerHeightMm: preset.layerHeightMm ?? 0.05,
+        normalExposureSec: preset.normalExposureSec ?? 2.5,
+        bottomExposureSec: preset.bottomExposureSec ?? 28,
+        bottomLayerCount: preset.bottomLayerCount ?? 5,
+        liftDistanceMm: preset.liftDistanceMm ?? 6,
+        liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
+        retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
+        minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+        ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
+        ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
+        localSettingsByOutput: preset.localSettingsByOutput
+          ? (preset.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
+          : resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat, selectedResolvedSettingsMode),
+      });
+      lastId = newId;
+      lastBrand = (preset.brand ?? 'Default').trim() || 'Default';
+      lastFamily = preset.resinFamily ?? 'standard';
+    }
+    if (lastId) {
+      setSelectedManufacturer(lastBrand);
+      setSelectedResinFamily(lastFamily as 'standard' | 'abs-like' | 'tough' | 'flexible' | 'engineering' | 'other');
+      setSelectedMaterialId(lastId);
+      setActiveMaterialProfile(lastId);
+    }
+    setShowMaterialPresetPicker(false);
+    setSelectedLibraryMaterialKeys(new Set());
+  }, [selectedPrinter, selectedLibraryMaterialKeys, availableMaterialPresets, selectedResolvedSettingsMode]);
+
   const handleCreateMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
 
@@ -2534,6 +2904,11 @@ export function ProfileSettingsModal({
 
   const openSelectedMaterialEditor = React.useCallback(() => {
     if (!selectedMaterial) return;
+    const isOfficial = typeof selectedMaterial.officialTemplateId === 'string' && selectedMaterial.officialTemplateId.trim().length > 0;
+    if (isOfficial) {
+      setShowOfficialMaterialLockDialog(true);
+      return;
+    }
     setIsMaterialEditorOpen(true);
   }, [selectedMaterial]);
 
@@ -2593,6 +2968,35 @@ export function ProfileSettingsModal({
     setOfficialLockedProfileId(null);
     setIsEditingPrinter(true);
   }, [officialLockedProfileId, handlePickPrinter]);
+
+  const handleDuplicateMaterialAsCustom = React.useCallback(() => {
+    if (!selectedMaterial || !selectedPrinter) return;
+    const baseName = selectedMaterial.name.includes('Custom') ? selectedMaterial.name : `${selectedMaterial.name} Custom`;
+    const newId = addMaterialProfile(selectedPrinter.id, {
+      name: baseName,
+      brand: selectedMaterial.brand,
+      currencyCode: selectedMaterial.currencyCode,
+      bottlePrice: selectedMaterial.bottlePrice,
+      bottleCapacityMl: selectedMaterial.bottleCapacityMl,
+      resinFamily: selectedMaterial.resinFamily,
+      scaleCompensationPct: selectedMaterial.scaleCompensationPct,
+      layerHeightMm: selectedMaterial.layerHeightMm,
+      normalExposureSec: selectedMaterial.normalExposureSec,
+      bottomExposureSec: selectedMaterial.bottomExposureSec,
+      bottomLayerCount: selectedMaterial.bottomLayerCount,
+      liftDistanceMm: selectedMaterial.liftDistanceMm,
+      liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
+      retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
+      minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
+      localSettingsByOutput: selectedMaterial.localSettingsByOutput,
+      officialTemplateId: undefined,
+      officialTemplateVersion: undefined,
+    });
+    setSelectedMaterialId(newId);
+    setActiveMaterialProfile(newId);
+    setShowOfficialMaterialLockDialog(false);
+    setIsMaterialEditorOpen(true);
+  }, [selectedMaterial, selectedPrinter]);
 
   const triggerImageUpload = React.useCallback((printerId: string) => {
     setUploadTargetPrinterId(printerId);
@@ -2663,8 +3067,107 @@ export function ProfileSettingsModal({
     })();
   }, []);
 
+  const handleExportSelectedMaterialBundle = React.useCallback(() => {
+    void (async () => {
+      if (!selectedMaterial) return;
+
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        material: selectedMaterial,
+      };
+
+      const safeName = selectedMaterial.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+      const suggestedFilename = `${safeName || 'material-profile'}-bundle.json`;
+      const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
+
+      try {
+        await savePrintArtifactWithNativeDialog(bytes, suggestedFilename);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) return;
+        throw error;
+      }
+    })();
+  }, [selectedMaterial]);
+
+  const handleImportSelectedMaterialBundle = React.useCallback(() => {
+    void (async () => {
+      try {
+        if (!selectedPrinter) return;
+
+        const picked = await pickOpenFilesWithNativeDialog('bundle', false);
+        const sourcePath = picked[0]?.path?.trim();
+        if (!sourcePath) return;
+
+        const bytes = await readPrintArtifactBytesFromPath(sourcePath);
+        const payload = JSON.parse(new TextDecoder().decode(bytes)) as {
+          material?: Partial<MaterialProfile>;
+        };
+
+        const source = payload?.material;
+        if (!source || typeof source !== 'object') {
+          throw new Error('[ProfileSettingsModal] Invalid material bundle payload');
+        }
+
+        const importedId = addMaterialProfile(selectedPrinter.id, {
+          officialTemplateId: typeof source.officialTemplateId === 'string' && source.officialTemplateId.trim().length > 0
+            ? source.officialTemplateId.trim()
+            : undefined,
+          officialTemplateVersion: Number.isFinite(Number(source.officialTemplateVersion))
+            ? Number(source.officialTemplateVersion)
+            : undefined,
+          name: typeof source.name === 'string' && source.name.trim().length > 0
+            ? source.name.trim()
+            : `Material ${printerMaterials.length + 1}`,
+          brand: typeof source.brand === 'string' && source.brand.trim().length > 0
+            ? source.brand.trim()
+            : 'Default',
+          currencyCode: typeof source.currencyCode === 'string' && source.currencyCode.trim().length > 0
+            ? source.currencyCode.trim().toUpperCase()
+            : 'USD',
+          bottlePrice: Number.isFinite(Number(source.bottlePrice)) ? Number(source.bottlePrice) : 0,
+          bottleCapacityMl: Number.isFinite(Number(source.bottleCapacityMl)) ? Number(source.bottleCapacityMl) : 1000,
+          resinFamily: (source.resinFamily ?? 'standard') as MaterialProfile['resinFamily'],
+          scaleCompensationPct: {
+            x: Number(source.scaleCompensationPct?.x ?? 0),
+            y: Number(source.scaleCompensationPct?.y ?? 0),
+            z: Number(source.scaleCompensationPct?.z ?? 0),
+          },
+          layerHeightMm: Number.isFinite(Number(source.layerHeightMm)) ? Number(source.layerHeightMm) : 0.05,
+          normalExposureSec: Number.isFinite(Number(source.normalExposureSec)) ? Number(source.normalExposureSec) : 2.5,
+          bottomExposureSec: Number.isFinite(Number(source.bottomExposureSec)) ? Number(source.bottomExposureSec) : 28,
+          bottomLayerCount: Number.isFinite(Number(source.bottomLayerCount)) ? Math.max(1, Math.round(Number(source.bottomLayerCount))) : 5,
+          liftDistanceMm: Number.isFinite(Number(source.liftDistanceMm)) ? Number(source.liftDistanceMm) : 6,
+          liftSpeedMmMin: Number.isFinite(Number(source.liftSpeedMmMin)) ? Number(source.liftSpeedMmMin) : 60,
+          retractSpeedMmMin: Number.isFinite(Number(source.retractSpeedMmMin)) ? Number(source.retractSpeedMmMin) : 150,
+          minimumAaAlphaPercent: Number.isFinite(Number(source.minimumAaAlphaPercent))
+            ? Math.max(0, Math.min(100, Number(source.minimumAaAlphaPercent)))
+            : 35,
+          localSettingsByOutput: source.localSettingsByOutput
+            ? (source.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
+            : resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat, selectedResolvedSettingsMode),
+        });
+
+        const importedBrand = typeof source.brand === 'string' && source.brand.trim().length > 0
+          ? source.brand.trim()
+          : 'Default';
+        const importedFamily = (source.resinFamily ?? 'standard') as MaterialProfile['resinFamily'];
+        setSelectedManufacturer(importedBrand);
+        setSelectedResinFamily(importedFamily);
+        setSelectedMaterialId(importedId);
+        setActiveMaterialProfile(importedId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) return;
+        console.warn('[ProfileSettingsModal] Failed to import material bundle', error);
+      }
+    })();
+  }, [printerMaterials.length, selectedPrinter, selectedResolvedSettingsMode]);
+
   const renderPresetLibraryCard = React.useCallback((preset: (typeof availablePrinterPresets)[number]) => {
     const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
+    const isSelected = selectedLibraryPresetIds.has(preset.presetId);
     const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
       || preset.name.toLowerCase().includes('generic');
     const platformBadge = preset.platformBadge?.text?.trim()
@@ -2677,20 +3180,35 @@ export function ProfileSettingsModal({
       ? `${bitDepthBits} Bit`
       : null;
 
+    const handleToggle = () => {
+      if (isAlreadyAdded) return;
+      setSelectedLibraryPresetIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(preset.presetId)) next.delete(preset.presetId);
+        else next.add(preset.presetId);
+        return next;
+      });
+    };
+
     return (
       <button
         key={preset.presetId}
         type="button"
         disabled={isAlreadyAdded}
-        onClick={() => handleAddPrinterFromPreset(preset.presetId)}
-        className="rounded-lg border p-2.5 text-left disabled:opacity-55"
+        onClick={handleToggle}
+        className="rounded-lg border p-2.5 text-left disabled:opacity-55 transition-colors"
         style={{
           borderColor: isAlreadyAdded
             ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-            : 'var(--border-subtle)',
+            : isSelected
+              ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 20%)'
+              : 'var(--border-subtle)',
           background: isAlreadyAdded
             ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-            : 'var(--surface-1)',
+            : isSelected
+              ? 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)'
+              : 'var(--surface-1)',
+          outline: isSelected ? '1.5px solid color-mix(in srgb, var(--accent), transparent 40%)' : 'none',
         }}
       >
         <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
@@ -2707,6 +3225,14 @@ export function ProfileSettingsModal({
             isGenericPreset
               ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
               : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+          )}
+          {isSelected && (
+            <span
+              className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full"
+              style={{ background: 'var(--accent)', color: '#0a0f0a' }}
+            >
+              <Check className="w-3 h-3" strokeWidth={3} />
+            </span>
           )}
           {platformBadge && (
             <span
@@ -2757,7 +3283,7 @@ export function ProfileSettingsModal({
         </div>
       </button>
     );
-  }, [addedOfficialPresetIds, availablePrinterPresets, handleAddPrinterFromPreset]);
+  }, [addedOfficialPresetIds, availablePrinterPresets, selectedLibraryPresetIds]);
 
   if (!isOpen) return null;
   const hasPrinters = profileState.printerProfiles.length > 0;
@@ -2790,7 +3316,7 @@ export function ProfileSettingsModal({
               <Box className="w-4 h-4" style={{ color: 'var(--accent)' }} />
             </span>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Printer & Material Profiles
+                  Printer & Material Profiles
             </h2>
           </div>
           <button
@@ -2810,12 +3336,12 @@ export function ProfileSettingsModal({
             <div
               className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
               style={{
-                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 30%)',
-                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)',
+                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 30%)',
+                background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
                 color: 'var(--text-muted)',
               }}
             >
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#f59e0b' }} />
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#d97706' }} />
               <span>
                 <strong style={{ color: 'var(--text-strong)' }}>Safety warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury. Verify all settings carefully before printing.
               </span>
@@ -2851,14 +3377,10 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleAddPrinter}
                   className="ui-button ui-button-secondary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Plus className="w-4 h-4" />
-                  Printer Library
+                  Add Printer
                 </button>
               </div>
             </div>
@@ -2876,7 +3398,7 @@ export function ProfileSettingsModal({
                   <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     {shouldRenderFleetRail
                       ? `Showing connected devices for ${selectedPrinter?.name ?? 'selected profile'}.`
-                      : 'Each printer can store its own image and has a dedicated set of compatible resin/material profiles.'}
+                      : 'Each printer can store its own image and has a dedicated set of compatible material profiles.'}
                   </p>
                 </div>
 
@@ -2917,19 +3439,11 @@ export function ProfileSettingsModal({
                       onClick={handleAddPrinter}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
                       style={shouldShowFleetSwitchAction
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                          }}
+                        ? accentSecondaryActionStyle92
+                        : accentSecondaryActionStyle93}
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      Printer Library
+                      Add Printer
                     </button>
                   </div>
                 )}
@@ -3170,11 +3684,7 @@ export function ProfileSettingsModal({
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
                               background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                             }
-                          : {
-                              color: 'var(--accent-secondary)',
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                            }}
+                          : accentSecondaryActionStyle93}
                         title={fleetCount > 0 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                       >
                         {fleetCount > 0 ? (
@@ -3214,11 +3724,7 @@ export function ProfileSettingsModal({
                       setIsNetworkSettingsOpen(true);
                     }}
                     className="ui-button ui-button-secondary mt-2 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                    style={{
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                    }}
+                    style={accentSecondaryActionStyle93}
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Add First Device
@@ -3235,11 +3741,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => setPrinterRailViewMode('profiles')}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         Return to Printers
                       </button>
@@ -3279,11 +3781,7 @@ export function ProfileSettingsModal({
                           disabled={!hasPrinters || !selectedPrinter}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                           style={shouldShowFleetSwitchAction
-                            ? {
-                                color: 'var(--accent-secondary)',
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                              }
+                            ? accentSecondaryActionStyle92
                             : { color: 'var(--text-strong)' }}
                         >
                           {shouldShowFleetSwitchAction ? <LayoutGrid className="w-3.5 h-3.5" /> : <Search className="w-3.5 h-3.5" />}
@@ -3295,11 +3793,7 @@ export function ProfileSettingsModal({
                           type="button"
                           onClick={() => setShowPrinterUpdateDiffModal(true)}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                          style={{
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }}
+                          style={accentSecondaryActionStyle92}
                           title={`Update v${selectedPrinterUpdate.currentVersion} to v${selectedPrinterUpdate.latestVersion}`}
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -3343,7 +3837,7 @@ export function ProfileSettingsModal({
                         onClick={requestDeleteSelectedPrinter}
                         disabled={!hasPrinters}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                        style={{ color: !hasPrinters ? 'var(--text-muted)' : '#fca5a5' }}
+                        style={{ color: !hasPrinters ? 'var(--text-muted)' : 'var(--danger)' }}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         Delete Printer
@@ -3417,44 +3911,27 @@ export function ProfileSettingsModal({
                     <>
                       <button
                         type="button"
-                        onClick={openSelectedMaterialEditor}
-                        disabled={!selectedMaterial}
-                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
+                        onClick={handleOpenMaterialLibrary}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent)',
+                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)',
+                        }}
                       >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Edit
+                        <FlaskConical className="w-3.5 h-3.5" />
+                        Library
                       </button>
                       <button
                         type="button"
                         onClick={handleAddMaterial}
                         className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        Add Resin
+                        New
                       </button>
                     </>
-                  )}
-                  {selectedMaterialUpdate && (
-                    <button
-                      type="button"
-                      onClick={handleApplySelectedMaterialOfficialUpdate}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                      style={{
-                        color: 'var(--accent-secondary)',
-                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                      }}
-                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Update Material
-                    </button>
                   )}
                 </div>
               </div>
@@ -3542,11 +4019,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleOpenNetworkSettings}
                         className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
                         Open Fleet Management
@@ -3576,11 +4049,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={handleOpenNetworkSettings}
                         className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{
-                          color: 'var(--accent-secondary)',
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                        }}
+                        style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
                         Connect Now
@@ -3627,7 +4096,7 @@ export function ProfileSettingsModal({
                   </div>
 
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Resin Type</div>
+                    <div className="px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Material Type</div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {availableResinTypes.map((resinType) => {
                         const active = selectedResinFamilyValue === resinType;
@@ -3665,6 +4134,7 @@ export function ProfileSettingsModal({
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {filteredMaterialProfiles.map((material) => {
                         const active = selectedMaterial?.id === material.id;
+                        const isOfficial = typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0;
                         return (
                           <button
                             key={material.id}
@@ -3676,7 +4146,11 @@ export function ProfileSettingsModal({
                             onDoubleClick={() => {
                               setSelectedMaterialId(material.id);
                               setActiveMaterialProfile(material.id);
-                              setIsMaterialEditorOpen(true);
+                              if (isOfficial) {
+                                setShowOfficialMaterialLockDialog(true);
+                              } else {
+                                setIsMaterialEditorOpen(true);
+                              }
                             }}
                             className="w-full rounded-md border px-2.5 py-2 text-left text-sm"
                             style={active
@@ -3692,7 +4166,10 @@ export function ProfileSettingsModal({
                                 }}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="truncate font-semibold">{material.name}</span>
+                              <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-semibold">
+                                {isOfficial && <Lock className="w-3.5 h-3.5 shrink-0" />}
+                                <span className="truncate">{material.name}</span>
+                              </span>
                               <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)}μm</span>
                             </div>
                           </button>
@@ -3700,6 +4177,67 @@ export function ProfileSettingsModal({
                       })}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedMaterialUpdate && (
+                    <button
+                      type="button"
+                      onClick={handleApplySelectedMaterialOfficialUpdate}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                      style={{
+                        color: 'var(--accent-secondary)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                      }}
+                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Update Material
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openSelectedMaterialEditor}
+                    disabled={!selectedMaterial}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    style={{ color: 'var(--text-strong)' }}
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleImportSelectedMaterialBundle}
+                    disabled={!selectedPrinter}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    style={{ color: 'var(--text-strong)' }}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    Import
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportSelectedMaterialBundle}
+                    disabled={!selectedMaterial}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                    style={{ color: 'var(--text-strong)' }}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    onClick={requestDeleteSelectedMaterial}
+                    disabled={!selectedMaterial || printerMaterials.length <= 1}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
+                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </button>
                 </div>
               </div>
 
@@ -3775,7 +4313,7 @@ export function ProfileSettingsModal({
 
                   <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Card Thumbnail</div>
-                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                       {editingFleetUnitImageDataUrl ? (
                         <AutoTrimmedImage src={editingFleetUnitImageDataUrl} alt={editingFleetUnitNickname || editingFleetUnit.displayName || 'Fleet unit'} className="h-full w-full object-cover" />
                       ) : (
@@ -3798,7 +4336,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => setEditingFleetUnitImageDataUrl(null)}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                        style={{ color: editingFleetUnitImageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                        style={{ color: editingFleetUnitImageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                         disabled={!editingFleetUnitImageDataUrl}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -3814,7 +4352,7 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleResetFleetUnitDraft}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{ color: '#fca5a5' }}
+                  style={{ color: 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Reset Unit
@@ -3851,15 +4389,26 @@ export function ProfileSettingsModal({
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
             <div className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
-                  <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Choose an official printer preset to add.</p>
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%), color-mix(in srgb, var(--accent), var(--surface-1) 90%))',
+                    }}
+                  >
+                    <Printer className="w-4 h-4" style={{ color: 'var(--accent-secondary)' }} />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official printer preset to add.</p>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowPresetPicker(false)}
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                   aria-label="Close printer library"
                 >
@@ -3913,11 +4462,19 @@ export function ProfileSettingsModal({
                       {filteredPrinterPresets.map(renderPresetLibraryCard)}
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {groupedFilteredPrinterPresets.map((group) => (
-                        <section key={`${selectedPresetManufacturer}-${group.family}`} className="space-y-1.5">
-                          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                            {group.family}
+                    <div className="space-y-0">
+                      {groupedFilteredPrinterPresets.map((group, groupIndex) => (
+                        <section key={`${selectedPresetManufacturer}-${group.family}`}>
+                          {groupIndex > 0 && (
+                            <div className="my-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
+                          )}
+                          <div className="mb-2 flex items-center gap-2">
+                            <span
+                              className="text-[11px] font-bold uppercase tracking-widest"
+                              style={{ color: 'var(--accent-secondary)' }}
+                            >
+                              {group.family}
+                            </span>
                           </div>
                           <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
                             {group.presets.map(renderPresetLibraryCard)}
@@ -3927,6 +4484,27 @@ export function ProfileSettingsModal({
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Printer Library footer */}
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                  {selectedLibraryPresetIds.size > 0
+                    ? `${selectedLibraryPresetIds.size} printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''} selected`
+                    : 'Select printers to add'}
+                </span>
+                <button
+                  type="button"
+                  aria-disabled={selectedLibraryPresetIds.size === 0}
+                  onClick={selectedLibraryPresetIds.size > 0 ? handleAddSelectedPrinterPresets : undefined}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+                  style={selectedLibraryPresetIds.size > 0 ? accentSecondaryActionStyle92 : undefined}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {selectedLibraryPresetIds.size > 0
+                    ? `Add ${selectedLibraryPresetIds.size} Printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''}`
+                    : 'Add Printers'}
+                </button>
               </div>
             </div>
           </div>
@@ -3941,8 +4519,8 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
-                      ? `Edit ${replacementMaterialModalLabel} Resin Profile`
-                      : 'Resin Profile Settings'}
+                      ? `Edit ${replacementMaterialModalLabel} Material Profile`
+                      : 'Material Profile Settings'}
                   </h3>
                   <p className="ui-meta">{selectedMaterial.name} • {selectedMaterial.brand}</p>
                 </div>
@@ -3951,7 +4529,7 @@ export function ProfileSettingsModal({
                   onClick={() => setIsMaterialEditorOpen(false)}
                   className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close resin editor"
+                  aria-label="Close material editor"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3963,6 +4541,7 @@ export function ProfileSettingsModal({
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
                     onActiveTabChange={setMaterialEditorTab}
+                    activeTabStyle={accentSecondaryActionStyle92}
                     draft={editMaterialDraft}
                     onDraftChange={setEditMaterialDraft}
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
@@ -3995,10 +4574,10 @@ export function ProfileSettingsModal({
                   }}
                   disabled={!selectedMaterial || printerMaterials.length <= 1}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-45"
-                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Delete Resin
+                  Delete Material
                 </button>
                 <div className="flex items-center gap-2">
                   <button
@@ -4012,10 +4591,10 @@ export function ProfileSettingsModal({
                     type="button"
                     onClick={handleSaveMaterialEdits}
                     className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                    style={{ color: 'var(--accent-secondary)' }}
+                    style={accentSecondaryActionStyle92}
                   >
                     <Check className="w-3.5 h-3.5" />
-                    Save Resin
+                    Save Material
                   </button>
                 </div>
               </div>
@@ -4048,11 +4627,11 @@ export function ProfileSettingsModal({
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 {isSelectedPrinterOfficial && (
-                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)' }}>
+                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)' }}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-sm font-semibold inline-flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
-                          <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
+                          <AlertTriangle className="w-4 h-4" style={{ color: '#d97706' }} />
                           Official Profile — Edits Limited!
                         </div>
                         <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -4068,7 +4647,7 @@ export function ProfileSettingsModal({
                           void handleDuplicateSelectedPrinterAsCustom();
                         }}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                        style={{ color: 'var(--accent-secondary)' }}
+                        style={accentSecondaryActionStyle92}
                       >
                         <Plus className="w-3.5 h-3.5" />
                         Create Custom Copy
@@ -4116,7 +4695,7 @@ export function ProfileSettingsModal({
                             }}
                             disabled={isSelectedPrinterOfficial || !selectedPrinter.imageDataUrl}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                            style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                            style={{ color: selectedPrinter.imageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             Clear Image
@@ -4129,7 +4708,7 @@ export function ProfileSettingsModal({
                     </div>
 
                     <div className="rounded-lg border p-2.5 h-full min-h-0 flex" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                         {selectedPrinter.imageDataUrl ? (
                           <AutoTrimmedImage src={selectedPrinter.imageDataUrl} alt={selectedPrinter.name} className="h-full w-full object-contain" />
                         ) : (
@@ -4168,11 +4747,7 @@ export function ProfileSettingsModal({
                       disabled={isSelectedPrinterOfficial}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md disabled:opacity-55 disabled:cursor-not-allowed"
                       style={selectedBuildDimensionMode === 'auto'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
+                        ? accentSecondaryActionStyle92
                         : { color: 'var(--text-strong)' }}
                     >
                       {selectedBuildDimensionMode === 'auto' ? 'Auto' : 'Manual'}
@@ -4401,10 +4976,229 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={() => setIsEditingPrinter(false)}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                  style={{ color: 'var(--accent-secondary)' }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
                   Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showMaterialPresetPicker && selectedPrinter && (
+          <div
+            className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setShowMaterialPresetPicker(false);
+            }}
+          >
+            <div
+              className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
+              style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent), var(--surface-1) 86%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%))',
+                    }}
+                  >
+                    <FlaskConical className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Material Library</h3>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official material preset to add.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMaterialPresetPicker(false)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close material library"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
+                <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                  <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none" style={{ color: 'var(--text-muted)' }} />
+                      <input
+                        value={materialPresetSearch}
+                        onChange={(event) => setMaterialPresetSearch(event.target.value)}
+                        placeholder="Search materials"
+                        className="ui-input w-full h-8 text-xs"
+                        style={{ paddingLeft: '2.5rem', paddingRight: '0.625rem' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
+                    {materialPresetBrands.map((brand) => (
+                      <button
+                        key={brand}
+                        type="button"
+                        onClick={() => setSelectedMaterialPresetBrand(brand)}
+                        className="w-full rounded-md border px-2.5 py-2 text-left text-sm font-semibold"
+                        style={selectedMaterialPresetBrand === brand
+                          ? {
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)',
+                              color: 'var(--text-strong)',
+                            }
+                          : {
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-1)',
+                              color: 'var(--text-muted)',
+                            }}
+                      >
+                        {brand}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="py-2 px-2 overflow-y-auto custom-scrollbar min-h-0">
+                  {(() => {
+                    const renderMaterialPresetRow = (preset: MaterialPreset, index: number, groupKey: string, showFamily = false) => {
+                      const templateId = typeof preset.templateId === 'string' ? preset.templateId.trim() : '';
+                      const selectionKey = templateId || `${preset.brand ?? 'Default'}::${preset.name}`;
+                      const isAlreadyAdded = templateId.length > 0 && addedOfficialMaterialTemplateIds.has(templateId);
+                      const isSelected = !isAlreadyAdded && selectedLibraryMaterialKeys.has(selectionKey);
+                      const resinFamilyLabel = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? preset.resinFamily;
+                      const familyColor = RESIN_FAMILY_COLOR[preset.resinFamily] ?? '#94a3b8';
+
+                      const handleToggle = () => {
+                        if (isAlreadyAdded) return;
+                        setSelectedLibraryMaterialKeys((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(selectionKey)) next.delete(selectionKey);
+                          else next.add(selectionKey);
+                          return next;
+                        });
+                      };
+
+                      return (
+                        <button
+                          key={templateId || `${groupKey}-${preset.brand || 'Default'}-${preset.name}-${index}`}
+                          type="button"
+                          disabled={isAlreadyAdded}
+                          onClick={handleToggle}
+                          className="w-full rounded-lg border text-left transition-colors overflow-hidden disabled:opacity-60"
+                          style={isAlreadyAdded
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                                background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 91%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
+                              }
+                            : isSelected
+                              ? {
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 20%)',
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                                  outline: '1.5px solid color-mix(in srgb, var(--accent), transparent 40%)',
+                                }
+                              : {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--surface-1)',
+                                }}
+                        >
+                          <div className="flex h-full">
+                            <div className="w-[3px] shrink-0 self-stretch" style={{ background: isAlreadyAdded ? 'var(--accent-secondary)' : isSelected ? 'var(--accent)' : familyColor }} />
+                            <div className="flex-1 min-w-0 px-3 py-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{preset.name}</span>
+                                <div className="shrink-0 flex items-center gap-1.5">
+                                  {showFamily && !isAlreadyAdded && !isSelected && (
+                                    <span
+                                      className="text-[10px] rounded-full border px-1.5 py-0.5 font-medium whitespace-nowrap"
+                                      style={{ borderColor: `color-mix(in srgb, ${familyColor}, transparent 45%)`, color: familyColor, background: `color-mix(in srgb, ${familyColor}, var(--surface-0) 88%)` }}
+                                    >
+                                      {resinFamilyLabel}
+                                    </span>
+                                  )}
+                                  {isSelected && (
+                                    <span
+                                      className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+                                      style={{ background: 'var(--accent)', color: '#0a0f0a' }}
+                                    >
+                                      <Check className="w-3 h-3" strokeWidth={3} />
+                                    </span>
+                                  )}
+                                  {isAlreadyAdded && (
+                                    <span
+                                      className="text-[10px] rounded-full border px-1.5 py-0.5 font-semibold whitespace-nowrap"
+                                      style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}
+                                    >
+                                      Added
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                                  {`${preset.layerHeightMm * 1000}μm · ${preset.normalExposureSec}s`}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    };
+
+                    if (isSearchingMaterialPresets) {
+                      return (
+                        <div className="space-y-1.5">
+                          {filteredMaterialPresets.map((preset, index) => renderMaterialPresetRow(preset, index, 'search', true))}
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-4">
+                        {groupedFilteredMaterialPresets.map((group) => {
+                          const familyColor = RESIN_FAMILY_COLOR[group.family] ?? '#94a3b8';
+                          return (
+                          <section key={`${selectedMaterialPresetBrand}-${group.family}`}>
+                            <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                              <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: familyColor }} />
+                              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: familyColor }}>
+                                {group.family}
+                              </span>
+                            </div>
+                            <div className="space-y-1.5">
+                              {group.presets.map((preset, index) => renderMaterialPresetRow(preset, index, group.family))}
+                            </div>
+                          </section>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Material Library footer */}
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                  {selectedLibraryMaterialKeys.size > 0
+                    ? `${selectedLibraryMaterialKeys.size} material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''} selected`
+                    : 'Select materials to add'}
+                </span>
+                <button
+                  type="button"
+                  aria-disabled={selectedLibraryMaterialKeys.size === 0}
+                  onClick={selectedLibraryMaterialKeys.size > 0 ? handleAddSelectedMaterialPresets : undefined}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1.5 rounded-md aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+                  style={selectedLibraryMaterialKeys.size > 0 ? accentSecondaryActionStyle92 : undefined}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {selectedLibraryMaterialKeys.size > 0
+                    ? `Add ${selectedLibraryMaterialKeys.size} Material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''}`
+                    : 'Add Materials'}
                 </button>
               </div>
             </div>
@@ -4420,8 +5214,8 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
-                      ? `Create ${replacementMaterialModalLabel} Resin Profile`
-                      : 'Create Resin Profile'}
+                      ? `Create ${replacementMaterialModalLabel} Material Profile`
+                      : 'Create Material Profile'}
                   </h3>
                   <p className="ui-meta">{selectedPrinter.name}</p>
                 </div>
@@ -4430,7 +5224,7 @@ export function ProfileSettingsModal({
                   onClick={() => setIsCreateMaterialOpen(false)}
                   className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
                   style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close create resin dialog"
+                  aria-label="Close create material dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -4442,6 +5236,7 @@ export function ProfileSettingsModal({
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
                     onActiveTabChange={setMaterialEditorTab}
+                    activeTabStyle={accentSecondaryActionStyle92}
                     draft={newMaterialDraft}
                     onDraftChange={setNewMaterialDraft}
                     outputFormat={selectedPrinter.display.outputFormat}
@@ -4477,10 +5272,10 @@ export function ProfileSettingsModal({
                   type="button"
                   onClick={handleCreateMaterial}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
-                  style={{ color: 'var(--accent)' }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Save Resin
+                  Save Material
                 </button>
               </div>
             </div>
@@ -4640,11 +5435,7 @@ export function ProfileSettingsModal({
                     setShowPrinterUpdateDiffModal(false);
                   }}
                   className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  style={accentSecondaryActionStyle92}
                 >
                   <Download className="w-3.5 h-3.5" />
                   Apply Update
@@ -4655,94 +5446,137 @@ export function ProfileSettingsModal({
         )}
 
         {showOfficialLockDialog && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
+          <StructuredDialogModal
+            open={showOfficialLockDialog}
+            ariaLabel="Official profile locked"
+            title="Official Profile Locked"
+            subtitle="Official slicer profiles can't be edited directly."
+            icon={<Lock className="h-4 w-4" />}
+            iconTone="warning"
+            zIndexClassName="z-[75]"
+            closeAriaLabel="Close official profile lock dialog"
+            onClose={() => {
               setShowOfficialLockDialog(false);
               setOfficialLockedProfileId(null);
-            }
-          }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Official Profile Locked
-                </h3>
-              </div>
-              <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                For safety reasons, official slicer profiles cannot be modified directly.
-                You can create a copy and customize that profile instead.
-                <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <strong style={{ color: 'var(--text-strong)' }}>Warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury.
-                </div>
-              </div>
-              <div className="px-4 pb-4 flex items-center justify-end gap-2">
+            }}
+            actions={(
+              <>
                 <button
                   type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
                   onClick={() => {
                     setShowOfficialLockDialog(false);
                     setOfficialLockedProfileId(null);
                   }}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={handleDuplicateOfficialProfile}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{
-                    color: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                  }}
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  style={accentSecondaryActionStyle92}
                 >
                   <Lock className="w-3.5 h-3.5" />
                   Make Custom Copy
                 </button>
-              </div>
-            </div>
-          </div>
+              </>
+            )}
+          >
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              For safety reasons, official slicer profiles cannot be modified directly.
+              <br />
+              Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
+              <br />
+              <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
+            </p>
+          </StructuredDialogModal>
         )}
 
-        {deleteConfirmTarget && (
-          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setDeleteConfirmTarget(null);
-            }
-          }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Confirm Delete
-                </h3>
-              </div>
-              <div className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-                {deleteConfirmTarget.kind === 'printer'
-                  ? <>Delete printer profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and all resin profiles bound to it?</>
-                  : <>Delete resin profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
-              </div>
-              <div className="px-4 pb-4 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDeleteConfirmTarget(null)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmDelete}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-                  style={{ color: '#fca5a5' }}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <StructuredDialogModal
+          open={showOfficialMaterialLockDialog && Boolean(selectedMaterial)}
+          ariaLabel="Official material profile locked"
+          title="Official Profile Locked"
+          subtitle="Official material profiles can't be edited directly."
+          icon={<Lock className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[75]"
+          closeAriaLabel="Close official material profile lock dialog"
+          onClose={() => setShowOfficialMaterialLockDialog(false)}
+          actions={(
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
+                onClick={() => setShowOfficialMaterialLockDialog(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDuplicateMaterialAsCustom}
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                style={accentSecondaryActionStyle92}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Make Custom Copy
+              </button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            Official material profiles cannot be edited directly.
+            <br />
+            Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
+            <br />
+            <br />
+            <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+          </p>
+        </StructuredDialogModal>
+
+        <StructuredDialogModal
+          open={Boolean(deleteConfirmTarget)}
+          ariaLabel="Confirm delete"
+          title={deleteConfirmTarget?.kind === 'printer' ? 'Delete Printer Profile' : 'Delete Material Profile'}
+          subtitle="This action cannot be undone."
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[76]"
+          onClose={() => setDeleteConfirmTarget(null)}
+          closeAriaLabel="Close delete confirmation dialog"
+          actions={(
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                onClick={() => setDeleteConfirmTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                style={{
+                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                  background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                  color: 'var(--danger)',
+                }}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </>
+          )}
+        >
+          {deleteConfirmTarget ? (
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {deleteConfirmTarget.kind === 'printer'
+                ? <>Delete <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and remove all material profiles linked to it?</>
+                : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
+            </p>
+          ) : null}
+        </StructuredDialogModal>
       </div>
     </div>
   );
@@ -4798,7 +5632,7 @@ function RemoteMaterialEditDialog({
       <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
         <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
           <div>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit {networkModeLabel} Resin Profile</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit {networkModeLabel} Material Profile</h3>
             <p className="ui-meta">{material.name} • Profile ID {material.id}</p>
           </div>
           <button
@@ -4851,9 +5685,9 @@ function RemoteMaterialEditDialog({
                       <span
                         className="text-[10px] rounded-full border px-2 py-0.5 normal-case tracking-normal"
                         style={{
-                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
-                          color: '#fbbf24',
+                          borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
+                          color: '#d97706',
                         }}
                         title="Dynamic Wait is controlling Wait Before Print fields"
                       >
@@ -4989,1003 +5823,6 @@ function RemoteMaterialEditDialog({
         </div>
       </div>
     </div>
-  );
-}
-
-type PluginLocalMaterialSettingsSectionsProps = {
-  outputFormat: string;
-  settingsMode?: string;
-  adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter>;
-  localSettingsByOutput: LocalSettingsByOutputDraft;
-  onChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
-  replacementMode?: boolean;
-  activeTabId?: string;
-  onActiveTabChange?: (tabId: string) => void;
-  showTabBar?: boolean;
-};
-
-function PluginLocalMaterialSettingsSections({
-  outputFormat,
-  settingsMode,
-  adapter,
-  localSettingsByOutput,
-  onChange,
-  replacementMode = false,
-  activeTabId: controlledActiveTabId,
-  onActiveTabChange,
-  showTabBar = true,
-}: PluginLocalMaterialSettingsSectionsProps) {
-  if (!adapter || adapter.fields.length === 0) return null;
-
-  const normalizedOutput = outputFormat.trim().toLowerCase();
-  const tabs = React.useMemo(() => {
-    const declared = [...(adapter.tabs ?? [])]
-      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    if (declared.length > 0) return declared;
-    return [{ id: 'local', title: adapter.displayName ?? 'Local Settings', order: 0 }];
-  }, [adapter.displayName, adapter.tabs]);
-
-  const defaultTabId = React.useMemo(() => tabs[0]?.id ?? 'local', [tabs]);
-
-  const [uncontrolledActiveTabId, setUncontrolledActiveTabId] = React.useState(defaultTabId);
-  const activeTabId = controlledActiveTabId ?? uncontrolledActiveTabId;
-  const setActiveTabId = onActiveTabChange ?? setUncontrolledActiveTabId;
-
-  React.useEffect(() => {
-    if (!tabs.some((tab) => tab.id === activeTabId)) {
-      setActiveTabId(defaultTabId);
-    }
-  }, [activeTabId, defaultTabId, tabs]);
-
-  const valuesForOutput = localSettingsByOutput[normalizedOutput] ?? {};
-
-  const fieldsForActiveTab = React.useMemo(() => {
-    const fallbackTabId = tabs[0]?.id;
-    return adapter.fields
-      .filter((field) => (field.placement?.tabId ?? fallbackTabId) === activeTabId)
-      .sort((a, b) => (a.placement?.order ?? 0) - (b.placement?.order ?? 0));
-  }, [activeTabId, adapter.fields, tabs]);
-
-  const sectionById = React.useMemo(() => {
-    const map = new Map<string, { id: string; title: string; order?: number }>();
-    (adapter.sections ?? []).forEach((section) => {
-      map.set(section.id, section);
-    });
-    return map;
-  }, [adapter.sections]);
-
-  const cardById = React.useMemo(() => {
-    const map = new Map<string, { id: string; title: string; order?: number }>();
-    (adapter.cards ?? []).forEach((card) => {
-      map.set(card.id, card);
-    });
-    return map;
-  }, [adapter.cards]);
-
-  const sectionGroups = React.useMemo(() => {
-    const grouped = new Map<string, typeof fieldsForActiveTab>();
-
-    fieldsForActiveTab.forEach((field) => {
-      const sectionId = field.placement?.sectionId ?? 'general';
-      const current = grouped.get(sectionId);
-      if (current) {
-        current.push(field);
-      } else {
-        grouped.set(sectionId, [field]);
-      }
-    });
-
-    return Array.from(grouped.entries())
-      .map(([sectionId, fields]) => ({
-        sectionId,
-        sectionTitle: sectionById.get(sectionId)?.title ?? 'General',
-        sectionOrder: sectionById.get(sectionId)?.order ?? 0,
-        fields,
-      }))
-      .sort((a, b) => a.sectionOrder - b.sectionOrder || a.sectionTitle.localeCompare(b.sectionTitle));
-  }, [fieldsForActiveTab, sectionById]);
-
-  const setFieldValue = React.useCallback((fieldKey: string, nextValue: string | number | boolean) => {
-    onChange((prev) => ({
-      ...prev,
-      [normalizedOutput]: {
-        ...(prev[normalizedOutput] ?? {}),
-        [fieldKey]: nextValue,
-      },
-    }));
-  }, [normalizedOutput, onChange]);
-
-  return (
-    <div
-      className={replacementMode ? 'space-y-2' : 'rounded-xl border p-3 space-y-2'}
-      style={replacementMode
-        ? undefined
-        : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-    >
-      {!replacementMode && (
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <div className="ui-meta font-semibold uppercase tracking-wide">{adapter.displayName ?? 'Format-specific settings'}</div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Applied to {normalizedOutput} metadata for export.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showTabBar && tabs.length > 1 && (
-        <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
-          {tabs.map((tab) => {
-            const active = tab.id === activeTabId;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTabId(tab.id)}
-                className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
-                style={active
-                  ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
-                  : { color: 'var(--text-muted)' }}
-              >
-                {tab.title}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {sectionGroups.length === 0 ? (
-        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          No custom settings are available for this tab.
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {sectionGroups.map((section) => {
-            const cardGroups = new Map<string, typeof section.fields>();
-            section.fields.forEach((field) => {
-              const cardId = field.placement?.cardId ?? 'general';
-              const existing = cardGroups.get(cardId);
-              if (existing) {
-                existing.push(field);
-              } else {
-                cardGroups.set(cardId, [field]);
-              }
-            });
-
-            const cards = Array.from(cardGroups.entries())
-              .map(([cardId, fields]) => ({
-                cardId,
-                cardTitle: cardById.get(cardId)?.title ?? 'General',
-                cardOrder: cardById.get(cardId)?.order ?? 0,
-                fields: [...fields].sort((a, b) => (a.placement?.order ?? 0) - (b.placement?.order ?? 0)),
-              }))
-              .sort((a, b) => a.cardOrder - b.cardOrder || a.cardTitle.localeCompare(b.cardTitle));
-
-            return (
-              <div key={section.sectionId} className="space-y-1.5">
-                {!replacementMode && (
-                  <div className="ui-meta font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    {section.sectionTitle}
-                  </div>
-                )}
-                {cards.map((card) => {
-                  const renderedKeys = new Set<string>();
-                  return (
-                  <div
-                    key={`${section.sectionId}-${card.cardId}`}
-                    className="rounded-xl border p-3"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                  >
-                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>{card.cardTitle}</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {card.fields.map((field) => {
-                        if (renderedKeys.has(field.key)) return null;
-
-                        const fieldValue = Object.prototype.hasOwnProperty.call(valuesForOutput, field.key)
-                          ? valuesForOutput[field.key]
-                          : field.defaultValue;
-                        const sanitizedFieldValue = (field.kind === 'number' || field.kind === 'integer')
-                          ? sanitizePluginNumericValue(field as PluginNumericFieldSchema, Number(fieldValue))
-                          : fieldValue;
-
-                        if (field.splitWithKey) {
-                          const pairedField = card.fields.find((candidate) => candidate.key === field.splitWithKey);
-                          if (pairedField) {
-                            const pairedValue = Object.prototype.hasOwnProperty.call(valuesForOutput, pairedField.key)
-                              ? valuesForOutput[pairedField.key]
-                              : pairedField.defaultValue;
-                            const sanitizedPairedValue = (pairedField.kind === 'number' || pairedField.kind === 'integer')
-                              ? sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(pairedValue))
-                              : pairedValue;
-                            renderedKeys.add(field.key);
-                            renderedKeys.add(pairedField.key);
-                            return (
-                              <LabeledTwoStageNumberInput
-                                key={field.key}
-                                label={field.label}
-                                helpText={field.description}
-                                firstValue={Number(sanitizedFieldValue)}
-                                secondValue={Number(sanitizedPairedValue)}
-                                firstMin={field.min}
-                                firstMax={field.max}
-                                firstStep={field.step}
-                                firstTag={field.tag}
-                                firstColor={field.color}
-                                secondMin={pairedField.min}
-                                secondMax={pairedField.max}
-                                secondStep={pairedField.step}
-                                secondTag={pairedField.tag}
-                                secondColor={pairedField.color}
-                                onFirstChange={(next) => {
-                                  const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
-                                  const pairedClamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(sanitizedPairedValue));
-
-                                  if (isSlowFastPair(field.tag, pairedField.tag)) {
-                                    const fieldTag = field.tag?.trim().toLowerCase();
-                                    if (fieldTag === 'slow' && clamped > pairedClamped) {
-                                      setFieldValue(field.key, clamped);
-                                      setFieldValue(pairedField.key, clamped);
-                                      return;
-                                    }
-                                    if (fieldTag === 'fast' && clamped < pairedClamped) {
-                                      setFieldValue(field.key, clamped);
-                                      setFieldValue(pairedField.key, clamped);
-                                      return;
-                                    }
-                                  }
-
-                                  setFieldValue(field.key, clamped);
-                                }}
-                                onSecondChange={(next) => {
-                                  const clamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, next);
-                                  const fieldClamped = sanitizePluginNumericValue(
-                                    field as PluginNumericFieldSchema,
-                                    Number(sanitizedFieldValue),
-                                  );
-
-                                  if (isSlowFastPair(field.tag, pairedField.tag)) {
-                                    const pairedTag = pairedField.tag?.trim().toLowerCase();
-                                    if (pairedTag === 'slow' && clamped > fieldClamped) {
-                                      setFieldValue(field.key, clamped);
-                                      setFieldValue(pairedField.key, clamped);
-                                      return;
-                                    }
-                                    if (pairedTag === 'fast' && clamped < fieldClamped) {
-                                      setFieldValue(field.key, clamped);
-                                      setFieldValue(pairedField.key, clamped);
-                                      return;
-                                    }
-                                  }
-
-                                  setFieldValue(pairedField.key, clamped);
-                                }}
-                              />
-                            );
-                          }
-                        }
-
-                        if (field.kind === 'boolean') {
-                          return (
-                            <LabeledToggleInput
-                              key={field.key}
-                              label={field.label}
-                              checked={Boolean(fieldValue)}
-                              onChange={(next) => setFieldValue(field.key, next)}
-                            />
-                          );
-                        }
-
-                        if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
-                          return (
-                            <SelectDropdown
-                              key={field.key}
-                              label={field.label}
-                              value={String(fieldValue)}
-                              onChange={(nextValue) => setFieldValue(field.key, nextValue)}
-                              options={field.options.map((option) => ({
-                                value: option.value,
-                                label: option.label,
-                              }))}
-                              className="space-y-1 block"
-                              labelClassName="font-medium"
-                              selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
-                            />
-                          );
-                        }
-
-                        if (field.kind === 'number' || field.kind === 'integer') {
-                          return (
-                            <LabeledNumberInput
-                              key={field.key}
-                              label={field.label}
-                              helpText={field.description}
-                              tag={field.tag}
-                              color={field.color}
-                              value={Number(sanitizedFieldValue)}
-                              onChange={(next) => {
-                                const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
-                                setFieldValue(field.key, clamped);
-                              }}
-                            />
-                          );
-                        }
-
-                        return (
-                          <LabeledInput
-                            key={field.key}
-                            label={field.label}
-                            helpText={field.description}
-                            value={String(fieldValue)}
-                            onChange={(next) => setFieldValue(field.key, next)}
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                );})}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-type ReplacementMaterialEditorShellProps = {
-  tabs: Array<{ id: string; title: string; order: number }>;
-  activeTabId: string;
-  onActiveTabChange: (tabId: string) => void;
-  draft: MaterialDraft;
-  onDraftChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
-  outputFormat: string;
-  settingsMode?: string;
-  adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
-  localSettingsByOutput: LocalSettingsByOutputDraft;
-  onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
-};
-
-function ReplacementMaterialEditorShell({
-  tabs,
-  activeTabId,
-  onActiveTabChange,
-  draft,
-  onDraftChange,
-  outputFormat,
-  settingsMode,
-  adapter,
-  localSettingsByOutput,
-  onLocalSettingsByOutputChange,
-}: ReplacementMaterialEditorShellProps) {
-  const measureRootRef = React.useRef<HTMLDivElement | null>(null);
-  const [minBodyHeight, setMinBodyHeight] = React.useState<number | null>(null);
-
-  const renderTabBody = React.useCallback((tabId: string) => {
-    if (tabId === 'meta') {
-      return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
-    }
-
-    return (
-      <PluginLocalMaterialSettingsSections
-        outputFormat={outputFormat}
-        settingsMode={settingsMode}
-        adapter={adapter}
-        localSettingsByOutput={localSettingsByOutput}
-        onChange={onLocalSettingsByOutputChange}
-        replacementMode
-        activeTabId={tabId}
-        showTabBar={false}
-      />
-    );
-  }, [adapter, draft, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, settingsMode]);
-
-  React.useLayoutEffect(() => {
-    const root = measureRootRef.current;
-    if (!root) return;
-
-    const heights = Array.from(root.querySelectorAll<HTMLElement>('[data-measure-tab-body]'))
-      .map((element) => element.getBoundingClientRect().height)
-      .filter((height) => Number.isFinite(height) && height > 0);
-
-    const nextHeight = heights.length > 0 ? Math.ceil(Math.max(...heights)) : null;
-    setMinBodyHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-  });
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
-        {tabs.map((tab) => {
-          const active = activeTabId === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onActiveTabChange(tab.id)}
-              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
-              style={active
-                ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
-                : { color: 'var(--text-muted)' }}
-            >
-              {tab.title}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="relative" style={minBodyHeight ? { minHeight: `${minBodyHeight}px` } : undefined}>
-        <div className="space-y-3" data-measure-tab-body>
-          {renderTabBody(activeTabId)}
-        </div>
-
-        <div ref={measureRootRef} aria-hidden="true" className="absolute inset-0 pointer-events-none invisible overflow-hidden" style={{ width: '100%' }}>
-          {tabs.map((tab) => (
-            <div key={tab.id} className="space-y-3" data-measure-tab-body>
-              {renderTabBody(tab.id)}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-type LabeledInputProps = {
-  label: string;
-  helpText?: string;
-  disabled?: boolean;
-  value: string | number;
-  onChange: (value: string) => void;
-};
-
-function LabeledInput({ label, helpText, disabled = false, value, onChange }: LabeledInputProps) {
-  const [localValue, setLocalValue] = React.useState<string>(() => String(value));
-  const [isFocused, setIsFocused] = React.useState(false);
-
-  React.useEffect(() => {
-    if (isFocused) return;
-    setLocalValue(String(value));
-  }, [value, isFocused]);
-
-  return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center gap-1.5">
-        {label}
-        {helpText && (
-          <span
-            title={helpText}
-            aria-label={`${label} help`}
-            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-          >
-            ?
-          </span>
-        )}
-      </span>
-      <input
-        type="text"
-        disabled={disabled}
-        value={localValue}
-        onChange={(event) => {
-          const next = event.target.value;
-          setLocalValue(next);
-          onChange(next);
-        }}
-        onFocus={() => setIsFocused(true)}
-        onBlur={() => setIsFocused(false)}
-        className={`ui-input w-full h-[36px] px-2.5 leading-tight text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
-      />
-    </label>
-  );
-}
-
-type LabeledNumberInputProps = {
-  label: string;
-  helpText?: string;
-  tag?: string;
-  color?: string;
-  disabled?: boolean;
-  value: number;
-  onChange: (value: number) => void;
-};
-
-function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, onChange }: LabeledNumberInputProps) {
-  const safeValue = clampNonNegativeNumber(value);
-  const [localValue, setLocalValue] = React.useState<string>(() => String(safeValue));
-  const [isFocused, setIsFocused] = React.useState(false);
-  const tone = resolveFieldTagTone(tag);
-  const accent = (typeof color === 'string' && color.trim().length > 0)
-    ? color.trim()
-    : tone?.fallbackColor ?? null;
-
-  React.useEffect(() => {
-    if (isFocused) return;
-    setLocalValue(String(safeValue));
-  }, [isFocused, safeValue]);
-
-  const commit = React.useCallback(() => {
-    const trimmed = localValue.trim();
-    if (trimmed === '') {
-      // Revert to persisted value when input is left empty.
-      setLocalValue(String(value));
-      return;
-    }
-
-    const next = Number(trimmed);
-    if (!Number.isFinite(next)) {
-      setLocalValue(String(safeValue));
-      return;
-    }
-
-    const sanitized = clampNonNegativeNumber(next);
-    onChange(sanitized);
-    setLocalValue(String(sanitized));
-  }, [localValue, onChange, safeValue]);
-
-  const nudge = React.useCallback((direction: 1 | -1) => {
-    const fallback = safeValue;
-    const parsed = Number(localValue.trim());
-    const current = Number.isFinite(parsed) ? parsed : fallback;
-    const step = Math.abs(current) < 1 ? 0.01 : 1;
-    const decimals = step < 1 ? 3 : 0;
-    const next = clampNonNegativeNumber(Number((current + direction * step).toFixed(decimals)));
-    onChange(next);
-    setLocalValue(String(next));
-  }, [localValue, onChange, safeValue]);
-
-  return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center gap-1.5">
-        {label}
-        {helpText && (
-          <span
-            title={helpText}
-            aria-label={`${label} help`}
-            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-          >
-            ?
-          </span>
-        )}
-      </span>
-      <div className="relative">
-        <input
-          type="text"
-          disabled={disabled}
-          value={localValue}
-          onChange={(event) => {
-            if (event.target.value.includes('-')) return;
-            setLocalValue(event.target.value);
-          }}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => {
-            setIsFocused(false);
-            commit();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.currentTarget.blur();
-            }
-            if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              nudge(1);
-            }
-            if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              nudge(-1);
-            }
-          }}
-          className={`ui-input w-full h-[36px] pl-2.5 ${tag ? 'pr-20' : 'pr-6'} leading-tight text-sm no-spinners ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
-          style={accent ? {
-            background: `color-mix(in srgb, ${accent} 7%, var(--surface-1))`,
-            borderColor: `color-mix(in srgb, ${accent} 24%, var(--border-subtle))`,
-          } : undefined}
-        />
-
-        <FieldTagChip tag={tag} color={color} />
-
-        <div className="absolute inset-y-0 right-1 z-20 flex w-4 flex-col items-center justify-center gap-0.5">
-          <button
-            type="button"
-            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
-            onClick={() => nudge(1)}
-            disabled={disabled}
-            tabIndex={-1}
-            aria-label={`Increase ${label}`}
-          >
-            <ChevronUp className="h-2.5 w-2.5" />
-          </button>
-          <button
-            type="button"
-            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
-            onClick={() => nudge(-1)}
-            disabled={disabled}
-            tabIndex={-1}
-            aria-label={`Decrease ${label}`}
-          >
-            <ChevronDown className="h-2.5 w-2.5" />
-          </button>
-        </div>
-      </div>
-    </label>
-  );
-}
-
-type LabeledTwoStageNumberInputProps = {
-  label: string;
-  helpText?: string;
-  firstValue: number;
-  secondValue: number;
-  firstMin?: number;
-  firstMax?: number;
-  firstStep?: number;
-  firstTag?: string;
-  firstColor?: string;
-  secondMin?: number;
-  secondMax?: number;
-  secondStep?: number;
-  secondTag?: string;
-  secondColor?: string;
-  onFirstChange: (value: number) => void;
-  onSecondChange: (value: number) => void;
-};
-
-function LabeledTwoStageNumberInput({
-  label,
-  helpText,
-  firstValue,
-  secondValue,
-  firstMin,
-  firstMax,
-  firstStep,
-  firstTag,
-  firstColor,
-  secondMin,
-  secondMax,
-  secondStep,
-  secondTag,
-  secondColor,
-  onFirstChange,
-  onSecondChange,
-}: LabeledTwoStageNumberInputProps) {
-  const firstTone = resolveFieldTagTone(firstTag);
-  const secondTone = resolveFieldTagTone(secondTag);
-  const firstAccent = (typeof firstColor === 'string' && firstColor.trim().length > 0)
-    ? firstColor.trim()
-    : firstTone?.fallbackColor ?? null;
-  const secondAccent = (typeof secondColor === 'string' && secondColor.trim().length > 0)
-    ? secondColor.trim()
-    : secondTone?.fallbackColor ?? null;
-
-  return (
-    <label className="space-y-1 block md:col-span-2">
-      <span className="ui-label font-medium inline-flex items-center gap-1.5">
-        {label}
-        {helpText && (
-          <span
-            title={helpText}
-            aria-label={`${label} help`}
-            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-          >
-            ?
-          </span>
-        )}
-      </span>
-      <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
-        <div className="relative">
-          <NumberInput
-            value={Number.isFinite(firstValue) ? firstValue : 0}
-            onChange={(next) => onFirstChange(next)}
-            min={firstMin}
-            max={firstMax}
-            step={firstStep}
-            showStepper
-            aria-label={`${label} stage 1`}
-            className={`ui-input w-full h-[36px] px-2.5 ${firstTag ? 'pr-24' : 'pr-2.5'} text-sm leading-tight`}
-            style={firstAccent ? {
-              background: `color-mix(in srgb, ${firstAccent} 7%, var(--surface-1))`,
-              borderColor: `color-mix(in srgb, ${firstAccent} 24%, var(--border-subtle))`,
-            } : undefined}
-          />
-          <FieldTagChip tag={firstTag} color={firstColor} compact />
-        </div>
-        <div className="text-sm px-1 font-semibold" style={{ color: 'var(--text-muted)' }}>{'>'}</div>
-        <div className="relative">
-          <NumberInput
-            value={Number.isFinite(secondValue) ? secondValue : 0}
-            onChange={(next) => onSecondChange(next)}
-            min={secondMin}
-            max={secondMax}
-            step={secondStep}
-            showStepper
-            aria-label={`${label} stage 2`}
-            className={`ui-input w-full h-[36px] px-2.5 ${secondTag ? 'pr-24' : 'pr-2.5'} text-sm leading-tight`}
-            style={secondAccent ? {
-              background: `color-mix(in srgb, ${secondAccent} 7%, var(--surface-1))`,
-              borderColor: `color-mix(in srgb, ${secondAccent} 24%, var(--border-subtle))`,
-            } : undefined}
-          />
-          <FieldTagChip tag={secondTag} color={secondColor} compact />
-        </div>
-      </div>
-    </label>
-  );
-}
-
-type LabeledSelectInputProps = {
-  label: string;
-  value: PrinterOutputFormat;
-  options: Array<{ value: PrinterOutputFormat; label: string }>;
-  onChange: (value: PrinterOutputFormat) => void;
-  disabled?: boolean;
-};
-
-function LabeledSelectInput({ label, value, options, onChange, disabled = false }: LabeledSelectInputProps) {
-  return (
-    <SelectDropdown
-      label={label}
-      value={value}
-      onChange={(nextValue) => onChange(nextValue as PrinterOutputFormat)}
-      disabled={disabled}
-      options={options}
-      className="space-y-1 block"
-      labelClassName="font-medium"
-      selectClassName={`w-full h-[36px] px-2.5 pr-10 leading-tight text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
-      selectStyle={disabled
-        ? {
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-            color: 'var(--text-muted)',
-          }
-        : undefined}
-    />
-  );
-}
-
-type LabeledToggleInputProps = {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  disabled?: boolean;
-};
-
-function LabeledToggleInput({ label, checked, onChange, disabled = false }: LabeledToggleInputProps) {
-  return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center">
-        {label}
-      </span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => {
-          if (disabled) return;
-          onChange(!checked);
-        }}
-        disabled={disabled}
-        className={`ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
-        style={disabled
-          ? {
-              borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-              color: 'var(--text-muted)',
-            }
-          : {
-              borderColor: checked
-                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
-                : 'var(--border-subtle)',
-              background: checked
-                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
-                : 'var(--surface-1)',
-              color: checked ? 'var(--text-strong)' : 'var(--text-muted)',
-            }}
-      >
-        <span>{checked ? 'Enabled' : 'Disabled'}</span>
-        <span
-          className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
-          style={disabled
-            ? { background: 'color-mix(in srgb, var(--surface-2), black 8%)' }
-            : { background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
-        >
-          <span
-            className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`}
-          />
-        </span>
-      </button>
-    </label>
-  );
-}
-
-type LabeledResinFamilySelectProps = {
-  label: string;
-  value: MaterialProfile['resinFamily'];
-  options: Array<{ value: MaterialProfile['resinFamily']; label: string }>;
-  onChange: (value: MaterialProfile['resinFamily']) => void;
-};
-
-function LabeledResinFamilySelect({ label, value, options, onChange }: LabeledResinFamilySelectProps) {
-  return (
-    <SelectDropdown
-      label={label}
-      value={value}
-      onChange={(nextValue) => onChange(nextValue as MaterialProfile['resinFamily'])}
-      options={options}
-      className="space-y-1 block"
-      labelClassName="font-medium"
-      selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
-    />
-  );
-}
-
-type MaterialProfileFormSectionsProps = {
-  draft: MaterialDraft;
-  onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
-};
-
-function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSectionsProps) {
-  return (
-    <>
-      <MaterialProfileIdentitySection draft={draft} onChange={onChange} />
-
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Print Settings</div>
-        <div className="grid grid-cols-2 gap-2">
-          <LabeledNumberInput
-            label="Layer height (mm)"
-            value={draft.layerHeightMm}
-            onChange={(value) => onChange((prev) => ({ ...prev, layerHeightMm: value }))}
-          />
-          <LabeledNumberInput
-            label="Normal exposure (s)"
-            value={draft.normalExposureSec}
-            onChange={(value) => onChange((prev) => ({ ...prev, normalExposureSec: value }))}
-          />
-          <LabeledNumberInput
-            label="Bottom exposure (s)"
-            value={draft.bottomExposureSec}
-            onChange={(value) => onChange((prev) => ({ ...prev, bottomExposureSec: value }))}
-          />
-          <LabeledNumberInput
-            label="Bottom layers"
-            value={draft.bottomLayerCount}
-            onChange={(value) => onChange((prev) => ({ ...prev, bottomLayerCount: value }))}
-          />
-          <LabeledNumberInput
-            label="Lift distance (mm)"
-            value={draft.liftDistanceMm}
-            onChange={(value) => onChange((prev) => ({ ...prev, liftDistanceMm: value }))}
-          />
-          <LabeledNumberInput
-            label="Lift speed (mm/min)"
-            value={draft.liftSpeedMmMin}
-            onChange={(value) => onChange((prev) => ({ ...prev, liftSpeedMmMin: value }))}
-          />
-          <LabeledNumberInput
-            label="Retract speed (mm/min)"
-            value={draft.retractSpeedMmMin}
-            onChange={(value) => onChange((prev) => ({ ...prev, retractSpeedMmMin: value }))}
-          />
-          <LabeledNumberInput
-            label="Minimum AA alpha (%)"
-            value={draft.minimumAaAlphaPercent}
-            onChange={(value) => onChange((prev) => ({
-              ...prev,
-              minimumAaAlphaPercent: Math.max(0, Math.min(100, value)),
-            }))}
-          />
-        </div>
-      </div>
-
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">
-          Scale Compensation (% shrinkage)
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <LabeledNumberInput
-            label="Scale X (%)"
-            value={draft.scaleCompensationPct.x}
-            onChange={(value) => onChange((prev) => ({
-              ...prev,
-              scaleCompensationPct: {
-                ...prev.scaleCompensationPct,
-                x: value,
-              },
-            }))}
-          />
-          <LabeledNumberInput
-            label="Scale Y (%)"
-            value={draft.scaleCompensationPct.y}
-            onChange={(value) => onChange((prev) => ({
-              ...prev,
-              scaleCompensationPct: {
-                ...prev.scaleCompensationPct,
-                y: value,
-              },
-            }))}
-          />
-          <LabeledNumberInput
-            label="Scale Z (%)"
-            value={draft.scaleCompensationPct.z}
-            onChange={(value) => onChange((prev) => ({
-              ...prev,
-              scaleCompensationPct: {
-                ...prev.scaleCompensationPct,
-                z: value,
-              },
-            }))}
-          />
-        </div>
-      </div>
-    </>
-  );
-}
-
-type MaterialProfileIdentitySectionProps = {
-  draft: MaterialDraft;
-  onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
-};
-
-function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIdentitySectionProps) {
-  return (
-    <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-      <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Resin Profile</div>
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledInput
-          label="Manufacturer"
-          value={draft.brand}
-          onChange={(value) => onChange((prev) => ({ ...prev, brand: value }))}
-        />
-        <LabeledInput
-          label="Name"
-          value={draft.name}
-          onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
-        />
-        <LabeledResinFamilySelect
-          label="Resin Family"
-          value={draft.resinFamily}
-          options={RESIN_FAMILY_OPTIONS}
-          onChange={(value) => onChange((prev) => ({ ...prev, resinFamily: value }))}
-        />
-        <LabeledCurrencySelect
-          label="Currency"
-          value={draft.currencyCode || 'USD'}
-          options={CURRENCY_OPTIONS}
-          onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
-        />
-        <LabeledNumberInput
-          label="Bottle Price"
-          value={draft.bottlePrice}
-          onChange={(value) => onChange((prev) => ({ ...prev, bottlePrice: value }))}
-        />
-        <LabeledNumberInput
-          label="Bottle Capacity (ml)"
-          value={draft.bottleCapacityMl}
-          onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
-        />
-      </div>
-    </div>
-  );
-}
-
-type LabeledCurrencySelectProps = {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-};
-
-function LabeledCurrencySelect({ label, value, options, onChange }: LabeledCurrencySelectProps) {
-  return (
-    <SelectDropdown
-      label={label}
-      value={value}
-      onChange={(nextValue) => onChange(String(nextValue))}
-      options={options.map((option) => ({ value: option, label: option }))}
-      className="space-y-1 block"
-      labelClassName="font-medium"
-      selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
-    />
   );
 }
 

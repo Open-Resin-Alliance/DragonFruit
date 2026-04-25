@@ -305,11 +305,12 @@ export function ensureMeshSmoothingEngineReady(geometry: THREE.BufferGeometry): 
   const existing = pendingInitByGeometry.get(geometry);
   if (existing) return;
 
-  setLoadingState({ active: true });
+  // Pre-warm silently in the background — no loading indicator.
+  // By the time the user starts painting, the topology will already be built.
   const token = { canceled: false };
   pendingInitByGeometry.set(geometry, token);
 
-  setTimeout(() => {
+  const run = () => {
     const current = pendingInitByGeometry.get(geometry);
     if (!current || current !== token || token.canceled) return;
 
@@ -319,9 +320,15 @@ export function ensureMeshSmoothingEngineReady(geometry: THREE.BufferGeometry): 
       }
     } finally {
       pendingInitByGeometry.delete(geometry);
-      setLoadingState({ active: false });
     }
-  }, 0);
+  };
+
+  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+    (window as Window & { requestIdleCallback: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number })
+      .requestIdleCallback(run, { timeout: 1500 });
+  } else {
+    setTimeout(run, 0);
+  }
 }
 
 function getGeometryKey(geometry: THREE.BufferGeometry): number {

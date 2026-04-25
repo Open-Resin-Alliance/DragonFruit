@@ -31,6 +31,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -545,6 +558,20 @@ name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "byteorder"
@@ -675,6 +702,16 @@ dependencies = [
  "jobserver",
  "libc",
  "shlex",
+]
+
+[[package]]
+name = "cdt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b91b872294f63ef586b32aa94141561681aa35ca2d703960cca4f661f4e18184"
+dependencies = [
+ "geometry-predicates",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1321,10 +1358,12 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-desktop"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.22.1",
+ "bytemuck",
  "dragonfruit-islands",
+ "dragonfruit-mesh-repair",
  "dragonfruit-rtsp-relay",
  "dragonfruit-slicing-engine",
  "flate2",
@@ -1359,6 +1398,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dragonfruit-mesh-repair"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "bytemuck",
+ "cdt",
+ "clap",
+ "manifold-csg",
+ "quick-xml 0.31.0",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thiserror 1.0.69",
+ "zip 0.6.6",
+]
+
+[[package]]
 name = "dragonfruit-rtsp-relay"
 version = "0.1.0"
 dependencies = [
@@ -1371,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicing-engine"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -1879,6 +1936,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "geometry-predicates"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8dba84198cf199c11b83f1cb9243eaeb70dc50b719d2835ebf34bf2481bca010"
+
+[[package]]
 name = "getrandom"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2100,7 +2163,7 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
- "ahash",
+ "ahash 0.7.8",
 ]
 
 [[package]]
@@ -2796,6 +2859,26 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
+
+[[package]]
+name = "manifold-csg"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce6e9625392f12ccc678993bff3b06d81c988bc620db18394acfc0b2ac7ff95"
+dependencies = [
+ "log",
+ "manifold-csg-sys",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "manifold-csg-sys"
+version = "3.4.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67be081da3159d603fc152c0564e0db9224611c4c253370fbdb2ea7703c8e211"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "markup5ever"
@@ -3765,6 +3848,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+dependencies = [
+ "memchr",
+ "serde",
 ]
 
 [[package]]
@@ -4971,7 +5064,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 [[package]]
 name = "tauri"
 version = "2.10.3"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5021,7 +5114,7 @@ dependencies = [
 [[package]]
 name = "tauri-build"
 version = "2.5.6"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "anyhow",
  "cargo_toml",
@@ -5042,7 +5135,7 @@ dependencies = [
 [[package]]
 name = "tauri-codegen"
 version = "2.5.5"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "base64 0.22.1",
  "brotli",
@@ -5068,7 +5161,7 @@ dependencies = [
 [[package]]
 name = "tauri-macros"
 version = "2.5.5"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5147,7 +5240,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime"
 version = "2.10.1"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "cookie",
  "dpi",
@@ -5168,7 +5261,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-cef"
 version = "0.1.0"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "base64 0.22.1",
  "cef",
@@ -5196,7 +5289,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-wry"
 version = "2.10.1"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "gtk",
  "http",
@@ -5222,7 +5315,7 @@ dependencies = [
 [[package]]
 name = "tauri-utils"
 version = "2.8.3"
-source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#415bdc23d30323674696a450f5e7989a14326ad3"
+source = "git+https://github.com/tauri-apps/tauri?branch=feat%2Fcef#562bc592b337de417aa48e72034c7816cfb4c142"
 dependencies = [
  "anyhow",
  "brotli",

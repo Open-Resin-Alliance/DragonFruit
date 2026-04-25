@@ -7,3 +7,6 @@
 [submodule "plugins/elegoo"]
 	path = plugins/elegoo
 	url = ../df-plugin-elegoo
+[submodule "plugins/sirayatech"]
+	path = plugins/sirayatech
+	url = https://github.com/Open-Resin-Alliance/df-plugin-sirayatech

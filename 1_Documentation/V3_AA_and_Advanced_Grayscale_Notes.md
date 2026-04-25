@@ -37,7 +37,7 @@ Quick implementation-grounded notes for direction planning.
 
 ## 2) Current **2D AA** implementation (today)
 
-Implemented in `rust/dragonfruit-slicer-v3/src/raster.rs`:
+Implemented in `rust/dragonfruit-slicing-engine/src/raster.rs`:
 
 - AA levels are parsed via `aa_subpixel_steps`: `Off`, `2x`, `4x`, `8x`, `16x`.
 - Rasterization is winding-based scanline fill.

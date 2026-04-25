@@ -81,7 +81,7 @@ High-level layout of key project areas:
 
 - `src/` — Next.js app, React components, scene controls, support systems, hooks, and utilities.
 - `src-tauri/` — Tauri desktop host and native integration points.
-- `rust/dragonfruit-slicer-v3/` — Rust slicer backend workspace.
+- `rust/dragonfruit-slicing-engine/` — Rust slicer backend workspace.
 - `plugins/` — Plugin architecture and ecosystem integrations.
 - `profiles/` — Printer and material profile definitions.
 - `docs/` and `1_Documentation/` — Architecture notes, implementation guides, and domain documentation.

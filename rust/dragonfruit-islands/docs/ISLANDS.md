@@ -14,7 +14,7 @@ rust/dragonfruit-islands/
 ├── docs/ISLANDS.md           (this file)
 ├── src/
 │   ├── lib.rs                — Crate root (module declarations)
-│   ├── geometry.rs           — Re-exports from dragonfruit-slicer-v3
+│   ├── geometry.rs           — Re-exports from dragonfruit-slicing-engine
 │   ├── model.rs              — Core domain types (Value Objects, Entities)
 │   ├── rle.rs                — RLE Domain Service (stateless mask algebra)
 │   ├── scan.rs               — Per-layer scan Domain Service
@@ -33,7 +33,7 @@ rust/dragonfruit-islands/
 ### Dependencies
 
 ```
-dragonfruit-slicer-v3  ← geometry types (Vec3, Triangle, parse_triangles)
+dragonfruit-slicing-engine  ← geometry types (Vec3, Triangle, parse_triangles)
        ↑
 dragonfruit-islands    ← this crate (island detection library + tooling)
        ↑
@@ -244,7 +244,7 @@ The rasterizer uses `IndexMap` (not `HashMap`) for polygon loop stitching. This 
 
 | Crate | Purpose |
 |-------|---------|
-| `dragonfruit-slicer-v3` | Geometry types (`Vec3`, `Triangle`, `parse_triangles`) |
+| `dragonfruit-slicing-engine` | Geometry types (`Vec3`, `Triangle`, `parse_triangles`) |
 | `serde` | Serialization for island types |
 | `rayon` | Parallel rasterization |
 | `indexmap` | Insertion-order map for deterministic loop stitching |

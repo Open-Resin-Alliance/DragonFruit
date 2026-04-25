@@ -1,7 +1,8 @@
 import React from 'react';
-import { LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
+import { LayoutGrid, Loader2, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
+import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 export type ArrangeLayoutMode = 'auto' | 'array';
@@ -186,7 +187,7 @@ export function ArrangePanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={accentCardStyle}>
-            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
+            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout Mode</div>
             <div className="grid grid-cols-2 gap-1">
               <button
                 type="button"
@@ -211,7 +212,7 @@ export function ArrangePanel({
 
           {layoutMode === 'auto' && (
             <div className="rounded-md border p-2" style={accentCardStyle}>
-              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange mode</div>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange Mode</div>
               <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
@@ -242,39 +243,20 @@ export function ArrangePanel({
 
           {layoutMode === 'auto' ? (
           <div className="rounded-md border p-2" style={panelCardStyle}>
-            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
-            <div className="mt-1 flex min-w-0 items-center gap-1">
-              <IconButton
-                className="!h-8 !w-8 shrink-0 !p-0"
-                onClick={() => setClampedSpacing(spacingMm - 0.1)}
-                disabled={spacingMm <= 0 || isApplying}
-                title="Decrease spacing"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </IconButton>
-
-              <NumberInput
-                value={spacingMm}
-                onChange={setClampedSpacing}
-                showStepper={false}
-                onWheel={(e) => {
-                  if (isApplying) return;
-                  e.preventDefault();
-                  setClampedSpacing(spacingMm + (e.deltaY < 0 ? 0.1 : -0.1));
-                }}
-                disabled={isApplying}
-                className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-              />
-
-              <IconButton
-                className="!h-8 !w-8 shrink-0 !p-0"
-                onClick={() => setClampedSpacing(spacingMm + 0.1)}
-                disabled={spacingMm >= 5 || isApplying}
-                title="Increase spacing"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </IconButton>
-            </div>
+            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange Distance</label>
+            <ScrollableNumberField
+              className="mt-1"
+              value={spacingMm}
+              onChange={setClampedSpacing}
+              min={0}
+              max={5}
+              step={0.1}
+              unit="mm"
+              disabled={isApplying}
+              ariaLabel="Arrange distance"
+              decreaseTitle="Decrease spacing"
+              increaseTitle="Increase spacing"
+            />
           </div>
 
           ) : (
@@ -312,7 +294,7 @@ export function ArrangePanel({
           )}
 
           <div className="rounded-md border p-2" style={panelCardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Placement anchor</div>
+            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Placement Anchor</div>
             <Select
               value={anchorMode}
               onChange={(e) => onAnchorModeChange(e.target.value as ArrangeAnchorMode)}

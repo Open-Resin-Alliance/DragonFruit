@@ -522,8 +522,35 @@ export function SceneCanvas({
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
+  const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
+
+  const [isLightTheme, setIsLightTheme] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    const html = document.documentElement;
+    return (
+      html.classList.contains('dragonfruit-light') ||
+      html.getAttribute('data-theme') === 'light' ||
+      (window.matchMedia('(prefers-color-scheme: light)').matches && !html.classList.contains('dragonfruit-dark'))
+    );
+  });
+  React.useEffect(() => {
+    const check = () => {
+      const html = document.documentElement;
+      setIsLightTheme(
+        html.classList.contains('dragonfruit-light') ||
+        html.getAttribute('data-theme') === 'light' ||
+        (window.matchMedia('(prefers-color-scheme: light)').matches && !html.classList.contains('dragonfruit-dark')),
+      );
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    mq.addEventListener('change', check);
+    return () => { observer.disconnect(); mq.removeEventListener('change', check); };
+  }, []);
+
   const cameraProjectionMode = React.useSyncExternalStore(
     subscribeToCameraProjectionSettings,
     () => getSavedCameraProjectionSettings().mode,
@@ -1165,6 +1192,7 @@ export function SceneCanvas({
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
+  const likelySupportGeometryTintColor = '#c8752a';
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
@@ -3102,7 +3130,7 @@ export function SceneCanvas({
   const [modeExitRestoreRunId, setModeExitRestoreRunId] = React.useState(0);
   const knownModelIdsRef = React.useRef<Set<string>>(new Set());
   const prevTransformModeRef = React.useRef<TransformMode | undefined>(transformMode);
-  const entryAnimRef = React.useRef<Record<string, { startMs: number; fromZ: number; skipBounce: boolean }>>({});
+  const entryAnimRef = React.useRef<Record<string, { startMs: number | null; fromZ: number; skipBounce: boolean }>>({});
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
@@ -3151,6 +3179,7 @@ export function SceneCanvas({
   React.useEffect(() => {
     const currentIds = new Set(models.map((model) => model.id));
     const initialDropOffsets: Record<string, number> = {};
+    const shouldDeferLargeModelDrop = cameraIntroRunId > cameraIntroCompletedRunId;
 
     // Start animation for newly added mesh files
     for (const model of models) {
@@ -3163,16 +3192,29 @@ export function SceneCanvas({
       if (!isMeshFile) continue;
 
       const dropFrom = Math.max(16, Math.min(64, model.geometry.size.z * 0.45));
+      const disableDropAnimation = model.polygonCount >= LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS;
+      if (disableDropAnimation) continue;
 
       const skipBounce = model.polygonCount >= LARGE_MODEL_BOUNCE_THRESHOLD_POLYS;
+      const deferDrop = shouldDeferLargeModelDrop && model.polygonCount >= LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS;
 
-      // Run drop immediately so it happens concurrently with camera intro zoom.
-      entryAnimRef.current[model.id] = {
-        startMs: performance.now(),
-        fromZ: dropFrom,
-        skipBounce,
-      };
-      initialDropOffsets[model.id] = dropFrom;
+      if (deferDrop) {
+        pendingEntryAnimRef.current[model.id] = {
+          fromZ: dropFrom,
+          runId: cameraIntroRunId,
+          skipBounce,
+        };
+      } else {
+        // Start timer on the first rendered animation frame.
+        // This keeps the drop motion intact even if initial GPU upload blocks
+        // the main thread for hundreds of milliseconds.
+        entryAnimRef.current[model.id] = {
+          startMs: null,
+          fromZ: dropFrom,
+          skipBounce,
+        };
+        initialDropOffsets[model.id] = dropFrom;
+      }
     }
 
     // Cleanup removed models
@@ -3204,12 +3246,11 @@ export function SceneCanvas({
     const pendingEntries = Object.entries(pendingEntryAnimRef.current).filter(([, pending]) => pending.runId <= cameraIntroCompletedRunId);
     if (pendingEntries.length === 0) return;
 
-    const now = performance.now();
     const activatedOffsets: Record<string, number> = {};
 
     for (const [id, pending] of pendingEntries) {
       entryAnimRef.current[id] = {
-        startMs: now,
+        startMs: null,
         fromZ: pending.fromZ,
         skipBounce: pending.skipBounce,
       };
@@ -3234,6 +3275,12 @@ export function SceneCanvas({
       const nextOffsets: Record<string, number> = {};
 
       for (const [id, animation] of entries) {
+        if (animation.startMs == null) {
+          animation.startMs = now;
+          nextOffsets[id] = animation.fromZ;
+          continue;
+        }
+
         const t = Math.min(1, (now - animation.startMs) / DROP_ANIMATION_DURATION_MS);
 
         // Drop -> impact -> optional rebound -> settle
@@ -4623,7 +4670,7 @@ export function SceneCanvas({
     >
       <Canvas
         key={`scene-canvas-${canvasRecoveryNonce}`}
-        style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
+        style={{ width: '100%', height: '100%', backgroundColor: 'var(--surface-0)', display: 'block' }}
         camera={defaultCamera}
         shadows={!isLinux}
         dpr={dynamicDpr}
@@ -4698,6 +4745,9 @@ export function SceneCanvas({
                   && duplicatePreviewModel
                   && model.id === duplicatePreviewModel.id,
                 );
+                const likelySupportGeometry = !!model.geometry.meshDefects?.nativeRepairReport?.likely_support_geometry;
+                const modelHoverTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : hoverTintColor;
+                const modelSelectedTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : selectedTintColor;
                 // Use live drag transform only during active/guarded gizmo interaction.
                 // Otherwise stale refs can mask immediate panel-driven updates (e.g. reset scale).
                 const liveDragTransformForRender = (
@@ -4784,8 +4834,8 @@ export function SceneCanvas({
                       isBracePlacementActive={isBracePlacementActive}
                       onModelHoverPointChange={onModelHoverPointChange}
                       onModelHoverModelChange={onModelHoverModelChange}
-                      hoverTintColor={hoverTintColor}
-                      selectedTintColor={selectedTintColor}
+                      hoverTintColor={modelHoverTintColor}
+                      selectedTintColor={modelSelectedTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
@@ -4807,6 +4857,7 @@ export function SceneCanvas({
                         && !!liveDragTransformRef.current
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
+                      supportSectionGeometry={model.geometry.meshDefects?.supportSectionGeometry ?? null}
                     >
                       {useActiveModelAttachedSupportProxy && isActive && (
                         <group
@@ -4853,9 +4904,9 @@ export function SceneCanvas({
                   <GhostPreviewInstances
                     geometry={duplicatePreviewModel.geometry.geometry}
                     center={duplicatePreviewModel.geometry.center}
-                    color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                    color={isLightTheme ? '#3a3a3a' : (duplicatePreviewModel.color ?? '#a3a3a3')}
                     transforms={effectiveDuplicatePreviewTransforms}
-                    opacity={0.22}
+                    opacity={isLightTheme ? 0.45 : 0.22}
                     renderOrder={2}
                   />
                 )
@@ -4936,9 +4987,9 @@ export function SceneCanvas({
                     key={`arrange-array-preview-${group.model.id}`}
                     geometry={group.model.geometry.geometry}
                     center={group.model.geometry.center}
-                    color={group.model.color ?? '#a3a3a3'}
+                    color={isLightTheme ? '#3a3a3a' : (group.model.color ?? '#a3a3a3')}
                     transforms={group.transforms}
-                    opacity={0.22}
+                    opacity={isLightTheme ? 0.45 : 0.22}
                     renderOrder={2}
                   />
                 ))
@@ -5989,7 +6040,7 @@ export function SceneCanvas({
             inset: 0,
             zIndex: 55,
             pointerEvents: 'none',
-            background: '#181a22',
+            background: 'var(--surface-0)',
           }}
           aria-hidden="true"
         >

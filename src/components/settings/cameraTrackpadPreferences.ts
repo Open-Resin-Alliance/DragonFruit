@@ -6,6 +6,7 @@ export type CameraTrackpadSettings = {
   modifierKey: CameraTrackpadModifierKey;
   panAcceleration: number;
   orbitAcceleration: number;
+  zoomAcceleration: number;
 };
 
 export const CAMERA_TRACKPAD_SETTINGS_STORAGE_KEY = 'camera-trackpad-settings';
@@ -16,6 +17,7 @@ export const DEFAULT_CAMERA_TRACKPAD_SETTINGS: CameraTrackpadSettings = {
   modifierKey: 'shift',
   panAcceleration: 2,
   orbitAcceleration: 2,
+  zoomAcceleration: 2,
 };
 
 function normalizeAcceleration(input: unknown, fallback: number): number {
@@ -39,6 +41,7 @@ export function normalizeCameraTrackpadSettings(input: unknown): CameraTrackpadS
   const modifierKey = normalizeModifierKey(candidate.modifierKey);
   const panAcceleration = normalizeAcceleration(candidate.panAcceleration, DEFAULT_CAMERA_TRACKPAD_SETTINGS.panAcceleration);
   const orbitAcceleration = normalizeAcceleration(candidate.orbitAcceleration, DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration);
+  const zoomAcceleration = normalizeAcceleration(candidate.zoomAcceleration, DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration);
 
   // Defensive fallback: a persisted orbit+shift combo has caused startup instability
   // on some macOS trackpad setups. Keep orbit, but migrate modifier to Option.
@@ -48,6 +51,7 @@ export function normalizeCameraTrackpadSettings(input: unknown): CameraTrackpadS
       modifierKey: 'alt',
       panAcceleration,
       orbitAcceleration,
+      zoomAcceleration,
     };
   }
 
@@ -56,6 +60,7 @@ export function normalizeCameraTrackpadSettings(input: unknown): CameraTrackpadS
     modifierKey,
     panAcceleration,
     orbitAcceleration,
+    zoomAcceleration,
   };
 }
 

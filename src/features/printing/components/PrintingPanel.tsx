@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronDown, Download, Printer } from 'lucide-react';
+import { ChevronDown, Download, FolderOpen, Loader2, Printer, RotateCcw, X } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 
 type PrintingPanelProps = {
@@ -14,11 +14,14 @@ type PrintingPanelProps = {
   canSendToPrinter: boolean;
   sendBusy: boolean;
   sendStatusText: string | null;
+  sendCanRetry?: boolean;
   sendButtonLabel?: string;
   showSendTargetPicker?: boolean;
   onOpenSendTargetPicker?: () => void;
   onDownload: () => void;
   onSendToPrinter: () => void;
+  onCancelSendToPrinter?: () => void;
+  onRetrySendToPrinter?: () => void;
   sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | null;
   savedFilePath?: string | null;
 };
@@ -35,15 +38,46 @@ export function PrintingPanel({
   canSendToPrinter,
   sendBusy,
   sendStatusText,
+  sendCanRetry = false,
   sendButtonLabel = 'Send to Printer',
   showSendTargetPicker = false,
   onOpenSendTargetPicker,
   onDownload,
   onSendToPrinter,
+  onCancelSendToPrinter,
+  onRetrySendToPrinter,
   sliceIntent = null,
   savedFilePath = null,
 }: PrintingPanelProps) {
   const [isExpanded, setIsExpanded] = React.useState(true);
+  const [revealingSavedPath, setRevealingSavedPath] = React.useState(false);
+  const [revealSavedPathError, setRevealSavedPathError] = React.useState<string | null>(null);
+
+  const isDesktopRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const savedPathForReveal = React.useMemo(() => {
+    const trimmed = savedFilePath?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : null;
+  }, [savedFilePath]);
+
+  const handleRevealSavedPath = React.useCallback(async () => {
+    if (!isDesktopRuntime || !savedPathForReveal) return;
+
+    setRevealingSavedPath(true);
+    setRevealSavedPathError(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('reveal_in_file_manager', { path: savedPathForReveal });
+    } catch (error) {
+      setRevealSavedPathError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRevealingSavedPath(false);
+    }
+  }, [isDesktopRuntime, savedPathForReveal]);
+
+  const showSendActionButton = sendBusy || sendCanRetry;
+  const sendActionTitle = sendBusy ? 'Cancel current upload' : 'Retry failed upload';
+  const sendActionLabel = sendBusy ? 'Cancel' : 'Retry';
+  const sendActionHandler = sendBusy ? onCancelSendToPrinter : onRetrySendToPrinter;
 
   return (
     <Card className="w-[22rem]">
@@ -120,14 +154,43 @@ export function PrintingPanel({
               className="rounded-md border p-2.5 space-y-0.5"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
             >
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Saved to</div>
-              <div
-                className="text-xs truncate"
-                title={savedFilePath ?? outputName ?? ''}
-                style={{ color: 'var(--text-strong)', fontFamily: 'monospace' }}
-              >
-                {savedFilePath ?? outputName ?? '—'}
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Saved to</div>
+                  <div
+                    className="text-xs whitespace-nowrap overflow-hidden"
+                    title={savedFilePath ?? outputName ?? ''}
+                    style={{
+                      color: 'var(--text-strong)',
+                      fontFamily: 'monospace',
+                      maskImage: 'linear-gradient(to right, #000 0%, #000 calc(100% - 18px), transparent 100%)',
+                      WebkitMaskImage: 'linear-gradient(to right, #000 0%, #000 calc(100% - 18px), transparent 100%)',
+                    }}
+                  >
+                    {savedFilePath ?? outputName ?? '—'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { void handleRevealSavedPath(); }}
+                  disabled={!isDesktopRuntime || !savedPathForReveal || revealingSavedPath}
+                  title={savedPathForReveal ? 'Open file location' : 'Path unavailable'}
+                  aria-label="Open saved file location"
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border transition-colors disabled:opacity-50"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    color: 'var(--text-muted)',
+                    background: 'var(--surface-2)',
+                  }}
+                >
+                  {revealingSavedPath ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+                </button>
               </div>
+              {revealSavedPathError && (
+                <div className="text-[11px]" style={{ color: '#f87171' }}>
+                  {revealSavedPathError}
+                </div>
+              )}
             </div>
           )}
 
@@ -149,6 +212,19 @@ export function PrintingPanel({
                     {sendBusy ? 'Sending…' : sendButtonLabel}
                   </span>
                 </Button>
+                {showSendActionButton && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-2.5 shrink-0 inline-flex items-center justify-center gap-1"
+                    onClick={sendActionHandler}
+                    disabled={!sendActionHandler}
+                    title={sendActionTitle}
+                    aria-label={sendActionTitle}
+                  >
+                    {sendBusy ? <X className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                    <span className="text-[11px]">{sendActionLabel}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="ui-button ui-button-secondary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md"
@@ -161,20 +237,35 @@ export function PrintingPanel({
                 </button>
               </div>
             ) : (
-              <Button
-                variant="secondary"
-                className="!h-9 inline-flex items-center justify-center gap-1.5 text-[12px]"
-                onClick={onSendToPrinter}
-                disabled={!canSendToPrinter || sendBusy}
-                title={canSendToPrinter
-                  ? 'Send generated print file to connected printer'
-                  : 'Requires connected printer with supported upload capability and a generated print file'}
-              >
-                <Printer className="h-4 w-4" />
-                <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
-                  {sendBusy ? 'Sending…' : sendButtonLabel}
-                </span>
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="secondary"
+                  className="!h-9 flex-1 inline-flex items-center justify-center gap-1.5 text-[12px]"
+                  onClick={onSendToPrinter}
+                  disabled={!canSendToPrinter || sendBusy}
+                  title={canSendToPrinter
+                    ? 'Send generated print file to connected printer'
+                    : 'Requires connected printer with supported upload capability and a generated print file'}
+                >
+                  <Printer className="h-4 w-4" />
+                  <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
+                    {sendBusy ? 'Sending…' : sendButtonLabel}
+                  </span>
+                </Button>
+                {showSendActionButton && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-2.5 shrink-0 inline-flex items-center justify-center gap-1"
+                    onClick={sendActionHandler}
+                    disabled={!sendActionHandler}
+                    title={sendActionTitle}
+                    aria-label={sendActionTitle}
+                  >
+                    {sendBusy ? <X className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                    <span className="text-[11px]">{sendActionLabel}</span>
+                  </button>
+                )}
+              </div>
             )
           )}
         </div>

@@ -9,6 +9,7 @@ type TauriEventModule = {
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
   formatVersion?: string | null;
+  outputPath?: string | null;
   sourceWidthPx: number;
   sourceHeightPx: number;
   widthPx: number;
@@ -82,6 +83,7 @@ type NativeSolidSlicePayload = {
 type NativeSolidSliceMetadataPayload = {
   output_format: string;
   format_version?: string | null;
+  output_path?: string | null;
   source_width_px: number;
   source_height_px: number;
   width_px: number;
@@ -201,6 +203,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
   return {
     output_format: job.outputFormat,
     format_version: job.formatVersion ?? null,
+    output_path: job.outputPath?.trim() || null,
     source_width_px: job.sourceWidthPx,
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
@@ -582,6 +585,17 @@ export async function pickSavePathWithNativeDialog(defaultFilename: string): Pro
     args: {
       defaultFilename,
     },
+  });
+}
+
+export async function pickDirectoryWithNativeDialog(currentPath?: string): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native folder picker is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('local_backup_pick_directory', {
+    currentPath: currentPath?.trim() || undefined,
   });
 }
 

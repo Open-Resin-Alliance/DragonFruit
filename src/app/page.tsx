@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -42,11 +42,15 @@ import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
+import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
+import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
+import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -157,11 +161,14 @@ import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
+import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
+import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
+import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -188,6 +195,9 @@ type PrintingMonitorRecentPlate = {
   layerCount: number | null;
   printTimeSec: number | null;
   usedMaterialMl: number | null;
+  totalSolidAreaMm2: number | null;
+  smallestAreaMm2: number | null;
+  largestAreaMm2: number | null;
 };
 
 type PrintingMonitorPendingConfirmation =
@@ -382,7 +392,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
-const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.obj', '.3mf', '.lys', '.voxl']);
 const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
@@ -437,6 +447,14 @@ function getFileNameFromPath(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function isDragonfruitTempArtifactPath(path: string | null | undefined): boolean {
+  if (typeof path !== 'string') return false;
+  const trimmed = path.trim();
+  if (!trimmed) return false;
+  const name = getFileNameFromPath(trimmed).toLowerCase();
+  return name.startsWith('dragonfruit-slice-');
+}
+
 function isSupportedPrepareDropName(name: string): boolean {
   return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name));
 }
@@ -444,6 +462,7 @@ function isSupportedPrepareDropName(name: string): boolean {
 function getDroppedFileMimeType(name: string): string {
   const ext = getFileExtension(name);
   if (ext === '.stl') return 'model/stl';
+  if (ext === '.obj') return 'model/obj';
   if (ext === '.3mf') return 'model/3mf';
   if (ext === '.voxl') return 'application/json';
   if (ext === '.lys') return 'application/octet-stream';
@@ -498,6 +517,75 @@ function isLikelyFileDragPayload(dataTransfer: DataTransfer | null): boolean {
   if (Array.from(dataTransfer.types ?? []).includes('Files')) return true;
   // Desktop runtime drags may not expose file metadata until drop.
   return true;
+}
+
+function getPrepareDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
+  if (!dataTransfer) return 'unknown';
+
+  const fileNames = new Set<string>();
+
+  const directFiles = Array.from(dataTransfer.files ?? []);
+  for (const file of directFiles) {
+    if (typeof file.name === 'string' && file.name.trim().length > 0) {
+      fileNames.add(file.name.trim());
+    }
+  }
+
+  const items = Array.from(dataTransfer.items ?? []);
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    try {
+      const file = item.getAsFile();
+      if (file && typeof file.name === 'string' && file.name.trim().length > 0) {
+        fileNames.add(file.name.trim());
+      }
+
+      const webkitEntry = (item as DataTransferItem & {
+        webkitGetAsEntry?: () => { isFile?: boolean; name?: string } | null;
+      }).webkitGetAsEntry?.();
+      if (webkitEntry?.isFile && typeof webkitEntry.name === 'string' && webkitEntry.name.trim().length > 0) {
+        fileNames.add(webkitEntry.name.trim());
+      }
+    } catch {
+      // Some runtimes throw here during drag hover metadata probing.
+    }
+  }
+
+  const maybeExtractNameFromTextPath = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
+    if (!firstLine) return;
+
+    let normalized = firstLine;
+    if (normalized.startsWith('file://')) {
+      try {
+        normalized = decodeURIComponent(normalized.replace(/^file:\/\//, ''));
+      } catch {
+        normalized = normalized.replace(/^file:\/\//, '');
+      }
+    }
+
+    const name = getFileNameFromPath(normalized);
+    if (name.trim().length > 0) {
+      fileNames.add(name.trim());
+    }
+  };
+
+  try {
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/uri-list'));
+    maybeExtractNameFromTextPath(dataTransfer.getData('text/plain'));
+  } catch {
+    // Ignore dataTransfer text extraction failures on restricted drag payloads.
+  }
+
+  if (fileNames.size === 0) {
+    return 'unknown';
+  }
+
+  const hasSupported = Array.from(fileNames).some((name) => isSupportedPrepareDropName(name));
+  return hasSupported ? 'supported' : 'unsupported';
 }
 
 function buildDroppedFilesSignature(files: File[]): string {
@@ -555,6 +643,13 @@ function formatPrintingMonitorEstimatedTime(seconds: number | null): string {
 function formatPrintingMonitorUsedMaterial(ml: number | null): string {
   if (ml == null || !Number.isFinite(ml) || ml <= 0) return '—';
   return `${ml.toFixed(2)} mL`;
+}
+
+function formatPrintingMonitorAreaMm2(areaMm2: number | null): string {
+  if (areaMm2 == null || !Number.isFinite(areaMm2) || areaMm2 <= 0) return '—';
+  if (areaMm2 >= 1000) return `${areaMm2.toFixed(0)} mm²`;
+  if (areaMm2 >= 100) return `${areaMm2.toFixed(1)} mm²`;
+  return `${areaMm2.toFixed(2)} mm²`;
 }
 
 function parsePrintingMonitorSeconds(value: unknown): number | null {
@@ -618,6 +713,26 @@ function parsePrintingMonitorMaterialMl(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parsePrintingMonitorAreaMm2(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+
+  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
+  if (!extracted) return null;
+  const parsed = Number(extracted[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizePrintingMonitorWebcamAspectRatio(value: number | null | undefined): number | null {
   if (value == null || !Number.isFinite(value) || value <= 0) return null;
   // Keep practical camera bounds and reject pathological stream metadata.
@@ -659,11 +774,14 @@ export default function Home() {
     const profile = activePrinterProfile;
     if (!profile || !profile.networkSupport) return null;
     if (profile.networkConnection?.connected !== true) return null;
+    const selectedMaterialId = profile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return null;
     const candidate = Number(profile.networkConnection?.selectedMaterialLayerHeightMm);
     if (!Number.isFinite(candidate) || candidate <= 0) return null;
     return candidate;
   }, [
     activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialId,
     activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
     activePrinterProfile?.networkSupport,
   ]);
@@ -773,7 +891,10 @@ export default function Home() {
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
+  const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
+  const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
+  const [isPreSliceSceneSaveInProgress, setIsPreSliceSceneSaveInProgress] = React.useState(false);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
   const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
@@ -791,6 +912,15 @@ export default function Home() {
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
   const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
+
+  // ZIP file picker modal
+  const [zipPickerState, setZipPickerState] = React.useState<{
+    zipName: string;
+    files: File[];
+    category: 'mesh' | 'scene' | 'mixed';
+    defaultSelectionCategory: 'mesh' | 'scene';
+  } | null>(null);
+  const zipPickerResolveRef = React.useRef<((files: File[]) => void) | null>(null);
   const hasUnsavedSceneChangesRef = React.useRef(false);
   const allowProgrammaticWindowCloseRef = React.useRef(false);
   const sceneSaveBaselineRef = React.useRef<{
@@ -813,6 +943,7 @@ export default function Home() {
   const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
   const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const exportErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
   const saveToastHideTimeoutRef = React.useRef<number | null>(null);
   const saveToastClearTimeoutRef = React.useRef<number | null>(null);
   const saveToastEnterRafRef = React.useRef<number | null>(null);
@@ -822,12 +953,17 @@ export default function Home() {
   const sceneSaveQueuedRef = React.useRef(false);
   const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
   const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
+  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
 
-  const { isAutosaving, clearAutosave } = useSceneAutosave({
+  const sceneAutosaveEnabled = sceneAutosaveSettings.enabled
+    && !isSlicingBusy
+    && scene.mode !== 'printing';
+
+  const { isAutosaving, clearAutosave, flushAutosave } = useSceneAutosave({
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
-    enabled: sceneAutosaveSettings.enabled,
+    enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     capMs: sceneAutosaveSettings.capMs,
     preferredSavePath: preferredOverwriteScenePathRef.current,
@@ -836,7 +972,7 @@ export default function Home() {
   React.useEffect(() => {
     const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
     const TOAST_ANIMATION_MS = 220;
-    const hasActiveSaveWork = isSceneSaveInProgress || isAutosaving;
+    const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
 
     if (hasActiveSaveWork) {
       if (saveToastHideTimeoutRef.current !== null) {
@@ -892,7 +1028,7 @@ export default function Home() {
         setIsSaveToastVisible(false);
       }, TOAST_ANIMATION_MS);
     }, remaining);
-  }, [isAutosaving, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+  }, [isAutosaving, isPreSliceSceneSaveInProgress, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
 
   React.useEffect(() => {
     return () => {
@@ -914,11 +1050,14 @@ export default function Home() {
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
   const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
+  const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
     const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
@@ -948,7 +1087,6 @@ export default function Home() {
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
   const [printingPngLoadedUrl, setPrintingPngLoadedUrl] = React.useState<string | null>(null);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
-  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
@@ -997,9 +1135,15 @@ export default function Home() {
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
+  const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
+  const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
+    filePath: string | null;
+    slicingTimeMs: number | null;
+  }>({ filePath: null, slicingTimeMs: null });
   const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
+  const printingSendCancelRequestedRef = React.useRef(false);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
   const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
   const [printingUploadTelemetry, setPrintingUploadTelemetry] = React.useState<{
@@ -1463,12 +1607,147 @@ export default function Home() {
     return imported;
   }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
 
+  // ── ZIP import helpers ───────────────────────────────────────────────────
+
+  const resolveZipFiles = React.useCallback(async (
+    zip: File,
+    requestedCategory: 'mesh' | 'scene',
+  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
+    const meshExts = new Set(['.stl', '.obj', '.3mf']);
+    const sceneExts = new Set(['.voxl', '.lys']);
+    const oppositeCategory = requestedCategory === 'mesh' ? 'scene' : 'mesh';
+
+    const readingLabel = 'Loading Archive…';
+    setNativePickerPreparationState({
+      active: true,
+      label: readingLabel,
+      detail: `Reading ${zip.name}…`,
+      progress: null,
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    let extracted: File[];
+    try {
+      extracted = await extractFilesFromZip(zip);
+    } catch (err) {
+      console.error('[ZIP] Failed to read ZIP archive:', err);
+      setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
+      return { meshFiles: [], sceneFiles: [] };
+    }
+
+    const meshCandidates = extracted.filter((f) => meshExts.has(getFileExtensionLower(f.name)));
+    const sceneCandidates = extracted.filter((f) => sceneExts.has(getFileExtensionLower(f.name)));
+
+    // Clear spinner before potentially showing the picker modal (or returning nothing)
+    setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
+
+    const hasMeshCandidates = meshCandidates.length > 0;
+    const hasSceneCandidates = sceneCandidates.length > 0;
+
+    let targetCategory: 'mesh' | 'scene' | 'mixed';
+    let targetCandidates: File[];
+
+    if (hasMeshCandidates && hasSceneCandidates) {
+      // Fully mixed ZIP: allow user to choose any combination of mesh/scene files.
+      targetCategory = 'mixed';
+      targetCandidates = [...meshCandidates, ...sceneCandidates];
+    } else {
+      const primaryCandidates = requestedCategory === 'mesh' ? meshCandidates : sceneCandidates;
+      const oppositeCandidates = requestedCategory === 'mesh' ? sceneCandidates : meshCandidates;
+      targetCategory = primaryCandidates.length === 0 && oppositeCandidates.length > 0
+        ? oppositeCategory
+        : requestedCategory;
+      targetCandidates = targetCategory === 'mesh' ? meshCandidates : sceneCandidates;
+    }
+
+    if (targetCandidates.length === 0) {
+      return { meshFiles: [], sceneFiles: [] };
+    }
+
+    const uniqueExts = new Set(targetCandidates.map((f) => getFileExtensionLower(f.name)));
+    const selectedCandidates = (targetCategory !== 'mixed' && uniqueExts.size === 1)
+      ? targetCandidates
+      : await new Promise<File[]>((resolve) => {
+          zipPickerResolveRef.current = resolve;
+          setZipPickerState({
+            zipName: zip.name,
+            files: targetCandidates,
+            category: targetCategory,
+            defaultSelectionCategory: requestedCategory,
+          });
+        });
+
+    const selectedMeshFiles = selectedCandidates.filter((file) => meshExts.has(getFileExtensionLower(file.name)));
+    const selectedSceneFiles = selectedCandidates.filter((file) => sceneExts.has(getFileExtensionLower(file.name)));
+
+    return {
+      meshFiles: selectedMeshFiles,
+      sceneFiles: selectedSceneFiles,
+    };
+  }, []);
+
+  const expandPickedFilesWithZip = React.useCallback(async (
+    files: File[],
+    requestedCategory: 'mesh' | 'scene',
+  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
+    const meshExts = new Set(['.stl', '.obj', '.3mf']);
+    const sceneExts = new Set(['.voxl', '.lys']);
+
+    const meshFiles: File[] = [];
+    const sceneFiles: File[] = [];
+
+    for (const file of files) {
+      const ext = getFileExtensionLower(file.name);
+      if (ext === '.zip') {
+        const expanded = await resolveZipFiles(file, requestedCategory);
+        if (expanded.meshFiles.length > 0) meshFiles.push(...expanded.meshFiles);
+        if (expanded.sceneFiles.length > 0) sceneFiles.push(...expanded.sceneFiles);
+      } else if (meshExts.has(ext)) {
+        meshFiles.push(file);
+      } else if (sceneExts.has(ext)) {
+        sceneFiles.push(file);
+      }
+    }
+
+    return { meshFiles, sceneFiles };
+  }, [resolveZipFiles]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
     void importSceneFilesWithLysWarning(files);
     e.target.value = '';
   }, [importSceneFilesWithLysWarning]);
+
+  const handleLoadMeshChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    const processed = await expandPickedFilesWithZip(files, 'mesh');
+    if (processed.meshFiles.length > 0) {
+      void scene.loadFiles(processed.meshFiles);
+    }
+    if (processed.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+    }
+  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+
+  const handleImportSceneChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    const processed = await expandPickedFilesWithZip(files, 'scene');
+    if (processed.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+    }
+    if (processed.meshFiles.length > 0) {
+      void scene.loadFiles(processed.meshFiles);
+    }
+  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
@@ -2365,8 +2644,7 @@ export default function Home() {
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-    scene.setMode('printing');
-  }, [scene]);
+  }, []);
 
   const handleSliceRunStartedForPrinting = React.useCallback(() => {
     setShouldAutoSliceOnExportEntry(false);
@@ -2806,6 +3084,20 @@ export default function Home() {
       // 'file': write to pre-selected destination, then navigate to printing workspace.
       const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
       preSliceFileDestinationPathRef.current = null;
+
+      const nativePathForIntent = artifact.nativeTempPath?.trim() || '';
+      const normalizePathForCompare = (value: string) => value.replace(/\\/g, '/').toLowerCase();
+      if (
+        destinationPath
+        && nativePathForIntent
+        && normalizePathForCompare(destinationPath) === normalizePathForCompare(nativePathForIntent)
+      ) {
+        setCompletedSaveDestinationPath(destinationPath);
+        setShouldAutoSliceOnExportEntry(false);
+        scene.setMode('printing');
+        return;
+      }
+
       const saveAndNavigate = async (a: SliceExportArtifact) => {
         let savedPath: string | null = null;
 
@@ -2827,8 +3119,8 @@ export default function Home() {
           const nativePath = a.nativeTempPath?.trim() || '';
           if (nativePath) {
             try {
-              await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
-              savedPath = a.outputName;
+              const resolvedPath = await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
+              savedPath = resolvedPath || a.outputName;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err ?? '');
               if (msg.toLowerCase().includes('cancel')) return;
@@ -2841,8 +3133,8 @@ export default function Home() {
                 ? new Uint8Array(await a.blob.arrayBuffer())
                 : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
               if (!bytes) throw new Error('No artifact bytes');
-              await savePrintArtifactWithNativeDialog(bytes, a.outputName);
-              savedPath = a.outputName;
+              const resolvedPath = await savePrintArtifactWithNativeDialog(bytes, a.outputName);
+              savedPath = resolvedPath || a.outputName;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err ?? '');
               if (msg.toLowerCase().includes('cancel')) return;
@@ -2871,6 +3163,23 @@ export default function Home() {
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
   }, []);
+
+  React.useEffect(() => {
+    if (completedSliceIntent !== 'file' || !completedSaveDestinationPath) {
+      return;
+    }
+
+    const slicingTimeMs = printingSlicingBenchmark?.totalElapsedMs ?? null;
+    if (slicingTimeMs === null || !Number.isFinite(slicingTimeMs)) {
+      return;
+    }
+
+    setSliceCompletedModalData({
+      filePath: completedSaveDestinationPath,
+      slicingTimeMs,
+    });
+    setShowSliceCompletedModal(true);
+  }, [completedSliceIntent, completedSaveDestinationPath, printingSlicingBenchmark?.totalElapsedMs]);
 
   const printingOutputSizeLabel = React.useMemo(() => {
     if (!printingArtifact) return '—';
@@ -3529,6 +3838,9 @@ export default function Home() {
   const printableConnectedPrinterFleet = React.useMemo(() => {
     return connectedPrinterFleet;
   }, [connectedPrinterFleet]);
+  const reachablePrintableConnectedPrinterFleet = React.useMemo(() => {
+    return printableConnectedPrinterFleet.filter((device) => printerReachabilityByDeviceId[device.id] !== false);
+  }, [printableConnectedPrinterFleet, printerReachabilityByDeviceId]);
   const printingTargetDevice = React.useMemo(() => {
     if (printableConnectedPrinterFleet.length === 0) return null;
     return printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
@@ -3762,7 +4074,16 @@ export default function Home() {
     return Array.from(groups.entries()).map(([label, materials]) => ({ label, materials }));
   }, [printingTargetMaterialOptions]);
   const sendToPrinterTargetName = printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || null;
+  const shouldShowOfflineRemoteMaterialName = Boolean(
+    activeNetworkUiAdapter
+    && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false
+    && shouldUseRemoteOfflineLayerHeight,
+  );
   const printingResinName = React.useMemo(() => {
+    if (shouldShowOfflineRemoteMaterialName) {
+      return 'N/A';
+    }
+
     const targetName = printingTargetDevice?.selectedMaterialName?.trim();
     if (targetName && targetName.length > 0) return targetName;
 
@@ -3776,13 +4097,16 @@ export default function Home() {
       return selectedName;
     }
 
-    return activeMaterialProfile?.name ?? 'No resin selected';
+    const compositeLocalMaterialName = resolveCompositeMaterialLabel(activeMaterialProfile);
+
+    return compositeLocalMaterialName ?? activeMaterialProfile?.name ?? 'No resin selected';
   }, [
-    activeMaterialProfile?.name,
+    activeMaterialProfile,
     activeNetworkUiAdapter,
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     printingTargetDevice?.selectedMaterialName,
+    shouldShowOfflineRemoteMaterialName,
   ]);
   const sendToPrinterButtonLabel = sendToPrinterTargetName
     ? `Upload to ${sendToPrinterTargetName.length > 26 ? `${sendToPrinterTargetName.slice(0, 24)}…` : sendToPrinterTargetName}`
@@ -3792,8 +4116,16 @@ export default function Home() {
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
   );
+  const canRetrySendToPrinter = Boolean(
+    printingUploadDialogStage === 'failed'
+    && !printingSendBusy
+    && canSendToPrinter,
+  );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
-  const canSliceAndUpload = Boolean(activeNetworkUiAdapter && printableConnectedPrinterFleet.length > 0);
+  const canSliceAndUpload = Boolean(
+    activeNetworkUiAdapter
+    && reachablePrintableConnectedPrinterFleet.length > 0,
+  );
   const canSliceAndPrint = canSliceAndUpload && Boolean(printingMonitoringAdapter.operations?.start);
   const requiresRemoteMaterialSelectionForUpload = Boolean(
     activeNetworkUiAdapter
@@ -3816,6 +4148,17 @@ export default function Home() {
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
   );
+
+  const handlePreSliceSceneSave = React.useCallback(async (): Promise<void> => {
+    setIsPreSliceSceneSaveInProgress(true);
+    try {
+      await flushAutosave();
+    } catch (error) {
+      console.warn('[Slicing] Failed to flush autosave before slicing; continuing.', error);
+    } finally {
+      setIsPreSliceSceneSaveInProgress(false);
+    }
+  }, [flushAutosave]);
 
   const handleBeforeSliceStart = React.useCallback(async (intent: SliceIntent): Promise<boolean> => {
     if (shouldReturnToPrintingAfterSliceRef.current) {
@@ -3849,12 +4192,12 @@ export default function Home() {
       }
     }
 
-    if (!activeNetworkUiAdapter || printableConnectedPrinterFleet.length === 0) {
-      setPrintingSendStatusText('No connected printer is available for upload.');
+    if (!activeNetworkUiAdapter || reachablePrintableConnectedPrinterFleet.length === 0) {
+      setPrintingSendStatusText('No online printer is available for upload.');
       return false;
     }
 
-    const shouldOpenTargetPicker = printableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
+    const shouldOpenTargetPicker = reachablePrintableConnectedPrinterFleet.length > 1 || requiresRemoteMaterialSelectionForUpload;
     if (shouldOpenTargetPicker) {
       setPrintingTargetPickerMode(intent === 'print' ? 'pre-slice-print' : 'pre-slice-upload');
       setPrintingTargetPickerOpen(true);
@@ -3868,9 +4211,13 @@ export default function Home() {
       }
       preSliceUploadSelectionRef.current = selection;
     } else {
-      const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
+      const selectedTarget = (
+        printingTargetDevice && printerReachabilityByDeviceId[printingTargetDevice.id] !== false
+          ? printingTargetDevice
+          : reachablePrintableConnectedPrinterFleet[0]
+      ) ?? null;
       if (!selectedTarget) {
-        setPrintingSendStatusText('No connected printer is available for upload.');
+        setPrintingSendStatusText('No online printer is available for upload.');
         return false;
       }
       preSliceUploadSelectionRef.current = {
@@ -3896,7 +4243,8 @@ export default function Home() {
     return true;
   }, [
     activeNetworkUiAdapter,
-    printableConnectedPrinterFleet,
+    reachablePrintableConnectedPrinterFleet,
+    printerReachabilityByDeviceId,
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
     suggestedSliceOutputFilename,
@@ -4731,7 +5079,8 @@ export default function Home() {
 
   // Delete previously-owned temp artifacts once replaced or cleared.
   React.useEffect(() => {
-    const currentPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const currentArtifactPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const currentPath = isDragonfruitTempArtifactPath(currentArtifactPath) ? currentArtifactPath : null;
     const previousPath = lastOwnedPrintTempPathRef.current;
 
     if (previousPath && previousPath !== currentPath) {
@@ -5274,8 +5623,32 @@ export default function Home() {
             ?? fileData?.MaterialUsage
             ?? fileData?.materialUsage
             ?? fileData?.material_usage;
+          const rawTotalSolidArea =
+            plate.TotalSolidArea
+            ?? plate.totalSolidArea
+            ?? plate.total_solid_area
+            ?? fileData?.TotalSolidArea
+            ?? fileData?.totalSolidArea
+            ?? fileData?.total_solid_area;
+          const rawLargestArea =
+            plate.LargestArea
+            ?? plate.largestArea
+            ?? plate.largest_area
+            ?? fileData?.LargestArea
+            ?? fileData?.largestArea
+            ?? fileData?.largest_area;
+          const rawSmallestArea =
+            plate.SmallestArea
+            ?? plate.smallestArea
+            ?? plate.smallest_area
+            ?? fileData?.SmallestArea
+            ?? fileData?.smallestArea
+            ?? fileData?.smallest_area;
           const parsedPrintTimeSec = parsePrintingMonitorSeconds(rawPrintTime);
           const parsedUsedMaterialMl = parsePrintingMonitorMaterialMl(rawUsedMaterial);
+          const parsedTotalSolidAreaMm2 = parsePrintingMonitorAreaMm2(rawTotalSolidArea);
+          const parsedLargestAreaMm2 = parsePrintingMonitorAreaMm2(rawLargestArea);
+          const parsedSmallestAreaMm2 = parsePrintingMonitorAreaMm2(rawSmallestArea);
 
           return {
             plateId: Math.round(plateId),
@@ -5289,6 +5662,9 @@ export default function Home() {
               : null,
             printTimeSec: parsedPrintTimeSec,
             usedMaterialMl: parsedUsedMaterialMl,
+            totalSolidAreaMm2: parsedTotalSolidAreaMm2,
+            smallestAreaMm2: parsedSmallestAreaMm2,
+            largestAreaMm2: parsedLargestAreaMm2,
           } satisfies PrintingMonitorRecentPlate;
         })
         .filter((item: PrintingMonitorRecentPlate | null): item is PrintingMonitorRecentPlate => item !== null)
@@ -6464,18 +6840,56 @@ export default function Home() {
   }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
+    const recoverySnapshot = autosaveRecovery;
+    setAutosaveRecovery(null);
+    setNativePickerPreparationState({
+      active: true,
+      label: 'Loading Scene…',
+      detail: 'Reading autosaved scene…',
+      progress: null,
+    });
+
+    // Let React commit the modal dismissal/loading UI before native file IO begins.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const bytes = await invoke<number[]>('scene_autosave_read_voxl_bytes');
+      const bytes = await invoke<ArrayBuffer>('scene_autosave_read_voxl_bytes');
       const uint8 = new Uint8Array(bytes);
+      if (uint8.byteLength === 0) {
+        throw new Error('Autosaved VOXL file is empty.');
+      }
       const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
       suppressSceneAutosave(60_000);
-      await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true });
-      await clearAutosave();
+      setNativePickerPreparationState({
+        active: false,
+        label: '',
+        detail: '',
+        progress: null,
+      });
+      const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true, suppressRepair: true });
+      if (restored) {
+        await clearAutosave();
+      } else if (recoverySnapshot) {
+        console.warn('[Autosave] Restore failed; keeping recovery prompt available.');
+        setAutosaveRecovery(recoverySnapshot);
+      }
+    } catch (error) {
+      console.error('[Autosave] Failed to restore autosaved scene.', error);
+      if (recoverySnapshot) {
+        setAutosaveRecovery(recoverySnapshot);
+      }
     } finally {
-      setAutosaveRecovery(null);
+      setNativePickerPreparationState({
+        active: false,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
-  }, [clearAutosave, importSceneFile]);
+  }, [autosaveRecovery, clearAutosave, importSceneFile]);
 
   const handleAutosaveDiscard = React.useCallback(async () => {
     setAutosaveRecovery(null);
@@ -6832,6 +7246,22 @@ export default function Home() {
     return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
   }, []);
 
+  const [nativePickerPreparationState, setNativePickerPreparationState] = React.useState<{
+    active: boolean;
+    label: string;
+    detail: string;
+    progress: number | null;
+  }>({
+    active: false,
+    label: '',
+    detail: '',
+    progress: null,
+  });
+
+  const waitForUiTick = React.useCallback(() => new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  }), []);
+
   const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
     if (!isDesktopRuntime()) return null;
 
@@ -6842,13 +7272,39 @@ export default function Home() {
       const core = await import('@tauri-apps/api/core');
       const files: File[] = [];
 
-      for (const entry of picked) {
+      const readingLabel = category === 'scene' ? 'Loading Scene…' : 'Loading Mesh…';
+      const singleNoun = category === 'scene' ? 'scene file' : 'mesh file';
+      const pluralNoun = category === 'scene' ? 'scene files' : 'mesh files';
+
+      setNativePickerPreparationState({
+        active: true,
+        label: readingLabel,
+        detail: picked.length > 1
+          ? `Reading 0/${picked.length} selected ${pluralNoun}…`
+          : `Reading selected ${singleNoun}…`,
+        progress: null,
+      });
+      await waitForUiTick();
+
+      try {
+        for (let i = 0; i < picked.length; i += 1) {
+          const entry = picked[i];
         try {
           const sourcePath = entry.path.trim();
           if (!sourcePath) continue;
 
+          const resolvedName = entry.name || getFileNameFromPath(sourcePath);
+          setNativePickerPreparationState({
+            active: true,
+            label: readingLabel,
+            detail: picked.length > 1
+              ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
+              : `Reading ${resolvedName}…`,
+            progress: null,
+          });
+
           const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-          const name = entry.name || getFileNameFromPath(sourcePath);
+          const name = resolvedName;
 
           files.push(new File([new Uint8Array(bytes)], name, {
             type: getDroppedFileMimeType(name),
@@ -6859,7 +7315,15 @@ export default function Home() {
         }
       }
 
-      return files;
+        return files;
+      } finally {
+        setNativePickerPreparationState({
+          active: false,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? '');
       const cancelled = message.toLowerCase().includes('cancel');
@@ -6867,7 +7331,7 @@ export default function Home() {
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [isDesktopRuntime]);
+  }, [isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -6899,13 +7363,35 @@ export default function Home() {
       const core = await import('@tauri-apps/api/core');
       const files: Array<{ file: File; sourcePath: string }> = [];
 
-      for (const entry of picked) {
+      setNativePickerPreparationState({
+        active: true,
+        label: 'Loading Scene…',
+        detail: picked.length > 1
+          ? `Reading 0/${picked.length} selected scene files…`
+          : 'Reading selected scene file…',
+        progress: null,
+      });
+      await waitForUiTick();
+
+      try {
+        for (let i = 0; i < picked.length; i += 1) {
+          const entry = picked[i];
         try {
           const sourcePath = entry.path.trim();
           if (!sourcePath) continue;
 
+          const resolvedName = entry.name || getFileNameFromPath(sourcePath);
+          setNativePickerPreparationState({
+            active: true,
+            label: 'Loading Scene…',
+            detail: picked.length > 1
+              ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
+              : `Reading ${resolvedName}…`,
+            progress: null,
+          });
+
           const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-          const name = entry.name || getFileNameFromPath(sourcePath);
+          const name = resolvedName;
 
           files.push({
             file: new File([new Uint8Array(bytes)], name, {
@@ -6919,7 +7405,15 @@ export default function Home() {
         }
       }
 
-      return files;
+        return files;
+      } finally {
+        setNativePickerPreparationState({
+          active: false,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? '');
       const cancelled = message.toLowerCase().includes('cancel');
@@ -6927,39 +7421,73 @@ export default function Home() {
       console.warn('[Picker] Native scene picker failed, falling back to web input.', error);
       return null;
     }
-  }, [isDesktopRuntime]);
+  }, [isDesktopRuntime, waitForUiTick]);
 
   const handleOpenMeshDialog = React.useCallback(async () => {
     const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      scene.onFileChange(buildSyntheticFileChangeEvent(nativeFiles));
+      const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
+      if (expanded.meshFiles.length > 0) {
+        scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+      }
+      if (expanded.sceneFiles.length > 0) {
+        await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      }
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.stl,.3mf', true);
+    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf,.zip', true);
     if (webFiles.length === 0) return;
-    scene.onFileChange(buildSyntheticFileChangeEvent(webFiles));
-  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    const expanded = await expandPickedFilesWithZip(webFiles, 'mesh');
+    if (expanded.meshFiles.length > 0) {
+      scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+    }
+    if (expanded.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+    }
+  }, [buildSyntheticFileChangeEvent, importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
     const nativeFiles = await pickSceneFilesWithNativeDialog();
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      await importSceneFilesWithLysWarning(
-        nativeFiles.map((entry) => entry.file),
-        {
-          resultingScenePath: nativeFiles.length === 1 ? nativeFiles[0]?.sourcePath ?? null : null,
-          sourcePaths: nativeFiles.map((entry) => entry.sourcePath),
-        },
-      );
+      const nonZip = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) !== '.zip');
+      const zips = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) === '.zip');
+      const expandedFromZips = await expandPickedFilesWithZip(zips.map((e) => e.file), 'scene');
+      const sceneFiles = [...nonZip.map((e) => e.file), ...expandedFromZips.sceneFiles];
+
+      if (sceneFiles.length > 0) {
+        await importSceneFilesWithLysWarning(
+          sceneFiles,
+          {
+            resultingScenePath: nonZip.length === 1 && expandedFromZips.sceneFiles.length === 0
+              ? nativeFiles[0]?.sourcePath ?? null
+              : null,
+            sourcePaths: [
+              ...nonZip.map((e) => e.sourcePath),
+              ...Array.from({ length: expandedFromZips.sceneFiles.length }, () => null),
+            ],
+          },
+        );
+      }
+
+      if (expandedFromZips.meshFiles.length > 0) {
+        void scene.loadFiles(expandedFromZips.meshFiles);
+      }
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys,.zip', true);
     if (webFiles.length === 0) return;
-    await importSceneFilesWithLysWarning(webFiles, { resultingScenePath: null });
-  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput]);
+    const expanded = await expandPickedFilesWithZip(webFiles, 'scene');
+    if (expanded.sceneFiles.length > 0) {
+      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+    }
+    if (expanded.meshFiles.length > 0) {
+      void scene.loadFiles(expanded.meshFiles);
+    }
+  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -7180,6 +7708,13 @@ export default function Home() {
       return;
     }
 
+    const isCancelRequested = () => printingSendCancelRequestedRef.current;
+    const throwIfCanceled = () => {
+      if (isCancelRequested()) {
+        throw new Error('Upload canceled by user.');
+      }
+    };
+
     setPrintingTargetDeviceId(targetDevice.id);
     selectPrinterNetworkDevice(activePrinterProfile.id, targetDevice.id);
 
@@ -7199,6 +7734,7 @@ export default function Home() {
     }
 
     setPrintingReadyPlateId(null);
+  printingSendCancelRequestedRef.current = false;
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
@@ -7213,6 +7749,7 @@ export default function Home() {
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
       let zipBlob = printingArtifact.blob;
+      throwIfCanceled();
 
       // If we have a local temp path and no blob, read the blob from native bridge
       if (!zipBlob && nativeTempPath) {
@@ -7230,6 +7767,8 @@ export default function Home() {
       if (!zipBlob) {
         throw new Error('No print artifact blob available for printer upload.');
       }
+
+      throwIfCanceled();
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
       const networkMode = (activeNetworkUiAdapter.mode || '').trim();
@@ -7251,6 +7790,7 @@ export default function Home() {
         profileId: selectedMaterialId,
         callbacks: {
           onProgress: (event: PluginUploadProgressEvent) => {
+            if (isCancelRequested()) return;
             const progress = event.percentComplete / 100;
             const clampedProgress = Math.min(progress, 0.9999);
             if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
@@ -7266,6 +7806,7 @@ export default function Home() {
             });
           },
           onStatusUpdate: (update) => {
+            if (isCancelRequested()) return;
             if (update.stage === 'processing') {
               setPrintingSendProgress(1);
               setPrintingUploadDisplayProgress(1);
@@ -7294,10 +7835,13 @@ export default function Home() {
             }
           },
           onComplete: (plateId) => {
+            if (isCancelRequested()) return;
             resolvedPlateId = plateId;
           },
         },
       });
+
+      throwIfCanceled();
 
       if (!uploadResult.ok) {
         throw new Error('Upload failed on printer backend');
@@ -7310,6 +7854,7 @@ export default function Home() {
       let pollFailureCount = 0;
 
       while ((Date.now() - startedAt) < timeoutMs) {
+        throwIfCanceled();
         try {
           const responseReady = await pluginNetworkFetch({
             pluginId: printingMonitoringAdapter.pluginId,
@@ -7332,6 +7877,8 @@ export default function Home() {
             resolvedPlateId = matchedPlateId;
           }
 
+          throwIfCanceled();
+
           metadataReady = readyPayload?.metadataReady === true;
           pollFailureCount = 0;
 
@@ -7348,6 +7895,8 @@ export default function Home() {
         await new Promise<void>((resolve) => {
           window.setTimeout(resolve, pollMs);
         });
+
+        throwIfCanceled();
       }
 
       if (resolvedPlateId) {
@@ -7386,8 +7935,14 @@ export default function Home() {
         printingUploadProcessingHandoffTimeoutRef.current = null;
       }
       const message = error instanceof Error ? error.message : 'Unknown error';
-      setPrintingSendStatusText(`Send failed: ${message}`);
-      setPrintingSendStageText('Upload failed');
+      const canceled = printingSendCancelRequestedRef.current || /cancel|abort/i.test(message);
+      if (canceled) {
+        setPrintingSendStatusText('Upload canceled. You can retry when ready.');
+        setPrintingSendStageText('Upload canceled');
+      } else {
+        setPrintingSendStatusText(`Send failed: ${message}`);
+        setPrintingSendStageText('Upload failed');
+      }
       setPrintingUploadDialogStage('failed');
       setPrintingDeviceProcessingStartedAtMs(null);
       setPrintingUploadTelemetry(null);
@@ -7395,6 +7950,7 @@ export default function Home() {
       setPrintingUploadDisplayProgress(0);
     } finally {
       setPrintingSendBusy(false);
+      printingSendCancelRequestedRef.current = false;
     }
   }, [
     activeNetworkUiAdapter,
@@ -7438,6 +7994,26 @@ export default function Home() {
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
   ]);
+
+  const handleCancelSendToPrinter = React.useCallback(() => {
+    if (!printingSendBusy) return;
+
+    printingSendCancelRequestedRef.current = true;
+    setPrintingSendStageText('Canceling upload…');
+    setPrintingSendStatusText('Canceling upload…');
+
+    if (activeNetworkUiAdapter?.pluginId === 'athena') {
+      void import('../../plugins/athena/network')
+        .then((mod) => {
+          if (typeof mod.abortUpload === 'function') {
+            mod.abortUpload();
+          }
+        })
+        .catch(() => {
+          // Ignore; cooperative cancellation checks still stop follow-up work.
+        });
+    }
+  }, [activeNetworkUiAdapter?.pluginId, printingSendBusy]);
 
   const openPrintingMonitorForTargetDevice = React.useCallback((deviceId: string | null) => {
     printingMonitorStartFocusDeviceIdRef.current = deviceId;
@@ -8074,12 +8650,15 @@ export default function Home() {
     usePrintingSettledHiResCanvas,
   ]);
 
-  const handleDroppedPrepareFiles = React.useCallback(async (files: File[]) => {
+  const handleDroppedPrepareFiles = React.useCallback(async (
+    files: File[],
+    options?: { prearmedLoadingUi?: boolean },
+  ) => {
     if (scene.mode !== 'prepare') return;
 
     const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
     if (supportedFiles.length === 0) {
-      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .3mf, .lys, .voxl');
+      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .obj, .3mf, .lys, .voxl');
       return;
     }
 
@@ -8095,7 +8674,7 @@ export default function Home() {
 
     const meshFiles = supportedFiles.filter((file) => {
       const ext = getFileExtension(file.name);
-      return ext === '.stl' || ext === '.3mf';
+      return ext === '.stl' || ext === '.obj' || ext === '.3mf';
     });
     const sceneFiles = supportedFiles.filter((file) => {
       const ext = getFileExtension(file.name);
@@ -8113,7 +8692,33 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      await importSceneFilesWithLysWarning(sceneFiles);
+      const shouldPrearmLoadingUi = !options?.prearmedLoadingUi;
+
+      if (shouldPrearmLoadingUi) {
+        setNativePickerPreparationState({
+          active: true,
+          label: sceneFiles.length > 1 ? 'Loading dropped scenes…' : 'Loading dropped scene…',
+          detail: sceneFiles.length > 1
+            ? `Preparing ${sceneFiles.length} dropped scene files…`
+            : 'Preparing dropped scene file…',
+          progress: null,
+        });
+
+        await waitForUiTick();
+      }
+
+      try {
+        await importSceneFilesWithLysWarning(sceneFiles);
+      } finally {
+        if (shouldPrearmLoadingUi) {
+          setNativePickerPreparationState({
+            active: false,
+            label: '',
+            detail: '',
+            progress: null,
+          });
+        }
+      }
       return;
     }
 
@@ -8122,7 +8727,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [importSceneFilesWithLysWarning, scene]);
+  }, [importSceneFilesWithLysWarning, scene, waitForUiTick]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -8154,6 +8759,22 @@ export default function Home() {
       return [] as File[];
     }
   }, []);
+
+  const sceneModeRef = React.useRef(scene.mode);
+  const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
+  const handleDroppedPrepareFilesRef = React.useRef(handleDroppedPrepareFiles);
+
+  React.useEffect(() => {
+    sceneModeRef.current = scene.mode;
+  }, [scene.mode]);
+
+  React.useEffect(() => {
+    createFilesFromTauriDroppedPathsRef.current = createFilesFromTauriDroppedPaths;
+  }, [createFilesFromTauriDroppedPaths]);
+
+  React.useEffect(() => {
+    handleDroppedPrepareFilesRef.current = handleDroppedPrepareFiles;
+  }, [handleDroppedPrepareFiles]);
 
   React.useEffect(() => {
     if (scene.mode !== 'prepare') return;
@@ -8196,15 +8817,27 @@ export default function Home() {
       try {
         const { listen } = await import('@tauri-apps/api/event');
 
-        const unlistenDragOver = await listen('tauri://drag-over', () => {
-          if (disposed || scene.mode !== 'prepare') return;
+        const unlistenDragOver = await listen<unknown>('tauri://drag-over', (event) => {
+          if (disposed || sceneModeRef.current !== 'prepare') return;
           setIsPrepareDragActive(true);
+
+          const paths = extractTauriDroppedPaths(event.payload);
+          if (paths.length === 0) {
+            return;
+          }
+
+          const hasSupportedPath = paths.some((path) => {
+            const fileName = getFileNameFromPath(path);
+            return isSupportedPrepareDropName(fileName);
+          });
+          setIsPrepareDragUnsupported(!hasSupportedPath);
         });
         registerUnlisten(unlistenDragOver);
 
         const hideOverlay = () => {
           dragDepthRef.current = 0;
           setIsPrepareDragActive(false);
+          setIsPrepareDragUnsupported(false);
         };
 
         const unlistenDragLeave = await listen('tauri://drag-leave', () => {
@@ -8220,17 +8853,48 @@ export default function Home() {
         registerUnlisten(unlistenDragCancelled);
 
         const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
-          if (disposed || scene.mode !== 'prepare') return;
+          if (disposed || sceneModeRef.current !== 'prepare') return;
 
           hideOverlay();
 
           const paths = extractTauriDroppedPaths(event.payload);
           if (paths.length === 0) return;
 
+          const supportedPathCount = paths.filter((path) => {
+            const fileName = getFileNameFromPath(path);
+            return isSupportedPrepareDropName(fileName);
+          }).length;
+
           void (async () => {
-            const files = await createFilesFromTauriDroppedPaths(paths);
-            if (files.length === 0) return;
-            await handleDroppedPrepareFiles(files);
+            if (supportedPathCount > 0) {
+              setNativePickerPreparationState({
+                active: true,
+                label: 'Loading dropped files…',
+                detail: supportedPathCount > 1
+                  ? `Reading 0/${supportedPathCount} dropped files…`
+                  : 'Reading dropped file…',
+                progress: null,
+              });
+
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+              });
+            }
+
+            try {
+              const files = await createFilesFromTauriDroppedPathsRef.current(paths);
+              if (files.length === 0) return;
+              await handleDroppedPrepareFilesRef.current(files, { prearmedLoadingUi: true });
+            } finally {
+              if (supportedPathCount > 0) {
+                setNativePickerPreparationState({
+                  active: false,
+                  label: '',
+                  detail: '',
+                  progress: null,
+                });
+              }
+            }
           })();
         });
         registerUnlisten(unlistenDragDrop);
@@ -8246,7 +8910,7 @@ export default function Home() {
         invokeUnlistenSafely(remove);
       }
     };
-  }, [createFilesFromTauriDroppedPaths, handleDroppedPrepareFiles, scene.mode]);
+  }, [scene.mode]);
 
   const handlePrepareDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (scene.mode !== 'prepare') return;
@@ -8254,6 +8918,12 @@ export default function Home() {
     e.preventDefault();
     e.stopPropagation();
     dragDepthRef.current += 1;
+    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsPrepareDragUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsPrepareDragUnsupported(false);
+    }
     setIsPrepareDragActive(true);
   }, [scene.mode]);
 
@@ -8262,7 +8932,13 @@ export default function Home() {
     if (!isLikelyFileDragPayload(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
+    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
+    if (supportState === 'unsupported') {
+      setIsPrepareDragUnsupported(true);
+    } else if (supportState === 'supported') {
+      setIsPrepareDragUnsupported(false);
+    }
+    e.dataTransfer.dropEffect = supportState === 'unsupported' ? 'none' : 'copy';
     setIsPrepareDragActive(true);
   }, [scene.mode]);
 
@@ -8273,6 +8949,7 @@ export default function Home() {
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
     if (dragDepthRef.current === 0) {
       setIsPrepareDragActive(false);
+      setIsPrepareDragUnsupported(false);
     }
   }, [scene.mode]);
 
@@ -8282,8 +8959,41 @@ export default function Home() {
     e.stopPropagation();
     dragDepthRef.current = 0;
     setIsPrepareDragActive(false);
+    setIsPrepareDragUnsupported(false);
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
+
+    const supportedFileCount = files.filter((file) => isSupportedPrepareDropName(file.name)).length;
+
+    if (supportedFileCount > 0) {
+      void (async () => {
+        setNativePickerPreparationState({
+          active: true,
+          label: 'Loading dropped files…',
+          detail: supportedFileCount > 1
+            ? `Preparing ${supportedFileCount} dropped files…`
+            : 'Preparing dropped file…',
+          progress: null,
+        });
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+
+        try {
+          await handleDroppedPrepareFiles(files, { prearmedLoadingUi: true });
+        } finally {
+          setNativePickerPreparationState({
+            active: false,
+            label: '',
+            detail: '',
+            progress: null,
+          });
+        }
+      })();
+      return;
+    }
+
     void handleDroppedPrepareFiles(files);
   }, [handleDroppedPrepareFiles, scene.mode]);
 
@@ -8305,6 +9015,10 @@ export default function Home() {
     }
     setEditorContextMenuPos(position);
   }, [scene]);
+
+  const handleRepairModel = React.useCallback((modelId: string) => {
+    setManualRepairModelId(modelId);
+  }, []);
 
   const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
     setSupportsInfoModelId(modelId);
@@ -8343,6 +9057,10 @@ export default function Home() {
 
   const handleRenameFolder = React.useCallback((groupId: string, nextName: string) => {
     scene.renameGroup(groupId, nextName);
+  }, [scene]);
+
+  const handleRenameModel = React.useCallback((modelId: string, nextName: string) => {
+    scene.renameModel(modelId, nextName);
   }, [scene]);
 
   const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
@@ -8642,10 +9360,13 @@ export default function Home() {
       window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
     }
 
+    const sceneImportToastDurationMs = scene.sceneImportReport.durationMs ?? 4200;
+    const sceneImportToastFadeMs = Math.max(0, sceneImportToastDurationMs - 400);
+
     sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
       setIsSceneImportToastVisible(false);
       sceneImportToastFadeTimeoutRef.current = null;
-    }, 3800);
+    }, sceneImportToastFadeMs);
 
     return () => {
       if (sceneImportToastFadeTimeoutRef.current !== null) {
@@ -8665,6 +9386,18 @@ export default function Home() {
       setIsExportSuccessToastVisible(false);
       exportSuccessToastFadeTimeoutRef.current = null;
     }, 3800);
+  }, []);
+
+  const handleExportError = React.useCallback((message: string) => {
+    setExportErrorToast({ id: Date.now(), text: message });
+    setIsExportErrorToastVisible(true);
+    if (exportErrorToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(exportErrorToastFadeTimeoutRef.current);
+    }
+    exportErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsExportErrorToastVisible(false);
+      exportErrorToastFadeTimeoutRef.current = null;
+    }, 4500);
   }, []);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
@@ -8816,11 +9549,16 @@ export default function Home() {
       case 'paste':
         scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
         break;
-      case 'duplicate':
-      case 'arrange':
-      case 'repair':
+      case 'repair': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          setManualRepairModelId(targetId);
+          return;
+        }
+        break;
+      }
       default:
-        // intentionally disabled in the menu for now
         break;
     }
     closeEditorContextMenu();
@@ -11365,10 +12103,19 @@ export default function Home() {
   ]);
 
   const importOverlayState = React.useMemo(() => {
+    if (nativePickerPreparationState.active) {
+      return {
+        active: true,
+        label: nativePickerPreparationState.label,
+        detail: nativePickerPreparationState.detail,
+        progress: nativePickerPreparationState.progress,
+      };
+    }
+
     if (scene.importProgress.active) {
       return {
         active: true,
-        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Importing scene…' : 'Loading mesh…'),
+        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Loading Scene…' : 'Loading Mesh…'),
         detail: scene.importProgress.detail,
         progress: scene.importProgress.progress,
       };
@@ -11377,7 +12124,7 @@ export default function Home() {
     if (scene.isLysLoading) {
       return {
         active: true,
-        label: 'Importing scene…',
+        label: 'Loading Scene…',
         detail: 'Parsing and applying scene transforms',
         progress: null as number | null,
       };
@@ -11386,7 +12133,7 @@ export default function Home() {
     if (scene.lycheeImportPhase === 'processing') {
       return {
         active: true,
-        label: 'Importing Lychee scene…',
+        label: 'Loading Lychee Scene…',
         detail: 'Converting support data and model metadata',
         progress: null as number | null,
       };
@@ -11398,14 +12145,15 @@ export default function Home() {
       detail: '',
       progress: null as number | null,
     };
-  }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
+  }, [nativePickerPreparationState, scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
 
   React.useEffect(() => {
     const isSceneImportActive =
-      (scene.importProgress.active && scene.importProgress.type === 'scene')
+      (scene.importProgress.active
+        && (scene.importProgress.type === 'scene' || scene.importProgress.type === 'mesh'))
       || scene.isLysLoading
       || scene.lycheeImportPhase === 'processing';
 
@@ -12099,6 +12847,7 @@ export default function Home() {
     };
 
     const handleClipboardHotkeys = (event: KeyboardEvent) => {
+      if (event.repeat) return;
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.altKey) return;
       if (isEditableTarget(event.target)) return;
@@ -12603,6 +13352,13 @@ export default function Home() {
         onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
         view3dSettings={scene.view3dSettings}
         onView3dSettingsChange={scene.setView3dSettings}
+        slicingThumbnailRenderSettings={exportThumbnailRenderOptions}
+        onSlicingThumbnailRenderSettingsChange={(next) => {
+          setExportThumbnailRenderOptions((previous) => ({
+            ...previous,
+            ...next,
+          }));
+        }}
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
@@ -12640,14 +13396,16 @@ export default function Home() {
               onUngroupModels={handleUngroupSelectedModels}
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
+              onRenameModel={handleRenameModel}
               onModelContextMenu={handleModelListContextMenu}
+              onRepairModel={handleRepairModel}
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onLoadMeshChange={scene.onFileChange}
+              onLoadMeshChange={handleLoadMeshChangeWithZip}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneInputChange}
+              onImportSceneChange={handleImportSceneChangeWithZip}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -12754,7 +13512,7 @@ export default function Home() {
                     </svg>
                   </IconButton>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Mesh Smoothing Settings
+                    Mesh Smoothing
                   </h3>
                 </div>
                 {prepareSmoothingSettingsExpanded && (
@@ -12936,6 +13694,7 @@ export default function Home() {
               supportsRef={supportsRef}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onExportSuccess={handleExportSuccess}
+              onExportError={handleExportError}
             />
 
             <SlicingPanel
@@ -12944,15 +13703,6 @@ export default function Home() {
               activeModel={scene.activeModel}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
-              thumbnailIncludeGradient={exportThumbnailRenderOptions.includeGradient}
-              thumbnailIncludeBuildPlate={exportThumbnailRenderOptions.includeBuildPlate}
-              thumbnailIncludeGrid={exportThumbnailRenderOptions.includeGrid}
-              onThumbnailRenderOptionsChange={(next) => {
-                setExportThumbnailRenderOptions((previous) => ({
-                  ...previous,
-                  ...next,
-                }));
-              }}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}
@@ -12966,6 +13716,12 @@ export default function Home() {
               canPrint={canSliceAndPrint}
               onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
               onBeforeSliceStart={handleBeforeSliceStart}
+              onBeforeSlicingRun={handlePreSliceSceneSave}
+              resolveOutputPathForIntent={(intent) => (
+                intent === 'file'
+                  ? (preSliceFileDestinationPathRef.current?.trim() || null)
+                  : null
+              )}
             />
           </>
 
@@ -12987,6 +13743,7 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
+              sendCanRetry={canRetrySendToPrinter}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
               onOpenSendTargetPicker={() => {
@@ -12995,6 +13752,8 @@ export default function Home() {
               }}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
+              onCancelSendToPrinter={handleCancelSendToPrinter}
+              onRetrySendToPrinter={handleSendToPrinter}
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
@@ -13275,9 +14034,9 @@ export default function Home() {
           {showEmptyStatePanel && (
             <EmptySceneState
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onFileChange={scene.onFileChange}
+              onFileChange={handleLoadMeshChangeWithZip}
               onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneInputChange}
+              onImportSceneChange={handleImportSceneChangeWithZip}
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={handleReopenRecentFile}
@@ -13293,17 +14052,30 @@ export default function Home() {
           {scene.mode === 'prepare' && isPrepareDragActive && (
             <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center">
               <div
-                className="rounded-lg border border-dashed px-6 py-4 text-center"
+                className="absolute inset-0"
                 style={{
-                  borderColor: 'var(--accent)',
-                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                  background: isPrepareDragUnsupported
+                    ? 'color-mix(in srgb, var(--danger), transparent 90%)'
+                    : 'color-mix(in srgb, black, transparent 86%)',
+                  backdropFilter: 'blur(1px)',
+                }}
+              />
+              <div
+                className="relative min-w-[380px] max-w-[min(92vw,640px)] rounded-xl border border-dashed px-8 py-6 text-center"
+                style={{
+                  borderColor: isPrepareDragUnsupported ? 'var(--danger)' : 'var(--accent)',
+                  background: isPrepareDragUnsupported
+                    ? 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)'
+                    : 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
                 }}
               >
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Drop supported files to import
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {isPrepareDragUnsupported ? 'Unsupported file format' : 'Drop supported files to import'}
                 </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Supported: STL, 3MF, LYS, VOXL
+                <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                  {isPrepareDragUnsupported
+                    ? 'Please use: STL, OBJ, 3MF, LYS, VOXL'
+                    : 'Supported: STL, OBJ, 3MF, LYS, VOXL'}
                 </div>
               </div>
             </div>
@@ -13513,6 +14285,7 @@ export default function Home() {
                 onChange={handlePrintingLayerChange}
                 onScrubStart={handlePrintingLayerScrubStart}
                 onScrubEnd={handlePrintingLayerScrubEnd}
+                allowTrackClickJump
                 currentHeightMm={printingCurrentHeightMm ?? undefined}
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
@@ -13672,10 +14445,8 @@ export default function Home() {
         position={editorContextMenuPos}
         onAction={handleEditorMenuAction}
         disabledActions={[
-          ...(!scene.activeModelId ? (['delete', 'cut', 'copy'] as const) : []),
-          'duplicate',
-          'arrange',
-          'repair',
+          ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
+          ...(!scene.canPasteModel ? (['paste'] as const) : []),
         ]}
       />
 
@@ -13718,6 +14489,13 @@ export default function Home() {
         benchmark={printingSlicingBenchmark}
         outputName={printingArtifact?.outputName ?? null}
         outputSizeLabel={printingOutputSizeLabel}
+      />
+
+      <SliceCompletedModal
+        isOpen={showSliceCompletedModal}
+        onClose={() => setShowSliceCompletedModal(false)}
+        filePath={sliceCompletedModalData.filePath}
+        slicingTimeMs={sliceCompletedModalData.slicingTimeMs}
       />
 
       <ModelSupportsModal
@@ -13840,6 +14618,146 @@ export default function Home() {
         />
       )}
 
+      {scene.meshRepairConfirmPrompt && (
+        <MeshRepairConfirmModal
+          prompt={scene.meshRepairConfirmPrompt}
+          onRepair={() => scene.resolveMeshRepairConfirmPrompt('repair')}
+          onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
+          onCancelImport={() => scene.resolveMeshRepairConfirmPrompt('cancel_import')}
+        />
+      )}
+
+      {manualRepairModelId && (() => {
+        const repairModel = scene.models.find(m => m.id === manualRepairModelId);
+        if (!repairModel) return null;
+        return (
+          <div
+            className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !isManualRepairing) {
+                setManualRepairModelId(null);
+              }
+            }}
+          >
+            <div
+              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+              style={{
+                background: 'var(--surface-0)',
+                borderColor: 'var(--border-subtle)',
+                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+              }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Repair mesh"
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                    style={{
+                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 88%)',
+                      color: '#d97706',
+                    }}
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                  </span>
+
+                  <div className="min-w-0 pr-2">
+                    <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                      Repair this mesh?
+                    </h2>
+                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                      DragonFruit will try to fix common geometry issues before you keep working.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+                  aria-label="Close repair mesh dialog"
+                  disabled={isManualRepairing}
+                  onClick={() => setManualRepairModelId(null)}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4 p-5">
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Model</div>
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={repairModel.name}>
+                    {repairModel.name}
+                  </div>
+                </div>
+
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  Repair can help with holes, broken surfaces, and other mesh problems that may lead to slicing or print issues.
+                </p>
+
+                <div
+                  className="rounded-md border px-3 py-2"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#d97706' }} />
+                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      <strong style={{ color: 'var(--text-strong)' }}>Heads up:</strong> The repaired result will replace this model in your current scene. Large or badly damaged meshes can take longer, and some files may still need manual cleanup afterward.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    disabled={isManualRepairing}
+                    onClick={() => setManualRepairModelId(null)}
+                  >
+                    Keep Original
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
+                    disabled={isManualRepairing}
+                    onClick={() => {
+                      const id = manualRepairModelId;
+                      setIsManualRepairing(true);
+                      void scene.repairModelInPlace(id).finally(() => {
+                        setIsManualRepairing(false);
+                        setManualRepairModelId(null);
+                      });
+                    }}
+                  >
+                    {isManualRepairing
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Repairing…</>
+                      : <><Wrench className="h-3.5 w-3.5" />Repair</>
+                    }
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {scene.meshRepairReports.length > 0 && (
+        <MeshRepairReportModal
+          reports={scene.meshRepairReports}
+          presentation={scene.meshRepairReportPresentation}
+          onDismiss={scene.dismissMeshRepairReports}
+        />
+      )}
+
       {showLysImportWarningModal && (
         <div
           className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
@@ -13865,9 +14783,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -13942,98 +14860,77 @@ export default function Home() {
         </div>
       )}
 
-      {showCloseUnsavedChangesModal && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && closeUnsavedChangesBusy === 'none') {
-              setShowCloseUnsavedChangesModal(false);
-            }
+      {zipPickerState && (
+        <ZipFilePickerModal
+          zipName={zipPickerState.zipName}
+          files={zipPickerState.files}
+          category={zipPickerState.category}
+          defaultSelectionCategory={zipPickerState.defaultSelectionCategory}
+          onConfirm={(selected) => {
+            const resolve = zipPickerResolveRef.current;
+            zipPickerResolveRef.current = null;
+            setZipPickerState(null);
+            resolve?.(selected);
           }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Unsaved changes"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Unsaved Scene Changes
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {hasUnsavedSceneChanges
-                      ? 'There are unsaved changes to this scene.'
-                      : 'This scene is already saved.'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close unsaved changes modal"
-                disabled={closeUnsavedChangesBusy !== 'none'}
-                onClick={() => setShowCloseUnsavedChangesModal(false)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3.5 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Are you sure you want to close?
-                <br />
-                Choose <strong>Save &amp; Close</strong> to keep your latest edits.
-                <br />
-                Choose <strong>Close Without Saving</strong> to discard them.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={closeUnsavedChangesBusy !== 'none'}
-                  onClick={handleDiscardAndCloseProgram}
-                >
-                  Close Without Saving
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={closeUnsavedChangesBusy !== 'none'}
-                  onClick={handleSaveAndCloseProgram}
-                >
-                  Save &amp; Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          onCancel={() => {
+            const resolve = zipPickerResolveRef.current;
+            zipPickerResolveRef.current = null;
+            setZipPickerState(null);
+            resolve?.([]);
+          }}
+        />
       )}
+
+      <StructuredDialogModal
+        open={showCloseUnsavedChangesModal}
+        ariaLabel="Unsaved changes"
+        title="Unsaved Scene Changes"
+        subtitle={hasUnsavedSceneChanges
+          ? 'You have unsaved edits in this scene.'
+          : 'This scene is already saved.'}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[220]"
+        closeAriaLabel="Close unsaved changes modal"
+        closeDisabled={closeUnsavedChangesBusy !== 'none'}
+        onClose={() => {
+          if (closeUnsavedChangesBusy !== 'none') return;
+          setShowCloseUnsavedChangesModal(false);
+        }}
+        onBackdropClick={() => {
+          if (closeUnsavedChangesBusy !== 'none') return;
+          setShowCloseUnsavedChangesModal(false);
+        }}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="ui-button ui-button-danger !h-9 px-3 text-xs"
+              disabled={closeUnsavedChangesBusy !== 'none'}
+              onClick={handleDiscardAndCloseProgram}
+            >
+              Close Without Saving
+            </button>
+            <button
+              type="button"
+              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              disabled={closeUnsavedChangesBusy !== 'none'}
+              onClick={handleSaveAndCloseProgram}
+            >
+              Save &amp; Close
+            </button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          {hasUnsavedSceneChanges
+            ? 'You’re about to close DragonFruit with unsaved scene changes.'
+            : 'Close DragonFruit now?'}
+        </p>
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <strong>Save &amp; Close</strong> keeps your latest edits. <strong>Close Without Saving</strong> discards them.
+        </p>
+      </StructuredDialogModal>
 
       {showSceneSaveChoiceModal && (
         <div
@@ -14062,7 +14959,7 @@ export default function Home() {
                   style={{
                     borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 55%)',
                     background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
-                    color: '#86efac',
+                    color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                   }}
                 >
                   <CheckCircle2 className="h-4 w-4" />
@@ -14163,9 +15060,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14256,12 +15153,12 @@ export default function Home() {
                           ? {
                               borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                               background: 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)',
-                              color: '#bbf7d0',
+                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
                             }
                           : {
                               borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                               background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: '#fee2e2',
+                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
                             }
                       )
                       : (
@@ -14269,12 +15166,12 @@ export default function Home() {
                           ? {
                               borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
                               background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                              color: '#fde68a',
+                              color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                             }
                           : {
                               borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
                               background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: '#fee2e2',
+                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
                             }
                       )
                   }
@@ -14346,9 +15243,9 @@ export default function Home() {
                 <span
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
                   style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                    color: '#f59e0b',
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
                   }}
                 >
                   <AlertTriangle className="h-4 w-4" />
@@ -14391,15 +15288,15 @@ export default function Home() {
               </div>
               <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Build plate and resin vat are properly seated and secured.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Resin is mixed, sufficient for the print, and at operating temperature.</span>
                 </div>
                 <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#86efac' }} />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
                   <span>Build plate is clean and clear, and the printer cover is fully closed.</span>
                 </div>
               </div>
@@ -14538,7 +15435,7 @@ export default function Home() {
                             <div
                               className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
                               style={{
-                                color: '#86efac',
+                                color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                                 background: 'color-mix(in srgb, #22c55e, transparent 84%)',
                               }}
                               aria-label="Selected printer"
@@ -14617,7 +15514,7 @@ export default function Home() {
                                       <div
                                         className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
                                         style={{
-                                          color: '#86efac',
+                                          color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
                                           background: 'color-mix(in srgb, #22c55e, transparent 84%)',
                                         }}
                                         aria-label="Selected material"
@@ -14922,7 +15819,7 @@ export default function Home() {
                   <div className="inline-flex h-7 w-7 items-center justify-center rounded-sm shrink-0" style={{
                     background: 'color-mix(in srgb, #baf72e, var(--surface-1) 90%)',
                     border: '1px solid color-mix(in srgb, #baf72e, var(--border-subtle) 45%)',
-                    color: '#baf72e',
+                    color: 'var(--accent-secondary)',
                   }}>
                     <LayoutGrid className="h-3.5 w-3.5" />
                   </div>
@@ -15367,7 +16264,7 @@ export default function Home() {
                       <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
                         borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 52%)',
                         background: 'color-mix(in srgb, #f59e0b, transparent 84%)',
-                        color: '#fde68a',
+                        color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
                       }}>
                         <RefreshCw className="h-5 w-5 animate-spin" />
                       </div>
@@ -15409,7 +16306,7 @@ export default function Home() {
                       <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
                         borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 52%)',
                         background: 'color-mix(in srgb, #f87171, transparent 84%)',
-                        color: '#fecaca',
+                        color: 'var(--danger)',
                       }}>
                         <AlertTriangle className="h-5 w-5" />
                       </div>
@@ -15572,6 +16469,9 @@ export default function Home() {
                                           <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
                                             {`Est. ${formatPrintingMonitorEstimatedTime(plate.printTimeSec)} • ${formatPrintingMonitorUsedMaterial(plate.usedMaterialMl)}`}
                                           </div>
+                                          <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                            {`Area Σ ${formatPrintingMonitorAreaMm2(plate.totalSolidAreaMm2)} • Min ${formatPrintingMonitorAreaMm2(plate.smallestAreaMm2)} • Max ${formatPrintingMonitorAreaMm2(plate.largestAreaMm2)}`}
+                                          </div>
                                         </div>
 
                                         <div className="flex w-[56px] shrink-0 items-center justify-end gap-1">
@@ -15584,7 +16484,7 @@ export default function Home() {
                                             style={{
                                               borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
                                               background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
-                                              color: '#bbf7d0',
+                                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
                                             }}
                                             title={`Start plate #${plate.plateId}`}
                                             disabled={printingMonitorAnyActionBusy || printingMonitorHasActivePrint}
@@ -16017,8 +16917,8 @@ export default function Home() {
                         className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
                         style={printingMonitorWebcamStatusPresentation.tone === 'warning'
                             ? {
-                                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)',
-                                background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)',
+                                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
+                                background: 'color-mix(in srgb, #d97706, var(--surface-1) 90%)',
                               }
                             : printingMonitorWebcamStatusPresentation.tone === 'error'
                               ? {
@@ -16031,7 +16931,7 @@ export default function Home() {
                                 }}
                       >
                         {printingMonitorWebcamStatusPresentation.tone === 'warning' ? (
-                          <AlertTriangle className="w-5 h-5" style={{ color: '#f59e0b' }} />
+                          <AlertTriangle className="w-5 h-5" style={{ color: '#d97706' }} />
                         ) : printingMonitorWebcamStatusPresentation.tone === 'error' ? (
                           <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
                         ) : (
@@ -16545,7 +17445,27 @@ export default function Home() {
             }
             animated
             visible={isSceneImportToastVisible}
-            className="flex items-center gap-2"
+            className={`flex items-center gap-2 ${
+              scene.sceneImportReport.clickAction === 'openMeshRepairReport'
+                ? 'pointer-events-auto cursor-pointer select-none'
+                : ''
+            }`}
+            role={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 'button' : undefined}
+            tabIndex={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 0 : undefined}
+            onClick={() => {
+              if (scene.sceneImportReport?.clickAction === 'openMeshRepairReport') {
+                scene.openPendingMeshRepairReports();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (scene.sceneImportReport?.clickAction !== 'openMeshRepairReport') {
+                return;
+              }
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                scene.openPendingMeshRepairReports();
+              }
+            }}
           >
             {scene.sceneImportReport.tone === 'error' ? (
               <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
@@ -16564,6 +17484,15 @@ export default function Home() {
           <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
             Saved to: {exportSuccessToast.path}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {exportErrorToast && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            {exportErrorToast.text}
           </Toast>
         </ToastViewport>
       )}
