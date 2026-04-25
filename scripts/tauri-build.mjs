@@ -2,7 +2,7 @@
  * Platform-aware tauri build wrapper.
  *
  * On Linux: passes --no-default-features --features custom-protocol,tauri-cef
- * to build with CEF instead of WebKitGTK. After a successful build, if
+ * to build with CEF instead of WebKitGTK. After a build attempt, if
  * flatpak-builder is on PATH, stages CEF libs and produces a .flatpak bundle
  * in src-tauri/target/release/bundle/flatpak/.
  *
@@ -57,13 +57,19 @@ console.log(
   `[tauri-build] ${npxCmd} ${cmdArgs.join(" ")} (target=${targetTriple ?? "unknown"}${rustflags ? `, RUSTFLAGS=${rustflags}` : ""})`
 );
 
+const tauriEnv = {
+  ...process.env,
+  ...(rustflags ? { RUSTFLAGS: rustflags } : {}),
+  ...(isLinux ? { APPIMAGE_EXTRACT_AND_RUN: process.env.APPIMAGE_EXTRACT_AND_RUN ?? "1" } : {}),
+};
+
 // On Windows, .cmd files cannot be spawned directly — they require the shell
 // (cmd.exe) to execute them. Pass RUSTFLAGS explicitly through env so it is
 // guaranteed to reach cargo/rustc regardless of inherited process.env state.
 const result = spawnSync(npxCmd, cmdArgs, {
   stdio: "inherit",
   shell: process.platform === "win32",
-  env: rustflags ? { ...process.env, RUSTFLAGS: rustflags } : { ...process.env },
+  env: tauriEnv,
 });
 
 // ── macOS post-build: embed QuickLook extension into Contents/PlugIns/ ───────
@@ -177,7 +183,17 @@ if (process.platform === "darwin" && result.status === 0) {
 // flatpak-builder, and exports a single-file .flatpak bundle to
 // src-tauri/target/release/bundle/flatpak/. Entirely non-fatal — if any tool
 // is missing or any step fails, the Tauri build itself is unaffected.
-if (isLinux && result.status === 0) {
+//
+// Note: we intentionally attempt Flatpak even if `tauri build` returned
+// non-zero (for example, AppImage/linuxdeploy failure) so partial outputs can
+// still be repackaged when the required binary artifacts exist.
+if (isLinux) {
+  if (result.status !== 0) {
+    console.warn(
+      "[tauri-build] tauri build exited non-zero; attempting Flatpak anyway if required artifacts exist.",
+    );
+  }
+
   const requiredTools = ["flatpak-builder", "appstreamcli", "desktop-file-validate"];
   const missingTools = requiredTools.filter(
     (t) => spawnSync("sh", ["-c", `command -v ${t}`], { stdio: "pipe" }).status !== 0

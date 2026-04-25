@@ -83,15 +83,20 @@ for (const target of targets) {
       }
 
       const rustflags = rustflagsForTarget(target);
+      const tauriEnv = {
+            ...process.env,
+            ...(rustflags ? { RUSTFLAGS: rustflags } : {}),
+            ...(target.includes("linux")
+                  ? { APPIMAGE_EXTRACT_AND_RUN: process.env.APPIMAGE_EXTRACT_AND_RUN ?? "1" }
+                  : {}),
+      };
 
       const result = spawnSync(npxCmd, cmdArgs, {
             stdio: "inherit",
             // Use +avx2 (supported on all CPUs since ~2013) for good vectorization
             // without the illegal-instruction crashes that "target-cpu=native" causes
             // on older hardware (STATUS_ILLEGAL_INSTRUCTION / 0xC000001D).
-            env: rustflags
-                  ? { ...process.env, RUSTFLAGS: rustflags }
-                  : { ...process.env },
+            env: tauriEnv,
       });
 
       if (result.status !== 0) {
