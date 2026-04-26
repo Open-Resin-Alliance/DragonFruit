@@ -4,7 +4,7 @@ import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
-import { OrbitControls } from '@react-three/drei';
+import { GizmoHelper, GizmoViewcube, OrbitControls } from '@react-three/drei';
 import {
   CrossSectionStencilCap,
   type CrossSectionCapDebugOverrides,
@@ -173,6 +173,30 @@ function resolveTrackpadGestureAction(
   if (!modifierPressed) return primaryAction;
   return primaryAction === 'pan' ? 'orbit' : 'pan';
 }
+
+function computeFloatingPanelWidthScale(width: number, height: number) {
+  if (width >= 3200 && height >= 1100) return 1.14;
+  if (width >= 2600 && height >= 980) return 1.08;
+  if (width <= 1100 || height <= 700) return 0.72;
+  if (width <= 1366 || height <= 820) return 0.82;
+  if (width <= 1600 || height <= 900) return 0.9;
+  if (width <= 1800 || height <= 980) return 0.95;
+  return 1;
+}
+
+function computeVisualSettingsPanelWidth(width: number, height: number) {
+  const baseWidth = 48;
+  const scale = Math.min(1, computeFloatingPanelWidthScale(width, height));
+  return Math.max(44, Math.round(baseWidth * scale));
+}
+
+const FLOATING_PANEL_RIGHT_INSET_PX = 12;
+// Drei GizmoHelper positions by gizmo center, not right edge.
+// GizmoViewcube renders at scale [60,60,60] on a unit box, so half-extent is 30px.
+const VIEW_CUBE_HALF_EXTENT_PX = 30;
+// Bottom margin is 72px to cube center; cube half-height is 30px, giving 42px gap from bottom.
+// Match this gap on the right side so the cube feels equally spaced from panel and screen bottom.
+const VIEW_CUBE_PANEL_GAP_PX = 42;
 
 function GhostPreviewInstances({
   geometry,
@@ -583,6 +607,48 @@ export function SceneCanvas({
   );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const [viewportSizeForUiAnchors, setViewportSizeForUiAnchors] = React.useState({ width: 0, height: 0 });
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateViewportSize = () => {
+      const next = {
+        width: container.clientWidth,
+        height: container.clientHeight,
+      };
+
+      setViewportSizeForUiAnchors((prev) => {
+        if (prev.width === next.width && prev.height === next.height) return prev;
+        return next;
+      });
+    };
+
+    updateViewportSize();
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(container);
+    window.addEventListener('resize', updateViewportSize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateViewportSize);
+    };
+  }, []);
+
+  const nonPrintingViewCubeRightMargin = React.useMemo(() => {
+    const width = viewportSizeForUiAnchors.width > 0
+      ? viewportSizeForUiAnchors.width
+      : (typeof window === 'undefined' ? 1920 : window.innerWidth);
+    const height = viewportSizeForUiAnchors.height > 0
+      ? viewportSizeForUiAnchors.height
+      : (typeof window === 'undefined' ? 1080 : window.innerHeight);
+
+    const visualSettingsPanelWidth = computeVisualSettingsPanelWidth(width, height);
+    const visualSettingsLeftInset = visualSettingsPanelWidth + FLOATING_PANEL_RIGHT_INSET_PX;
+    return visualSettingsLeftInset + VIEW_CUBE_PANEL_GAP_PX + VIEW_CUBE_HALF_EXTENT_PX;
+  }, [viewportSizeForUiAnchors.height, viewportSizeForUiAnchors.width]);
 
   const smoothingProcessing = React.useSyncExternalStore(
     subscribeToMeshSmoothingProcessingState,
@@ -6024,6 +6090,22 @@ export function SceneCanvas({
           target={orbitTarget}
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
+        {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
+          <GizmoHelper
+            alignment="bottom-right"
+            margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
+          >
+            <GizmoViewcube
+              faces={['Right', 'Left', 'Top', 'Bottom', 'Front', 'Back']}
+              font="600 20px Inter, system-ui, sans-serif"
+              color="#1f2937"
+              textColor="#f8fafc"
+              strokeColor="#baf72e"
+              hoverColor="#baf72e"
+              opacity={0.9}
+            />
+          </GizmoHelper>
+        )}
         <OrbitPivotIndicator visible={!thumbnailCaptureActive && isOrbitInteracting && isOrbitRotating} />
         {cameraInteractionCycleEnabled && (
           <SpaceMouseController
