@@ -1257,6 +1257,11 @@ export function SceneCanvas({
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
+  const [gizmoColors, setGizmoColors] = React.useState({
+    face: '#1f2937',
+    text: '#f8fafc',
+    accent: '#baf72e',
+  });
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
   const likelySupportGeometryTintColor = '#c8752a';
@@ -1752,7 +1757,37 @@ export function SceneCanvas({
 
     resolveOutOfBoundsStripeColor();
 
-    const observer = new MutationObserver(resolveOutOfBoundsStripeColor);
+    const resolveGizmoColors = () => {
+      const rootStyles = getComputedStyle(document.documentElement);
+      const tryColor = (variable: string, fallback: string) => {
+        const raw = rootStyles.getPropertyValue(variable).trim();
+        if (!raw) return fallback;
+        try {
+          const c = new THREE.Color();
+          c.setStyle(raw);
+          return c.getStyle();
+        } catch {
+          return fallback;
+        }
+      };
+
+      const accent = tryColor('--accent-secondary', '#baf72e');
+      // Derive face/text colors from theme surface/text tokens.
+      // --surface-1 is the panel background; --text-strong is primary text.
+      const face = tryColor('--surface-1', '#1f2937');
+      const text = tryColor('--text-strong', '#f8fafc');
+      setGizmoColors((prev) => {
+        if (prev.face === face && prev.text === text && prev.accent === accent) return prev;
+        return { face, text, accent };
+      });
+    };
+
+    resolveGizmoColors();
+
+    const observer = new MutationObserver(() => {
+      resolveOutOfBoundsStripeColor();
+      resolveGizmoColors();
+    });
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class', 'style', 'data-theme'],
@@ -6096,13 +6131,13 @@ export function SceneCanvas({
             margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
           >
             <GizmoViewcube
-              faces={['Right', 'Left', 'Top', 'Bottom', 'Front', 'Back']}
-              font="600 20px Inter, system-ui, sans-serif"
-              color="#1f2937"
-              textColor="#f8fafc"
-              strokeColor="#baf72e"
-              hoverColor="#baf72e"
-              opacity={0.9}
+              faces={['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']}
+              font="600 24px Inter, system-ui, sans-serif"
+              color={gizmoColors.face}
+              textColor={gizmoColors.text}
+              strokeColor={gizmoColors.accent}
+              hoverColor={gizmoColors.accent}
+              opacity={0.75}
             />
           </GizmoHelper>
         )}
