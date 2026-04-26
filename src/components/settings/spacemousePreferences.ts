@@ -20,19 +20,19 @@ export type SpaceMouseSettings = {
 };
 
 export const DEFAULT_SPACEMOUSE_SETTINGS: SpaceMouseSettings = {
-  enabled: false,
+  enabled: true,
   pivotMode: 'auto',
-  translationSensitivity: 1,
-  rotationSensitivity: 1,
-  zoomSensitivity: 1,
-  deadzone: 0.08,
+  translationSensitivity: 2.3,
+  rotationSensitivity: 2.3,
+  zoomSensitivity: 2.3,
+  deadzone: 0.03,
   dominantAxis: false,
-  invertTx: false,
-  invertTy: true,
-  invertTz: false,
-  invertRx: true,
-  invertRy: true,
-  invertRz: false,
+  invertTx: false,    // X Pan
+  invertTy: true,     // Y Pan
+  invertTz: false,    // Zoom
+  invertRx: false,    // Pitch
+  invertRy: true,     // Yaw
+  invertRz: false,    // Roll
 };
 
 let cachedRawSettings: string | null | undefined;
