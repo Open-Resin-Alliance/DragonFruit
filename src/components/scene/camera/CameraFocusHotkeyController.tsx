@@ -195,7 +195,7 @@ export function CameraFocusHotkeyController({
     }
 
     const endTarget = point.clone();
-    const preserveCameraPosition = !!options?.preserveCameraPosition && camera instanceof THREE.PerspectiveCamera;
+    const preserveCameraPosition = !!options?.preserveCameraPosition;
     const endPos = preserveCameraPosition
       ? camera.position.clone()
       : endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
@@ -237,7 +237,7 @@ export function CameraFocusHotkeyController({
       );
 
     // Hovering a selected model: re-target the orbit pivot to the hovered
-    // surface point but keep the current zoom / distance unchanged.
+    // surface point but keep the current zoom / camera position unchanged.
     if (hoverPoint && hoveredSelectedModel) {
       snapCameraToPoint(hoverPoint, undefined, { preserveCameraPosition: true });
       return;
