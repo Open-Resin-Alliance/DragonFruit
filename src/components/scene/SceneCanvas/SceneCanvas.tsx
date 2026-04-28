@@ -581,6 +581,11 @@ export function SceneCanvas({
     () => getSavedCameraTrackpadSettings().orbitAcceleration,
     () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration,
   );
+  const cameraTrackpadZoomAcceleration = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().zoomAcceleration,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration,
+  );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -3519,10 +3524,12 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!controls || !camera) return;
 
+    const normalizedTrackpadZoomAcceleration = cameraTrackpadZoomAcceleration / DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration;
+
     if (cameraFeelPreset === 'raw') {
       controls.rotateSpeed = 1.0;
       controls.panSpeed = 1.0;
-      controls.zoomSpeed = 1.0;
+      controls.zoomSpeed = normalizedTrackpadZoomAcceleration;
       return;
     }
 
@@ -3607,7 +3614,11 @@ export function SceneCanvas({
 
     const targetRotateSpeed = THREE.MathUtils.clamp(tuning.rotateBase * acceleration, tuning.rotateMin, tuning.rotateMax);
     const targetPanSpeed = THREE.MathUtils.clamp(tuning.panBase * acceleration, tuning.panMin, tuning.panMax);
-    const targetZoomSpeed = THREE.MathUtils.clamp(tuning.zoomBase * acceleration, tuning.zoomMin, tuning.zoomMax);
+    const targetZoomSpeed = THREE.MathUtils.clamp(
+      tuning.zoomBase * acceleration * normalizedTrackpadZoomAcceleration,
+      tuning.zoomMin * normalizedTrackpadZoomAcceleration,
+      tuning.zoomMax * normalizedTrackpadZoomAcceleration,
+    );
 
     controls.rotateSpeed = THREE.MathUtils.lerp(controls.rotateSpeed, targetRotateSpeed, tuning.responseLerp);
     controls.panSpeed = THREE.MathUtils.lerp(controls.panSpeed, targetPanSpeed, tuning.responseLerp);
@@ -3616,6 +3627,7 @@ export function SceneCanvas({
     activeBuildVolumeSettings.depthMm,
     activeBuildVolumeSettings.maxZMm,
     activeBuildVolumeSettings.widthMm,
+    cameraTrackpadZoomAcceleration,
     cameraFeelPreset,
   ]);
 
@@ -6008,7 +6020,7 @@ export function SceneCanvas({
           dampingFactor={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
           rotateSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
           panSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
-          zoomSpeed={cameraFeelPreset === 'raw' ? 1.6 : cameraFeelPreset === 'precise' ? 1.25 : cameraFeelPreset === 'fast' ? 1.75 : 1.45}
+          zoomSpeed={(cameraFeelPreset === 'raw' ? 1.6 : cameraFeelPreset === 'precise' ? 1.25 : cameraFeelPreset === 'fast' ? 1.75 : 1.45) * (cameraTrackpadZoomAcceleration / DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration)}
           screenSpacePanning
           zoomToCursor
           enablePan
