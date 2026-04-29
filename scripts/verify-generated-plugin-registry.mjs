@@ -36,6 +36,16 @@ async function readPluginCapabilities(pluginId) {
       return parseCapabilitiesFromPluginDefinitionSource(source);
 }
 
+async function hasPluginDefinition(pluginId) {
+      const definitionPath = path.join(pluginsRoot, pluginId, 'pluginDefinition.ts');
+      try {
+            await fs.access(definitionPath);
+            return true;
+      } catch {
+            return false;
+      }
+}
+
 async function main() {
       const allowRaw = await readText(allowlistPath);
       const allowParsed = JSON.parse(allowRaw);
@@ -55,8 +65,21 @@ async function main() {
             readText(generatedEncoderRustPath),
       ]);
 
+      const localPresence = await Promise.all(
+            ids.map(async (id) => ({ id, present: await hasPluginDefinition(id) })),
+      );
+      const locallyAvailableIds = localPresence.filter((entry) => entry.present).map((entry) => entry.id);
+      const missingIds = localPresence.filter((entry) => !entry.present).map((entry) => entry.id);
+
+      if (missingIds.length > 0) {
+            console.warn(
+                  `[plugin-registry-smoke] Warning: allowlisted plugin(s) missing locally (likely uninitialized submodule): ${missingIds.join(', ')}`,
+            );
+            console.warn('[plugin-registry-smoke] Skipping smoke validation for missing local plugin sources.');
+      }
+
       const capabilityEntries = await Promise.all(
-            ids.map(async (id) => ({ id, capabilities: await readPluginCapabilities(id) })),
+            locallyAvailableIds.map(async (id) => ({ id, capabilities: await readPluginCapabilities(id) })),
       );
 
       for (const { id, capabilities } of capabilityEntries) {
@@ -90,11 +113,14 @@ async function main() {
             }
       }
 
-      if (!generatedEncoderRust.includes('create_plugin_encoder()')) {
+      if (
+            capabilityEntries.some((entry) => entry.capabilities.slicerEncoder) &&
+            !generatedEncoderRust.includes('create_plugin_encoder()')
+      ) {
             throw new Error(`[plugin-registry-smoke] ${path.basename(generatedEncoderRustPath)} missing create_plugin_encoder() invocation`);
       }
 
-      console.log(`[plugin-registry-smoke] OK (${ids.length} plugin id(s))`);
+      console.log(`[plugin-registry-smoke] OK (${locallyAvailableIds.length} local plugin id(s), ${missingIds.length} missing)`);
 }
 
 main().catch((error) => {

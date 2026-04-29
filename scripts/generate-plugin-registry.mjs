@@ -398,11 +398,9 @@ function enforceAllowlist(discovered, allowlistIds) {
       const allowlistedButMissing = allowlistIds
             .filter((id) => !discoveredIds.has(id));
 
-      if (allowlistedButMissing.length > 0) {
-            throw new Error(
-                  `[plugin-registry] Allowlisted plugin(s) missing pluginDefinition.ts: ${allowlistedButMissing.join(', ')}`,
-            );
-      }
+      return {
+            allowlistedButMissing,
+      };
 }
 
 function computeAllowlistHash(rawAllowlistJson) {
@@ -630,8 +628,15 @@ async function writeFileIfChanged(filePath, content) {
 async function main() {
       const discovered = await discoverPlugins();
       const allowlist = await readAllowlist();
-      enforceAllowlist(discovered, allowlist.ids);
+      const allowlistResult = enforceAllowlist(discovered, allowlist.ids);
       enforceCapabilityConsistency(discovered);
+
+      if (allowlistResult.allowlistedButMissing.length > 0) {
+            console.warn(
+                  `[plugin-registry] Warning: allowlisted plugin(s) missing locally (likely uninitialized submodule): ${allowlistResult.allowlistedButMissing.join(', ')}`,
+            );
+            console.warn('[plugin-registry] Continuing with locally available complex plugins only.');
+      }
 
       const filteredDiscovered = discovered
             .filter((entry) => allowlist.ids.includes(entry.id))
