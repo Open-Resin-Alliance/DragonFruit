@@ -800,6 +800,7 @@ export function SettingsModal({
     draftCameraTrackpadModifierKey,
     draftCameraTrackpadPanAcceleration,
     draftCameraTrackpadOrbitAcceleration,
+    draftCameraTrackpadZoomAcceleration,
     draftWorkspaceCameraDefaults,
     draftSlicingPerformanceSettings,
     draftSlicingThumbnailRenderSettings,
