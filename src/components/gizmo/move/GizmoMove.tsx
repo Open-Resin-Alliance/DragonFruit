@@ -16,6 +16,7 @@ interface GizmoMoveProps {
   isHidden?: boolean;
   suppressHover?: boolean;
   opacityScale?: number;
+  interactionsEnabled?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   handleScale?: number;
@@ -40,6 +41,7 @@ export function GizmoMove({
   isHidden,
   suppressHover = false,
   opacityScale = 1,
+  interactionsEnabled = true,
   enableLighting = true,
   gizmoPosition,
   handleScale = 1.0,
@@ -151,6 +153,7 @@ export function GizmoMove({
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (e.button === 2) return;
     if (isHidden) return;
+    if (!interactionsEnabled) return;
 
     e.stopPropagation();
     e.stopped = true;
@@ -170,11 +173,13 @@ export function GizmoMove({
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled) return;
     e.stopPropagation();
     onPointerEnter();
   };
 
   const handlePointerLeaveLocal = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled) return;
     e.stopPropagation();
     onPointerLeave();
   };
@@ -273,7 +278,7 @@ export function GizmoMove({
           and Three.js checks each object's OWN .visible, not its parent). */}
       <group ref={pickMeshRef}>
         <mesh
-          visible={!isHidden}
+          visible={!isHidden && interactionsEnabled}
           position={arrowTipPosition}
           onPointerDown={handlePointerDown}
           onPointerEnter={handlePointerEnterLocal}
@@ -286,7 +291,7 @@ export function GizmoMove({
 
         {moveHandleBidirectional && (
           <mesh
-            visible={!isHidden}
+            visible={!isHidden && interactionsEnabled}
             position={oppositeArrowTipPosition}
             onPointerDown={handlePointerDown}
             onPointerEnter={handlePointerEnterLocal}

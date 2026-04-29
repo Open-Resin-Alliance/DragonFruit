@@ -16,6 +16,7 @@ interface GizmoScaleProps {
   isHidden?: boolean;
   suppressHover?: boolean;
   opacityScale?: number;
+  interactionsEnabled?: boolean;
   gizmoPosition: THREE.Vector3;
   onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
@@ -66,6 +67,7 @@ export function GizmoScale({
   isHidden,
   suppressHover = false,
   opacityScale = 1,
+  interactionsEnabled = true,
   gizmoPosition,
   onDragStart,
   onDrag,
@@ -149,11 +151,13 @@ export function GizmoScale({
   }, []);
 
   const handlePointerEnter = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled) return;
     e.stopPropagation();
     onPointerEnter();
   };
 
   const handlePointerLeave = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled) return;
     e.stopPropagation();
     onPointerLeave();
   };
@@ -167,6 +171,9 @@ export function GizmoScale({
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     // Ignore right-click to allow camera orbit controls
     if (e.button === 2) {
+      return;
+    }
+    if (!interactionsEnabled) {
       return;
     }
     
@@ -290,7 +297,7 @@ export function GizmoScale({
           not block pointer events during another gizmo's active drag. */}
       <mesh 
         ref={pickMeshRef}
-        visible={!isHidden}
+        visible={!isHidden && interactionsEnabled}
         position={position}
         renderOrder={1000}
         onPointerDown={handlePointerDown}
