@@ -2073,9 +2073,10 @@ export function resetStore() {
 }
 
 /**
- * Loads support data from the DragonFruit Interchange Format (e.g. from Lychee conversion).
+ * Loads support data from the DragonFruit import format into the support store,
+ * replacing all existing support data.
  */
-export function loadFromLychee(data: DragonfruitImportFormat) {
+export function loadFromImportFormat(data: DragonfruitImportFormat) {
     // Reset first
     resetKickstandStore();
 
@@ -2159,8 +2160,8 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
 
     state = newState;
     rebuildSupportSettingsHexCacheFromState();
-    emitSupportInteractionReset('loadFromLychee');
-    console.log('[SupportStore] Loaded from Lychee:', {
+    emitSupportInteractionReset('loadFromImportFormat');
+    console.log('[SupportStore] Loaded from LYS:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
         branches: Object.keys(state.branches).length,
@@ -2439,11 +2440,11 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 }
 
 /**
- * Merges support data from the DragonFruit Interchange Format into the existing scene state,
+ * Merges support data from the DragonFruit import format into the existing scene state,
  * preserving supports for all models already in the scene.
  * Use this when importing an additional scene file into an already-populated scene.
  */
-export function mergeFromLychee(data: DragonfruitImportFormat) {
+export function mergeFromImportFormat(data: DragonfruitImportFormat) {
     const isolated = isolateImportedSupportPayload(data);
 
     const merged: SupportState = {
@@ -2479,8 +2480,8 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
 
     state = merged;
     rebuildSupportSettingsHexCacheFromState();
-    emitSupportInteractionReset('mergeFromLychee');
-    console.log('[SupportStore] Merged from Lychee:', {
+    emitSupportInteractionReset('mergeFromImportFormat');
+    console.log('[SupportStore] Merged from LYS:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
         branches: Object.keys(state.branches).length,

@@ -6,7 +6,7 @@ import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, mergeFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -14,8 +14,9 @@ import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
-import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
-import { useLysImport } from '@/components/lys-import/useLysImport';
+import { useLysSceneImport, type LysSceneImportResult } from '../../../plugins/lys-import/useLysSceneImport';
+import { importLysFile } from '../../../plugins/lys-import/fileTypeHandlers';
+import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
@@ -742,10 +743,16 @@ export function useSceneCollectionManager() {
     return null;
   }, []);
 
-  const getSceneExtension = useCallback((name: string): '.lys' | '.voxl' | null => {
+  const getSceneExtension = useCallback((name: string): string | null => {
     const normalized = name.trim().toLowerCase();
-    if (normalized.endsWith('.lys')) return '.lys';
     if (normalized.endsWith('.voxl')) return '.voxl';
+    for (const def of GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS) {
+      for (const ft of def.fileTypes ?? []) {
+        if (ft.isSceneFile && normalized.endsWith(ft.fileExtension)) {
+          return ft.fileExtension;
+        }
+      }
+    }
     return null;
   }, []);
 
@@ -3053,8 +3060,7 @@ export function useSceneCollectionManager() {
     return createdIds;
   }, [activeModelId, cloneGeometryWithBounds, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
-  // NEW: LYS Import (1-step)
-  const lysImport = useLysImport();
+  // LYS Import (1-step) — dispatched via plugin registry
 
   type SceneImportRunOptions = {
     suppressProgress?: boolean;
@@ -3084,7 +3090,7 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
-      const result = await lysImport.importFile(file, {
+      const result = await importLysFile(file, {
         importCenterXY: {
           x: defaultImportCenterXY.x,
           y: defaultImportCenterXY.y,
@@ -3175,13 +3181,13 @@ export function useSceneCollectionManager() {
         if (supportData) {
           if (typeof window !== 'undefined') {
             requestAnimationFrame(() => {
-              mergeFromLychee(supportData);
+              mergeFromImportFormat(supportData);
               if (!transformsEqual(sourceTransform, model.transform)) {
                 transformSupportsForModel(model.id, sourceTransform, model.transform);
               }
             });
           } else {
-            mergeFromLychee(supportData);
+            mergeFromImportFormat(supportData);
             if (!transformsEqual(sourceTransform, model.transform)) {
               transformSupportsForModel(model.id, sourceTransform, model.transform);
             }
@@ -3201,7 +3207,7 @@ export function useSceneCollectionManager() {
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
         return true;
       } else {
-        const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
+        const errorMessage = 'LYS import failed before geometry could be produced.';
         console.error('[SceneCollection] LYS import failed:', errorMessage);
         if (!options?.suppressReport) {
           emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
@@ -3232,7 +3238,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, lysImport, processGeometry, requestSceneImportPlacementChoice, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -3456,7 +3462,7 @@ export function useSceneCollectionManager() {
 
       if (voxlSupportsContainData(document)) {
         const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
-        mergeFromLychee(remappedSupports);
+        mergeFromImportFormat(remappedSupports);
 
         for (const imported of importedModels) {
           const sourceTransform = sourceTransformsByModelId.get(imported.id);
@@ -3619,31 +3625,31 @@ export function useSceneCollectionManager() {
     return true;
   }, [importSceneFile, loadFiles, recentOpenedFiles]);
 
-  // Legacy Lychee loader wrapper
-  const handleLoadLychee = async () => {
+  // Legacy LYS JSON loader wrapper
+  const handleLoadLysJson = async () => {
     try {
       const res = await fetch('/dragonfruit_supports.json');
       const data = await res.json();
-      loadFromLychee(data);
-      console.log('Loaded Lychee data:', data);
+      loadFromImportFormat(data);
+      console.log('Loaded LYS data:', data);
     } catch (e) {
-      console.error('Failed to load Lychee data:', e);
+      console.error('Failed to load LYS data:', e);
     }
   };
 
-  // New Import Handler for Lychee Files (Legacy - single step)
-  const importLycheeSupportFile = useCallback(async (file: File) => {
+  // LYS support JSON import handler (Legacy - single step)
+  const importLysSupportFile = useCallback(async (file: File) => {
     try {
       const text = await file.text();
       const json = JSON.parse(text);
 
-      // Determine if it's raw Lychee (has 'supports') or pre-converted DragonFruit (has 'trunks')
-      // But here we assume raw Lychee as per the goal.
-      // LysConverter.convert handles the Raw Lychee structure.
+      // Determine if it's raw LYS (has 'supports') or pre-converted DragonFruit (has 'trunks')
+      // But here we assume raw LYS format as per the goal.
+      // LysConverter.convert handles the raw LYS structure.
       // Dynamic import to avoid circular deps if any (though usually fine here)
-      const { LysConverter } = await import('@/components/lys-import/LysConverter');
+      const { LysConverter } = await import('../../../plugins/lys-import/LysConverter');
 
-      console.log('[SceneCollection] Converting Lychee file...');
+      console.log('[SceneCollection] Converting LYS file...');
       const converted = LysConverter.convert(json, getSettings());
 
       const targetModelId = activeModelIdRef.current ?? modelsRef.current[0]?.id ?? null;
@@ -3652,23 +3658,23 @@ export function useSceneCollectionManager() {
       }
 
       console.log('[SceneCollection] Loading into Store...');
-      loadFromLychee(converted);
+      loadFromImportFormat(converted);
 
     } catch (err) {
-      console.error('[SceneCollection] Failed to import Lychee file:', err);
+      console.error('[SceneCollection] Failed to import LYS file:', err);
     }
   }, []);
 
-  // Two-Step Lychee Import (JSON -> STL -> Apply Transforms -> Create Supports)
-  const lycheeImport = useLycheeImport();
+  // Two-Step LYS Scene Import (JSON -> STL -> Apply Transforms -> Create Supports)
+  const lysSceneImport = useLysSceneImport();
 
-  const handleLycheeModelLoaded = useCallback((result: LycheeImportResult) => {
+  const handleLysSceneModelLoaded = useCallback((result: LysSceneImportResult) => {
     // Create model from the import result
     const color = '#a3a3a3';
 
     const model: LoadedModel = {
       id: result.modelId,
-      name: 'Lychee Import',
+      name: 'LYS Import',
       fileUrl: '', // No URL for imported models
       geometry: result.geometry,
       transform: {
@@ -3685,15 +3691,15 @@ export function useSceneCollectionManager() {
     setActiveModelId(result.modelId);
     setSelectedModelIds([result.modelId]);
 
-    console.log('[SceneCollection] Lychee import complete:', {
+    console.log('[SceneCollection] LYS scene import complete:', {
       modelId: result.modelId,
       supports: result.supportCount
     });
   }, []);
 
-  const handleLycheeStlFile = useCallback((file: File) => {
-    lycheeImport.processStlFile(file, handleLycheeModelLoaded);
-  }, [lycheeImport.processStlFile, handleLycheeModelLoaded]);
+  const handleLysStlFile = useCallback((file: File) => {
+    lysSceneImport.processStlFile(file, handleLysSceneModelLoaded);
+  }, [lysSceneImport.processStlFile, handleLysSceneModelLoaded]);
 
   // Delete Handler Integration
   useEffect(() => {
@@ -4035,23 +4041,21 @@ export function useSceneCollectionManager() {
     }, []),
 
     // Legacy/Other
-    handleLoadLychee,
-    importLycheeSupportFile,
+    handleLoadLysJson,
+    importLysSupportFile,
 
-    // Two-Step Lychee Import
-    lycheeImportPhase: lycheeImport.phase,
-    lycheeImportError: lycheeImport.error,
-    handleLycheeJsonFile: lycheeImport.processJsonFile,
-    handleLycheeStlFile,
-    cancelLycheeImport: lycheeImport.cancelImport,
+    // Two-Step LYS Scene Import
+    lysImportPhase: lysSceneImport.phase,
+    lysImportError: lysSceneImport.error,
+    handleLysJsonFile: lysSceneImport.processJsonFile,
+    handleLysStlFile,
+    cancelLysImport: lysSceneImport.cancelImport,
 
     // LYS Import (1-step)
     importLysFile: handleImportLysFile,
     importSceneFile,
     importSceneFiles,
     onImportLysChange,
-    isLysLoading: lysImport.isLoading,
-    lysError: lysImport.error,
 
     // Debug primitives
     addDebugPrimitive,

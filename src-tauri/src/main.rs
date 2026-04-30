@@ -28,6 +28,9 @@ type DragonFruitWindow = tauri::Window<tauri::Cef>;
 #[cfg(not(feature = "tauri-cef"))]
 type DragonFruitWindow = tauri::Window<tauri::Wry>;
 
+/// Scene file extensions contributed by built-in fileType plugins — auto-generated, do not edit.
+use plugin_registry::GENERATED_BUILTIN_PLUGIN_SCENE_FILE_EXTENSIONS as BUILTIN_PLUGIN_SCENE_EXTENSIONS;
+
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     let stamp = std::time::SystemTime::now()
@@ -116,7 +119,9 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
         dialog = match ext {
             "stl" | "obj" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf"]),
             "voxl" => dialog.add_filter("Scene Files", &["voxl"]),
-            "lys" => dialog.add_filter("Scene Files", &["lys"]),
+            x if BUILTIN_PLUGIN_SCENE_EXTENSIONS.contains(&x) => {
+                dialog.add_filter("Scene Files", BUILTIN_PLUGIN_SCENE_EXTENSIONS)
+            }
             "json" => dialog.add_filter("JSON Files", &["json"]),
             _ => dialog.add_filter("Print Files", &[ext]),
         };
@@ -2201,13 +2206,11 @@ fn is_scene_file_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| {
-            ext.trim()
-                .trim_start_matches('.')
-                .eq_ignore_ascii_case("voxl")
-                || ext
-                    .trim()
-                    .trim_start_matches('.')
-                    .eq_ignore_ascii_case("lys")
+            let normalized = ext.trim().trim_start_matches('.');
+            normalized.eq_ignore_ascii_case("voxl")
+                || BUILTIN_PLUGIN_SCENE_EXTENSIONS
+                    .iter()
+                    .any(|&s| normalized.eq_ignore_ascii_case(s))
         })
         .unwrap_or(false)
 }
@@ -2246,14 +2249,19 @@ struct SceneFileHandoffPayload {
 fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
     let mut dialog = rfd::FileDialog::new();
 
+    // Build scene extension list: voxl + all plugin-registered extensions + zip (for bundles)
+    let mut scene_exts: Vec<&str> = vec!["voxl"];
+    scene_exts.extend_from_slice(BUILTIN_PLUGIN_SCENE_EXTENSIONS);
+    scene_exts.push("zip");
+
     let normalized = category.trim().to_ascii_lowercase();
     dialog = match normalized.as_str() {
         "mesh" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf", "zip"]),
-        "scene" => dialog.add_filter("Scene Files", &["voxl", "lys", "zip"]),
+        "scene" => dialog.add_filter("Scene Files", &scene_exts),
         "bundle" => dialog.add_filter("JSON Files", &["json"]),
         _ => dialog
             .add_filter("Mesh Files", &["stl", "obj", "3mf", "zip"])
-            .add_filter("Scene Files", &["voxl", "lys", "zip"]),
+            .add_filter("Scene Files", &scene_exts),
     };
 
     dialog

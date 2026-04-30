@@ -117,6 +117,7 @@ import {
   type PrinterMonitoringSnapshot,
   type PrinterMonitoringWebcamInfo,
 } from '@/features/plugins/pluginRegistry';
+import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -392,8 +393,19 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
-const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.obj', '.3mf', '.lys', '.voxl']);
-const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
+const PLUGIN_SCENE_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
+  (def) => (def.fileTypes ?? []).filter((ft) => ft.isSceneFile),
+);
+const PLUGIN_ALL_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
+  (def) => def.fileTypes ?? [],
+);
+const PREPARE_DROP_EXTENSIONS = new Set([
+  '.stl', '.obj', '.3mf', '.voxl',
+  ...PLUGIN_ALL_FILE_TYPES.map((ft) => ft.fileExtension),
+]);
+const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
+  PLUGIN_SCENE_FILE_TYPES.find((ft) => ft.fileExtension === '.lys')?.importWarning?.storageKey
+  ?? 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
@@ -465,13 +477,14 @@ function getDroppedFileMimeType(name: string): string {
   if (ext === '.obj') return 'model/obj';
   if (ext === '.3mf') return 'model/3mf';
   if (ext === '.voxl') return 'application/json';
-  if (ext === '.lys') return 'application/octet-stream';
-  return 'application/octet-stream';
+  const pluginType = PLUGIN_ALL_FILE_TYPES.find((ft) => ft.fileExtension === ext);
+  return pluginType?.mimeType ?? 'application/octet-stream';
 }
 
 function isSceneFileName(name: string): boolean {
   const ext = getFileExtension(name);
-  return ext === '.voxl' || ext === '.lys';
+  if (ext === '.voxl') return true;
+  return PLUGIN_SCENE_FILE_TYPES.some((ft) => ft.fileExtension === ext);
 }
 
 function normalizeActiveVoxlScenePath(path: string | null | undefined): string | null {
@@ -12121,19 +12134,10 @@ export default function Home() {
       };
     }
 
-    if (scene.isLysLoading) {
+    if (scene.lysImportPhase === 'processing') {
       return {
         active: true,
-        label: 'Loading Scene…',
-        detail: 'Parsing and applying scene transforms',
-        progress: null as number | null,
-      };
-    }
-
-    if (scene.lycheeImportPhase === 'processing') {
-      return {
-        active: true,
-        label: 'Loading Lychee Scene…',
+        label: 'Loading LYS Scene…',
         detail: 'Converting support data and model metadata',
         progress: null as number | null,
       };
@@ -12145,7 +12149,7 @@ export default function Home() {
       detail: '',
       progress: null as number | null,
     };
-  }, [nativePickerPreparationState, scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
+  }, [nativePickerPreparationState, scene.importProgress, scene.lysImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
@@ -12154,8 +12158,7 @@ export default function Home() {
     const isSceneImportActive =
       (scene.importProgress.active
         && (scene.importProgress.type === 'scene' || scene.importProgress.type === 'mesh'))
-      || scene.isLysLoading
-      || scene.lycheeImportPhase === 'processing';
+      || scene.lysImportPhase === 'processing';
 
     if (isSceneImportActive && scene.models.length === 0) {
       setHoldEmptyStateSceneImportUi(true);
@@ -12165,7 +12168,7 @@ export default function Home() {
     if (!isSceneImportActive && holdEmptyStateSceneImportUi) {
       setHoldEmptyStateSceneImportUi(false);
     }
-  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.isLysLoading, scene.lycheeImportPhase, scene.models.length]);
+  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.lysImportPhase, scene.models.length]);
 
   const showEmptyStatePanel = scene.models.length === 0 || holdEmptyStateSceneImportUi;
   const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
@@ -13604,13 +13607,13 @@ export default function Home() {
               key="analysis-scan-card"
               islands={islands}
               hasGeometry={!!scene.geom}
-              onLoadLychee={scene.handleLoadLychee}
-              onImportLycheeFile={scene.importLycheeSupportFile}
-              lycheeImportPhase={scene.lycheeImportPhase}
-              lycheeImportError={scene.lycheeImportError}
-              onLycheeJsonFile={scene.handleLycheeJsonFile}
-              onLycheeStlFile={scene.handleLycheeStlFile}
-              onCancelLycheeImport={scene.cancelLycheeImport}
+              onLoadLysJson={scene.handleLoadLysJson}
+              onImportLysFile={scene.importLysSupportFile}
+              lysImportPhase={scene.lysImportPhase}
+              lysImportError={scene.lysImportError}
+              onLysJsonFile={scene.handleLysJsonFile}
+              onLysStlFile={scene.handleLysStlFile}
+              onCancelLysImport={scene.cancelLysImport}
             />
 
             <IslandScanWorkflowCard key="analysis-workflow" islands={islands} hasGeometry={!!scene.geom} />

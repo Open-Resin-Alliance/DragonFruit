@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getSnapshot, loadFromLychee, resetStore } from '../state';
+import { getSnapshot, loadFromImportFormat, resetStore } from '../state';
 import type { DragonfruitImportFormat } from '../types';
 
 function almostEqual(a: number, b: number, epsilon = 1e-6): boolean {
     return Math.abs(a - b) <= epsilon;
 }
 
-test('loadFromLychee normalizes imported host-knot positions for brace/leaf visuals', () => {
+test('loadFromImportFormat normalizes imported host-knot positions for brace/leaf visuals', () => {
     resetStore();
 
     const data: DragonfruitImportFormat = {
@@ -96,7 +96,7 @@ test('loadFromLychee normalizes imported host-knot positions for brace/leaf visu
         ],
     };
 
-    loadFromLychee(data);
+    loadFromImportFormat(data);
     const snapshot = getSnapshot();
 
     const knotLeaf = snapshot.knots['k-leaf'];
@@ -126,7 +126,7 @@ test('loadFromLychee normalizes imported host-knot positions for brace/leaf visu
     resetStore();
 });
 
-test('loadFromLychee preserves authored brace host positions on large endpoint reprojection', () => {
+test('loadFromImportFormat preserves authored brace host positions on large endpoint reprojection', () => {
     resetStore();
 
     const data: DragonfruitImportFormat = {
@@ -226,7 +226,7 @@ test('loadFromLychee preserves authored brace host positions on large endpoint r
         ],
     };
 
-    loadFromLychee(data);
+    loadFromImportFormat(data);
     const snapshot = getSnapshot();
 
     const knotLeft = snapshot.knots['k-left'];

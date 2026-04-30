@@ -10,6 +10,7 @@ const pluginsRoot = path.join(repoRoot, 'plugins');
 const generatedTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPlugins.ts');
 const generatedNetworkTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginNetworkHandlers.ts');
 const generatedUploadTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
+const generatedFileTypeTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginFileTypeHandlers.ts');
 const generatedRustPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
 const generatedEncoderRustPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'src', 'encoders', 'generated_plugin_encoders.rs');
 
@@ -27,6 +28,7 @@ function parseCapabilitiesFromPluginDefinitionSource(sourceText) {
             uploadWithProgress: hasTrueFlag('uploadWithProgress'),
             slicerEncoder: hasTrueFlag('slicerEncoder'),
             tauriRuntimePlugin: hasTrueFlag('tauriRuntimePlugin'),
+            fileType: hasTrueFlag('fileType'),
       };
 }
 
@@ -57,10 +59,11 @@ async function main() {
             throw new Error('[plugin-registry-smoke] allowlist has no plugin ids');
       }
 
-      const [generatedTs, generatedNetworkTs, generatedUploadTs, generatedRust, generatedEncoderRust] = await Promise.all([
+      const [generatedTs, generatedNetworkTs, generatedUploadTs, generatedFileTypeTs, generatedRust, generatedEncoderRust] = await Promise.all([
             readText(generatedTsPath),
             readText(generatedNetworkTsPath),
             readText(generatedUploadTsPath),
+            readText(generatedFileTypeTsPath),
             readText(generatedRustPath),
             readText(generatedEncoderRustPath),
       ]);
@@ -97,6 +100,10 @@ async function main() {
 
             if (capabilities.uploadWithProgress && !generatedUploadTs.includes(`pluginId: '${id}'`)) {
                   throw new Error(`[plugin-registry-smoke] ${path.basename(generatedUploadTsPath)} missing upload handler entry for '${id}'`);
+            }
+
+            if (capabilities.fileType && !generatedFileTypeTs.includes(`pluginId: '${id}'`)) {
+                  throw new Error(`[plugin-registry-smoke] ${path.basename(generatedFileTypeTsPath)} missing file-type handler entry for '${id}'`);
             }
 
             if (capabilities.tauriRuntimePlugin && !generatedRust.includes(`"${id}"`)) {
