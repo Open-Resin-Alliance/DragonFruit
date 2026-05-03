@@ -751,6 +751,39 @@ function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port
   return `${base}/${trimmed.replace(/^\/+/, '')}`;
 }
 
+type JsonObject = Record<string, unknown>;
+
+function asJsonObject(value: unknown): JsonObject {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as JsonObject;
+  }
+  return {};
+}
+
+async function readJsonObject(response: { json: () => Promise<unknown> }): Promise<JsonObject> {
+  try {
+    const payload = await response.json();
+    return asJsonObject(payload);
+  } catch {
+    return {};
+  }
+}
+
+function readBooleanField(payload: JsonObject, key: string): boolean | null {
+  const value = payload[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function readStringField(payload: JsonObject, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function readNumberField(payload: JsonObject, key: string): number | null {
+  const value = payload[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -4054,11 +4087,12 @@ export default function Home() {
               port: target.port,
             });
 
-            const payload = await response.json().catch(() => ({} as any));
+            const payload = await readJsonObject(response);
             if (!response.ok) return [target.id, false] as const;
 
-            if (payload && typeof payload.ok === 'boolean') {
-              return [target.id, payload.ok === true] as const;
+            const payloadOk = readBooleanField(payload, 'ok');
+            if (payloadOk != null) {
+              return [target.id, payloadOk === true] as const;
             }
 
             try {
@@ -5020,9 +5054,10 @@ export default function Home() {
             .then(async (response) => {
               if (!response.ok) return false;
 
-              const payload = await response.json().catch(() => null) as any;
-              if (payload && typeof payload.ok === 'boolean') {
-                return payload.ok === true;
+              const payload = await readJsonObject(response);
+              const payloadOk = readBooleanField(payload, 'ok');
+              if (payloadOk != null) {
+                return payloadOk === true;
               }
 
               try {
@@ -5316,7 +5351,7 @@ export default function Home() {
           host,
         });
 
-        const payload = await response.json().catch(() => null) as any;
+        const payload = await readJsonObject(response);
         const rawMaterials = Array.isArray(payload?.materials) ? payload.materials : [];
 
         const parsed: FleetUploadMaterialOption[] = rawMaterials
@@ -5411,7 +5446,7 @@ export default function Home() {
             port,
           });
 
-          const payload = await response.json().catch(() => ({} as any));
+          const payload = await readJsonObject(response);
           if (cancelled) return;
           const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
           setSelectedPrinterMonitorSnapshot(snapshot);
@@ -5474,7 +5509,7 @@ export default function Home() {
         try {
           const response = await pluginNetworkFetch(requestPayload);
 
-          const payload = await response.json().catch(() => ({} as any));
+          const payload = await readJsonObject(response);
           if (cancelled) return;
 
           const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
@@ -5594,7 +5629,7 @@ export default function Home() {
     try {
       const response = await pluginNetworkFetch(requestPayload);
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
@@ -6010,14 +6045,14 @@ export default function Home() {
         const requestStartedAt = Date.now();
         const response = await pluginNetworkFetch(requestPayload);
 
-        const payload = await response.json().catch(() => ({} as any));
+        const payload = await readJsonObject(response);
         if (cancelled) return;
         const parsed = printingMonitoringAdapter.parseWebcamInfoPayload(payload, host, port);
         const elapsedMs = Date.now() - requestStartedAt;
 
         const parsedMessage = String(parsed?.message ?? '').toLowerCase();
-        const payloadMessage = typeof payload?.message === 'string' ? payload.message.toLowerCase() : '';
-        const ack = typeof payload?.ack === 'number' ? payload.ack : null;
+        const payloadMessage = (readStringField(payload, 'message') ?? '').toLowerCase();
+        const ack = readNumberField(payload, 'ack');
         const timedOut = parsedMessage.includes('timed out')
           || payloadMessage.includes('timed out')
           || parsedMessage.includes('no-response')
@@ -6464,9 +6499,10 @@ export default function Home() {
             });
 
             if (!response.ok) {
-              const payload = await response.json().catch(() => null) as { error?: unknown } | null;
-              const reason = typeof payload?.error === 'string' && payload.error.trim().length > 0
-                ? payload.error.trim()
+              const payload = await readJsonObject(response);
+              const payloadError = readStringField(payload, 'error');
+              const reason = typeof payloadError === 'string' && payloadError.trim().length > 0
+                ? payloadError.trim()
                 : `HTTP ${response.status}`;
               throw new Error(reason);
             }
@@ -6649,7 +6685,7 @@ export default function Home() {
               port,
             });
 
-            const payload = await response.json().catch(() => ({} as any));
+            const payload = await readJsonObject(response);
             const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
             return [device.id, snapshot] as const;
           } catch {
@@ -7915,7 +7951,7 @@ export default function Home() {
             jobName: pathBase,
           });
 
-          const readyPayload = await responseReady.json().catch(() => ({} as any));
+          const readyPayload = await readJsonObject(responseReady);
           const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
           const matchedPlateId = Number(
             (matchedPlate as any)?.PlateID
@@ -8099,8 +8135,8 @@ export default function Home() {
         plateId: printingReadyPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
-      if (response.ok && payload?.ok) {
+      const payload = await readJsonObject(response);
+      if (response.ok && payload?.ok === true) {
         setPrintingSendStageText('Print started');
         setPrintingUploadDialogStage('started');
         setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
@@ -8147,7 +8183,7 @@ export default function Home() {
         plateId: roundedPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -8209,7 +8245,7 @@ export default function Home() {
         plateId: roundedPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -8283,7 +8319,7 @@ export default function Home() {
         plateId: printingMonitorPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string'
           ? payload.error
@@ -8311,7 +8347,7 @@ export default function Home() {
         port,
         plateId: printingMonitorPlateId,
       });
-      const statusPayload = await statusResponse.json().catch(() => ({} as any));
+      const statusPayload = await readJsonObject(statusResponse);
       if (statusResponse.ok) {
         setPrintingMonitorSnapshot(printingMonitoringAdapter.parseStatusPayload(statusPayload, `${host}:${port}`));
       }
@@ -8374,7 +8410,7 @@ export default function Home() {
         mainboardId: resolvedMainboardId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       const commandOk = typeof payload?.ok === 'boolean' ? payload.ok : (response.ok ? true : false);
       setPrintingMonitorLastFeatureToggleResponse({
         operation,
@@ -8456,7 +8492,7 @@ export default function Home() {
 
     try {
       const response = await pluginNetworkFetch(requestPayload);
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
 
       setPrintingMonitorDebugState((previous) => ({
         ...previous,
