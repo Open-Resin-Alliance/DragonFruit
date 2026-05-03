@@ -405,6 +405,7 @@ const DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
 const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
+const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
 
 type TransformStoreCommitResult = {
   updated: boolean;
@@ -1132,8 +1133,10 @@ export default function Home() {
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
+  const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
+  const lastCompletedResinEstimateSignatureRef = React.useRef<string>('');
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
   const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
   const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
@@ -3298,13 +3301,41 @@ export default function Home() {
     return promise;
   }, [computeBaseResinMlChunked]);
 
-  // First, check if we should even calculate volumes based on mode.
-  // Printing-mode reopen with an existing artifact should stay responsive;
-  // avoid re-running heavy support/raft volume aggregation in that case.
-  const shouldCalculateVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  // Support/raft aggregation is comparatively heavy, so keep it scoped to
+  // export + pre-artifact printing. Base model volume estimation runs in the
+  // background across active editing modes (for warm, up-to-date estimates).
+  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  const visibleResinModels = React.useMemo(() => {
+    return scene.models.filter((model) => model.visible);
+  }, [scene.models]);
+  const shouldEstimateResinInBackground = visibleResinModels.length > 0
+    && (scene.mode !== 'printing' || !printingArtifact);
+
+  const resinEstimateComputationSignature = React.useMemo(() => {
+    if (visibleResinModels.length === 0) return '';
+
+    const parts = visibleResinModels.map((model) => {
+      const geometry = model.geometry.geometry;
+      const positionAttr = geometry.getAttribute('position') as ({ version?: number; data?: { version?: number } } | null);
+      const indexAttr = geometry.getIndex() as ({ version?: number } | null);
+
+      const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
+      const positionVersion = positionAttr?.version ?? positionAttr?.data?.version ?? 0;
+      const indexVersion = indexAttr?.version ?? 0;
+
+      const sx = Math.abs(model.transform.scale.x || 1).toFixed(6);
+      const sy = Math.abs(model.transform.scale.y || 1).toFixed(6);
+      const sz = Math.abs(model.transform.scale.z || 1).toFixed(6);
+
+      return `${model.id}:${sourceKey}:${positionVersion}:${indexVersion}:${sx}:${sy}:${sz}`;
+    });
+
+    parts.sort((a, b) => a.localeCompare(b));
+    return parts.join('|');
+  }, [visibleResinModels]);
 
   const supportAndRaftResinMl = React.useMemo(() => {
-    if (!shouldCalculateVolumes) return 0;
+    if (!shouldCalculateSupportAndRaftVolumes) return 0;
 
     // Expensive calculation ONLY runs when mode is export/printing
     const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
@@ -3626,7 +3657,7 @@ export default function Home() {
 
     return supportMl + raftMl;
   }, [
-    shouldCalculateVolumes,
+    shouldCalculateSupportAndRaftVolumes,
     computeFootprint,
     computeRaftOuterBoundary,
     raftSettingsSnapshot,
@@ -3645,26 +3676,37 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
+    if (!shouldEstimateResinInBackground) return;
+
+    const intervalId = window.setInterval(() => {
+      setResinEstimateRefreshTick((previous) => previous + 1);
+    }, RESIN_ESTIMATE_BACKGROUND_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [shouldEstimateResinInBackground]);
+
+  React.useEffect(() => {
     let cancelled = false;
 
-    if (!shouldCalculateVolumes) {
+    if (!shouldEstimateResinInBackground) {
+      if (visibleResinModels.length === 0) {
+        lastCompletedResinEstimateSignatureRef.current = '';
+        setPrintingEstimatedResinMl(null);
+      }
       setIsPrintingEstimatedResinBusy(false);
       return () => {
         cancelled = true;
       };
     }
 
-    const visibleModels = scene.models.filter((model) => model.visible);
-
-    if (visibleModels.length === 0) {
-      setPrintingEstimatedResinMl(null);
-      setIsPrintingEstimatedResinBusy(false);
-      return () => {
-        cancelled = true;
-      };
+    const visibleModels = visibleResinModels;
+    const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
+    const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
+    if (printingEstimatedResinMl == null || hasChangedSinceLastSuccess) {
+      setIsPrintingEstimatedResinBusy(true);
     }
-
-    setIsPrintingEstimatedResinBusy(true);
 
     const run = async () => {
       let totalMl = 0;
@@ -3686,6 +3728,7 @@ export default function Home() {
       if (cancelled) return;
       const totalWithSupports = totalMl + supportAndRaftResinMl;
       setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
 
@@ -3694,7 +3737,15 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [getOrComputeBaseResinMl, scene.models, shouldCalculateVolumes, supportAndRaftResinMl]);
+  }, [
+    getOrComputeBaseResinMl,
+    printingEstimatedResinMl,
+    resinEstimateComputationSignature,
+    resinEstimateRefreshTick,
+    shouldEstimateResinInBackground,
+    supportAndRaftResinMl,
+    visibleResinModels,
+  ]);
 
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
