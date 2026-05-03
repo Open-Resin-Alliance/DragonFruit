@@ -3884,16 +3884,45 @@ export function ProfileSettingsModal({
                 <div className="flex items-center gap-1.5 shrink-0">
                   {shouldUseRemoteOnDeviceMaterials && (
                     <>
-                      <button
-                        type="button"
-                        onClick={openRemoteMaterialEditDialog}
-                        disabled={!selectedRemoteMaterial}
-                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Edit
-                      </button>
+                      {effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice ? (
+                        <div className="relative group">
+                          <button
+                            type="button"
+                            disabled
+                            aria-label="Edit material (work in progress)"
+                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md opacity-35 cursor-not-allowed"
+                            style={{ color: 'var(--text-strong)', pointerEvents: 'none' }}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                          <div
+                            className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[220px] rounded-md border px-2.5 py-2 text-[10px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
+                              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+                              color: 'var(--text-muted)',
+                              boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                            }}
+                            role="tooltip"
+                            aria-hidden="true"
+                          >
+                            <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>Work in progress</div>
+                            <div>{effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice}</div>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={openRemoteMaterialEditDialog}
+                          disabled={!selectedRemoteMaterial}
+                          className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                          style={{ color: 'var(--text-strong)' }}
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Edit
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => { void loadRemoteMaterials(); }}
