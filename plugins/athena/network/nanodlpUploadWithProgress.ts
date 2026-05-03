@@ -291,6 +291,7 @@ export async function uploadToNanoDlpFromPathWithProgress(
   let smoothedBytesPerSecond = 0;
   let currentLoaded = 0;
   let currentTotal = knownTotal ?? 0;
+  let uploadBytesFullySent = false;
 
   const emitProgress = (loadedInput: number, totalInput: number, options?: { phase?: 'uploading' | 'processing' | 'complete' }) => {
     const phase = options?.phase ?? 'uploading';
@@ -390,8 +391,25 @@ export async function uploadToNanoDlpFromPathWithProgress(
       currentLoaded = Math.max(0, Math.min(Math.round(sentBytes), Math.round(totalBytes)));
       currentTotal = Math.max(1, Math.round(totalBytes));
 
-      const done = upload.done === true;
-      emitProgress(currentLoaded, currentTotal, { phase: done ? 'processing' : 'uploading' });
+      const fullyTransferred = currentLoaded >= currentTotal;
+
+      if (fullyTransferred && !uploadBytesFullySent) {
+        // Bytes are all sent; NanoDLP is now processing server-side.
+        // Stop the poll timer so speed/ETA don't drift, then signal processing.
+        // NOTE: do NOT call emitProgress here — onProgress clears the 220ms
+        // handoff timeout in page.tsx that transitions to the indeterminate bar.
+        uploadBytesFullySent = true;
+        if (progressTimer !== null) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
+        callbacks.onStatusUpdate({
+          stage: 'processing',
+          message: 'File uploaded, processing on device…',
+        });
+      } else if (!fullyTransferred) {
+        emitProgress(currentLoaded, currentTotal, { phase: 'uploading' });
+      }
     } finally {
       progressPollInFlight = false;
     }
@@ -433,15 +451,17 @@ export async function uploadToNanoDlpFromPathWithProgress(
       throw new Error(reason);
     }
 
-    callbacks.onStatusUpdate({
-      stage: 'processing',
-      message: 'File uploaded, processing on device…',
-    });
-
-    await pollNativeUploadProgress();
-    const processingTotal = currentTotal > 0 ? currentTotal : (knownTotal ?? 1);
-    const processingLoaded = Math.max(currentLoaded, Math.round(processingTotal * 0.99));
-    emitProgress(processingLoaded, processingTotal, { phase: 'processing' });
+    // If the poll never detected full transfer (fast/local uploads), transition to
+    // processing now so the user sees the state before complete fires.
+    // NOTE: do NOT call emitProgress here — onProgress clears the 220ms
+    // handoff timeout in page.tsx that transitions to the indeterminate bar.
+    if (!uploadBytesFullySent) {
+      uploadBytesFullySent = true;
+      callbacks.onStatusUpdate({
+        stage: 'processing',
+        message: 'File uploaded, processing on device…',
+      });
+    }
 
     const plateIdRaw = Number(payload.plateId);
     const plateId = Number.isFinite(plateIdRaw) && plateIdRaw > 0
@@ -455,7 +475,7 @@ export async function uploadToNanoDlpFromPathWithProgress(
     });
 
     callbacks.onComplete?.(plateId);
-    const finalTotal = currentTotal > 0 ? currentTotal : Math.max(processingTotal, 1);
+    const finalTotal = currentTotal > 0 ? currentTotal : (knownTotal ?? 1);
     emitProgress(finalTotal, finalTotal, { phase: 'complete' });
 
     return { ok: true, plateId };
