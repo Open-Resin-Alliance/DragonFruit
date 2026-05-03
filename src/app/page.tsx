@@ -3704,50 +3704,6 @@ export default function Home() {
     return `${printingEstimatedResinMl.toFixed(2)} mL`;
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
 
-  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
-    if (!activeMaterialProfile) return '—';
-
-    const visibleModels = scene.models.filter((model) => model.visible);
-    if (visibleModels.length === 0) return '—';
-
-    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
-    let maxModelHeightMm = 0;
-
-    for (const model of visibleModels) {
-      const bbox = model.geometry.bbox;
-      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
-      const sz = Math.abs(model.transform.scale.z || 1);
-      maxModelHeightMm = Math.max(maxModelHeightMm, sizeZ * sz);
-    }
-
-    const totalLayers = Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-    if (totalLayers <= 0) return '—';
-
-    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
-    const normalLayers = Math.max(0, totalLayers - bottomLayers);
-
-    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
-      : 0;
-    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
-      : 0;
-    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
-
-    const totalSec = (
-      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
-      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
-    );
-
-    const wholeSeconds = Math.max(0, Math.floor(totalSec));
-    const hours = Math.floor(wholeSeconds / 3600);
-    const minutes = Math.floor((wholeSeconds % 3600) / 60);
-    const seconds = wholeSeconds % 60;
-
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [activeMaterialProfile, scene.models]);
-
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
 
@@ -10169,12 +10125,25 @@ export default function Home() {
     supportStateSnapshot.twigs,
   ]);
 
-  // For non-printing workflows, avoid expensive world-triangle projection work.
+  // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
     max: scene.sceneBounds?.max.z ?? 100,
   }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
+
+  const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
+    const maxZMm = Math.max(0, Number(range.max) || 0);
+    const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
+    const clampedMaxZMm = buildHeightLimitMm > 0
+      ? Math.min(maxZMm, buildHeightLimitMm)
+      : maxZMm;
+
+    return {
+      min: 0,
+      max: clampedMaxZMm,
+    };
+  }, [activePrinterProfile?.buildVolumeMm.height]);
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
@@ -10230,9 +10199,10 @@ export default function Home() {
   useEffect(() => {
     // Projected world-triangle bounds are expensive.
     // Analysis can run on fallback bounds to keep mode-entry instant.
-    // Printing only needs accurate support/raft-aware bounds before a print artifact
-    // exists; reopening printing with an existing artifact should avoid this rebuild.
-    const needsAccurateZRange = scene.mode === 'printing' && !printingArtifact;
+    // Printing needs accurate support/raft-aware bounds before a print artifact
+    // exists; Export needs the same fidelity so layer estimates match real slicing.
+    const needsAccurateZRange = (scene.mode === 'printing' && !printingArtifact) || scene.mode === 'export';
+    const shouldUseSlicerAlignedRange = scene.mode === 'printing' || scene.mode === 'export';
     
     if (needsAccurateZRange) {
       const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
@@ -10249,7 +10219,10 @@ export default function Home() {
       const run = () => {
         if (cancelled) return;
         const projected = buildProjectedCrossSectionZRange(scene.models);
-        const nextRange = projected ?? fallbackZRange;
+        const baseRange = projected ?? fallbackZRange;
+        const nextRange = shouldUseSlicerAlignedRange
+          ? normalizeToSlicerZRange(baseRange)
+          : baseRange;
         projectedZRangeCacheRef.current.set(projectedZRangeCacheKey, nextRange);
         if (projectedZRangeCacheRef.current.size > 8) {
           const oldest = projectedZRangeCacheRef.current.keys().next().value;
@@ -10277,10 +10250,11 @@ export default function Home() {
         }
       };
     } else {
-      // Use fast fallback for prepare/support/export modes
-      setSceneZRange(fallbackZRange);
+      // Use fast fallback for non-export modes where projected bounds aren't required.
+      setSceneZRange(shouldUseSlicerAlignedRange ? normalizeToSlicerZRange(fallbackZRange) : fallbackZRange);
     }
   }, [
+    normalizeToSlicerZRange,
     fallbackZRange,
     printingArtifact,
     projectedZRangeCacheKey,
@@ -10292,6 +10266,53 @@ export default function Home() {
     hasGeometry: scene.models.length > 0,
     zRange: sceneZRange
   });
+
+  const estimatedSlicerLayerCount = React.useMemo(() => {
+    if (scene.models.length === 0) return 0;
+
+    const layerHeightMm = Math.max(0.001, slicedLayerHeightMm || 0.05);
+    const printableMaxZMm = Math.max(0, Number(sceneZRange.max) || 0);
+    const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
+    const slicerHeightMm = buildHeightLimitMm > 0
+      ? Math.min(printableMaxZMm, buildHeightLimitMm)
+      : printableMaxZMm;
+
+    return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
+  }, [activePrinterProfile?.buildVolumeMm.height, scene.models.length, sceneZRange.max, slicedLayerHeightMm]);
+
+  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile) return '—';
+
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return '—';
+
+    const totalLayers = estimatedSlicerLayerCount;
+    if (totalLayers <= 0) return '—';
+
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const wholeSeconds = Math.max(0, Math.floor(totalSec));
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    const seconds = wholeSeconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
@@ -13701,6 +13722,7 @@ export default function Home() {
               key="export-slicing"
               models={scene.models}
               activeModel={scene.activeModel}
+              estimatedLayerCountOverride={estimatedSlicerLayerCount}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
@@ -14227,7 +14249,7 @@ export default function Home() {
                 models={scene.models}
                 selectedModelIds={scene.selectedModelIds}
                 inBoundsModelIds={inBoundsModelIds}
-                numLayers={slicing.numLayers}
+                numLayers={estimatedSlicerLayerCount}
                 heightMm={slicing.heightMm}
                 estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}

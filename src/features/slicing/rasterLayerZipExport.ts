@@ -24,6 +24,7 @@ import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
@@ -546,7 +547,7 @@ class TriangleFloatCollector {
 }
 
 function composeModelMatrix(transform: LoadedModel['transform']): THREE.Matrix4 {
-  const q = new THREE.Quaternion().setFromEuler(transform.rotation);
+  const q = quaternionFromGlobalEuler(transform.rotation);
   return new THREE.Matrix4().compose(transform.position, q, transform.scale);
 }
 
