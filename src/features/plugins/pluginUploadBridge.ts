@@ -27,7 +27,8 @@ export type PluginUploadCallbacks = {
 
 export type PluginUploadHandler = (args: {
   hostUrl: string;
-  zipBlob: Blob;
+  zipBlob?: Blob | null;
+  zipFilePath?: string | null;
   path: string;
   profileId: string;
   callbacks: PluginUploadCallbacks;
@@ -36,13 +37,21 @@ export type PluginUploadHandler = (args: {
 export async function uploadPrintJobWithProgress(args: {
   networkMode: string;
   hostUrl: string;
-  zipBlob: Blob;
+  zipBlob?: Blob | null;
+  zipFilePath?: string | null;
   path: string;
   profileId: string;
   callbacks: PluginUploadCallbacks;
 }): Promise<{ ok: boolean; plateId: number | null }> {
-  const { networkMode, hostUrl, zipBlob, path, profileId, callbacks } = args;
+  const { networkMode, hostUrl, zipBlob, zipFilePath, path, profileId, callbacks } = args;
   const adapter = getProfileNetworkUiAdapter(networkMode);
+
+  const hasBlob = Boolean(zipBlob && zipBlob.size > 0);
+  const normalizedPath = typeof zipFilePath === 'string' ? zipFilePath.trim() : '';
+  const hasFilePath = normalizedPath.length > 0;
+  if (!hasBlob && !hasFilePath) {
+    throw new Error('No upload payload available: expected zipBlob or zipFilePath.');
+  }
 
   if (!adapter) {
     throw new Error(`No network adapter found for mode: ${networkMode}`);
@@ -57,6 +66,7 @@ export async function uploadPrintJobWithProgress(args: {
     return handler({
       hostUrl,
       zipBlob,
+      zipFilePath: hasFilePath ? normalizedPath : null,
       path,
       profileId,
       callbacks,

@@ -7694,8 +7694,8 @@ export default function Home() {
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
-    setPrintingSendStageText('Uploading print job…');
-    setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingSendStageText('Uploading Print Job…');
+    setPrintingSendStatusText('Uploading Print Job to Printer…');
     setPrintingUploadTelemetry(null);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDialogOpen(true);
@@ -7704,24 +7704,12 @@ export default function Home() {
 
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
-      let zipBlob = printingArtifact.blob;
+      const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
+      const zipBlob = printingArtifact.blob ?? null;
       throwIfCanceled();
 
-      // If we have a local temp path and no blob, read the blob from native bridge
-      if (!zipBlob && nativeTempPath) {
-        try {
-          const fileBytes = await readPrintArtifactBytesFromPath(nativeTempPath);
-          if (fileBytes && fileBytes.length > 0) {
-            const normalizedBytes = Uint8Array.from(fileBytes);
-            zipBlob = new Blob([normalizedBytes], { type: 'application/octet-stream' });
-          }
-        } catch (readError) {
-          console.warn('Failed to read artifact from native path:', readError);
-        }
-      }
-
-      if (!zipBlob) {
-        throw new Error('No print artifact blob available for printer upload.');
+      if (!zipBlob && !zipFilePath) {
+        throw new Error('No print artifact payload available for printer upload.');
       }
 
       throwIfCanceled();
@@ -7742,6 +7730,7 @@ export default function Home() {
         networkMode,
         hostUrl,
         zipBlob,
+        zipFilePath,
         path: pathBase,
         profileId: selectedMaterialId,
         callbacks: {
