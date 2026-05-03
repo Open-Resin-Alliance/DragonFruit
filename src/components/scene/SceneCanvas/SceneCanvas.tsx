@@ -4,7 +4,9 @@ import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
-import { GizmoHelper, GizmoViewcube, OrbitControls } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
+import { ZUpGizmoViewcube } from './ZUpGizmoViewcube';
+import { ZUpGizmoHelper } from './ZUpGizmoHelper';
 import {
   CrossSectionStencilCap,
   type CrossSectionCapDebugOverrides,
@@ -6126,12 +6128,11 @@ export function SceneCanvas({
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
         {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
-          <GizmoHelper
+          <ZUpGizmoHelper
             alignment="bottom-right"
             margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
           >
-            <GizmoViewcube
-              faces={['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']}
+            <ZUpGizmoViewcube
               font="600 24px Inter, system-ui, sans-serif"
               color={gizmoColors.face}
               textColor={gizmoColors.text}
@@ -6139,7 +6140,7 @@ export function SceneCanvas({
               hoverColor={gizmoColors.accent}
               opacity={0.75}
             />
-          </GizmoHelper>
+          </ZUpGizmoHelper>
         )}
         <OrbitPivotIndicator visible={!thumbnailCaptureActive && isOrbitInteracting && isOrbitRotating} />
         {cameraInteractionCycleEnabled && (
