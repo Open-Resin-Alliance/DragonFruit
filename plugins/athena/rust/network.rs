@@ -2148,7 +2148,7 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
             .multipart(form)
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(600))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -2968,6 +2968,27 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
     }
 }
 
+fn plugin_operation_deadline(operation: &str) -> Duration {
+    let normalized_operation = operation.trim().trim_start_matches('/').trim_end_matches('/');
+    let op = normalized_operation
+        .strip_prefix("nanodlp/")
+        .unwrap_or(normalized_operation);
+
+    if matches!(op, "job/import") {
+        // Large uploads can legitimately take several minutes on slower networks.
+        return Duration::from_secs(10 * 60);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Duration::from_secs(60)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Duration::from_secs(120)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plugin dispatcher entry point
 // ---------------------------------------------------------------------------
@@ -3010,10 +3031,7 @@ pub async fn dispatch_plugin_network_request(request_json: String) -> Result<Plu
     // next poll arrives the total open-socket count can grow until Windows AV
     // heuristics decide the process is a port scanner and terminates it
     // (Windows Event 1005).  Returning a 503 early breaks the accumulation.
-    #[cfg(target_os = "windows")]
-    let deadline = Duration::from_secs(60);
-    #[cfg(not(target_os = "windows"))]
-    let deadline = Duration::from_secs(120);
+    let deadline = plugin_operation_deadline(&operation);
 
     let task = tokio::spawn(async move {
         match plugin_id.as_str() {
