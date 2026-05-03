@@ -26,7 +26,7 @@ const Context = React.createContext<{ tweenCamera: TweenCamera }>({
 
 export const useGizmoContext = () => React.useContext(Context);
 
-const turnRate = 2 * Math.PI;
+const turnRate = 4 * Math.PI;
 const dummy = new Object3D();
 const matrix = new Matrix4();
 const q1 = new Quaternion();
@@ -104,12 +104,6 @@ export function ZUpGizmoHelper({
   const animating = React.useRef(false);
   const radius = React.useRef(0);
   const focusPoint = React.useRef(new Vector3(0, 0, 0));
-  const defaultUp = React.useRef(new Vector3(0, 0, 1));
-
-  React.useEffect(() => {
-    defaultUp.current.copy(mainCamera.up);
-    dummy.up.copy(mainCamera.up);
-  }, [mainCamera]);
 
   const tweenCamera = React.useCallback<TweenCamera>(
     (direction) => {
@@ -141,13 +135,14 @@ export function ZUpGizmoHelper({
         if (q1.angleTo(q2) < 0.01) {
           mainCamera.position.copy(targetPosition);
           mainCamera.quaternion.copy(q2);
-          mainCamera.up.copy(defaultUp.current);
+          mainCamera.up.copy(worldUp);
           animating.current = false;
         } else {
           const step = delta * turnRate;
           q1.rotateTowards(q2, step);
           mainCamera.position.set(0, 0, 1).applyQuaternion(q1).multiplyScalar(radius.current).add(focusPoint.current);
-          mainCamera.up.copy(defaultUp.current);
+          targetDirection.copy(mainCamera.position).sub(focusPoint.current).normalize();
+          mainCamera.up.copy(worldUp);
           mainCamera.quaternion.copy(q1);
           if (isCameraControls(defaultControls)) {
             defaultControls.setPosition(mainCamera.position.x, mainCamera.position.y, mainCamera.position.z);
