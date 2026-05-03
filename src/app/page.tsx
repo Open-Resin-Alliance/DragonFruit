@@ -3305,9 +3305,62 @@ export default function Home() {
   // export + pre-artifact printing. Base model volume estimation runs in the
   // background across active editing modes (for warm, up-to-date estimates).
   const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  const resinBuildVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+
+    const width = scene.view3dSettings.widthMm;
+    const depth = scene.view3dSettings.depthMm;
+    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
+    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+
+    return new THREE.Box3(
+      new THREE.Vector3(minX, minY, 0),
+      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+    );
+  }, [
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.enabled,
+    scene.view3dSettings.maxZMm,
+    scene.view3dSettings.originMode,
+    scene.view3dSettings.widthMm,
+  ]);
+
+  const resinInBoundsModelIdSet = React.useMemo(() => {
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return new Set<string>();
+    if (!resinBuildVolumeBounds) return new Set(visibleModels.map((model) => model.id));
+
+    const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
+    const inBoundsModelIds = new Set<string>();
+
+    for (const model of visibleModels) {
+      const effectiveTransform =
+        (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
+          ? transformMgr.transform
+          : model.transform;
+
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+        ? computePreciseModelWorldBounds(model.geometry, effectiveTransform)
+        : approxBounds;
+
+      if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+        inBoundsModelIds.add(model.id);
+      }
+    }
+
+    return inBoundsModelIds;
+  }, [
+    displayActiveModelId,
+    resinBuildVolumeBounds,
+    scene.activeModelId,
+    scene.models,
+    transformMgr.transform,
+  ]);
+
   const visibleResinModels = React.useMemo(() => {
-    return scene.models.filter((model) => model.visible);
-  }, [scene.models]);
+    return scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id));
+  }, [resinInBoundsModelIdSet, scene.models]);
   const shouldEstimateResinInBackground = visibleResinModels.length > 0
     && (scene.mode !== 'printing' || !printingArtifact);
 
@@ -3338,7 +3391,7 @@ export default function Home() {
     if (!shouldCalculateSupportAndRaftVolumes) return 0;
 
     // Expensive calculation ONLY runs when mode is export/printing
-    const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
+    const visibleModelIds = resinInBoundsModelIdSet;
     if (visibleModelIds.size === 0) return 0;
 
     const mm3ToMl = (mm3: number) => Math.max(0, mm3) / 1000;
@@ -3657,6 +3710,7 @@ export default function Home() {
 
     return supportMl + raftMl;
   }, [
+    resinInBoundsModelIdSet,
     shouldCalculateSupportAndRaftVolumes,
     computeFootprint,
     computeRaftOuterBoundary,
