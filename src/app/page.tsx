@@ -405,6 +405,7 @@ const DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
 const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
+const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
 
 type TransformStoreCommitResult = {
   updated: boolean;
@@ -748,6 +749,39 @@ function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port
   const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
   if (trimmed.startsWith('/')) return `${base}${trimmed}`;
   return `${base}/${trimmed.replace(/^\/+/, '')}`;
+}
+
+type JsonObject = Record<string, unknown>;
+
+function asJsonObject(value: unknown): JsonObject {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as JsonObject;
+  }
+  return {};
+}
+
+async function readJsonObject(response: { json: () => Promise<unknown> }): Promise<JsonObject> {
+  try {
+    const payload = await response.json();
+    return asJsonObject(payload);
+  } catch {
+    return {};
+  }
+}
+
+function readBooleanField(payload: JsonObject, key: string): boolean | null {
+  const value = payload[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function readStringField(payload: JsonObject, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function readNumberField(payload: JsonObject, key: string): number | null {
+  const value = payload[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 export default function Home() {
@@ -1132,8 +1166,10 @@ export default function Home() {
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
+  const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
+  const lastCompletedResinEstimateSignatureRef = React.useRef<string>('');
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
   const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
   const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
@@ -3298,16 +3334,97 @@ export default function Home() {
     return promise;
   }, [computeBaseResinMlChunked]);
 
-  // First, check if we should even calculate volumes based on mode.
-  // Printing-mode reopen with an existing artifact should stay responsive;
-  // avoid re-running heavy support/raft volume aggregation in that case.
-  const shouldCalculateVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  // Support/raft aggregation is comparatively heavy, so keep it scoped to
+  // export + pre-artifact printing. Base model volume estimation runs in the
+  // background across active editing modes (for warm, up-to-date estimates).
+  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  const resinBuildVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+
+    const width = scene.view3dSettings.widthMm;
+    const depth = scene.view3dSettings.depthMm;
+    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
+    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+
+    return new THREE.Box3(
+      new THREE.Vector3(minX, minY, 0),
+      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+    );
+  }, [
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.enabled,
+    scene.view3dSettings.maxZMm,
+    scene.view3dSettings.originMode,
+    scene.view3dSettings.widthMm,
+  ]);
+
+  const resinInBoundsModelIdSet = React.useMemo(() => {
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return new Set<string>();
+    if (!resinBuildVolumeBounds) return new Set(visibleModels.map((model) => model.id));
+
+    const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
+    const inBoundsModelIds = new Set<string>();
+
+    for (const model of visibleModels) {
+      const effectiveTransform =
+        (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
+          ? transformMgr.transform
+          : model.transform;
+
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+        ? computePreciseModelWorldBounds(model.geometry, effectiveTransform)
+        : approxBounds;
+
+      if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+        inBoundsModelIds.add(model.id);
+      }
+    }
+
+    return inBoundsModelIds;
+  }, [
+    displayActiveModelId,
+    resinBuildVolumeBounds,
+    scene.activeModelId,
+    scene.models,
+    transformMgr.transform,
+  ]);
+
+  const visibleResinModels = React.useMemo(() => {
+    return scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id));
+  }, [resinInBoundsModelIdSet, scene.models]);
+  const shouldEstimateResinInBackground = visibleResinModels.length > 0
+    && (scene.mode !== 'printing' || !printingArtifact);
+
+  const resinEstimateComputationSignature = React.useMemo(() => {
+    if (visibleResinModels.length === 0) return '';
+
+    const parts = visibleResinModels.map((model) => {
+      const geometry = model.geometry.geometry;
+      const positionAttr = geometry.getAttribute('position') as ({ version?: number; data?: { version?: number } } | null);
+      const indexAttr = geometry.getIndex() as ({ version?: number } | null);
+
+      const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
+      const positionVersion = positionAttr?.version ?? positionAttr?.data?.version ?? 0;
+      const indexVersion = indexAttr?.version ?? 0;
+
+      const sx = Math.abs(model.transform.scale.x || 1).toFixed(6);
+      const sy = Math.abs(model.transform.scale.y || 1).toFixed(6);
+      const sz = Math.abs(model.transform.scale.z || 1).toFixed(6);
+
+      return `${model.id}:${sourceKey}:${positionVersion}:${indexVersion}:${sx}:${sy}:${sz}`;
+    });
+
+    parts.sort((a, b) => a.localeCompare(b));
+    return parts.join('|');
+  }, [visibleResinModels]);
 
   const supportAndRaftResinMl = React.useMemo(() => {
-    if (!shouldCalculateVolumes) return 0;
+    if (!shouldCalculateSupportAndRaftVolumes) return 0;
 
     // Expensive calculation ONLY runs when mode is export/printing
-    const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
+    const visibleModelIds = resinInBoundsModelIdSet;
     if (visibleModelIds.size === 0) return 0;
 
     const mm3ToMl = (mm3: number) => Math.max(0, mm3) / 1000;
@@ -3626,7 +3743,8 @@ export default function Home() {
 
     return supportMl + raftMl;
   }, [
-    shouldCalculateVolumes,
+    resinInBoundsModelIdSet,
+    shouldCalculateSupportAndRaftVolumes,
     computeFootprint,
     computeRaftOuterBoundary,
     raftSettingsSnapshot,
@@ -3645,26 +3763,37 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
+    if (!shouldEstimateResinInBackground) return;
+
+    const intervalId = window.setInterval(() => {
+      setResinEstimateRefreshTick((previous) => previous + 1);
+    }, RESIN_ESTIMATE_BACKGROUND_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [shouldEstimateResinInBackground]);
+
+  React.useEffect(() => {
     let cancelled = false;
 
-    if (!shouldCalculateVolumes) {
+    if (!shouldEstimateResinInBackground) {
+      if (visibleResinModels.length === 0) {
+        lastCompletedResinEstimateSignatureRef.current = '';
+        setPrintingEstimatedResinMl(null);
+      }
       setIsPrintingEstimatedResinBusy(false);
       return () => {
         cancelled = true;
       };
     }
 
-    const visibleModels = scene.models.filter((model) => model.visible);
-
-    if (visibleModels.length === 0) {
-      setPrintingEstimatedResinMl(null);
-      setIsPrintingEstimatedResinBusy(false);
-      return () => {
-        cancelled = true;
-      };
+    const visibleModels = visibleResinModels;
+    const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
+    const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
+    if (printingEstimatedResinMl == null || hasChangedSinceLastSuccess) {
+      setIsPrintingEstimatedResinBusy(true);
     }
-
-    setIsPrintingEstimatedResinBusy(true);
 
     const run = async () => {
       let totalMl = 0;
@@ -3686,6 +3815,7 @@ export default function Home() {
       if (cancelled) return;
       const totalWithSupports = totalMl + supportAndRaftResinMl;
       setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
 
@@ -3694,7 +3824,15 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [getOrComputeBaseResinMl, scene.models, shouldCalculateVolumes, supportAndRaftResinMl]);
+  }, [
+    getOrComputeBaseResinMl,
+    printingEstimatedResinMl,
+    resinEstimateComputationSignature,
+    resinEstimateRefreshTick,
+    shouldEstimateResinInBackground,
+    supportAndRaftResinMl,
+    visibleResinModels,
+  ]);
 
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
@@ -3703,50 +3841,6 @@ export default function Home() {
     if (printingEstimatedResinMl == null) return '—';
     return `${printingEstimatedResinMl.toFixed(2)} mL`;
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
-
-  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
-    if (!activeMaterialProfile) return '—';
-
-    const visibleModels = scene.models.filter((model) => model.visible);
-    if (visibleModels.length === 0) return '—';
-
-    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
-    let maxModelHeightMm = 0;
-
-    for (const model of visibleModels) {
-      const bbox = model.geometry.bbox;
-      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
-      const sz = Math.abs(model.transform.scale.z || 1);
-      maxModelHeightMm = Math.max(maxModelHeightMm, sizeZ * sz);
-    }
-
-    const totalLayers = Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-    if (totalLayers <= 0) return '—';
-
-    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
-    const normalLayers = Math.max(0, totalLayers - bottomLayers);
-
-    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
-      : 0;
-    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
-      : 0;
-    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
-
-    const totalSec = (
-      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
-      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
-    );
-
-    const wholeSeconds = Math.max(0, Math.floor(totalSec));
-    const hours = Math.floor(wholeSeconds / 3600);
-    const minutes = Math.floor((wholeSeconds % 3600) / 60);
-    const seconds = wholeSeconds % 60;
-
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [activeMaterialProfile, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
@@ -3993,11 +4087,12 @@ export default function Home() {
               port: target.port,
             });
 
-            const payload = await response.json().catch(() => ({} as any));
+            const payload = await readJsonObject(response);
             if (!response.ok) return [target.id, false] as const;
 
-            if (payload && typeof payload.ok === 'boolean') {
-              return [target.id, payload.ok === true] as const;
+            const payloadOk = readBooleanField(payload, 'ok');
+            if (payloadOk != null) {
+              return [target.id, payloadOk === true] as const;
             }
 
             try {
@@ -4959,9 +5054,10 @@ export default function Home() {
             .then(async (response) => {
               if (!response.ok) return false;
 
-              const payload = await response.json().catch(() => null) as any;
-              if (payload && typeof payload.ok === 'boolean') {
-                return payload.ok === true;
+              const payload = await readJsonObject(response);
+              const payloadOk = readBooleanField(payload, 'ok');
+              if (payloadOk != null) {
+                return payloadOk === true;
               }
 
               try {
@@ -5255,7 +5351,7 @@ export default function Home() {
           host,
         });
 
-        const payload = await response.json().catch(() => null) as any;
+        const payload = await readJsonObject(response);
         const rawMaterials = Array.isArray(payload?.materials) ? payload.materials : [];
 
         const parsed: FleetUploadMaterialOption[] = rawMaterials
@@ -5350,7 +5446,7 @@ export default function Home() {
             port,
           });
 
-          const payload = await response.json().catch(() => ({} as any));
+          const payload = await readJsonObject(response);
           if (cancelled) return;
           const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
           setSelectedPrinterMonitorSnapshot(snapshot);
@@ -5413,7 +5509,7 @@ export default function Home() {
         try {
           const response = await pluginNetworkFetch(requestPayload);
 
-          const payload = await response.json().catch(() => ({} as any));
+          const payload = await readJsonObject(response);
           if (cancelled) return;
 
           const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
@@ -5533,7 +5629,7 @@ export default function Home() {
     try {
       const response = await pluginNetworkFetch(requestPayload);
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
@@ -5949,14 +6045,14 @@ export default function Home() {
         const requestStartedAt = Date.now();
         const response = await pluginNetworkFetch(requestPayload);
 
-        const payload = await response.json().catch(() => ({} as any));
+        const payload = await readJsonObject(response);
         if (cancelled) return;
         const parsed = printingMonitoringAdapter.parseWebcamInfoPayload(payload, host, port);
         const elapsedMs = Date.now() - requestStartedAt;
 
         const parsedMessage = String(parsed?.message ?? '').toLowerCase();
-        const payloadMessage = typeof payload?.message === 'string' ? payload.message.toLowerCase() : '';
-        const ack = typeof payload?.ack === 'number' ? payload.ack : null;
+        const payloadMessage = (readStringField(payload, 'message') ?? '').toLowerCase();
+        const ack = readNumberField(payload, 'ack');
         const timedOut = parsedMessage.includes('timed out')
           || payloadMessage.includes('timed out')
           || parsedMessage.includes('no-response')
@@ -6403,9 +6499,10 @@ export default function Home() {
             });
 
             if (!response.ok) {
-              const payload = await response.json().catch(() => null) as { error?: unknown } | null;
-              const reason = typeof payload?.error === 'string' && payload.error.trim().length > 0
-                ? payload.error.trim()
+              const payload = await readJsonObject(response);
+              const payloadError = readStringField(payload, 'error');
+              const reason = typeof payloadError === 'string' && payloadError.trim().length > 0
+                ? payloadError.trim()
                 : `HTTP ${response.status}`;
               throw new Error(reason);
             }
@@ -6588,7 +6685,7 @@ export default function Home() {
               port,
             });
 
-            const payload = await response.json().catch(() => ({} as any));
+            const payload = await readJsonObject(response);
             const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
             return [device.id, snapshot] as const;
           } catch {
@@ -7738,8 +7835,8 @@ export default function Home() {
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
-    setPrintingSendStageText('Uploading print job…');
-    setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingSendStageText('Uploading Print Job…');
+    setPrintingSendStatusText('Uploading Print Job to Printer…');
     setPrintingUploadTelemetry(null);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDialogOpen(true);
@@ -7748,24 +7845,12 @@ export default function Home() {
 
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
-      let zipBlob = printingArtifact.blob;
+      const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
+      const zipBlob = printingArtifact.blob ?? null;
       throwIfCanceled();
 
-      // If we have a local temp path and no blob, read the blob from native bridge
-      if (!zipBlob && nativeTempPath) {
-        try {
-          const fileBytes = await readPrintArtifactBytesFromPath(nativeTempPath);
-          if (fileBytes && fileBytes.length > 0) {
-            const normalizedBytes = Uint8Array.from(fileBytes);
-            zipBlob = new Blob([normalizedBytes], { type: 'application/octet-stream' });
-          }
-        } catch (readError) {
-          console.warn('Failed to read artifact from native path:', readError);
-        }
-      }
-
-      if (!zipBlob) {
-        throw new Error('No print artifact blob available for printer upload.');
+      if (!zipBlob && !zipFilePath) {
+        throw new Error('No print artifact payload available for printer upload.');
       }
 
       throwIfCanceled();
@@ -7786,6 +7871,7 @@ export default function Home() {
         networkMode,
         hostUrl,
         zipBlob,
+        zipFilePath,
         path: pathBase,
         profileId: selectedMaterialId,
         callbacks: {
@@ -7865,7 +7951,7 @@ export default function Home() {
             jobName: pathBase,
           });
 
-          const readyPayload = await responseReady.json().catch(() => ({} as any));
+          const readyPayload = await readJsonObject(responseReady);
           const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
           const matchedPlateId = Number(
             (matchedPlate as any)?.PlateID
@@ -8049,8 +8135,8 @@ export default function Home() {
         plateId: printingReadyPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
-      if (response.ok && payload?.ok) {
+      const payload = await readJsonObject(response);
+      if (response.ok && payload?.ok === true) {
         setPrintingSendStageText('Print started');
         setPrintingUploadDialogStage('started');
         setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
@@ -8097,7 +8183,7 @@ export default function Home() {
         plateId: roundedPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -8159,7 +8245,7 @@ export default function Home() {
         plateId: roundedPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -8233,7 +8319,7 @@ export default function Home() {
         plateId: printingMonitorPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string'
           ? payload.error
@@ -8261,7 +8347,7 @@ export default function Home() {
         port,
         plateId: printingMonitorPlateId,
       });
-      const statusPayload = await statusResponse.json().catch(() => ({} as any));
+      const statusPayload = await readJsonObject(statusResponse);
       if (statusResponse.ok) {
         setPrintingMonitorSnapshot(printingMonitoringAdapter.parseStatusPayload(statusPayload, `${host}:${port}`));
       }
@@ -8324,7 +8410,7 @@ export default function Home() {
         mainboardId: resolvedMainboardId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       const commandOk = typeof payload?.ok === 'boolean' ? payload.ok : (response.ok ? true : false);
       setPrintingMonitorLastFeatureToggleResponse({
         operation,
@@ -8406,7 +8492,7 @@ export default function Home() {
 
     try {
       const response = await pluginNetworkFetch(requestPayload);
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
 
       setPrintingMonitorDebugState((previous) => ({
         ...previous,
@@ -10169,12 +10255,25 @@ export default function Home() {
     supportStateSnapshot.twigs,
   ]);
 
-  // For non-printing workflows, avoid expensive world-triangle projection work.
+  // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
     max: scene.sceneBounds?.max.z ?? 100,
   }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
+
+  const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
+    const maxZMm = Math.max(0, Number(range.max) || 0);
+    const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
+    const clampedMaxZMm = buildHeightLimitMm > 0
+      ? Math.min(maxZMm, buildHeightLimitMm)
+      : maxZMm;
+
+    return {
+      min: 0,
+      max: clampedMaxZMm,
+    };
+  }, [activePrinterProfile?.buildVolumeMm.height]);
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
@@ -10230,9 +10329,10 @@ export default function Home() {
   useEffect(() => {
     // Projected world-triangle bounds are expensive.
     // Analysis can run on fallback bounds to keep mode-entry instant.
-    // Printing only needs accurate support/raft-aware bounds before a print artifact
-    // exists; reopening printing with an existing artifact should avoid this rebuild.
-    const needsAccurateZRange = scene.mode === 'printing' && !printingArtifact;
+    // Printing needs accurate support/raft-aware bounds before a print artifact
+    // exists; Export needs the same fidelity so layer estimates match real slicing.
+    const needsAccurateZRange = (scene.mode === 'printing' && !printingArtifact) || scene.mode === 'export';
+    const shouldUseSlicerAlignedRange = scene.mode === 'printing' || scene.mode === 'export';
     
     if (needsAccurateZRange) {
       const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
@@ -10249,7 +10349,10 @@ export default function Home() {
       const run = () => {
         if (cancelled) return;
         const projected = buildProjectedCrossSectionZRange(scene.models);
-        const nextRange = projected ?? fallbackZRange;
+        const baseRange = projected ?? fallbackZRange;
+        const nextRange = shouldUseSlicerAlignedRange
+          ? normalizeToSlicerZRange(baseRange)
+          : baseRange;
         projectedZRangeCacheRef.current.set(projectedZRangeCacheKey, nextRange);
         if (projectedZRangeCacheRef.current.size > 8) {
           const oldest = projectedZRangeCacheRef.current.keys().next().value;
@@ -10277,10 +10380,11 @@ export default function Home() {
         }
       };
     } else {
-      // Use fast fallback for prepare/support/export modes
-      setSceneZRange(fallbackZRange);
+      // Use fast fallback for non-export modes where projected bounds aren't required.
+      setSceneZRange(shouldUseSlicerAlignedRange ? normalizeToSlicerZRange(fallbackZRange) : fallbackZRange);
     }
   }, [
+    normalizeToSlicerZRange,
     fallbackZRange,
     printingArtifact,
     projectedZRangeCacheKey,
@@ -10292,6 +10396,53 @@ export default function Home() {
     hasGeometry: scene.models.length > 0,
     zRange: sceneZRange
   });
+
+  const estimatedSlicerLayerCount = React.useMemo(() => {
+    if (scene.models.length === 0) return 0;
+
+    const layerHeightMm = Math.max(0.001, slicedLayerHeightMm || 0.05);
+    const printableMaxZMm = Math.max(0, Number(sceneZRange.max) || 0);
+    const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
+    const slicerHeightMm = buildHeightLimitMm > 0
+      ? Math.min(printableMaxZMm, buildHeightLimitMm)
+      : printableMaxZMm;
+
+    return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
+  }, [activePrinterProfile?.buildVolumeMm.height, scene.models.length, sceneZRange.max, slicedLayerHeightMm]);
+
+  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile) return '—';
+
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return '—';
+
+    const totalLayers = estimatedSlicerLayerCount;
+    if (totalLayers <= 0) return '—';
+
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const wholeSeconds = Math.max(0, Math.floor(totalSec));
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    const seconds = wholeSeconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
@@ -13701,6 +13852,7 @@ export default function Home() {
               key="export-slicing"
               models={scene.models}
               activeModel={scene.activeModel}
+              estimatedLayerCountOverride={estimatedSlicerLayerCount}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
@@ -14227,7 +14379,7 @@ export default function Home() {
                 models={scene.models}
                 selectedModelIds={scene.selectedModelIds}
                 inBoundsModelIds={inBoundsModelIds}
-                numLayers={slicing.numLayers}
+                numLayers={estimatedSlicerLayerCount}
                 heightMm={slicing.heightMm}
                 estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}

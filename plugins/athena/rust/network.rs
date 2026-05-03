@@ -1,15 +1,110 @@
 use base64::Engine;
+use futures_util::TryStreamExt;
 use log::debug;
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static ATHENA_NETWORK_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
+static NANODLP_UPLOAD_PROGRESS: OnceLock<Mutex<HashMap<String, NanoDlpUploadProgressEntry>>> =
+    OnceLock::new();
+
+#[derive(Clone)]
+struct NanoDlpUploadProgressEntry {
+    total_bytes: u64,
+    sent_bytes: Arc<AtomicU64>,
+    done: bool,
+    error: Option<String>,
+    updated_at_ms: u64,
+}
+
+fn epoch_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn nanodlp_upload_progress_registry() -> &'static Mutex<HashMap<String, NanoDlpUploadProgressEntry>> {
+    NANODLP_UPLOAD_PROGRESS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_nanodlp_upload_progress(upload_id: &str, total_bytes: u64, sent_bytes: Arc<AtomicU64>) {
+    if upload_id.trim().is_empty() {
+        return;
+    }
+
+    if let Ok(mut map) = nanodlp_upload_progress_registry().lock() {
+        let now_ms = epoch_ms_now();
+        // Best-effort pruning to prevent unbounded growth.
+        map.retain(|_, entry| !(entry.done && now_ms.saturating_sub(entry.updated_at_ms) > 15 * 60 * 1000));
+
+        map.insert(
+            upload_id.to_string(),
+            NanoDlpUploadProgressEntry {
+                total_bytes,
+                sent_bytes,
+                done: false,
+                error: None,
+                updated_at_ms: now_ms,
+            },
+        );
+    }
+}
+
+fn complete_nanodlp_upload_progress(upload_id: &str, error: Option<String>) {
+    if upload_id.trim().is_empty() {
+        return;
+    }
+
+    if let Ok(mut map) = nanodlp_upload_progress_registry().lock() {
+        if let Some(entry) = map.get_mut(upload_id) {
+            if error.is_none() {
+                entry
+                    .sent_bytes
+                    .store(entry.total_bytes, Ordering::Relaxed);
+            }
+            entry.done = true;
+            entry.error = error;
+            entry.updated_at_ms = epoch_ms_now();
+        }
+    }
+}
+
+fn snapshot_nanodlp_upload_progress(upload_id: &str) -> Option<Value> {
+    let entry = {
+        let map = nanodlp_upload_progress_registry().lock().ok()?;
+        map.get(upload_id)?.clone()
+    };
+
+    let sent = entry
+        .sent_bytes
+        .load(Ordering::Relaxed)
+        .min(entry.total_bytes);
+    let percent = if entry.total_bytes > 0 {
+        ((sent as f64 / entry.total_bytes as f64) * 100.0).clamp(0.0, 100.0)
+    } else if entry.done {
+        100.0
+    } else {
+        0.0
+    };
+
+    Some(json!({
+        "uploadId": upload_id,
+        "totalBytes": entry.total_bytes,
+        "sentBytes": sent,
+        "percent": percent,
+        "done": entry.done,
+        "error": entry.error,
+        "updatedAtMs": entry.updated_at_ms,
+    }))
+}
 
 fn athena_network_filters() -> &'static Vec<String> {
     ATHENA_NETWORK_FILTERS.get_or_init(|| {
@@ -1933,6 +2028,12 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
             json!({ "ok": false, "error": "profileId is required for NanoDLP import" }),
         );
     }
+    let upload_id = payload
+        .get("uploadId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     let host_lower = parsed.0.to_lowercase();
     let is_localhost =
@@ -1944,11 +2045,21 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
         .trim()
         .to_string();
 
-    // Read zip bytes from file path or base64
+    // Prefer streaming upload directly from disk when zipFilePath is provided,
+    // and fall back to base64 bytes for legacy callers.
+    let mut upload_file_path: Option<String> = None;
     let mut zip_bytes: Option<Vec<u8>> = None;
     if !zip_file_path.is_empty() {
-        match tokio::fs::read(&zip_file_path).await {
-            Ok(bytes) => zip_bytes = Some(bytes),
+        match tokio::fs::metadata(&zip_file_path).await {
+            Ok(meta) => {
+                if meta.len() == 0 {
+                    if zip_base64.is_empty() {
+                        return (400, json!({ "ok": false, "error": "zipFilePath points to an empty file" }));
+                    }
+                } else {
+                    upload_file_path = Some(zip_file_path.clone());
+                }
+            }
             Err(e) => {
                 if zip_base64.is_empty() {
                     return (
@@ -1959,7 +2070,7 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
             }
         }
     }
-    if zip_bytes.is_none() && !zip_base64.is_empty() {
+    if upload_file_path.is_none() && !zip_base64.is_empty() {
         match base64::engine::general_purpose::STANDARD.decode(&zip_base64) {
             Ok(bytes) => zip_bytes = Some(bytes),
             Err(e) => {
@@ -1970,17 +2081,23 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
             }
         }
     }
-    let zip_bytes = match zip_bytes {
-        Some(bytes) if !bytes.is_empty() => bytes,
-        _ => {
-            return (
-                400,
-                json!({ "ok": false, "error": "Decoded job payload is empty" }),
-            )
-        }
-    };
+    if upload_file_path.is_none() && zip_bytes.as_ref().map(|bytes| bytes.is_empty()).unwrap_or(true) {
+        return (
+            400,
+            json!({ "ok": false, "error": "Decoded job payload is empty" }),
+        );
+    }
 
     let base_url = build_base_url(&parsed.0, port);
+    let upload_file_path_for_request = upload_file_path;
+    let upload_bytes_for_request = zip_bytes;
+    let upload_id_for_request = if upload_id.is_empty() {
+        None
+    } else {
+        Some(upload_id)
+    };
+    let tracks_upload_progress =
+        upload_id_for_request.is_some() && upload_file_path_for_request.is_some();
 
     let result: Result<(u16, Value), String> = async {
         let form = if is_localhost && !usb_file_path.is_empty() {
@@ -1989,10 +2106,35 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
                 .text("ProfileID", profile_id.clone())
                 .text("USBFile", usb_file_path)
         } else {
-            let file_part = reqwest::multipart::Part::bytes(zip_bytes)
-                .file_name(format!("{path}.nanodlp"))
-                .mime_str("application/octet-stream")
-                .map_err(|e| format!("Failed to build multipart: {e}"))?;
+            let file_part = if let Some(upload_path) = upload_file_path_for_request.as_ref() {
+                let file = tokio::fs::File::open(upload_path)
+                    .await
+                    .map_err(|e| format!("Failed to open upload file '{}': {e}", upload_path))?;
+                let file_len = file
+                    .metadata()
+                    .await
+                    .map_err(|e| format!("Failed to read upload file metadata '{}': {e}", upload_path))?
+                    .len();
+                let progress_counter = Arc::new(AtomicU64::new(0));
+                if let Some(upload_id) = upload_id_for_request.as_deref() {
+                    register_nanodlp_upload_progress(upload_id, file_len, progress_counter.clone());
+                }
+                let progress_counter_for_stream = progress_counter;
+                let stream = tokio_util::io::ReaderStream::new(file).inspect_ok(move |chunk| {
+                    progress_counter_for_stream
+                        .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                });
+                let body = reqwest::Body::wrap_stream(stream);
+                reqwest::multipart::Part::stream_with_length(body, file_len)
+            } else {
+                let bytes = upload_bytes_for_request
+                    .clone()
+                    .ok_or_else(|| "No upload payload bytes available".to_string())?;
+                reqwest::multipart::Part::bytes(bytes)
+            }
+            .file_name(format!("{path}.nanodlp"))
+            .mime_str("application/octet-stream")
+            .map_err(|e| format!("Failed to build multipart: {e}"))?;
             reqwest::multipart::Form::new()
                 .text("Path", path.clone())
                 .text("ProfileID", profile_id.clone())
@@ -2006,7 +2148,7 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
             .multipart(form)
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(600))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -2070,6 +2212,27 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
     }
     .await;
 
+    if tracks_upload_progress {
+        if let Some(upload_id) = upload_id_for_request.as_deref() {
+            match &result {
+                Ok((status, _body)) if *status == 200 => {
+                    complete_nanodlp_upload_progress(upload_id, None);
+                }
+                Ok((_status, body)) => {
+                    let message = body
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "NanoDLP upload failed".to_string());
+                    complete_nanodlp_upload_progress(upload_id, Some(message));
+                }
+                Err(message) => {
+                    complete_nanodlp_upload_progress(upload_id, Some(message.clone()));
+                }
+            }
+        }
+    }
+
     match result {
         Ok((status, body)) => (status, body),
         Err(message) => (
@@ -2087,6 +2250,43 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
 // ---------------------------------------------------------------------------
 // NanoDLP: plates/list/json
 // ---------------------------------------------------------------------------
+
+async fn nanodlp_job_upload_progress(payload: &Value) -> (u16, Value) {
+    let upload_id = payload
+        .get("uploadId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if upload_id.is_empty() {
+        return (
+            400,
+            json!({
+                "ok": false,
+                "error": "uploadId is required",
+            }),
+        );
+    }
+
+    match snapshot_nanodlp_upload_progress(&upload_id) {
+        Some(progress) => (
+            200,
+            json!({
+                "ok": true,
+                "upload": progress,
+            }),
+        ),
+        None => (
+            404,
+            json!({
+                "ok": false,
+                "uploadId": upload_id,
+                "error": "Upload progress not found",
+            }),
+        ),
+    }
+}
 
 async fn nanodlp_plates_list_json(payload: &Value) -> (u16, Value) {
     let raw_host = resolve_raw_host(payload);
@@ -2751,6 +2951,7 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
         "materials" => nanodlp_materials(payload).await,
         "materials/edit" => nanodlp_materials_edit(payload).await,
         "job/import" => nanodlp_job_import(payload).await,
+        "job/upload-progress" => nanodlp_job_upload_progress(payload).await,
         "plates/list/json" => nanodlp_plates_list_json(payload).await,
         "plate/delete" => nanodlp_plate_delete(payload).await,
         "printer/start" => nanodlp_printer_start(payload).await,
@@ -2764,6 +2965,27 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
             404,
             json!({ "error": format!("Unknown Athena NanoDLP operation: {normalized_operation}") }),
         ),
+    }
+}
+
+fn plugin_operation_deadline(operation: &str) -> Duration {
+    let normalized_operation = operation.trim().trim_start_matches('/').trim_end_matches('/');
+    let op = normalized_operation
+        .strip_prefix("nanodlp/")
+        .unwrap_or(normalized_operation);
+
+    if matches!(op, "job/import") {
+        // Large uploads can legitimately take several minutes on slower networks.
+        return Duration::from_secs(10 * 60);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Duration::from_secs(60)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Duration::from_secs(120)
     }
 }
 
@@ -2809,10 +3031,7 @@ pub async fn dispatch_plugin_network_request(request_json: String) -> Result<Plu
     // next poll arrives the total open-socket count can grow until Windows AV
     // heuristics decide the process is a port scanner and terminates it
     // (Windows Event 1005).  Returning a 503 early breaks the accumulation.
-    #[cfg(target_os = "windows")]
-    let deadline = Duration::from_secs(60);
-    #[cfg(not(target_os = "windows"))]
-    let deadline = Duration::from_secs(120);
+    let deadline = plugin_operation_deadline(&operation);
 
     let task = tokio::spawn(async move {
         match plugin_id.as_str() {

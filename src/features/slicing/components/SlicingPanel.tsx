@@ -33,6 +33,7 @@ export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
 interface SlicingPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
+  estimatedLayerCountOverride?: number | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onSliceRunStarted?: () => void;
@@ -263,6 +264,7 @@ function resolveInitialMinimumAaAlphaOverrideEnabled(): boolean {
 export function SlicingPanel({
   models,
   activeModel,
+  estimatedLayerCountOverride,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
   onSliceRunStarted,
@@ -558,6 +560,10 @@ export function SlicingPanel({
   }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
 
   const estimatedLayerCount = useMemo(() => {
+    if (Number.isFinite(estimatedLayerCountOverride) && Number(estimatedLayerCountOverride) > 0) {
+      return Math.max(0, Math.round(Number(estimatedLayerCountOverride)));
+    }
+
     if (effectiveLayerHeightMm == null || visibleModels.length === 0) return 0;
 
     const layerHeightMm = Math.max(0.001, effectiveLayerHeightMm || 0.05);
@@ -571,7 +577,7 @@ export function SlicingPanel({
     }
 
     return Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-  }, [effectiveLayerHeightMm, visibleModels]);
+  }, [effectiveLayerHeightMm, estimatedLayerCountOverride, visibleModels]);
 
   const estimatedPrintTimeLabel = useMemo(() => {
     if (!effectiveMaterialProfile || estimatedLayerCount <= 0) return '—';
