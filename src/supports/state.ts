@@ -485,6 +485,16 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         });
     }
 
+    // Track branch parent knots that currently host descendants.
+    // If a branch parent knot is hosting descendants, keep it projected to ensure
+    // downstream branch/leaf attachments stay segment-legal and connected.
+    const branchHostKnotIdsWithChildren = new Set<string>();
+    for (const knot of Object.values(snapshot.knots)) {
+        const hostBranchRef = branchSegmentMap.get(knot.parentShaftId);
+        if (!hostBranchRef) continue;
+        branchHostKnotIdsWithChildren.add(hostBranchRef.branch.parentKnotId);
+    }
+
     const braceHostKnotIds = new Set<string>();
     const targetHostKnotIds = new Set<string>();
     for (const brace of Object.values(snapshot.braces)) {
@@ -553,17 +563,27 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
             const dz = computedPos.z - knot.pos.z;
             const reprojectionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             const isEndpointProjection = t <= 1e-4 || t >= 1 - 1e-4;
-            // Imported formats (including LYS) may intentionally place brace endpoints beyond the
-            // host shaft endpoint (e.g., on contact-cone regions). If normalization reprojects
-            // those endpoint-clamped brace knots back to the shaft endpoint, visuals can appear snapped.
-            // Only preserve authored positions for brace endpoints; branch/leaf host knots must
-            // always re-project to maintain correct segment linkage.
+            // Imported formats (including LYS) may intentionally place endpoint knots beyond the
+            // host shaft endpoint (e.g., on contact-cone regions).
+            // - Always preserve braces at endpoint clamps (visual span fidelity).
+            // - Preserve terminal branch/leaf host knots at large endpoint clamps.
+            // - Keep descendant-host branch knots projected to maintain parent->child linkage.
             const preserveAuthoredBracePos =
                 braceHostKnotIds.has(knot.id) &&
                 isEndpointProjection &&
                 reprojectionDistance > 0.5;
 
-            if (preserveAuthoredBracePos) {
+            const isDescendantHostKnot = branchHostKnotIdsWithChildren.has(knot.id);
+            const preserveAuthoredTerminalHostPos =
+                !braceHostKnotIds.has(knot.id) &&
+                !isDescendantHostKnot &&
+                isEndpointProjection &&
+                reprojectionDistance > 1.0;
+
+            const preserveAuthoredEndpointPos =
+                preserveAuthoredBracePos || preserveAuthoredTerminalHostPos;
+
+            if (preserveAuthoredEndpointPos) {
                 if (knot.diameter !== computedDiameter) {
                     nextKnots[knot.id] = {
                         ...knot,

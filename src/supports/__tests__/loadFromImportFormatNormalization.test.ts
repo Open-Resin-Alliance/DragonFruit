@@ -240,3 +240,151 @@ test('loadFromImportFormat preserves authored brace host positions on large endp
 
     resetStore();
 });
+
+test('loadFromImportFormat preserves terminal endpoint knots but keeps descendant-host branch knots projected', () => {
+    resetStore();
+
+    const data: DragonfruitImportFormat = {
+        version: 1,
+        meta: {
+            source: 'unit-test',
+            objectCenter: { x: 0, y: 0, z: 0 },
+        },
+        roots: [
+            {
+                id: 'root-1',
+                modelId: 'model-1',
+                transform: {
+                    pos: { x: 0, y: 0, z: 0 },
+                    rot: { x: 0, y: 0, z: 0, w: 1 },
+                },
+                diameter: 6,
+                diskHeight: 1,
+                coneHeight: 1,
+            },
+        ],
+        trunks: [
+            {
+                id: 'trunk-1',
+                modelId: 'model-1',
+                rootId: 'root-1',
+                segments: [
+                    {
+                        id: 'trunk-seg-1',
+                        type: 'straight',
+                        diameter: 1,
+                        topJoint: {
+                            id: 'trunk-top',
+                            pos: { x: 0, y: 0, z: 10 },
+                            diameter: 1,
+                        },
+                    },
+                ],
+            },
+        ],
+        branches: [
+            {
+                id: 'branch-1',
+                modelId: 'model-1',
+                parentKnotId: 'k-parent-host',
+                segments: [
+                    {
+                        id: 'branch-seg-1',
+                        type: 'straight',
+                        diameter: 0.8,
+                        topJoint: {
+                            id: 'branch-top',
+                            pos: { x: 4, y: 0, z: 20 },
+                            diameter: 1,
+                        },
+                    },
+                ],
+            },
+            {
+                id: 'branch-2-child',
+                modelId: 'model-1',
+                parentKnotId: 'k-child-on-branch',
+                segments: [
+                    {
+                        id: 'branch-seg-2',
+                        type: 'straight',
+                        diameter: 0.6,
+                        topJoint: {
+                            id: 'branch2-top',
+                            pos: { x: 8, y: 0, z: 24 },
+                            diameter: 0.8,
+                        },
+                    },
+                ],
+            },
+        ],
+        leaves: [
+            {
+                id: 'leaf-terminal',
+                modelId: 'model-1',
+                parentKnotId: 'k-terminal-endpoint',
+                contactCone: {
+                    id: 'leaf-cone-terminal',
+                    pos: { x: 4, y: 0, z: 21 },
+                    normal: { x: 0, y: 0, z: -1 },
+                    surfaceNormal: { x: 0, y: 0, z: -1 },
+                    profile: {
+                        type: 'disk',
+                        contactDiameterMm: 0.4,
+                        bodyDiameterMm: 1.2,
+                        lengthMm: 3,
+                        penetrationMm: 0.05,
+                        diskThicknessMm: 0.1,
+                        maxStandoffMm: 0.25,
+                        standoffAngleThreshold: Math.PI / 4,
+                    },
+                },
+            },
+        ],
+        twigs: [],
+        sticks: [],
+        braces: [],
+        knots: [
+            {
+                id: 'k-parent-host',
+                parentShaftId: 'trunk-seg-1',
+                t: 1,
+                pos: { x: 0, y: 0, z: 25 },
+                diameter: 1.1,
+            },
+            {
+                id: 'k-child-on-branch',
+                parentShaftId: 'branch-seg-1',
+                t: 0.7,
+                pos: { x: 2.8, y: 0, z: 17 },
+                diameter: 1.1,
+            },
+            {
+                id: 'k-terminal-endpoint',
+                parentShaftId: 'branch-seg-1',
+                t: 0,
+                pos: { x: 0, y: 0, z: 0.2 },
+                diameter: 1.1,
+            },
+        ],
+    };
+
+    loadFromImportFormat(data);
+    const snapshot = getSnapshot();
+
+    const parentHost = snapshot.knots['k-parent-host'];
+    const terminal = snapshot.knots['k-terminal-endpoint'];
+
+    assert.ok(parentHost, 'Expected branch host parent knot to exist after load');
+    assert.ok(terminal, 'Expected terminal endpoint knot to exist after load');
+
+    // Host knot with descendants should stay projected (not preserved at authored overshoot z=25).
+    assert.ok(parentHost.pos.z <= 10 + 1e-6,
+        'Descendant-host branch parent knot should remain projected onto its trunk segment');
+
+    // Terminal endpoint knot can keep authored endpoint intent at large endpoint clamp.
+    assert.ok(almostEqual(terminal.pos.z, 0.2),
+        'Terminal endpoint knot should preserve authored endpoint position on large endpoint reprojection');
+
+    resetStore();
+});
