@@ -241,7 +241,7 @@ test('loadFromImportFormat preserves authored brace host positions on large endp
     resetStore();
 });
 
-test('loadFromImportFormat preserves terminal endpoint knots but keeps descendant-host branch knots projected', () => {
+test('loadFromImportFormat preserves terminal leaf tip endpoint intent, projects large base clamps, and keeps descendant-host branch knots projected', () => {
     resetStore();
 
     const data: DragonfruitImportFormat = {
@@ -340,6 +340,27 @@ test('loadFromImportFormat preserves terminal endpoint knots but keeps descendan
                     },
                 },
             },
+            {
+                id: 'leaf-base-clamped',
+                modelId: 'model-1',
+                parentKnotId: 'k-terminal-base-clamped',
+                contactCone: {
+                    id: 'leaf-cone-base-clamped',
+                    pos: { x: 2, y: 0, z: 13 },
+                    normal: { x: 0, y: 0, z: -1 },
+                    surfaceNormal: { x: 0, y: 0, z: -1 },
+                    profile: {
+                        type: 'disk',
+                        contactDiameterMm: 0.4,
+                        bodyDiameterMm: 1.2,
+                        lengthMm: 3,
+                        penetrationMm: 0.05,
+                        diskThicknessMm: 0.1,
+                        maxStandoffMm: 0.25,
+                        standoffAngleThreshold: Math.PI / 4,
+                    },
+                },
+            },
         ],
         twigs: [],
         sticks: [],
@@ -362,6 +383,13 @@ test('loadFromImportFormat preserves terminal endpoint knots but keeps descendan
             {
                 id: 'k-terminal-endpoint',
                 parentShaftId: 'branch-seg-1',
+                t: 1,
+                pos: { x: 4, y: 0, z: 30 },
+                diameter: 1.1,
+            },
+            {
+                id: 'k-terminal-base-clamped',
+                parentShaftId: 'branch-seg-1',
                 t: 0,
                 pos: { x: 0, y: 0, z: 0.2 },
                 diameter: 1.1,
@@ -373,18 +401,145 @@ test('loadFromImportFormat preserves terminal endpoint knots but keeps descendan
     const snapshot = getSnapshot();
 
     const parentHost = snapshot.knots['k-parent-host'];
-    const terminal = snapshot.knots['k-terminal-endpoint'];
+    const terminalTip = snapshot.knots['k-terminal-endpoint'];
+    const terminalBase = snapshot.knots['k-terminal-base-clamped'];
 
     assert.ok(parentHost, 'Expected branch host parent knot to exist after load');
-    assert.ok(terminal, 'Expected terminal endpoint knot to exist after load');
+    assert.ok(terminalTip, 'Expected terminal tip endpoint knot to exist after load');
+    assert.ok(terminalBase, 'Expected terminal base endpoint knot to exist after load');
 
     // Host knot with descendants should stay projected (not preserved at authored overshoot z=25).
     assert.ok(parentHost.pos.z <= 10 + 1e-6,
         'Descendant-host branch parent knot should remain projected onto its trunk segment');
 
-    // Terminal endpoint knot can keep authored endpoint intent at large endpoint clamp.
-    assert.ok(almostEqual(terminal.pos.z, 0.2),
-        'Terminal endpoint knot should preserve authored endpoint position on large endpoint reprojection');
+    // Leaf tip-side endpoint intent can be authored beyond the segment endpoint; preserve it.
+    assert.ok(almostEqual(terminalTip.pos.z, 30),
+        `Terminal tip endpoint knot should preserve authored tip-side endpoint intent (actual z=${terminalTip.pos.z})`);
+
+    // Base-clamped terminal knot should project to host start (prevents floating terminal leaves).
+    assert.ok(almostEqual(terminalBase.pos.z, 10),
+        `Terminal base-clamped endpoint knot should project to host segment start to avoid detached leaves (actual z=${terminalBase.pos.z})`);
+
+    resetStore();
+});
+
+test('loadFromImportFormat preserves terminal branch and leaf tip endpoints, while projecting large base-clamped leaves', () => {
+    resetStore();
+
+    const data: DragonfruitImportFormat = {
+        version: 1,
+        meta: {
+            source: 'unit-test',
+            objectCenter: { x: 0, y: 0, z: 0 },
+        },
+        roots: [
+            {
+                id: 'root-1',
+                modelId: 'model-1',
+                transform: {
+                    pos: { x: 0, y: 0, z: 0 },
+                    rot: { x: 0, y: 0, z: 0, w: 1 },
+                },
+                diameter: 6,
+                diskHeight: 1,
+                coneHeight: 1,
+            },
+        ],
+        trunks: [
+            {
+                id: 'trunk-1',
+                modelId: 'model-1',
+                rootId: 'root-1',
+                segments: [
+                    {
+                        id: 'trunk-seg-1',
+                        type: 'straight',
+                        diameter: 1,
+                        topJoint: {
+                            id: 'trunk-top',
+                            pos: { x: 0, y: 0, z: 10 },
+                            diameter: 1,
+                        },
+                    },
+                ],
+            },
+        ],
+        branches: [
+            {
+                id: 'branch-terminal',
+                modelId: 'model-1',
+                parentKnotId: 'k-branch-terminal-parent',
+                segments: [
+                    {
+                        id: 'branch-terminal-seg',
+                        type: 'straight',
+                        diameter: 0.8,
+                        topJoint: {
+                            id: 'branch-terminal-top',
+                            pos: { x: 4, y: 0, z: 18 },
+                            diameter: 1,
+                        },
+                    },
+                ],
+            },
+        ],
+        leaves: [
+            {
+                id: 'leaf-terminal',
+                modelId: 'model-1',
+                parentKnotId: 'k-leaf-terminal-parent',
+                contactCone: {
+                    id: 'leaf-cone-terminal',
+                    pos: { x: 2, y: 0, z: 13 },
+                    normal: { x: 0, y: 0, z: -1 },
+                    surfaceNormal: { x: 0, y: 0, z: -1 },
+                    profile: {
+                        type: 'disk',
+                        contactDiameterMm: 0.4,
+                        bodyDiameterMm: 1.2,
+                        lengthMm: 3,
+                        penetrationMm: 0.05,
+                        diskThicknessMm: 0.1,
+                        maxStandoffMm: 0.25,
+                        standoffAngleThreshold: Math.PI / 4,
+                    },
+                },
+            },
+        ],
+        twigs: [],
+        sticks: [],
+        braces: [],
+        knots: [
+            {
+                id: 'k-branch-terminal-parent',
+                parentShaftId: 'trunk-seg-1',
+                t: 1,
+                pos: { x: 0, y: 0, z: 24 },
+                diameter: 1.1,
+            },
+            {
+                id: 'k-leaf-terminal-parent',
+                parentShaftId: 'trunk-seg-1',
+                t: 1,
+                pos: { x: 0, y: 0, z: 24 },
+                diameter: 1.1,
+            },
+        ],
+    };
+
+    loadFromImportFormat(data);
+    const snapshot = getSnapshot();
+
+    const branchTerminalParent = snapshot.knots['k-branch-terminal-parent'];
+    const leafTerminalParent = snapshot.knots['k-leaf-terminal-parent'];
+
+    assert.ok(branchTerminalParent, 'Expected terminal branch parent knot to exist after load');
+    assert.ok(leafTerminalParent, 'Expected terminal leaf parent knot to exist after load');
+
+    assert.ok(almostEqual(branchTerminalParent.pos.z, 24),
+        `Terminal branch parent knot should preserve authored endpoint position (actual z=${branchTerminalParent.pos.z})`);
+    assert.ok(almostEqual(leafTerminalParent.pos.z, 24),
+        `Terminal leaf tip endpoint knot should preserve authored endpoint intent (actual z=${leafTerminalParent.pos.z})`);
 
     resetStore();
 });

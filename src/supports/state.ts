@@ -495,6 +495,16 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         branchHostKnotIdsWithChildren.add(hostBranchRef.branch.parentKnotId);
     }
 
+    const branchParentKnotIds = new Set<string>();
+    for (const branch of Object.values(snapshot.branches)) {
+        branchParentKnotIds.add(branch.parentKnotId);
+    }
+
+    const leafParentKnotIds = new Set<string>();
+    for (const leaf of Object.values(snapshot.leaves)) {
+        leafParentKnotIds.add(leaf.parentKnotId);
+    }
+
     const braceHostKnotIds = new Set<string>();
     const targetHostKnotIds = new Set<string>();
     for (const brace of Object.values(snapshot.braces)) {
@@ -511,6 +521,10 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
     }
 
     const nextKnots = { ...snapshot.knots };
+    const authoredKnotPosById = new Map<string, Vec3>();
+    for (const [knotId, authoredKnot] of Object.entries(snapshot.knots)) {
+        authoredKnotPosById.set(knotId, authoredKnot.pos);
+    }
     const changedHostPosById: Record<string, Vec3> = {};
 
     const maxPasses = 4;
@@ -554,41 +568,105 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
 
             if (!segment || !endpoints) continue;
 
-            const t = computeClosestTOnSegmentFromPoint(knot.pos, endpoints.start, endpoints.end, segment);
+            const authoredPos = authoredKnotPosById.get(knot.id) ?? knot.pos;
+            const t = computeClosestTOnSegmentFromPoint(authoredPos, endpoints.start, endpoints.end, segment);
             const computedPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, t);
             const computedDiameter = segment.diameter + JOINT_DIAMETER_OFFSET_MM;
 
-            const dx = computedPos.x - knot.pos.x;
-            const dy = computedPos.y - knot.pos.y;
-            const dz = computedPos.z - knot.pos.z;
+            const dx = computedPos.x - authoredPos.x;
+            const dy = computedPos.y - authoredPos.y;
+            const dz = computedPos.z - authoredPos.z;
             const reprojectionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             const isEndpointProjection = t <= 1e-4 || t >= 1 - 1e-4;
-            // Imported formats (including LYS) may intentionally place endpoint knots beyond the
-            // host shaft endpoint (e.g., on contact-cone regions).
-            // - Always preserve braces at endpoint clamps (visual span fidelity).
-            // - Preserve terminal branch/leaf host knots at large endpoint clamps.
-            // - Keep descendant-host branch knots projected to maintain parent->child linkage.
+            const isBaseEndpointProjection = t <= 1e-4;
+            const isTipEndpointProjection = t >= 1 - 1e-4;
+            const reprojectionDeltaZ = Math.abs(computedPos.z - authoredPos.z);
+
+            // Import-hint fast path: converter has already determined preserve/project intent.
+            // This takes priority over all derived preserve rules to avoid the two systems
+            // making conflicting decisions (e.g. leaf s85 vs back leaves both look identical
+            // to heuristic rules but require opposite treatment).
+            const importHint = knot._importHint;
+            if (importHint === 'project') {
+                const posChanged =
+                    computedPos.x !== knot.pos.x ||
+                    computedPos.y !== knot.pos.y ||
+                    computedPos.z !== knot.pos.z;
+                const tChanged = knot.t !== t;
+                const diameterChanged = knot.diameter !== computedDiameter;
+                if (posChanged || tChanged || diameterChanged) {
+                    nextKnots[knot.id] = { ...knot, t, pos: computedPos, diameter: computedDiameter };
+                    if (posChanged) changedHostPosById[knot.id] = computedPos;
+                    changedThisPass = true;
+                }
+                continue;
+            }
+            if (importHint === 'preserve') {
+                const posChanged =
+                    authoredPos.x !== knot.pos.x ||
+                    authoredPos.y !== knot.pos.y ||
+                    authoredPos.z !== knot.pos.z;
+                const tChanged = knot.t !== t;
+                const diameterChanged = knot.diameter !== computedDiameter;
+                if (posChanged || tChanged || diameterChanged) {
+                    nextKnots[knot.id] = { ...knot, t, pos: authoredPos, diameter: computedDiameter };
+                    if (posChanged) changedHostPosById[knot.id] = authoredPos;
+                    changedThisPass = true;
+                }
+                continue;
+            }
+
+            // Imported formats (including LYS) may intentionally place brace endpoints beyond
+            // host shaft bounds for visual span fidelity. For non-brace host knots, always project
+            // to host geometry to keep imported branch/leaf linkage connected on load.
             const preserveAuthoredBracePos =
                 braceHostKnotIds.has(knot.id) &&
                 isEndpointProjection &&
                 reprojectionDistance > 0.5;
 
             const isDescendantHostKnot = branchHostKnotIdsWithChildren.has(knot.id);
-            const preserveAuthoredTerminalHostPos =
+            const preserveAuthoredTerminalBranchHostPos =
                 !braceHostKnotIds.has(knot.id) &&
+                branchParentKnotIds.has(knot.id) &&
+                !leafParentKnotIds.has(knot.id) &&
                 !isDescendantHostKnot &&
                 isEndpointProjection &&
                 reprojectionDistance > 1.0;
 
+            const preserveAuthoredTerminalLeafHostPos =
+                !braceHostKnotIds.has(knot.id) &&
+                leafParentKnotIds.has(knot.id) &&
+                !branchParentKnotIds.has(knot.id) &&
+                isEndpointProjection &&
+                (
+                    reprojectionDistance <= 0.5
+                    || (isTipEndpointProjection && reprojectionDistance > 1.0)
+                    || (isBaseEndpointProjection && reprojectionDeltaZ <= 0.5)
+                );
+
             const preserveAuthoredEndpointPos =
-                preserveAuthoredBracePos || preserveAuthoredTerminalHostPos;
+                preserveAuthoredBracePos
+                || preserveAuthoredTerminalBranchHostPos
+                || preserveAuthoredTerminalLeafHostPos;
 
             if (preserveAuthoredEndpointPos) {
-                if (knot.diameter !== computedDiameter) {
+                const authoredPosChanged =
+                    authoredPos.x !== knot.pos.x
+                    || authoredPos.y !== knot.pos.y
+                    || authoredPos.z !== knot.pos.z;
+                const tChanged = knot.t !== t;
+                const diameterChanged = knot.diameter !== computedDiameter;
+
+                if (authoredPosChanged || tChanged || diameterChanged) {
                     nextKnots[knot.id] = {
                         ...knot,
+                        t,
+                        pos: authoredPos,
                         diameter: computedDiameter,
                     };
+                    if (authoredPosChanged) {
+                        changedHostPosById[knot.id] = authoredPos;
+                    }
                     changedThisPass = true;
                 }
                 continue;
@@ -633,6 +711,22 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         const leafCone2 = recomputeLeafConeKnotGeometry(nextLeaves, finalKnots);
         const braceSeg2 = recomputeBraceSegmentKnotGeometry(snapshot.braces, leafCone2.knots);
         finalKnots = braceSeg2.knots;
+    }
+
+    // Strip import hints from final output — they are consumed by normalization
+    // and must not persist into the runtime support state.
+    const hasAnyHints = Object.values(finalKnots).some(k => k._importHint !== undefined);
+    if (hasAnyHints) {
+        const stripped: Record<string, Knot> = {};
+        for (const [id, k] of Object.entries(finalKnots)) {
+            if (k._importHint !== undefined) {
+                const { _importHint: _, ...rest } = k;
+                stripped[id] = rest;
+            } else {
+                stripped[id] = k;
+            }
+        }
+        finalKnots = stripped;
     }
 
     return { knots: finalKnots, leaves: nextLeaves };
