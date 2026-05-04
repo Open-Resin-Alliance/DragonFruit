@@ -1,36 +1,37 @@
 import React from 'react';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
-import type { ImportPhase } from '../../../plugins/lys-import/useLysSceneImport';
 import { Search, ScanLine, Cpu } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+
+type ImportPhase = 'idle' | 'awaiting_stl' | 'processing';
 
 interface IslandScanCardProps {
     islands: ReturnType<typeof useIslandManager>;
     hasGeometry: boolean;
-    onLoadLysJson: () => void;
+    onLoadSupportJson: () => void;
     onGhostDataLoaded?: (data: unknown) => void;
-    onImportLysFile?: (file: File) => void;
-    // Two-step LYS import
-    lysImportPhase?: ImportPhase;
-    lysImportError?: string | null;
-    onLysJsonFile?: (file: File) => void;
-    onLysStlFile?: (file: File) => void;
-    onCancelLysImport?: () => void;
+    onImportSupportFile?: (file: File) => void;
+    // Two-step plugin import
+    pluginImportPhase?: ImportPhase;
+    pluginImportError?: string | null;
+    onPluginJsonFile?: (file: File) => void;
+    onPluginStlFile?: (file: File) => void;
+    onCancelPluginImport?: () => void;
 }
 
 export function IslandScanCard({
     islands,
     hasGeometry,
-    onLoadLysJson,
+    onLoadSupportJson,
     onGhostDataLoaded,
-    onImportLysFile,
+    onImportSupportFile,
     // Two-step import props
-    lysImportPhase = 'idle',
-    lysImportError,
-    onLysJsonFile,
-    onLysStlFile,
-    onCancelLysImport
+    pluginImportPhase = 'idle',
+    pluginImportError,
+    onPluginJsonFile,
+    onPluginStlFile,
+    onCancelPluginImport
 }: IslandScanCardProps) {
     const cardRef = React.useRef<HTMLDivElement | null>(null);
     const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -38,7 +39,7 @@ export function IslandScanCard({
     const [compactActions, setCompactActions] = React.useState(false);
 
     // Determine if we're using the new two-step flow
-    const useTwoStepFlow = !!onLysJsonFile && !!onLysStlFile;
+    const useTwoStepFlow = !!onPluginJsonFile && !!onPluginStlFile;
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -46,13 +47,13 @@ export function IslandScanCard({
         e.target.value = ''; // Reset for re-selection
 
         // Two-step flow: JSON file
-        if (useTwoStepFlow && onLysJsonFile) {
-            onLysJsonFile(file);
+        if (useTwoStepFlow && onPluginJsonFile) {
+            onPluginJsonFile(file);
             return;
         }
 
-        if (onImportLysFile) {
-            onImportLysFile(file);
+        if (onImportSupportFile) {
+            onImportSupportFile(file);
             return;
         }
 
@@ -76,8 +77,8 @@ export function IslandScanCard({
         if (!file) return;
         e.target.value = ''; // Reset for re-selection
 
-        if (onLysStlFile) {
-            onLysStlFile(file);
+        if (onPluginStlFile) {
+            onPluginStlFile(file);
         }
     };
 
@@ -172,7 +173,7 @@ export function IslandScanCard({
             <div className="px-2.5 pt-1 pb-2.5 space-y-1.5">
             <div>
                 {/* Two-step import: Awaiting STL phase */}
-                {useTwoStepFlow && lysImportPhase === 'awaiting_stl' ? (
+                {useTwoStepFlow && pluginImportPhase === 'awaiting_stl' ? (
                     <div className="space-y-1">
                         <div className="text-[11px] px-1" style={{ color: 'var(--text-strong)' }}>
                             JSON loaded. Now select the original STL file.
@@ -187,7 +188,7 @@ export function IslandScanCard({
                                 Select STL File
                             </Button>
                             <Button
-                                onClick={onCancelLysImport}
+                                onClick={onCancelPluginImport}
                                 variant="secondary"
                                 size="sm"
                                 className="!h-8 text-[11px]"
@@ -196,17 +197,17 @@ export function IslandScanCard({
                             </Button>
                         </div>
                     </div>
-                ) : lysImportPhase === 'processing' ? (
+                ) : pluginImportPhase === 'processing' ? (
                     <div className="text-[11px] px-1 py-1" style={{ color: 'var(--text-muted)' }}>
                         Processing import...
                     </div>
                 ) : (
                     <Button
                         onClick={() => {
-                            if (useTwoStepFlow || onImportLysFile || onGhostDataLoaded) {
+                            if (useTwoStepFlow || onImportSupportFile || onGhostDataLoaded) {
                                 fileInputRef.current?.click();
                             } else {
-                                onLoadLysJson();
+                                onLoadSupportJson();
                             }
                         }}
                         variant="primary"
@@ -217,9 +218,9 @@ export function IslandScanCard({
                 )}
 
                 {/* Error display */}
-                {lysImportError && (
+                {pluginImportError && (
                     <div className="text-[11px] px-1 mt-1" style={{ color: 'var(--danger)' }}>
-                        {lysImportError}
+                        {pluginImportError}
                     </div>
                 )}
             </div>

@@ -40,7 +40,7 @@ export function useSceneManager() {
     e.target.value = '';
   }, []);
 
-  const handleLoadLysJson = async () => {
+  const handleLoadSupportJson = async () => {
     try {
       const res = await fetch('/dragonfruit_supports.json');
       const data = await res.json();
@@ -118,6 +118,6 @@ export function useSceneManager() {
     geom,
     polygonCount,
     onFileChange,
-    handleLoadLysJson
+    handleLoadSupportJson
   };
 }

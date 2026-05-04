@@ -51,8 +51,6 @@ import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimi
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
-
-import { GhostOverlay } from '../../../../plugins/lys-import/GhostOverlay';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { CameraFocusHotkeyController, CameraHomeResetController, CameraIntroController, SpaceMouseController, useStlLoadCameraIntro } from '@/components/scene/camera';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
@@ -134,6 +132,10 @@ type GhostPreviewTransform = {
   rotation: THREE.Euler;
   scale: THREE.Vector3;
 };
+
+function GhostOverlay() {
+  return null;
+}
 
 type TrackpadGestureAction = 'pan' | 'orbit';
 

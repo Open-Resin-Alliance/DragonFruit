@@ -403,7 +403,7 @@ const PREPARE_DROP_EXTENSIONS = new Set([
   '.stl', '.obj', '.3mf', '.voxl',
   ...PLUGIN_ALL_FILE_TYPES.map((ft) => ft.fileExtension),
 ]);
-const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
+const PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
   PLUGIN_SCENE_FILE_TYPES.find((ft) => ft.fileExtension === '.lys')?.importWarning?.storageKey
   ?? 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
@@ -945,9 +945,9 @@ export default function Home() {
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
   const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
-  const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
-  const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
-  const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
+  const [showPluginImportWarningModal, setShowPluginImportWarningModal] = React.useState(false);
+  const [suppressPluginImportWarning, setSuppressPluginImportWarning] = React.useState(false);
+  const [pluginImportWarningSkipFuture, setPluginImportWarningSkipFuture] = React.useState(false);
   const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
   const [loadedSceneSaveSource, setLoadedSceneSaveSource] = React.useState<{ name: string; path: string | null } | null>(null);
   const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
@@ -957,7 +957,7 @@ export default function Home() {
   const [showCloseUnsavedChangesModal, setShowCloseUnsavedChangesModal] = React.useState(false);
   const [closeUnsavedChangesBusy, setCloseUnsavedChangesBusy] = React.useState<'none' | 'save_and_close' | 'discard_and_close'>('none');
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
-  const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
+  const pluginImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
 
   // ZIP file picker modal
@@ -1452,18 +1452,18 @@ export default function Home() {
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const stored = window.localStorage.getItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY);
-      setSuppressLysImportWarning(stored === '1');
+      const stored = window.localStorage.getItem(PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY);
+      setSuppressPluginImportWarning(stored === '1');
     } catch {
-      setSuppressLysImportWarning(false);
+      setSuppressPluginImportWarning(false);
     }
   }, []);
 
   React.useEffect(() => {
     return () => {
-      if (lysImportWarningPendingResolveRef.current) {
-        const resolve = lysImportWarningPendingResolveRef.current;
-        lysImportWarningPendingResolveRef.current = null;
+      if (pluginImportWarningPendingResolveRef.current) {
+        const resolve = pluginImportWarningPendingResolveRef.current;
+        pluginImportWarningPendingResolveRef.current = null;
         resolve(false);
       }
     };
@@ -1484,53 +1484,53 @@ export default function Home() {
     };
   }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
 
-  const hasLysSceneFile = React.useCallback((filesInput: FileList | File[]) => {
+  const hasPluginSceneFile = React.useCallback((filesInput: FileList | File[]) => {
     const files = Array.from(filesInput);
     return files.some((file) => file.name.trim().toLowerCase().endsWith('.lys'));
   }, []);
 
-  const maybeConfirmLysImportWarning = React.useCallback(async (filesInput: FileList | File[]) => {
-    if (suppressLysImportWarning) return true;
-    if (!hasLysSceneFile(filesInput)) return true;
+  const maybeConfirmPluginImportWarning = React.useCallback(async (filesInput: FileList | File[]) => {
+    if (suppressPluginImportWarning) return true;
+    if (!hasPluginSceneFile(filesInput)) return true;
 
-    if (lysImportWarningPendingResolveRef.current) {
-      const pendingResolve = lysImportWarningPendingResolveRef.current;
-      lysImportWarningPendingResolveRef.current = null;
+    if (pluginImportWarningPendingResolveRef.current) {
+      const pendingResolve = pluginImportWarningPendingResolveRef.current;
+      pluginImportWarningPendingResolveRef.current = null;
       pendingResolve(false);
     }
 
-    setLysImportWarningSkipFuture(false);
-    setShowLysImportWarningModal(true);
+    setPluginImportWarningSkipFuture(false);
+    setShowPluginImportWarningModal(true);
     return await new Promise<boolean>((resolve) => {
-      lysImportWarningPendingResolveRef.current = resolve;
+      pluginImportWarningPendingResolveRef.current = resolve;
     });
-  }, [hasLysSceneFile, suppressLysImportWarning]);
+  }, [hasPluginSceneFile, suppressPluginImportWarning]);
 
-  const resolveLysImportWarning = React.useCallback((proceed: boolean) => {
-    const resolve = lysImportWarningPendingResolveRef.current;
-    lysImportWarningPendingResolveRef.current = null;
-    setLysImportWarningSkipFuture(false);
-    setShowLysImportWarningModal(false);
+  const resolvePluginImportWarning = React.useCallback((proceed: boolean) => {
+    const resolve = pluginImportWarningPendingResolveRef.current;
+    pluginImportWarningPendingResolveRef.current = null;
+    setPluginImportWarningSkipFuture(false);
+    setShowPluginImportWarningModal(false);
     resolve?.(proceed);
   }, []);
 
-  const handleCancelLysImportWarning = React.useCallback(() => {
-    resolveLysImportWarning(false);
-  }, [resolveLysImportWarning]);
+  const handleCancelPluginImportWarning = React.useCallback(() => {
+    resolvePluginImportWarning(false);
+  }, [resolvePluginImportWarning]);
 
-  const handleContinueLysImportWarning = React.useCallback(() => {
-    if (lysImportWarningSkipFuture) {
-      setSuppressLysImportWarning(true);
+  const handleContinuePluginImportWarning = React.useCallback(() => {
+    if (pluginImportWarningSkipFuture) {
+      setSuppressPluginImportWarning(true);
       if (typeof window !== 'undefined') {
         try {
-          window.localStorage.setItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY, '1');
+          window.localStorage.setItem(PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY, '1');
         } catch {
           // Ignore persistence failure and still proceed.
         }
       }
     }
-    resolveLysImportWarning(true);
-  }, [lysImportWarningSkipFuture, resolveLysImportWarning]);
+    resolvePluginImportWarning(true);
+  }, [pluginImportWarningSkipFuture, resolvePluginImportWarning]);
 
   const resolveSceneSaveChoice = React.useCallback((choice: 'overwrite' | 'save_as' | 'cancel') => {
     const resolve = sceneSaveChoiceResolveRef.current;
@@ -1619,14 +1619,14 @@ export default function Home() {
     recomputeUnsavedSceneChanges();
   }, [recomputeUnsavedSceneChanges, scene.models.length]);
 
-  const importSceneFilesWithLysWarning = React.useCallback(async (
+  const importSceneFilesWithPluginWarning = React.useCallback(async (
     filesInput: FileList | File[],
     options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
   ): Promise<boolean> => {
     const sceneFiles = Array.from(filesInput);
     if (sceneFiles.length === 0) return false;
 
-    const proceed = await maybeConfirmLysImportWarning(sceneFiles);
+    const proceed = await maybeConfirmPluginImportWarning(sceneFiles);
     if (!proceed) return false;
 
     const imported = sceneFiles.length === 1
@@ -1654,7 +1654,7 @@ export default function Home() {
     }
 
     return imported;
-  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
+  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmPluginImportWarning]);
 
   // ── ZIP import helpers ───────────────────────────────────────────────────
 
@@ -1768,9 +1768,9 @@ export default function Home() {
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
-    void importSceneFilesWithLysWarning(files);
+    void importSceneFilesWithPluginWarning(files);
     e.target.value = '';
-  }, [importSceneFilesWithLysWarning]);
+  }, [importSceneFilesWithPluginWarning]);
 
   const handleLoadMeshChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1781,9 +1781,9 @@ export default function Home() {
       void scene.loadFiles(processed.meshFiles);
     }
     if (processed.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(processed.sceneFiles, { resultingScenePath: null });
     }
-  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+  }, [expandPickedFilesWithZip, importSceneFilesWithPluginWarning, scene]);
 
   const handleImportSceneChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1791,19 +1791,19 @@ export default function Home() {
     e.target.value = '';
     const processed = await expandPickedFilesWithZip(files, 'scene');
     if (processed.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(processed.sceneFiles, { resultingScenePath: null });
     }
     if (processed.meshFiles.length > 0) {
       void scene.loadFiles(processed.meshFiles);
     }
-  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+  }, [expandPickedFilesWithZip, importSceneFilesWithPluginWarning, scene]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
     if (!entry) return false;
 
     if (entry.kind === 'scene' && entry.name.trim().toLowerCase().endsWith('.lys')) {
-      const proceed = await maybeConfirmLysImportWarning([
+      const proceed = await maybeConfirmPluginImportWarning([
         new File([], entry.name, { type: 'application/octet-stream' }),
       ]);
       if (!proceed) return false;
@@ -1824,7 +1824,7 @@ export default function Home() {
             lastModified: Date.now(),
           });
 
-          const importedFromSource = await importSceneFilesWithLysWarning([restoredFile], {
+          const importedFromSource = await importSceneFilesWithPluginWarning([restoredFile], {
             resultingScenePath: sourcePath,
             sourcePaths: [sourcePath],
           });
@@ -1852,7 +1852,7 @@ export default function Home() {
       }
     }
     return reopened;
-  }, [importSceneFilesWithLysWarning, markSceneSaveBaseline, maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
+  }, [importSceneFilesWithPluginWarning, markSceneSaveBaseline, maybeConfirmPluginImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -7542,7 +7542,7 @@ export default function Home() {
         scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
       }
       if (expanded.sceneFiles.length > 0) {
-        await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+        await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
       }
       return;
     }
@@ -7554,9 +7554,9 @@ export default function Home() {
       scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
     }
     if (expanded.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
     }
-  }, [buildSyntheticFileChangeEvent, importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
+  }, [buildSyntheticFileChangeEvent, importSceneFilesWithPluginWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
     const nativeFiles = await pickSceneFilesWithNativeDialog();
@@ -7568,7 +7568,7 @@ export default function Home() {
       const sceneFiles = [...nonZip.map((e) => e.file), ...expandedFromZips.sceneFiles];
 
       if (sceneFiles.length > 0) {
-        await importSceneFilesWithLysWarning(
+        await importSceneFilesWithPluginWarning(
           sceneFiles,
           {
             resultingScenePath: nonZip.length === 1 && expandedFromZips.sceneFiles.length === 0
@@ -7592,12 +7592,12 @@ export default function Home() {
     if (webFiles.length === 0) return;
     const expanded = await expandPickedFilesWithZip(webFiles, 'scene');
     if (expanded.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
     }
     if (expanded.meshFiles.length > 0) {
       void scene.loadFiles(expanded.meshFiles);
     }
-  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
+  }, [importSceneFilesWithPluginWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -7625,11 +7625,11 @@ export default function Home() {
     }
 
     if (files.length === 0) return false;
-    return await importSceneFilesWithLysWarning(files, {
+    return await importSceneFilesWithPluginWarning(files, {
       resultingScenePath: files.length === 1 ? sceneEntries[0]?.path ?? null : null,
       sourcePaths: sceneEntries.map((entry) => entry.path),
     });
-  }, [importSceneFilesWithLysWarning]);
+  }, [importSceneFilesWithPluginWarning]);
 
   // Keep the ref in sync with the latest callback.
   React.useEffect(() => {
@@ -8807,7 +8807,7 @@ export default function Home() {
       }
 
       try {
-        await importSceneFilesWithLysWarning(sceneFiles);
+        await importSceneFilesWithPluginWarning(sceneFiles);
       } finally {
         if (shouldPrearmLoadingUi) {
           setNativePickerPreparationState({
@@ -8826,7 +8826,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [importSceneFilesWithLysWarning, scene, waitForUiTick]);
+  }, [importSceneFilesWithPluginWarning, scene, waitForUiTick]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -12285,7 +12285,7 @@ export default function Home() {
       };
     }
 
-    if (scene.lysImportPhase === 'processing') {
+    if (scene.pluginImportPhase === 'processing') {
       return {
         active: true,
         label: 'Loading LYS Scene…',
@@ -12300,7 +12300,7 @@ export default function Home() {
       detail: '',
       progress: null as number | null,
     };
-  }, [nativePickerPreparationState, scene.importProgress, scene.lysImportPhase]);
+  }, [nativePickerPreparationState, scene.importProgress, scene.pluginImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
@@ -12309,7 +12309,7 @@ export default function Home() {
     const isSceneImportActive =
       (scene.importProgress.active
         && (scene.importProgress.type === 'scene' || scene.importProgress.type === 'mesh'))
-      || scene.lysImportPhase === 'processing';
+      || scene.pluginImportPhase === 'processing';
 
     if (isSceneImportActive && scene.models.length === 0) {
       setHoldEmptyStateSceneImportUi(true);
@@ -12319,7 +12319,7 @@ export default function Home() {
     if (!isSceneImportActive && holdEmptyStateSceneImportUi) {
       setHoldEmptyStateSceneImportUi(false);
     }
-  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.lysImportPhase, scene.models.length]);
+  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.pluginImportPhase, scene.models.length]);
 
   const showEmptyStatePanel = scene.models.length === 0 || holdEmptyStateSceneImportUi;
   const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
@@ -13758,13 +13758,13 @@ export default function Home() {
               key="analysis-scan-card"
               islands={islands}
               hasGeometry={!!scene.geom}
-              onLoadLysJson={scene.handleLoadLysJson}
-              onImportLysFile={scene.importLysSupportFile}
-              lysImportPhase={scene.lysImportPhase}
-              lysImportError={scene.lysImportError}
-              onLysJsonFile={scene.handleLysJsonFile}
-              onLysStlFile={scene.handleLysStlFile}
-              onCancelLysImport={scene.cancelLysImport}
+              onLoadSupportJson={scene.handleLoadSupportJson}
+              onImportSupportFile={scene.importSupportDataFile}
+              pluginImportPhase={scene.pluginImportPhase}
+              pluginImportError={scene.pluginImportError}
+              onPluginJsonFile={scene.handlePluginJsonFile}
+              onPluginStlFile={scene.handlePluginStlFile}
+              onCancelPluginImport={scene.cancelPluginImport}
             />
 
             <IslandScanWorkflowCard key="analysis-workflow" islands={islands} hasGeometry={!!scene.geom} />
@@ -14913,12 +14913,12 @@ export default function Home() {
         />
       )}
 
-      {showLysImportWarningModal && (
+      {showPluginImportWarningModal && (
         <div
           className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              handleCancelLysImportWarning();
+              handleCancelPluginImportWarning();
             }
           }}
         >
@@ -14965,7 +14965,7 @@ export default function Home() {
                   color: 'var(--text-muted)',
                 }}
                 aria-label="Close LYS import warning"
-                onClick={handleCancelLysImportWarning}
+                onClick={handleCancelPluginImportWarning}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -14980,8 +14980,8 @@ export default function Home() {
                 <label className="inline-flex items-center gap-2 text-xs select-none" style={{ color: 'var(--text-muted)' }}>
                   <input
                     type="checkbox"
-                    checked={lysImportWarningSkipFuture}
-                    onChange={(event) => setLysImportWarningSkipFuture(event.target.checked)}
+                    checked={pluginImportWarningSkipFuture}
+                    onChange={(event) => setPluginImportWarningSkipFuture(event.target.checked)}
                     className="h-3.5 w-3.5 rounded border"
                     style={{ accentColor: '#f59e0b' }}
                   />
@@ -14992,7 +14992,7 @@ export default function Home() {
                   <button
                     type="button"
                     className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                    onClick={handleCancelLysImportWarning}
+                    onClick={handleCancelPluginImportWarning}
                   >
                     Cancel
                   </button>
@@ -15004,7 +15004,7 @@ export default function Home() {
                       background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
                       color: '#fde68a',
                     }}
-                    onClick={handleContinueLysImportWarning}
+                    onClick={handleContinuePluginImportWarning}
                   >
                     Continue
                   </button>
