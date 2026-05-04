@@ -3254,121 +3254,156 @@ export function useSceneCollectionManager() {
         throw new Error(importResult.error || `${pluginImport.fileType.displayName} import failed.`);
       }
 
-      const normalizedPayload = normalizePluginSceneImportPayload(importResult.payload);
-      if (!normalizedPayload) {
+      // Support both single-payload and array-payload plugins (e.g. multi-model LYS import).
+      const rawPayloads = Array.isArray(importResult.payload)
+        ? (importResult.payload as unknown[])
+        : [importResult.payload];
+
+      const normalizedPayloads = rawPayloads
+        .map((p) => normalizePluginSceneImportPayload(p))
+        .filter((p): p is PluginSceneImportPayload => p !== null);
+
+      if (normalizedPayloads.length === 0) {
         throw new Error(`Plugin "${pluginImport.pluginId}" returned an unsupported scene payload.`);
       }
 
-      const {
-        geometry: rawGeom,
-        transform: importedTransform,
-        modelId: importedModelId,
-        supportData,
-      } = normalizedPayload;
+      // Process all geometries sequentially
+      const processedItems: Array<{
+        normalized: PluginSceneImportPayload;
+        processed: GeometryWithBounds;
+      }> = [];
+      for (const normalized of normalizedPayloads) {
+        const processed = await processGeometry(normalized.geometry, {
+          center: false,
+          nativeProcessingMode: 'none',
+        });
+        processedItems.push({ normalized, processed });
+      }
 
-      // Process geometry (bounds, center, normals, BVH)
-      const processed = await processGeometry(rawGeom, {
-        center: false,
-        nativeProcessingMode: 'none',
-      });
-
-      // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
-      const color = '#a3a3a3';
-
-      const originalPosition = importedTransform.position.clone();
-
-      const sourceTransform: ModelTransform = {
-        position: originalPosition.clone(),
-        rotation: importedTransform.rotation.clone(),
-        scale: importedTransform.scale.clone(),
-      };
-
-      const sourceCandidate: Pick<LoadedModel, 'geometry' | 'transform'> = {
+      // Determine if any model is off-plate (check all)
+      const sourceCandidates = processedItems.map(({ normalized, processed }) => ({
         geometry: processed,
-        transform: sourceTransform,
-      };
+        transform: {
+          position: normalized.transform.position.clone(),
+          rotation: normalized.transform.rotation.clone(),
+          scale: normalized.transform.scale.clone(),
+        },
+      }));
+      const offPlateCount = sourceCandidates.filter(
+        (c) => !isModelFootprintInsidePlate({ geometry: c.geometry, transform: c.transform }),
+      ).length;
 
-      let shouldAutoArrangeOnImport = true;
-      const isLikelyOffPlate = !isModelFootprintInsidePlate(sourceCandidate);
-      if (isLikelyOffPlate && !options?.suppressPlacementPrompt) {
+      // Preserve authored placement by default. Only auto-arrange if models are off-plate
+      // and the user explicitly chooses auto-arrange in the prompt.
+      let shouldAutoArrangeOnImport = false;
+      if (offPlateCount > 0 && !options?.suppressPlacementPrompt) {
         const choice = await requestSceneImportPlacementChoice({
           source: extension.slice(1).toUpperCase(),
           fileName: file.name,
-          modelCount: 1,
-          offPlateModelCount: 1,
+          modelCount: normalizedPayloads.length,
+          offPlateModelCount: offPlateCount,
         });
         shouldAutoArrangeOnImport = choice === 'auto_arrange';
       }
 
-      const assignedCenter = shouldAutoArrangeOnImport
-        ? findFreeSpotCentersForModels([
-            {
-              geometry: processed,
-              transform: {
-                position: originalPosition.clone(),
-                rotation: importedTransform.rotation.clone(),
-                scale: importedTransform.scale.clone(),
-              },
-            },
-          ], 5)[0]
-        : null;
+      // Auto-arrange all models together so they don't overlap
+      const assignedCenters = shouldAutoArrangeOnImport
+        ? findFreeSpotCentersForModels(sourceCandidates, 5)
+        : [];
 
-      const finalPosition = new THREE.Vector3(
-        shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
-        shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
-        originalPosition.z,
-      );
+      const newModels: LoadedModel[] = [];
+      const supportEntries: Array<{
+        model: LoadedModel;
+        sourceTransform: ModelTransform;
+        supportData: PluginSceneImportPayload['supportData'];
+      }> = [];
 
-      const model: LoadedModel = {
-        id: importedModelId || generateId(),
-        name: sanitizeImportedModelDisplayName(file.name),
-        fileUrl: '', // No URL
-        fileSizeBytes: file.size,
-        geometry: processed,
-        transform: {
-          position: finalPosition,
-          rotation: importedTransform.rotation,
-          scale: importedTransform.scale,
-        },
-        visible: true,
-        color,
-        polygonCount: processed.geometry.getAttribute('position').count / 3,
-        ignoreAutoLift: true,
-        manualZMoveOverride: true,
-      };
+      for (let i = 0; i < processedItems.length; i++) {
+        const { normalized, processed } = processedItems[i];
+        const { transform: importedTransform, modelId: importedModelId, supportData } = normalized;
 
-      setModels(prev => [...prev, model]);
-      setActiveModelId(model.id);
-      setSelectedModelIds([model.id]);
+        const originalPosition = importedTransform.position.clone();
+        const sourceTransform: ModelTransform = {
+          position: originalPosition.clone(),
+          rotation: importedTransform.rotation.clone(),
+          scale: importedTransform.scale.clone(),
+        };
 
-      if (supportData) {
-        if (typeof window !== 'undefined') {
-          requestAnimationFrame(() => {
-            mergeFromImportFormat(supportData);
+        const assignedCenter = assignedCenters[i] ?? null;
+        const finalPosition = new THREE.Vector3(
+          shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
+          shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
+          originalPosition.z,
+        );
+
+        const modelName = processedItems.length === 1
+          ? sanitizeImportedModelDisplayName(file.name)
+          : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
+
+        const model: LoadedModel = {
+          id: importedModelId || generateId(),
+          name: modelName,
+          fileUrl: '',
+          fileSizeBytes: file.size,
+          geometry: processed,
+          transform: {
+            position: finalPosition,
+            rotation: importedTransform.rotation,
+            scale: importedTransform.scale,
+          },
+          visible: true,
+          color: '#a3a3a3',
+          polygonCount: processed.geometry.getAttribute('position').count / 3,
+          ignoreAutoLift: true,
+          manualZMoveOverride: true,
+        };
+
+        newModels.push(model);
+        supportEntries.push({ model, sourceTransform, supportData });
+      }
+
+      if (newModels.length === 0) {
+        throw new Error(`Plugin "${pluginImport.pluginId}" returned no importable models.`);
+      }
+
+      setModels((prev) => [...prev, ...newModels]);
+      setActiveModelId(newModels[newModels.length - 1].id);
+      setSelectedModelIds(newModels.map((m) => m.id));
+
+      // Load supports for all models in a single animation frame batch
+      const pendingSupports = supportEntries.filter((e) => !!e.supportData);
+      if (pendingSupports.length > 0) {
+        const applySupports = () => {
+          for (const { model, sourceTransform, supportData } of pendingSupports) {
+            mergeFromImportFormat(supportData!);
             if (!transformsEqual(sourceTransform, model.transform)) {
               transformSupportsForModel(model.id, sourceTransform, model.transform);
             }
-          });
-        } else {
-          mergeFromImportFormat(supportData);
-          if (!transformsEqual(sourceTransform, model.transform)) {
-            transformSupportsForModel(model.id, sourceTransform, model.transform);
           }
+        };
+        if (typeof window !== 'undefined') {
+          requestAnimationFrame(applySupports);
+        } else {
+          applySupports();
         }
       }
 
-      const supportCount = countSupportEntries(supportData ?? null);
+      const totalSupportCount = supportEntries.reduce(
+        (sum, e) => sum + countSupportEntries(e.supportData ?? null),
+        0,
+      );
       if (!options?.suppressReport) {
         const sourceLabel = extension.slice(1).toUpperCase();
+        const modelLabel = newModels.length === 1 ? '1 model' : `${newModels.length} models`;
         emitSceneImportReport(
-          supportCount > 0
-            ? `Imported ${sourceLabel} scene: 1 model, ${supportCount} supports.`
-            : `Imported ${sourceLabel} scene: 1 model.`,
+          totalSupportCount > 0
+            ? `Imported ${sourceLabel} scene: ${modelLabel}, ${totalSupportCount} supports.`
+            : `Imported ${sourceLabel} scene: ${modelLabel}.`,
           'success',
         );
       }
 
-      console.log(`[SceneCollection] ${extension} import successful: ${model.name}`);
+      console.log(`[SceneCollection] ${extension} import successful: ${newModels.map((m) => m.name).join(', ')}`);
       return true;
     } catch (err) {
       console.error('[SceneCollection] Failed to process plugin scene geometry:', err);
@@ -3391,7 +3426,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -3574,7 +3609,9 @@ export function useSceneCollectionManager() {
       const offPlateImportedModels = importedModels.filter((model) => !isModelFootprintInsidePlate(model));
       const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
 
-      let shouldAutoArrangeOnImport = true;
+      // Preserve authored placement by default. Only auto-arrange if models are off-plate
+      // and the user explicitly chooses auto-arrange in the prompt.
+      let shouldAutoArrangeOnImport = false;
       if (shouldPromptForPlacement) {
         const choice = await requestSceneImportPlacementChoice({
           source: 'VOXL',
