@@ -68,6 +68,11 @@ export type PluginNetworkUiAdapterContract = {
    * Defaults to true for existing backends when omitted.
    */
   supportsRemoteMaterialProfiles?: boolean;
+  /**
+   * When set, the Edit button is greyed out and this message is shown on hover.
+   * Omit when editing is fully supported.
+   */
+  remoteMaterialEditingWipNotice?: string;
   operations: {
     connect: string;
     discover: string;

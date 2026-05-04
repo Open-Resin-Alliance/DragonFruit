@@ -21,12 +21,14 @@ log = "0.4"
 rfd = "0.15"
 rayon = "1.10"
 zip = "2"
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 if-addrs = "0.10"
 tungstenite = "0.24"
 base64 = "0.22"
 sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "fs", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 dragonfruit-slicing-engine = { path = "../rust/dragonfruit-slicing-engine" }
 dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
