@@ -485,8 +485,8 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         });
     }
 
-    const targetHostKnotIds = new Set<string>();
     const braceHostKnotIds = new Set<string>();
+    const targetHostKnotIds = new Set<string>();
     for (const brace of Object.values(snapshot.braces)) {
         braceHostKnotIds.add(brace.startKnotId);
         braceHostKnotIds.add(brace.endKnotId);
@@ -553,10 +553,15 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
             const dz = computedPos.z - knot.pos.z;
             const reprojectionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             const isEndpointProjection = t <= 1e-4 || t >= 1 - 1e-4;
+            // Imported formats (including LYS) may intentionally place brace endpoints beyond the
+            // host shaft endpoint (e.g., on contact-cone regions). If normalization reprojects
+            // those endpoint-clamped brace knots back to the shaft endpoint, visuals can appear snapped.
+            // Only preserve authored positions for brace endpoints; branch/leaf host knots must
+            // always re-project to maintain correct segment linkage.
             const preserveAuthoredBracePos =
                 braceHostKnotIds.has(knot.id) &&
                 isEndpointProjection &&
-                reprojectionDistance > 2;
+                reprojectionDistance > 0.5;
 
             if (preserveAuthoredBracePos) {
                 if (knot.diameter !== computedDiameter) {
