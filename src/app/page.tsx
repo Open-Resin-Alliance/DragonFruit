@@ -40,9 +40,10 @@ import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmooth
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
-import { bakeMirrorIntoGeometry } from '@/features/mirror/logic/bakeMirrorIntoGeometry';
-import { buildMirrorSupportTransforms } from '@/features/mirror/logic/buildMirrorSupportTransforms';
+import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
+import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@/features/mirror/logic/buildMirrorSupportTransforms';
 import type { MirrorAxis } from '@/features/mirror/types';
+import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
@@ -13468,20 +13469,101 @@ export default function Home() {
     return requestDestructiveTransformSupportDeletionWithContinuation('Place On Face', continueApply);
   }, [requestDestructiveTransformSupportDeletionWithContinuation]);
 
+  const mirrorToolActive = scene.mode === 'prepare' && transformMgr.transformMode === 'mirror';
+
+  // Mirror session state: while the user is in Mirror mode we don't bake the
+  // geometry per-click (a 2.4M-vert bake is slow on big meshes). Instead, each
+  // click toggles a parity bit and applies a negative-scale transform — the GPU
+  // renders the flip immediately. On exit we run one combined bake against the
+  // accumulated parity bits and reset the scale to positive.
+  const mirrorSessionRef = React.useRef<{
+    modelId: string;
+    flips: { x: boolean; y: boolean; z: boolean };
+    initialTransform: ModelTransform;
+    initialGeometry: GeometryWithBounds;
+  } | null>(null);
+  const mirrorPrevToolActiveRef = React.useRef(false);
+
+  const finalizeMirrorSession = React.useCallback(() => {
+    const session = mirrorSessionRef.current;
+    mirrorSessionRef.current = null;
+    if (!session) return;
+
+    const { modelId, flips, initialTransform, initialGeometry } = session;
+    const anyFlip = flips.x || flips.y || flips.z;
+
+    if (!anyFlip) {
+      // Net-zero session (e.g. user clicked X twice). Nothing to commit.
+      return;
+    }
+
+    // Reset the model transform to the session's starting state. The bake
+    // produces a "natively flipped" mesh that, when rendered with the original
+    // transform, matches what the user has been seeing during the session.
+    scene.setModelTransformRaw(modelId, {
+      position: initialTransform.position.clone(),
+      rotation: initialTransform.rotation.clone(),
+      scale: initialTransform.scale.clone(),
+    });
+
+    const baked = bakeWithFlips(initialGeometry.geometry, flips);
+    if (!baked) return;
+    const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
+    scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
+      includeSupportState: !flips.z,
+    });
+    transformMgr.performAutoSnap();
+  }, [scene, transformMgr]);
+
+  React.useEffect(() => {
+    const wasActive = mirrorPrevToolActiveRef.current;
+    mirrorPrevToolActiveRef.current = mirrorToolActive;
+    if (wasActive && !mirrorToolActive) {
+      finalizeMirrorSession();
+    }
+  }, [mirrorToolActive, finalizeMirrorSession]);
+
   const handleMirror = React.useCallback((axis: MirrorAxis) => {
     const modelId = scene.activeModelId;
     if (!modelId) return;
     const model = scene.models.find((m) => m.id === modelId);
     if (!model) return;
 
-    const sourceBufferGeometry = model.geometry.geometry;
-    const localBboxCenter = model.geometry.center.clone();
+    if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
+      // Finalize any prior session that was for a different model first.
+      if (mirrorSessionRef.current) finalizeMirrorSession();
+      mirrorSessionRef.current = {
+        modelId,
+        flips: { x: false, y: false, z: false },
+        initialTransform: {
+          position: model.transform.position.clone(),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
+        },
+        initialGeometry: model.geometry,
+      };
+    }
+
+    const session = mirrorSessionRef.current;
 
     const performMirror = () => {
+      session.flips[axis] = !session.flips[axis];
+
+      // Reflect the model's transform across the world-space axis through the
+      // model's world bbox center. This produces a true world-space mirror
+      // regardless of the model's existing rotation.
+      const nextTransform = reflectTransformAcrossWorldAxis(
+        model.transform,
+        model.geometry.center,
+        axis,
+      );
+
+      // For X/Y also push supports through the same reflection. Z deletes
+      // supports up-front via the destructive modal.
       if (axis !== 'z') {
         const supportTransforms = buildMirrorSupportTransforms({
           current: model.transform,
-          modelLocalBboxCenter: localBboxCenter,
+          modelLocalBboxCenter: model.geometry.center.clone(),
           axis,
         });
         if (supportTransforms) {
@@ -13489,12 +13571,7 @@ export default function Home() {
         }
       }
 
-      const mirroredGeometry = bakeMirrorIntoGeometry(sourceBufferGeometry, axis);
-      const label = `Mirror Model (${axis.toUpperCase()})`;
-      scene.replaceModelGeometry(modelId, mirroredGeometry, label, {
-        includeSupportState: axis !== 'z',
-      });
-
+      scene.setModelTransformRaw(modelId, nextTransform);
       transformMgr.performAutoSnap();
     };
 
@@ -13504,7 +13581,7 @@ export default function Home() {
     } else {
       performMirror();
     }
-  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation]);
+  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, finalizeMirrorSession]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">

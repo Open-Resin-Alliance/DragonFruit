@@ -14,15 +14,13 @@ export interface MirrorSupportTransforms {
   after: ModelTransform;
 }
 
-export function buildMirrorSupportTransforms(args: {
-  current: ModelTransform;
-  modelLocalBboxCenter: THREE.Vector3;
-  axis: MirrorAxis;
-}): MirrorSupportTransforms | null {
-  const { current, modelLocalBboxCenter, axis } = args;
-
-  if (axis === 'z') return null;
-
+// Reflects a model's transform across a world-space axis through the model's
+// world-space bbox center. Works for any axis, including Z.
+export function reflectTransformAcrossWorldAxis(
+  current: ModelTransform,
+  modelLocalBboxCenter: THREE.Vector3,
+  axis: MirrorAxis,
+): ModelTransform {
   const beforeMatrix = new THREE.Matrix4().compose(
     current.position.clone(),
     quaternionFromGlobalEuler(current.rotation),
@@ -49,18 +47,28 @@ export function buildMirrorSupportTransforms(args: {
   const afterScale = new THREE.Vector3();
   afterMatrix.decompose(afterPosition, afterQuat, afterScale);
 
-  const afterEuler = new THREE.Euler().setFromQuaternion(afterQuat, 'ZYX');
+  return {
+    position: afterPosition,
+    rotation: new THREE.Euler().setFromQuaternion(afterQuat, 'ZYX'),
+    scale: afterScale,
+  };
+}
 
+export function buildMirrorSupportTransforms(args: {
+  current: ModelTransform;
+  modelLocalBboxCenter: THREE.Vector3;
+  axis: MirrorAxis;
+}): MirrorSupportTransforms | null {
+  const { current, modelLocalBboxCenter, axis } = args;
+  if (axis === 'z') return null;
+
+  const after = reflectTransformAcrossWorldAxis(current, modelLocalBboxCenter, axis);
   return {
     before: {
       position: current.position.clone(),
       rotation: current.rotation.clone(),
       scale: current.scale.clone(),
     },
-    after: {
-      position: afterPosition,
-      rotation: afterEuler,
-      scale: afterScale,
-    },
+    after,
   };
 }

@@ -2004,6 +2004,14 @@ export function useSceneCollectionManager() {
   }, [loadFiles]);
 
   // Model Management
+  // Updates a model's transform without running the support-transform pipeline
+  // or pushing history. Callers that need supports moved must do that themselves
+  // (e.g. mirror, which reflects supports about the model bbox center via
+  // `transformSupportsForModel` rather than through a delta-matrix).
+  const setModelTransformRaw = useCallback((id: string, transform: ModelTransform) => {
+    setModels((prev) => prev.map((m) => (m.id === id ? { ...m, transform } : m)));
+  }, []);
+
   const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
     const currentModel = modelsRef.current.find((m) => m.id === id);
     if (!currentModel) {
@@ -2180,7 +2188,7 @@ export function useSceneCollectionManager() {
     id: string,
     nextBufferGeometry: THREE.BufferGeometry,
     historyDescription: string,
-    options?: { includeSupportState?: boolean },
+    options?: { includeSupportState?: boolean; deferPostProcessing?: boolean },
   ) => {
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
@@ -2188,22 +2196,41 @@ export function useSceneCollectionManager() {
     const target = currentModels.find((m) => m.id === id);
     if (!target) return false;
 
-    accelerateGeometry(nextBufferGeometry);
     if (!nextBufferGeometry.boundingBox) nextBufferGeometry.computeBoundingBox();
     const bbox = nextBufferGeometry.boundingBox
       ? nextBufferGeometry.boundingBox.clone()
       : new THREE.Box3();
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
-    const flatteningPlanes = computeFlatteningPlanes(nextBufferGeometry);
 
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
       bbox,
       center,
       size,
-      flatteningPlanes,
+      flatteningPlanes: target.geometry.flatteningPlanes,
     };
+
+    if (!options?.deferPostProcessing) {
+      deferAccelerateGeometry([nextGeometry]);
+
+      const scheduleIdle = (cb: () => void) => {
+        if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+          (window as any).requestIdleCallback(cb, { timeout: 250 });
+        } else {
+          setTimeout(cb, 16);
+        }
+      };
+      scheduleIdle(() => {
+        const planes = computeFlatteningPlanes(nextBufferGeometry);
+        nextGeometry.flatteningPlanes = planes;
+        setModels((prev) => prev.map((m) => (
+          m.id === id && m.geometry.geometry === nextBufferGeometry
+            ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
+            : m
+        )));
+      });
+    }
 
     const polygonCount = (() => {
       const idx = nextBufferGeometry.getIndex();
@@ -2232,7 +2259,31 @@ export function useSceneCollectionManager() {
     pushSceneSnapshotHistory(before, after, historyDescription);
 
     return true;
-  }, [pushSceneSnapshotHistory]);
+  }, [pushSceneSnapshotHistory, deferAccelerateGeometry]);
+
+  const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
+    const target = modelsRef.current.find((m) => m.id === id);
+    if (!target) return;
+    const geom = target.geometry.geometry;
+
+    deferAccelerateGeometry([target.geometry]);
+
+    const scheduleIdle = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 250 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+    scheduleIdle(() => {
+      const planes = computeFlatteningPlanes(geom);
+      setModels((prev) => prev.map((m) => (
+        m.id === id && m.geometry.geometry === geom
+          ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
+          : m
+      )));
+    });
+  }, [deferAccelerateGeometry]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
@@ -4027,7 +4078,9 @@ export function useSceneCollectionManager() {
     updateModelTransform,
     commitModelTransformHistory,
     updateModelTransforms,
+    setModelTransformRaw,
     replaceModelGeometry,
+    finalizeModelGeometryPostProcessing,
     setModelManualZMoveOverride,
     setModelVisibility,
     renameModel,

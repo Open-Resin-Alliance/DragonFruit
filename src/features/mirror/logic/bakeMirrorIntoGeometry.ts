@@ -50,10 +50,17 @@ export function bakeMirrorIntoGeometry(
     }
   }
 
-  if (out.getAttribute('normal')) {
-    out.deleteAttribute('normal');
+  const normalAttr = out.getAttribute('normal') as THREE.BufferAttribute | undefined;
+  if (normalAttr) {
+    const normals = normalAttr.array as Float32Array;
+    const normalItemSize = normalAttr.itemSize;
+    for (let i = axisIndex; i < normals.length; i += normalItemSize) {
+      normals[i] = -normals[i];
+    }
+    normalAttr.needsUpdate = true;
+  } else {
+    out.computeVertexNormals();
   }
-  out.computeVertexNormals();
 
   out.computeBoundingBox();
   out.computeBoundingSphere();
