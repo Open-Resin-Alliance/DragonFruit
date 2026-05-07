@@ -39,6 +39,10 @@ import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetri
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
+import { MirrorTool } from '@/features/mirror/MirrorTool';
+import { bakeMirrorIntoGeometry } from '@/features/mirror/logic/bakeMirrorIntoGeometry';
+import { buildMirrorSupportTransforms } from '@/features/mirror/logic/buildMirrorSupportTransforms';
+import type { MirrorAxis } from '@/features/mirror/types';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
@@ -145,7 +149,7 @@ import {
   savePrintArtifactWithNativeDialog,
   writeBytesToNativePath,
 } from '@/features/slicing/tauri/nativeSlicerBridge';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, transformSupportsForModel } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -13464,6 +13468,44 @@ export default function Home() {
     return requestDestructiveTransformSupportDeletionWithContinuation('Place On Face', continueApply);
   }, [requestDestructiveTransformSupportDeletionWithContinuation]);
 
+  const handleMirror = React.useCallback((axis: MirrorAxis) => {
+    const modelId = scene.activeModelId;
+    if (!modelId) return;
+    const model = scene.models.find((m) => m.id === modelId);
+    if (!model) return;
+
+    const sourceBufferGeometry = model.geometry.geometry;
+    const localBboxCenter = model.geometry.center.clone();
+
+    const performMirror = () => {
+      if (axis !== 'z') {
+        const supportTransforms = buildMirrorSupportTransforms({
+          current: model.transform,
+          modelLocalBboxCenter: localBboxCenter,
+          axis,
+        });
+        if (supportTransforms) {
+          transformSupportsForModel(modelId, supportTransforms.before, supportTransforms.after);
+        }
+      }
+
+      const mirroredGeometry = bakeMirrorIntoGeometry(sourceBufferGeometry, axis);
+      const label = `Mirror Model (${axis.toUpperCase()})`;
+      scene.replaceModelGeometry(modelId, mirroredGeometry, label, {
+        includeSupportState: axis !== 'z',
+      });
+
+      transformMgr.performAutoSnap();
+    };
+
+    if (axis === 'z') {
+      const proceedNow = requestDestructiveTransformSupportDeletionWithContinuation('Mirror Z', performMirror);
+      if (proceedNow) performMirror();
+    } else {
+      performMirror();
+    }
+  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation]);
+
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
       <TopBar
@@ -14353,6 +14395,12 @@ export default function Home() {
                 resolveAnimatedTransform={transformMgr.resolveLiveTransform}
                 onFaceSelect={handlePlaceOnFace}
                 onBeforeFaceApply={handlePlaceOnFaceBeforeApply}
+              />
+            )}
+            {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (
+              <MirrorTool
+                activeModelId={displayActiveModelId}
+                onMirror={handleMirror}
               />
             )}
           </SceneCanvas>

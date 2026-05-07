@@ -2176,6 +2176,64 @@ export function useSceneCollectionManager() {
     };
   }, [pushSceneSnapshotHistory]);
 
+  const replaceModelGeometry = useCallback((
+    id: string,
+    nextBufferGeometry: THREE.BufferGeometry,
+    historyDescription: string,
+    options?: { includeSupportState?: boolean },
+  ) => {
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const target = currentModels.find((m) => m.id === id);
+    if (!target) return false;
+
+    accelerateGeometry(nextBufferGeometry);
+    if (!nextBufferGeometry.boundingBox) nextBufferGeometry.computeBoundingBox();
+    const bbox = nextBufferGeometry.boundingBox
+      ? nextBufferGeometry.boundingBox.clone()
+      : new THREE.Box3();
+    const center = bbox.getCenter(new THREE.Vector3());
+    const size = bbox.getSize(new THREE.Vector3());
+    const flatteningPlanes = computeFlatteningPlanes(nextBufferGeometry);
+
+    const nextGeometry: GeometryWithBounds = {
+      geometry: nextBufferGeometry,
+      bbox,
+      center,
+      size,
+      flatteningPlanes,
+    };
+
+    const polygonCount = (() => {
+      const idx = nextBufferGeometry.getIndex();
+      if (idx) return Math.floor(idx.count / 3);
+      const pos = nextBufferGeometry.getAttribute('position');
+      return pos ? Math.floor(pos.count / 3) : target.polygonCount;
+    })();
+
+    const includeSupportHistory = options?.includeSupportState
+      ?? hasSupportsOrKickstandsForModel(id, getSnapshot(), getKickstandSnapshot());
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+    });
+
+    const nextModels = currentModels.map((m) => (
+      m.id === id
+        ? { ...m, geometry: nextGeometry, polygonCount }
+        : m
+    ));
+    setModels(nextModels);
+
+    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+    });
+    pushSceneSnapshotHistory(before, after, historyDescription);
+
+    return true;
+  }, [pushSceneSnapshotHistory]);
+
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, visible } : m
@@ -3969,6 +4027,7 @@ export function useSceneCollectionManager() {
     updateModelTransform,
     commitModelTransformHistory,
     updateModelTransforms,
+    replaceModelGeometry,
     setModelManualZMoveOverride,
     setModelVisibility,
     renameModel,
