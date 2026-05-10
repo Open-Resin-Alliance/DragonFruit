@@ -1,3 +1,5 @@
+import type { ComponentType } from 'react';
+
 export type RemoteMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select';
 
 export type RemoteMaterialFieldOption = {
@@ -152,6 +154,20 @@ export type PluginNetworkOperationHandlerContract = (
   operationPath: string[],
   payload: unknown,
 ) => Promise<{ status: number; body: unknown }>;
+
+/**
+ * First-class scene overlay loader contributed by a plugin.
+ *
+ * The host obtains the loader from the central plugin registry and turns it
+ * into a client-side lazy component without importing plugin-owned UI code
+ * directly.
+ */
+export type PluginSceneOverlayLoaderContract = () => Promise<{
+  default: ComponentType<{
+    data: unknown;
+    visible: boolean;
+  }>;
+}>;
 
 export type PluginSlicingFormatDefinitionContract = {
   id: string;
@@ -331,6 +347,7 @@ export type ComplexPluginDefinition = {
   slicingFormatsByOutput?: Record<string, PluginSlicingFormatDefinitionContract>;
   localMaterialSettingsByOutput?: Record<string, PluginLocalMaterialSettingsAdapterContract>;
   localMaterialSettingsByOutputAndMode?: PluginLocalMaterialSettingsByModeContract;
+  sceneOverlayLoader?: PluginSceneOverlayLoaderContract;
   /** File types this plugin can import. Required when `capabilities.fileType` is true. */
   fileTypes?: PluginFileTypeDefinition[];
 };

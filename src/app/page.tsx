@@ -64,6 +64,7 @@ import {
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
@@ -10834,6 +10835,13 @@ export default function Home() {
 
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
+  const LysGhostOverlay = React.useMemo(
+    () => {
+      const loader = getPluginSceneOverlayLoader('lys-import');
+      return loader ? React.lazy(loader) : null;
+    },
+    [],
+  );
 
   const computeModelWorldBounds = React.useCallback((
     model: (typeof scene.models)[number],
@@ -14317,7 +14325,11 @@ export default function Home() {
             supportDragGroupRef={supportDragGroupRef}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             supportDragTransactionId={supportDragTransactionId}
-            ghostData={ghostData}
+            renderSceneOverlays={() => (
+              ghostData && LysGhostOverlay
+                ? <LysGhostOverlay data={ghostData} visible />
+                : null
+            )}
             duplicatePreviewModel={
               isDuplicating
                 ? duplicateApplySourceModel
