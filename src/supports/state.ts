@@ -526,6 +526,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         authoredKnotPosById.set(knotId, authoredKnot.pos);
     }
     const changedHostPosById: Record<string, Vec3> = {};
+    const unresolvedBraceHostWarned = new Set<string>();
 
     const maxPasses = 4;
     for (let pass = 0; pass < maxPasses; pass++) {
@@ -566,12 +567,151 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 }
             }
 
-            if (!segment || !endpoints) continue;
+            if (!segment || !endpoints) {
+                if (braceHostKnotIds.has(knot.id) && !unresolvedBraceHostWarned.has(knot.id)) {
+                    unresolvedBraceHostWarned.add(knot.id);
+                    console.warn('[SupportStore][normalizeLoadedKnotAndLeafGeometry] unresolved brace host knot segment', {
+                        knotId: knot.id,
+                        parentShaftId: knot.parentShaftId,
+                        knotPos: knot.pos,
+                    });
+                }
+                continue;
+            }
 
             const authoredPos = authoredKnotPosById.get(knot.id) ?? knot.pos;
-            const t = computeClosestTOnSegmentFromPoint(authoredPos, endpoints.start, endpoints.end, segment);
-            const computedPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, t);
-            const computedDiameter = segment.diameter + JOINT_DIAMETER_OFFSET_MM;
+            let activeSegment = segment;
+            let activeEndpoints = endpoints;
+            let nextParentShaftId = knot.parentShaftId;
+
+            if (braceHostKnotIds.has(knot.id)) {
+                const scoreBinding = (
+                    targetSegment: Segment,
+                    targetEndpoints: { start: Vec3; end: Vec3 },
+                    segmentIndex: number,
+                    segmentCount: number,
+                    axisStart: Vec3,
+                    axisEnd: Vec3,
+                ): { score: number; t: number; pos: Vec3; distance: number; isEndpoint: boolean } => {
+                    const tVal = computeClosestTOnSegmentFromPoint(authoredPos, targetEndpoints.start, targetEndpoints.end, targetSegment);
+                    const posVal = calculateKnotPositionOnSegmentFromT(targetEndpoints.start, targetEndpoints.end, targetSegment, tVal);
+
+                    const dxVal = posVal.x - authoredPos.x;
+                    const dyVal = posVal.y - authoredPos.y;
+                    const dzVal = posVal.z - authoredPos.z;
+                    const distanceVal = Math.sqrt(dxVal * dxVal + dyVal * dyVal + dzVal * dzVal);
+                    const isEndpointVal = tVal <= 0.02 || tVal >= 0.98;
+
+                    const axisStartVec = new THREE.Vector3(axisStart.x, axisStart.y, axisStart.z);
+                    const axisEndVec = new THREE.Vector3(axisEnd.x, axisEnd.y, axisEnd.z);
+                    const authoredVec = new THREE.Vector3(authoredPos.x, authoredPos.y, authoredPos.z);
+                    const axis = axisEndVec.clone().sub(axisStartVec);
+                    const axisLenSq = axis.lengthSq();
+                    const axisAlpha = axisLenSq > 1e-8
+                        ? THREE.MathUtils.clamp(authoredVec.clone().sub(axisStartVec).dot(axis) / axisLenSq, 0, 1)
+                        : 0;
+                    const desiredIndex = axisAlpha * Math.max(0, segmentCount - 1);
+
+                    const endpointPenalty = isEndpointVal
+                        ? Math.max(0, distanceVal - 0.35) * 4.0 + 0.75
+                        : 0;
+                    const indexPenalty = Math.abs(segmentIndex - desiredIndex) * 0.25;
+                    const score = distanceVal + endpointPenalty + indexPenalty;
+
+                    return {
+                        score,
+                        t: tVal,
+                        pos: posVal,
+                        distance: distanceVal,
+                        isEndpoint: isEndpointVal,
+                    };
+                };
+
+                if (trunkRef?.root) {
+                    const segments = trunkRef.trunk.segments;
+                    const firstSeg = segments[0];
+                    const lastSeg = segments[segments.length - 1];
+                    const firstEndpoints = firstSeg
+                        ? getTrunkSegmentEndpoints(trunkRef.trunk, firstSeg, 0, trunkRef.root)
+                        : null;
+                    const lastEndpoints = lastSeg
+                        ? getTrunkSegmentEndpoints(trunkRef.trunk, lastSeg, segments.length - 1, trunkRef.root)
+                        : null;
+
+                    if (segments.length > 0 && firstEndpoints && lastEndpoints) {
+                        const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === knot.parentShaftId));
+                        let best = scoreBinding(activeSegment, activeEndpoints, currentIndex, segments.length, firstEndpoints.start, lastEndpoints.end);
+                        let bestSegment = activeSegment;
+                        let bestEndpoints = activeEndpoints;
+
+                        for (let idx = 0; idx < segments.length; idx++) {
+                            const candidateSeg = segments[idx];
+                            const candidateEndpoints = getTrunkSegmentEndpoints(trunkRef.trunk, candidateSeg, idx, trunkRef.root);
+                            if (!candidateEndpoints) continue;
+
+                            const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
+                            if (candidate.score + 0.05 < best.score) {
+                                best = candidate;
+                                bestSegment = candidateSeg;
+                                bestEndpoints = candidateEndpoints;
+                            }
+                        }
+
+                        if (bestSegment.id !== knot.parentShaftId) {
+                            activeSegment = bestSegment;
+                            activeEndpoints = bestEndpoints;
+                            nextParentShaftId = bestSegment.id;
+                        }
+                    }
+                } else {
+                    const branchRef = branchSegmentMap.get(knot.parentShaftId);
+                    if (branchRef) {
+                        const parentKnot = nextKnots[branchRef.branch.parentKnotId] ?? snapshot.knots[branchRef.branch.parentKnotId];
+                        if (parentKnot) {
+                            const segments = branchRef.branch.segments;
+                            const firstSeg = segments[0];
+                            const lastSeg = segments[segments.length - 1];
+                            const firstEndpoints = firstSeg
+                                ? getBranchSegmentEndpoints(branchRef.branch, firstSeg, 0, parentKnot)
+                                : null;
+                            const lastEndpoints = lastSeg
+                                ? getBranchSegmentEndpoints(branchRef.branch, lastSeg, segments.length - 1, parentKnot)
+                                : null;
+
+                            if (segments.length > 0 && firstEndpoints && lastEndpoints) {
+                                const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === knot.parentShaftId));
+                                let best = scoreBinding(activeSegment, activeEndpoints, currentIndex, segments.length, firstEndpoints.start, lastEndpoints.end);
+                                let bestSegment = activeSegment;
+                                let bestEndpoints = activeEndpoints;
+
+                                for (let idx = 0; idx < segments.length; idx++) {
+                                    const candidateSeg = segments[idx];
+                                    const candidateEndpoints = getBranchSegmentEndpoints(branchRef.branch, candidateSeg, idx, parentKnot);
+                                    if (!candidateEndpoints) continue;
+
+                                    const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
+                                    if (candidate.score + 0.05 < best.score) {
+                                        best = candidate;
+                                        bestSegment = candidateSeg;
+                                        bestEndpoints = candidateEndpoints;
+                                    }
+                                }
+
+                                if (bestSegment.id !== knot.parentShaftId) {
+                                    activeSegment = bestSegment;
+                                    activeEndpoints = bestEndpoints;
+                                    nextParentShaftId = bestSegment.id;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            const t = computeClosestTOnSegmentFromPoint(authoredPos, activeEndpoints.start, activeEndpoints.end, activeSegment);
+            const computedPos = calculateKnotPositionOnSegmentFromT(activeEndpoints.start, activeEndpoints.end, activeSegment, t);
+            const computedDiameter = activeSegment.diameter + JOINT_DIAMETER_OFFSET_MM;
+            const parentShaftChanged = nextParentShaftId !== knot.parentShaftId;
 
             const dx = computedPos.x - authoredPos.x;
             const dy = computedPos.y - authoredPos.y;
@@ -594,8 +734,8 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                     computedPos.z !== knot.pos.z;
                 const tChanged = knot.t !== t;
                 const diameterChanged = knot.diameter !== computedDiameter;
-                if (posChanged || tChanged || diameterChanged) {
-                    nextKnots[knot.id] = { ...knot, t, pos: computedPos, diameter: computedDiameter };
+                if (posChanged || tChanged || diameterChanged || parentShaftChanged) {
+                    nextKnots[knot.id] = { ...knot, parentShaftId: nextParentShaftId, t, pos: computedPos, diameter: computedDiameter };
                     if (posChanged) changedHostPosById[knot.id] = computedPos;
                     changedThisPass = true;
                 }
@@ -608,8 +748,8 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                     authoredPos.z !== knot.pos.z;
                 const tChanged = knot.t !== t;
                 const diameterChanged = knot.diameter !== computedDiameter;
-                if (posChanged || tChanged || diameterChanged) {
-                    nextKnots[knot.id] = { ...knot, t, pos: authoredPos, diameter: computedDiameter };
+                if (posChanged || tChanged || diameterChanged || parentShaftChanged) {
+                    nextKnots[knot.id] = { ...knot, parentShaftId: nextParentShaftId, t, pos: authoredPos, diameter: computedDiameter };
                     if (posChanged) changedHostPosById[knot.id] = authoredPos;
                     changedThisPass = true;
                 }
@@ -657,9 +797,10 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 const tChanged = knot.t !== t;
                 const diameterChanged = knot.diameter !== computedDiameter;
 
-                if (authoredPosChanged || tChanged || diameterChanged) {
+                if (authoredPosChanged || tChanged || diameterChanged || parentShaftChanged) {
                     nextKnots[knot.id] = {
                         ...knot,
+                        parentShaftId: nextParentShaftId,
                         t,
                         pos: authoredPos,
                         diameter: computedDiameter,
@@ -678,10 +819,11 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 computedPos.z !== knot.pos.z;
             const tChanged = knot.t !== t;
             const diameterChanged = knot.diameter !== computedDiameter;
-            if (!posChanged && !tChanged && !diameterChanged) continue;
+            if (!posChanged && !tChanged && !diameterChanged && !parentShaftChanged) continue;
 
             nextKnots[knot.id] = {
                 ...knot,
+                parentShaftId: nextParentShaftId,
                 t,
                 pos: computedPos,
                 diameter: computedDiameter,
