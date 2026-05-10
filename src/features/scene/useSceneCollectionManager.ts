@@ -628,6 +628,11 @@ function countSupportEntries(payload: DragonfruitImportFormat | null | undefined
     + (payload.kickstands?.length ?? 0);
 }
 
+function applyImportDefaultsToRaftState() {
+  const defaults = getSavedImportDefaultsSettings();
+  updateRaftSettings(getImportDefaultsRaftPatch(defaults));
+}
+
 type PluginSceneImportPayload = {
   geometry: THREE.BufferGeometry;
   transform: {
@@ -769,11 +774,12 @@ import {
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
-import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, updateRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { beginKickstandStoreBatch, endKickstandStoreBatch } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 
 type ImportProgressState = {
   active: boolean;
@@ -3375,6 +3381,7 @@ export function useSceneCollectionManager() {
       if (pendingSupports.length > 0) {
         const applySupports = () => {
           for (const { model, sourceTransform, supportData } of pendingSupports) {
+            applyImportDefaultsToRaftState();
             mergeFromImportFormat(supportData!);
             if (!transformsEqual(sourceTransform, model.transform)) {
               transformSupportsForModel(model.id, sourceTransform, model.transform);
@@ -3652,6 +3659,7 @@ export function useSceneCollectionManager() {
 
       if (voxlSupportsContainData(document)) {
         const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
+        applyImportDefaultsToRaftState();
         mergeFromImportFormat(remappedSupports);
 
         for (const imported of importedModels) {
@@ -3820,6 +3828,7 @@ export function useSceneCollectionManager() {
     try {
       const res = await fetch('/dragonfruit_supports.json');
       const data = await res.json();
+      applyImportDefaultsToRaftState();
       loadFromImportFormat(data);
       console.log('Loaded LYS data:', data);
     } catch (e) {
@@ -3838,6 +3847,7 @@ export function useSceneCollectionManager() {
         return;
       }
 
+      applyImportDefaultsToRaftState();
       loadFromImportFormat(parsed);
       emitSceneImportReport('Imported support data.', 'success');
 

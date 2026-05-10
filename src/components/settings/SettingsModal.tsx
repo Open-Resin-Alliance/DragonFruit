@@ -101,6 +101,12 @@ import {
   setDebugPrimitivesPanelVisibleEnabled,
   setFloatingLayoutPersistenceEnabled,
 } from '@/components/layout/floatingLayoutPreferences';
+import {
+  DEFAULT_IMPORT_DEFAULTS_SETTINGS,
+  getSavedImportDefaultsSettings,
+  saveImportDefaultsSettings,
+  type ImportDefaultsSettings,
+} from '@/features/scene/importDefaultsPreferences';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
 const DEFAULT_AMBIENT_INTENSITY = 0.6;
@@ -255,6 +261,7 @@ export function SettingsModal({
   });
   const [draftFloatingLayoutPersistence, setDraftFloatingLayoutPersistence] = useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
+  const [draftImportDefaults, setDraftImportDefaults] = useState<ImportDefaultsSettings>(() => getSavedImportDefaultsSettings());
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
@@ -340,6 +347,7 @@ export function SettingsModal({
     setDraftCustomThemeName(savedThemeProfile.isBuiltIn ? '' : savedThemeProfile.name);
     setDraftFloatingLayoutPersistence(isFloatingLayoutPersistenceEnabled());
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
+    setDraftImportDefaults(getSavedImportDefaultsSettings());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
@@ -672,6 +680,7 @@ export function SettingsModal({
     setDraftCustomThemeName('');
     setDraftFloatingLayoutPersistence(true);
     setDraftDebugPrimitivesPanelVisible(false);
+    setDraftImportDefaults(DEFAULT_IMPORT_DEFAULTS_SETTINGS);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
@@ -742,6 +751,7 @@ export function SettingsModal({
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
     setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
+    saveImportDefaultsSettings(draftImportDefaults);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
     saveCameraFeelSettings({ preset: draftCameraFeelPreset });
@@ -793,6 +803,7 @@ export function SettingsModal({
     draftThemeProfiles,
     draftFloatingLayoutPersistence,
     draftDebugPrimitivesPanelVisible,
+    draftImportDefaults,
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
     draftCameraFeelPreset,
@@ -1274,6 +1285,8 @@ export function SettingsModal({
                   onResetFloatingLayout={handleResetFloatingLayout}
                   debugPrimitivesPanelVisible={draftDebugPrimitivesPanelVisible}
                   onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
+                  importDefaults={draftImportDefaults}
+                  onImportDefaultsChange={setDraftImportDefaults}
                 />
               )}
               {activeTab === 'camera' && (

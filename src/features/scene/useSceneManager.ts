@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { useStlGeometry } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { loadFromImportFormat } from '@/supports/state';
+import { updateRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 
@@ -44,6 +46,7 @@ export function useSceneManager() {
     try {
       const res = await fetch('/dragonfruit_supports.json');
       const data = await res.json();
+      updateRaftSettings(getImportDefaultsRaftPatch(getSavedImportDefaultsSettings()));
       loadFromImportFormat(data);
       console.log('Loaded LYS data:', data);
     } catch (e) {

@@ -11,6 +11,7 @@ import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './S
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
+import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
@@ -2344,6 +2345,9 @@ export function resetStore() {
  * replacing all existing support data.
  */
 export function loadFromImportFormat(data: DragonfruitImportFormat) {
+    const importDefaults = getSavedImportDefaultsSettings();
+    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
+
     // Reset first
     resetKickstandStore();
 
@@ -2365,59 +2369,59 @@ export function loadFromImportFormat(data: DragonfruitImportFormat) {
     };
 
     // Populate Roots
-    data.roots.forEach(r => {
+    effectiveData.roots.forEach(r => {
         newState.roots[r.id] = r;
     });
 
     // Populate Trunks
-    data.trunks.forEach(t => {
+    effectiveData.trunks.forEach(t => {
         newState.trunks[t.id] = t;
     });
 
     // Populate Branches
-    data.branches.forEach(b => {
+    effectiveData.branches.forEach(b => {
         newState.branches[b.id] = b;
     });
 
     // Populate Leaves
-    data.leaves.forEach(l => {
+    effectiveData.leaves.forEach(l => {
         newState.leaves[l.id] = l;
     });
 
     // Populate Twigs
-    if (data.twigs) {
-        data.twigs.forEach((t) => {
+    if (effectiveData.twigs) {
+        effectiveData.twigs.forEach((t) => {
             newState.twigs[t.id] = t;
         });
     }
 
     // Populate Sticks
-    if (data.sticks) {
-        data.sticks.forEach((s) => {
+    if (effectiveData.sticks) {
+        effectiveData.sticks.forEach((s) => {
             newState.sticks[s.id] = s;
         });
     }
 
     // Populate Braces
-    data.braces.forEach(br => {
+    effectiveData.braces.forEach(br => {
         newState.braces[br.id] = br;
     });
 
     // Populate Anchors
-    if (data.anchors) {
-        data.anchors.forEach(a => {
+    if (effectiveData.anchors) {
+        effectiveData.anchors.forEach(a => {
             newState.anchors[a.id] = a;
         });
     }
 
     // Populate Knots
-    if (data.knots) {
-        data.knots.forEach(k => {
+    if (effectiveData.knots) {
+        effectiveData.knots.forEach(k => {
             newState.knots[k.id] = k;
         });
     }
 
-    for (const kickstandBuild of data.kickstands ?? []) {
+    for (const kickstandBuild of effectiveData.kickstands ?? []) {
         addKickstand(kickstandBuild);
     }
 
@@ -2712,7 +2716,9 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
  * Use this when importing an additional scene file into an already-populated scene.
  */
 export function mergeFromImportFormat(data: DragonfruitImportFormat) {
-    const isolated = isolateImportedSupportPayload(data);
+    const importDefaults = getSavedImportDefaultsSettings();
+    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
+    const isolated = isolateImportedSupportPayload(effectiveData);
 
     const merged: SupportState = {
         ...state,
