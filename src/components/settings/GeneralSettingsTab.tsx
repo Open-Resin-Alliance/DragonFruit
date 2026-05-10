@@ -242,7 +242,6 @@ export function GeneralSettingsTab({
                   onClick={() => onImportDefaultsChange({
                     ...importDefaults,
                     raftBottomMode: option.value,
-                    raftWallEnabled: option.value === 'solid' ? importDefaults.raftWallEnabled : false,
                     rootsEnabled: option.value === 'line' ? true : importDefaults.rootsEnabled,
                   })}
                   className="h-9 rounded-md border text-[12px] font-semibold transition-colors"

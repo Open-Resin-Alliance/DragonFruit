@@ -82,7 +82,7 @@ test('normalizeImportDefaultsSettings falls back to safe defaults', () => {
   assert.equal(normalized.rootsEnabled, true);
 });
 
-test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode', () => {
+test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode and preserves wall preference', () => {
   const normalized = normalizeImportDefaultsSettings({
     raftBottomMode: 'line',
     raftWallEnabled: true,
@@ -90,8 +90,19 @@ test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode'
   });
 
   assert.equal(normalized.raftBottomMode, 'line');
-  assert.equal(normalized.raftWallEnabled, false);
+  assert.equal(normalized.raftWallEnabled, true);
   assert.equal(normalized.rootsEnabled, true);
+});
+
+test('normalizeImportDefaultsSettings keeps wall preference when raft mode is non-solid', () => {
+  const normalized = normalizeImportDefaultsSettings({
+    raftBottomMode: 'off',
+    raftWallEnabled: false,
+    rootsEnabled: true,
+  });
+
+  assert.equal(normalized.raftBottomMode, 'off');
+  assert.equal(normalized.raftWallEnabled, false);
 });
 
 test('applyImportDefaultsToSupportPayload keeps payload unchanged when roots are enabled', () => {

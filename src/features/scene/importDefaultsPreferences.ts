@@ -36,11 +36,9 @@ export function normalizeImportDefaultsSettings(value: unknown): ImportDefaultsS
 
   return {
     raftBottomMode,
-    raftWallEnabled: raftBottomMode === 'solid'
-      ? (typeof raw.raftWallEnabled === 'boolean'
-        ? raw.raftWallEnabled
-        : DEFAULT_IMPORT_DEFAULTS_SETTINGS.raftWallEnabled)
-      : false,
+    raftWallEnabled: typeof raw.raftWallEnabled === 'boolean'
+      ? raw.raftWallEnabled
+      : DEFAULT_IMPORT_DEFAULTS_SETTINGS.raftWallEnabled,
     rootsEnabled,
   };
 }
