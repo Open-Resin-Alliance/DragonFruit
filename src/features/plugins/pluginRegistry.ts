@@ -6,6 +6,7 @@ import type {
   PluginMonitoringUiAdapterContract,
   PluginMonitoringWebcamInfoContract,
   PluginNetworkUiAdapterContract,
+  PluginSceneOverlayLoaderContract,
   RemoteMaterialProcessValues,
   RemoteMaterialSettingsAdapter,
 } from '@/features/plugins/complexPluginContracts';
@@ -55,6 +56,7 @@ const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>();
 const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>();
 const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT = new Map<string, ProfileLocalMaterialSettingsAdapter>();
 const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE = new Map<string, Map<string, ProfileLocalMaterialSettingsAdapter>>();
+const SCENE_OVERLAY_LOADERS_BY_PLUGIN_ID = new Map<string, PluginSceneOverlayLoaderContract>();
 let builtinAdaptersHydrated = false;
 
 function ensureBuiltinAdaptersHydrated(): void {
@@ -100,6 +102,10 @@ function ensureBuiltinAdaptersHydrated(): void {
         LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.set(normalizedOutput, modeMap);
       }
     });
+
+    if (definition.sceneOverlayLoader) {
+      SCENE_OVERLAY_LOADERS_BY_PLUGIN_ID.set(definition.id, definition.sceneOverlayLoader);
+    }
   });
 }
 
@@ -193,6 +199,21 @@ export function getProfileLocalMaterialSettingsAdapter(
   const first = Array.from(modeMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))[0]?.[1];
   return first ?? null;
+}
+
+/**
+ * Resolve a plugin-owned scene overlay loader from the central registry.
+ *
+ * The host can turn the returned loader into a client-side lazy component
+ * without importing the plugin module directly, keeping plugin ownership
+ * centralized.
+ */
+export function getPluginSceneOverlayLoader(
+  pluginId: string | null | undefined,
+): PluginSceneOverlayLoaderContract | null {
+  ensureBuiltinAdaptersHydrated();
+  if (!pluginId || typeof pluginId !== 'string') return null;
+  return SCENE_OVERLAY_LOADERS_BY_PLUGIN_ID.get(pluginId.trim().toLowerCase()) ?? null;
 }
 
 export type InstalledProfilePlugin = {

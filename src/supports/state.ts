@@ -11,6 +11,7 @@ import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './S
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
+import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
@@ -485,8 +486,28 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         });
     }
 
-    const targetHostKnotIds = new Set<string>();
+    // Track branch parent knots that currently host descendants.
+    // If a branch parent knot is hosting descendants, keep it projected to ensure
+    // downstream branch/leaf attachments stay segment-legal and connected.
+    const branchHostKnotIdsWithChildren = new Set<string>();
+    for (const knot of Object.values(snapshot.knots)) {
+        const hostBranchRef = branchSegmentMap.get(knot.parentShaftId);
+        if (!hostBranchRef) continue;
+        branchHostKnotIdsWithChildren.add(hostBranchRef.branch.parentKnotId);
+    }
+
+    const branchParentKnotIds = new Set<string>();
+    for (const branch of Object.values(snapshot.branches)) {
+        branchParentKnotIds.add(branch.parentKnotId);
+    }
+
+    const leafParentKnotIds = new Set<string>();
+    for (const leaf of Object.values(snapshot.leaves)) {
+        leafParentKnotIds.add(leaf.parentKnotId);
+    }
+
     const braceHostKnotIds = new Set<string>();
+    const targetHostKnotIds = new Set<string>();
     for (const brace of Object.values(snapshot.braces)) {
         braceHostKnotIds.add(brace.startKnotId);
         braceHostKnotIds.add(brace.endKnotId);
@@ -501,7 +522,12 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
     }
 
     const nextKnots = { ...snapshot.knots };
+    const authoredKnotPosById = new Map<string, Vec3>();
+    for (const [knotId, authoredKnot] of Object.entries(snapshot.knots)) {
+        authoredKnotPosById.set(knotId, authoredKnot.pos);
+    }
     const changedHostPosById: Record<string, Vec3> = {};
+    const unresolvedBraceHostWarned = new Set<string>();
 
     const maxPasses = 4;
     for (let pass = 0; pass < maxPasses; pass++) {
@@ -542,28 +568,253 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 }
             }
 
-            if (!segment || !endpoints) continue;
+            if (!segment || !endpoints) {
+                if (braceHostKnotIds.has(knot.id) && !unresolvedBraceHostWarned.has(knot.id)) {
+                    unresolvedBraceHostWarned.add(knot.id);
+                    console.warn('[SupportStore][normalizeLoadedKnotAndLeafGeometry] unresolved brace host knot segment', {
+                        knotId: knot.id,
+                        parentShaftId: knot.parentShaftId,
+                        knotPos: knot.pos,
+                    });
+                }
+                continue;
+            }
 
-            const t = computeClosestTOnSegmentFromPoint(knot.pos, endpoints.start, endpoints.end, segment);
-            const computedPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, t);
-            const computedDiameter = segment.diameter + JOINT_DIAMETER_OFFSET_MM;
+            const authoredPos = authoredKnotPosById.get(knot.id) ?? knot.pos;
+            let activeSegment = segment;
+            let activeEndpoints = endpoints;
+            let nextParentShaftId = knot.parentShaftId;
 
-            const dx = computedPos.x - knot.pos.x;
-            const dy = computedPos.y - knot.pos.y;
-            const dz = computedPos.z - knot.pos.z;
+            if (braceHostKnotIds.has(knot.id)) {
+                const scoreBinding = (
+                    targetSegment: Segment,
+                    targetEndpoints: { start: Vec3; end: Vec3 },
+                    segmentIndex: number,
+                    segmentCount: number,
+                    axisStart: Vec3,
+                    axisEnd: Vec3,
+                ): { score: number; t: number; pos: Vec3; distance: number; isEndpoint: boolean } => {
+                    const tVal = computeClosestTOnSegmentFromPoint(authoredPos, targetEndpoints.start, targetEndpoints.end, targetSegment);
+                    const posVal = calculateKnotPositionOnSegmentFromT(targetEndpoints.start, targetEndpoints.end, targetSegment, tVal);
+
+                    const dxVal = posVal.x - authoredPos.x;
+                    const dyVal = posVal.y - authoredPos.y;
+                    const dzVal = posVal.z - authoredPos.z;
+                    const distanceVal = Math.sqrt(dxVal * dxVal + dyVal * dyVal + dzVal * dzVal);
+                    const isEndpointVal = tVal <= 0.02 || tVal >= 0.98;
+
+                    const axisStartVec = new THREE.Vector3(axisStart.x, axisStart.y, axisStart.z);
+                    const axisEndVec = new THREE.Vector3(axisEnd.x, axisEnd.y, axisEnd.z);
+                    const authoredVec = new THREE.Vector3(authoredPos.x, authoredPos.y, authoredPos.z);
+                    const axis = axisEndVec.clone().sub(axisStartVec);
+                    const axisLenSq = axis.lengthSq();
+                    const axisAlpha = axisLenSq > 1e-8
+                        ? THREE.MathUtils.clamp(authoredVec.clone().sub(axisStartVec).dot(axis) / axisLenSq, 0, 1)
+                        : 0;
+                    const desiredIndex = axisAlpha * Math.max(0, segmentCount - 1);
+
+                    const endpointPenalty = isEndpointVal
+                        ? Math.max(0, distanceVal - 0.35) * 4.0 + 0.75
+                        : 0;
+                    const indexPenalty = Math.abs(segmentIndex - desiredIndex) * 0.25;
+                    const score = distanceVal + endpointPenalty + indexPenalty;
+
+                    return {
+                        score,
+                        t: tVal,
+                        pos: posVal,
+                        distance: distanceVal,
+                        isEndpoint: isEndpointVal,
+                    };
+                };
+
+                if (trunkRef?.root) {
+                    const segments = trunkRef.trunk.segments;
+                    const firstSeg = segments[0];
+                    const lastSeg = segments[segments.length - 1];
+                    const firstEndpoints = firstSeg
+                        ? getTrunkSegmentEndpoints(trunkRef.trunk, firstSeg, 0, trunkRef.root)
+                        : null;
+                    const lastEndpoints = lastSeg
+                        ? getTrunkSegmentEndpoints(trunkRef.trunk, lastSeg, segments.length - 1, trunkRef.root)
+                        : null;
+
+                    if (segments.length > 0 && firstEndpoints && lastEndpoints) {
+                        const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === knot.parentShaftId));
+                        let best = scoreBinding(activeSegment, activeEndpoints, currentIndex, segments.length, firstEndpoints.start, lastEndpoints.end);
+                        let bestSegment = activeSegment;
+                        let bestEndpoints = activeEndpoints;
+
+                        for (let idx = 0; idx < segments.length; idx++) {
+                            const candidateSeg = segments[idx];
+                            const candidateEndpoints = getTrunkSegmentEndpoints(trunkRef.trunk, candidateSeg, idx, trunkRef.root);
+                            if (!candidateEndpoints) continue;
+
+                            const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
+                            if (candidate.score + 0.05 < best.score) {
+                                best = candidate;
+                                bestSegment = candidateSeg;
+                                bestEndpoints = candidateEndpoints;
+                            }
+                        }
+
+                        if (bestSegment.id !== knot.parentShaftId) {
+                            activeSegment = bestSegment;
+                            activeEndpoints = bestEndpoints;
+                            nextParentShaftId = bestSegment.id;
+                        }
+                    }
+                } else {
+                    const branchRef = branchSegmentMap.get(knot.parentShaftId);
+                    if (branchRef) {
+                        const parentKnot = nextKnots[branchRef.branch.parentKnotId] ?? snapshot.knots[branchRef.branch.parentKnotId];
+                        if (parentKnot) {
+                            const segments = branchRef.branch.segments;
+                            const firstSeg = segments[0];
+                            const lastSeg = segments[segments.length - 1];
+                            const firstEndpoints = firstSeg
+                                ? getBranchSegmentEndpoints(branchRef.branch, firstSeg, 0, parentKnot)
+                                : null;
+                            const lastEndpoints = lastSeg
+                                ? getBranchSegmentEndpoints(branchRef.branch, lastSeg, segments.length - 1, parentKnot)
+                                : null;
+
+                            if (segments.length > 0 && firstEndpoints && lastEndpoints) {
+                                const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === knot.parentShaftId));
+                                let best = scoreBinding(activeSegment, activeEndpoints, currentIndex, segments.length, firstEndpoints.start, lastEndpoints.end);
+                                let bestSegment = activeSegment;
+                                let bestEndpoints = activeEndpoints;
+
+                                for (let idx = 0; idx < segments.length; idx++) {
+                                    const candidateSeg = segments[idx];
+                                    const candidateEndpoints = getBranchSegmentEndpoints(branchRef.branch, candidateSeg, idx, parentKnot);
+                                    if (!candidateEndpoints) continue;
+
+                                    const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
+                                    if (candidate.score + 0.05 < best.score) {
+                                        best = candidate;
+                                        bestSegment = candidateSeg;
+                                        bestEndpoints = candidateEndpoints;
+                                    }
+                                }
+
+                                if (bestSegment.id !== knot.parentShaftId) {
+                                    activeSegment = bestSegment;
+                                    activeEndpoints = bestEndpoints;
+                                    nextParentShaftId = bestSegment.id;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            const t = computeClosestTOnSegmentFromPoint(authoredPos, activeEndpoints.start, activeEndpoints.end, activeSegment);
+            const computedPos = calculateKnotPositionOnSegmentFromT(activeEndpoints.start, activeEndpoints.end, activeSegment, t);
+            const preserveImportedBraceUniformDiameter =
+                braceHostKnotIds.has(knot.id)
+                && knot._importHint === 'braceImported'
+                && Number.isFinite(knot.diameter as number);
+            const computedDiameter = preserveImportedBraceUniformDiameter
+                ? (knot.diameter as number)
+                : activeSegment.diameter + JOINT_DIAMETER_OFFSET_MM;
+            const parentShaftChanged = nextParentShaftId !== knot.parentShaftId;
+
+            const dx = computedPos.x - authoredPos.x;
+            const dy = computedPos.y - authoredPos.y;
+            const dz = computedPos.z - authoredPos.z;
             const reprojectionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             const isEndpointProjection = t <= 1e-4 || t >= 1 - 1e-4;
+            const isBaseEndpointProjection = t <= 1e-4;
+            const isTipEndpointProjection = t >= 1 - 1e-4;
+            const reprojectionDeltaZ = Math.abs(computedPos.z - authoredPos.z);
+
+            // Import-hint fast path: converter has already determined preserve/project intent.
+            // This takes priority over all derived preserve rules to avoid the two systems
+            // making conflicting decisions (e.g. leaf s85 vs back leaves both look identical
+            // to heuristic rules but require opposite treatment).
+            const importHint = knot._importHint;
+            if (importHint === 'project') {
+                const posChanged =
+                    computedPos.x !== knot.pos.x ||
+                    computedPos.y !== knot.pos.y ||
+                    computedPos.z !== knot.pos.z;
+                const tChanged = knot.t !== t;
+                const diameterChanged = knot.diameter !== computedDiameter;
+                if (posChanged || tChanged || diameterChanged || parentShaftChanged) {
+                    nextKnots[knot.id] = { ...knot, parentShaftId: nextParentShaftId, t, pos: computedPos, diameter: computedDiameter };
+                    if (posChanged) changedHostPosById[knot.id] = computedPos;
+                    changedThisPass = true;
+                }
+                continue;
+            }
+            if (importHint === 'preserve') {
+                const posChanged =
+                    authoredPos.x !== knot.pos.x ||
+                    authoredPos.y !== knot.pos.y ||
+                    authoredPos.z !== knot.pos.z;
+                const tChanged = knot.t !== t;
+                const diameterChanged = knot.diameter !== computedDiameter;
+                if (posChanged || tChanged || diameterChanged || parentShaftChanged) {
+                    nextKnots[knot.id] = { ...knot, parentShaftId: nextParentShaftId, t, pos: authoredPos, diameter: computedDiameter };
+                    if (posChanged) changedHostPosById[knot.id] = authoredPos;
+                    changedThisPass = true;
+                }
+                continue;
+            }
+
+            // Imported formats (including LYS) may intentionally place brace endpoints beyond
+            // host shaft bounds for visual span fidelity. For non-brace host knots, always project
+            // to host geometry to keep imported branch/leaf linkage connected on load.
             const preserveAuthoredBracePos =
                 braceHostKnotIds.has(knot.id) &&
                 isEndpointProjection &&
-                reprojectionDistance > 2;
+                reprojectionDistance > 0.5;
 
-            if (preserveAuthoredBracePos) {
-                if (knot.diameter !== computedDiameter) {
+            const isDescendantHostKnot = branchHostKnotIdsWithChildren.has(knot.id);
+            const preserveAuthoredTerminalBranchHostPos =
+                !braceHostKnotIds.has(knot.id) &&
+                branchParentKnotIds.has(knot.id) &&
+                !leafParentKnotIds.has(knot.id) &&
+                !isDescendantHostKnot &&
+                isEndpointProjection &&
+                reprojectionDistance > 1.0;
+
+            const preserveAuthoredTerminalLeafHostPos =
+                !braceHostKnotIds.has(knot.id) &&
+                leafParentKnotIds.has(knot.id) &&
+                !branchParentKnotIds.has(knot.id) &&
+                isEndpointProjection &&
+                (
+                    reprojectionDistance <= 0.5
+                    || (isTipEndpointProjection && reprojectionDistance > 1.0)
+                    || (isBaseEndpointProjection && reprojectionDeltaZ <= 0.5)
+                );
+
+            const preserveAuthoredEndpointPos =
+                preserveAuthoredBracePos
+                || preserveAuthoredTerminalBranchHostPos
+                || preserveAuthoredTerminalLeafHostPos;
+
+            if (preserveAuthoredEndpointPos) {
+                const authoredPosChanged =
+                    authoredPos.x !== knot.pos.x
+                    || authoredPos.y !== knot.pos.y
+                    || authoredPos.z !== knot.pos.z;
+                const tChanged = knot.t !== t;
+                const diameterChanged = knot.diameter !== computedDiameter;
+
+                if (authoredPosChanged || tChanged || diameterChanged || parentShaftChanged) {
                     nextKnots[knot.id] = {
                         ...knot,
+                        parentShaftId: nextParentShaftId,
+                        t,
+                        pos: authoredPos,
                         diameter: computedDiameter,
                     };
+                    if (authoredPosChanged) {
+                        changedHostPosById[knot.id] = authoredPos;
+                    }
                     changedThisPass = true;
                 }
                 continue;
@@ -575,10 +826,11 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 computedPos.z !== knot.pos.z;
             const tChanged = knot.t !== t;
             const diameterChanged = knot.diameter !== computedDiameter;
-            if (!posChanged && !tChanged && !diameterChanged) continue;
+            if (!posChanged && !tChanged && !diameterChanged && !parentShaftChanged) continue;
 
             nextKnots[knot.id] = {
                 ...knot,
+                parentShaftId: nextParentShaftId,
                 t,
                 pos: computedPos,
                 diameter: computedDiameter,
@@ -608,6 +860,22 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         const leafCone2 = recomputeLeafConeKnotGeometry(nextLeaves, finalKnots);
         const braceSeg2 = recomputeBraceSegmentKnotGeometry(snapshot.braces, leafCone2.knots);
         finalKnots = braceSeg2.knots;
+    }
+
+    // Strip import hints from final output — they are consumed by normalization
+    // and must not persist into the runtime support state.
+    const hasAnyHints = Object.values(finalKnots).some(k => k._importHint !== undefined);
+    if (hasAnyHints) {
+        const stripped: Record<string, Knot> = {};
+        for (const [id, k] of Object.entries(finalKnots)) {
+            if (k._importHint !== undefined) {
+                const { _importHint: _, ...rest } = k;
+                stripped[id] = rest;
+            } else {
+                stripped[id] = k;
+            }
+        }
+        finalKnots = stripped;
     }
 
     return { knots: finalKnots, leaves: nextLeaves };
@@ -2073,9 +2341,13 @@ export function resetStore() {
 }
 
 /**
- * Loads support data from the DragonFruit Interchange Format (e.g. from Lychee conversion).
+ * Loads support data from the DragonFruit import format into the support store,
+ * replacing all existing support data.
  */
-export function loadFromLychee(data: DragonfruitImportFormat) {
+export function loadFromImportFormat(data: DragonfruitImportFormat) {
+    const importDefaults = getSavedImportDefaultsSettings();
+    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
+
     // Reset first
     resetKickstandStore();
 
@@ -2097,59 +2369,59 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
     };
 
     // Populate Roots
-    data.roots.forEach(r => {
+    effectiveData.roots.forEach(r => {
         newState.roots[r.id] = r;
     });
 
     // Populate Trunks
-    data.trunks.forEach(t => {
+    effectiveData.trunks.forEach(t => {
         newState.trunks[t.id] = t;
     });
 
     // Populate Branches
-    data.branches.forEach(b => {
+    effectiveData.branches.forEach(b => {
         newState.branches[b.id] = b;
     });
 
     // Populate Leaves
-    data.leaves.forEach(l => {
+    effectiveData.leaves.forEach(l => {
         newState.leaves[l.id] = l;
     });
 
     // Populate Twigs
-    if (data.twigs) {
-        data.twigs.forEach((t) => {
+    if (effectiveData.twigs) {
+        effectiveData.twigs.forEach((t) => {
             newState.twigs[t.id] = t;
         });
     }
 
     // Populate Sticks
-    if (data.sticks) {
-        data.sticks.forEach((s) => {
+    if (effectiveData.sticks) {
+        effectiveData.sticks.forEach((s) => {
             newState.sticks[s.id] = s;
         });
     }
 
     // Populate Braces
-    data.braces.forEach(br => {
+    effectiveData.braces.forEach(br => {
         newState.braces[br.id] = br;
     });
 
     // Populate Anchors
-    if (data.anchors) {
-        data.anchors.forEach(a => {
+    if (effectiveData.anchors) {
+        effectiveData.anchors.forEach(a => {
             newState.anchors[a.id] = a;
         });
     }
 
     // Populate Knots
-    if (data.knots) {
-        data.knots.forEach(k => {
+    if (effectiveData.knots) {
+        effectiveData.knots.forEach(k => {
             newState.knots[k.id] = k;
         });
     }
 
-    for (const kickstandBuild of data.kickstands ?? []) {
+    for (const kickstandBuild of effectiveData.kickstands ?? []) {
         addKickstand(kickstandBuild);
     }
 
@@ -2159,8 +2431,8 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
 
     state = newState;
     rebuildSupportSettingsHexCacheFromState();
-    emitSupportInteractionReset('loadFromLychee');
-    console.log('[SupportStore] Loaded from Lychee:', {
+    emitSupportInteractionReset('loadFromImportFormat');
+    console.log('[SupportStore] Loaded from LYS:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
         branches: Object.keys(state.branches).length,
@@ -2439,12 +2711,14 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 }
 
 /**
- * Merges support data from the DragonFruit Interchange Format into the existing scene state,
+ * Merges support data from the DragonFruit import format into the existing scene state,
  * preserving supports for all models already in the scene.
  * Use this when importing an additional scene file into an already-populated scene.
  */
-export function mergeFromLychee(data: DragonfruitImportFormat) {
-    const isolated = isolateImportedSupportPayload(data);
+export function mergeFromImportFormat(data: DragonfruitImportFormat) {
+    const importDefaults = getSavedImportDefaultsSettings();
+    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
+    const isolated = isolateImportedSupportPayload(effectiveData);
 
     const merged: SupportState = {
         ...state,
@@ -2479,8 +2753,8 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
 
     state = merged;
     rebuildSupportSettingsHexCacheFromState();
-    emitSupportInteractionReset('mergeFromLychee');
-    console.log('[SupportStore] Merged from Lychee:', {
+    emitSupportInteractionReset('mergeFromImportFormat');
+    console.log('[SupportStore] Merged from LYS:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
         branches: Object.keys(state.branches).length,

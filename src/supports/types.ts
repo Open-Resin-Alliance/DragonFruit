@@ -70,6 +70,13 @@ export interface Knot {
     t?: number; // 0-1 position along the shaft segment (preferred representation)
     pos: Vec3; // World position on the host shaft
     diameter?: number; // Host shaft diameter + 0.1mm (computed at creation if absent)
+    /**
+     * Import-time hint stamped by converters (e.g. LYS).
+     * Consumed and stripped by normalizeLoadedKnotAndLeafGeometry.
+     * 'preserve' → keep authored pos; 'project' → project to shaft geometry.
+     * Not present for runtime-created knots.
+     */
+    _importHint?: 'preserve' | 'project' | 'braceImported';
 }
 
 /**

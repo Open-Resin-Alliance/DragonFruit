@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { usePicking } from '@/components/picking';

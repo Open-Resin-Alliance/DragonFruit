@@ -117,6 +117,10 @@ pub fn initialize_plugins() -> Result<(), String> {
     generated_builtin_plugins::register_generated_plugins()
 }
 
+/// Scene file extensions contributed by built-in fileType-capable plugins.
+/// Auto-generated from plugin definitions; do not hard-code separately.
+pub use generated_builtin_plugins::GENERATED_BUILTIN_PLUGIN_SCENE_FILE_EXTENSIONS;
+
 fn computed_allowlist_sha256_hex() -> String {
     let mut hasher = Sha256::new();
     hasher.update(COMPLEX_PLUGIN_ALLOWLIST_JSON.as_bytes());

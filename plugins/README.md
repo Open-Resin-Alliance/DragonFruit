@@ -106,8 +106,9 @@ Complex plugins live at `plugins/<vendor>/`.
 
 Complex plugin sources may be either regular in-repo folders or Git submodules
 mounted under `plugins/<vendor>`. For submodule-backed plugins, ensure
-submodules are initialized/updated before running plugin generation and CI
-validation commands.
+submodules are initialized/updated before running CI validation commands.
+Local generation/build commands skip missing plugin submodules with warnings
+and compile with the plugin sources that are available.
 
 Required entrypoint:
 

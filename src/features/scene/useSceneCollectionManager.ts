@@ -6,16 +6,17 @@ import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, mergeFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
-import { getSettings } from '@/supports/Settings/state';
+import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
-import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
-import { useLysImport } from '@/components/lys-import/useLysImport';
+import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
+import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
+import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
+import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
@@ -627,6 +628,117 @@ function countSupportEntries(payload: DragonfruitImportFormat | null | undefined
     + (payload.kickstands?.length ?? 0);
 }
 
+function applyImportDefaultsToRaftState() {
+  const defaults = getSavedImportDefaultsSettings();
+  updateRaftSettings(getImportDefaultsRaftPatch(defaults));
+}
+
+type PluginSceneImportPayload = {
+  geometry: THREE.BufferGeometry;
+  transform: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  };
+  modelId?: string;
+  supportData?: DragonfruitImportFormat | null;
+};
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function toVector3(value: unknown): THREE.Vector3 | null {
+  if (value instanceof THREE.Vector3) {
+    return value.clone();
+  }
+
+  if (!value || typeof value !== 'object') return null;
+  const source = value as { x?: unknown; y?: unknown; z?: unknown };
+  const x = toFiniteNumber(source.x);
+  const y = toFiniteNumber(source.y);
+  const z = toFiniteNumber(source.z);
+  if (x == null || y == null || z == null) return null;
+  return new THREE.Vector3(x, y, z);
+}
+
+function toEuler(value: unknown): THREE.Euler | null {
+  if (value instanceof THREE.Euler) {
+    return value.clone();
+  }
+
+  if (!value || typeof value !== 'object') return null;
+  const source = value as { x?: unknown; y?: unknown; z?: unknown };
+  const x = toFiniteNumber(source.x);
+  const y = toFiniteNumber(source.y);
+  const z = toFiniteNumber(source.z);
+  if (x == null || y == null || z == null) return null;
+  return new THREE.Euler(x, y, z);
+}
+
+function asDragonfruitImportFormat(value: unknown): DragonfruitImportFormat | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const candidate = value as Partial<DragonfruitImportFormat>;
+  const requiredArrayKeys: Array<keyof DragonfruitImportFormat> = [
+    'roots',
+    'trunks',
+    'branches',
+    'leaves',
+    'braces',
+    'knots',
+  ];
+
+  if (!requiredArrayKeys.every((key) => Array.isArray(candidate[key]))) {
+    return null;
+  }
+
+  if (candidate.twigs != null && !Array.isArray(candidate.twigs)) return null;
+  if (candidate.sticks != null && !Array.isArray(candidate.sticks)) return null;
+  if (candidate.kickstands != null && !Array.isArray(candidate.kickstands)) return null;
+
+  return candidate as DragonfruitImportFormat;
+}
+
+function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportPayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const source = payload as {
+    geometry?: unknown;
+    transform?: unknown;
+    modelId?: unknown;
+    supportData?: unknown;
+  };
+
+  if (!(source.geometry instanceof THREE.BufferGeometry)) return null;
+  if (!source.transform || typeof source.transform !== 'object') return null;
+
+  const transformSource = source.transform as {
+    position?: unknown;
+    rotation?: unknown;
+    scale?: unknown;
+  };
+
+  const position = toVector3(transformSource.position);
+  const rotation = toEuler(transformSource.rotation);
+  const scale = toVector3(transformSource.scale);
+
+  if (!position || !rotation || !scale) return null;
+
+  return {
+    geometry: source.geometry,
+    transform: {
+      position,
+      rotation,
+      scale,
+    },
+    modelId: typeof source.modelId === 'string' && source.modelId.trim().length > 0
+      ? source.modelId
+      : undefined,
+    supportData: asDragonfruitImportFormat(source.supportData),
+  };
+}
+
 export interface LoadedModel {
   id: string;
   name: string;
@@ -662,11 +774,12 @@ import {
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
-import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, updateRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { beginKickstandStoreBatch, endKickstandStoreBatch } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 
 type ImportProgressState = {
   active: boolean;
@@ -709,7 +822,7 @@ function repairReportNeedsAttention(report: MeshHealthReport): boolean {
 type SceneImportPlacementChoice = 'auto_arrange' | 'load_as_is';
 
 export type SceneImportPlacementPrompt = {
-  source: 'LYS' | 'VOXL';
+  source: string;
   fileName: string;
   modelCount: number;
   offPlateModelCount: number;
@@ -734,6 +847,12 @@ type ModelClipboardEntry = {
 };
 
 export function useSceneCollectionManager() {
+  type ScenePluginImportEntry = {
+    pluginId: string;
+    fileType: PluginFileTypeDefinition;
+    handler: PluginFileTypeHandler;
+  };
+
   const getMeshExtension = useCallback((name: string): '.stl' | '.obj' | '.3mf' | null => {
     const normalized = name.trim().toLowerCase();
     if (normalized.endsWith('.stl')) return '.stl';
@@ -742,11 +861,43 @@ export function useSceneCollectionManager() {
     return null;
   }, []);
 
-  const getSceneExtension = useCallback((name: string): '.lys' | '.voxl' | null => {
+  const getSceneExtension = useCallback((name: string): string | null => {
     const normalized = name.trim().toLowerCase();
-    if (normalized.endsWith('.lys')) return '.lys';
     if (normalized.endsWith('.voxl')) return '.voxl';
+    for (const def of GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS) {
+      for (const ft of def.fileTypes ?? []) {
+        if (ft.isSceneFile && normalized.endsWith(ft.fileExtension)) {
+          return ft.fileExtension;
+        }
+      }
+    }
     return null;
+  }, []);
+
+  const scenePluginImportHandlersByExtension = useMemo(() => {
+    const handlersByPluginId = new Map(
+      getBuiltinComplexPluginFileTypeHandlers().map((entry) => [entry.pluginId, entry.handler]),
+    );
+
+    const out = new Map<string, ScenePluginImportEntry>();
+
+    for (const definition of GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS) {
+      for (const fileType of definition.fileTypes ?? []) {
+        if (!fileType.isSceneFile) continue;
+
+        const extension = fileType.fileExtension.toLowerCase();
+        const handler = handlersByPluginId.get(definition.id);
+        if (!handler) continue;
+
+        out.set(extension, {
+          pluginId: definition.id,
+          fileType,
+          handler,
+        });
+      }
+    }
+
+    return out;
   }, []);
 
   const waitForUiYield = useCallback(
@@ -3053,8 +3204,7 @@ export function useSceneCollectionManager() {
     return createdIds;
   }, [activeModelId, cloneGeometryWithBounds, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
-  // NEW: LYS Import (1-step)
-  const lysImport = useLysImport();
+  // LYS Import (1-step) — dispatched via plugin registry
 
   type SceneImportRunOptions = {
     suppressProgress?: boolean;
@@ -3066,7 +3216,27 @@ export function useSceneCollectionManager() {
     sourcePaths?: Array<string | null | undefined>;
   };
 
-  const handleImportLysFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
+  const handleImportPluginSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
+    const extension = getSceneExtension(file.name);
+    if (!extension || extension === '.voxl') {
+      const unsupportedMessage = `Unsupported scene file: ${file.name}`;
+      console.warn(`[SceneCollection] ${unsupportedMessage}`);
+      if (!options?.suppressReport) {
+        emitSceneImportReport(unsupportedMessage, 'error');
+      }
+      return false;
+    }
+
+    const pluginImport = scenePluginImportHandlersByExtension.get(extension.toLowerCase());
+    if (!pluginImport) {
+      const missingHandlerMessage = `No registered scene import handler for ${extension}.`;
+      console.warn(`[SceneCollection] ${missingHandlerMessage}`);
+      if (!options?.suppressReport) {
+        emitSceneImportReport(missingHandlerMessage, 'error');
+      }
+      return false;
+    }
+
     if (!options?.suppressRecentTracking) {
       trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
@@ -3075,7 +3245,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing Scene…',
+        label: `Importing ${pluginImport.fileType.displayName}…`,
         detail: file.name,
         progress: null,
       });
@@ -3084,138 +3254,169 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
-      const result = await lysImport.importFile(file, {
-        importCenterXY: {
-          x: defaultImportCenterXY.x,
-          y: defaultImportCenterXY.y,
-        },
-      });
-      if (result && result.geometry) {
-        const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId, supportData } = result;
+      const importResult = await pluginImport.handler(file, pluginImport.fileType);
 
-        // Process geometry (bounds, center, normals, BVH)
-        const processed = await processGeometry(rawGeom, {
+      if (!importResult.success) {
+        throw new Error(importResult.error || `${pluginImport.fileType.displayName} import failed.`);
+      }
+
+      // Support both single-payload and array-payload plugins (e.g. multi-model LYS import).
+      const rawPayloads = Array.isArray(importResult.payload)
+        ? (importResult.payload as unknown[])
+        : [importResult.payload];
+
+      const normalizedPayloads = rawPayloads
+        .map((p) => normalizePluginSceneImportPayload(p))
+        .filter((p): p is PluginSceneImportPayload => p !== null);
+
+      if (normalizedPayloads.length === 0) {
+        throw new Error(`Plugin "${pluginImport.pluginId}" returned an unsupported scene payload.`);
+      }
+
+      // Process all geometries sequentially
+      const processedItems: Array<{
+        normalized: PluginSceneImportPayload;
+        processed: GeometryWithBounds;
+      }> = [];
+      for (const normalized of normalizedPayloads) {
+        const processed = await processGeometry(normalized.geometry, {
           center: false,
           nativeProcessingMode: 'none',
         });
+        processedItems.push({ normalized, processed });
+      }
 
-        // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
-        const color = '#a3a3a3';
+      // Determine if any model is off-plate (check all)
+      const sourceCandidates = processedItems.map(({ normalized, processed }) => ({
+        geometry: processed,
+        transform: {
+          position: normalized.transform.position.clone(),
+          rotation: normalized.transform.rotation.clone(),
+          scale: normalized.transform.scale.clone(),
+        },
+      }));
+      const offPlateCount = sourceCandidates.filter(
+        (c) => !isModelFootprintInsidePlate({ geometry: c.geometry, transform: c.transform }),
+      ).length;
 
-        const originalPosition = new THREE.Vector3(
-          importedTransform.position.x,
-          importedTransform.position.y,
-          importedTransform.position.z
-        );
+      // Preserve authored placement by default. Only auto-arrange if models are off-plate
+      // and the user explicitly chooses auto-arrange in the prompt.
+      let shouldAutoArrangeOnImport = false;
+      if (offPlateCount > 0 && !options?.suppressPlacementPrompt) {
+        const choice = await requestSceneImportPlacementChoice({
+          source: extension.slice(1).toUpperCase(),
+          fileName: file.name,
+          modelCount: normalizedPayloads.length,
+          offPlateModelCount: offPlateCount,
+        });
+        shouldAutoArrangeOnImport = choice === 'auto_arrange';
+      }
 
+      // Auto-arrange all models together so they don't overlap
+      const assignedCenters = shouldAutoArrangeOnImport
+        ? findFreeSpotCentersForModels(sourceCandidates, 5)
+        : [];
+
+      const newModels: LoadedModel[] = [];
+      const supportEntries: Array<{
+        model: LoadedModel;
+        sourceTransform: ModelTransform;
+        supportData: PluginSceneImportPayload['supportData'];
+      }> = [];
+
+      for (let i = 0; i < processedItems.length; i++) {
+        const { normalized, processed } = processedItems[i];
+        const { transform: importedTransform, modelId: importedModelId, supportData } = normalized;
+
+        const originalPosition = importedTransform.position.clone();
         const sourceTransform: ModelTransform = {
           position: originalPosition.clone(),
           rotation: importedTransform.rotation.clone(),
           scale: importedTransform.scale.clone(),
         };
 
-        const sourceCandidate: Pick<LoadedModel, 'geometry' | 'transform'> = {
-          geometry: processed,
-          transform: sourceTransform,
-        };
-
-        let shouldAutoArrangeOnImport = true;
-        const isLikelyOffPlate = !isModelFootprintInsidePlate(sourceCandidate);
-        if (isLikelyOffPlate && !options?.suppressPlacementPrompt) {
-          const choice = await requestSceneImportPlacementChoice({
-            source: 'LYS',
-            fileName: file.name,
-            modelCount: 1,
-            offPlateModelCount: 1,
-          });
-          shouldAutoArrangeOnImport = choice === 'auto_arrange';
-        }
-
-        const assignedCenter = shouldAutoArrangeOnImport
-          ? findFreeSpotCentersForModels([
-              {
-                geometry: processed,
-                transform: {
-                  position: originalPosition.clone(),
-                  rotation: importedTransform.rotation,
-                  scale: importedTransform.scale,
-                },
-              },
-            ], 5)[0]
-          : null;
-
+        const assignedCenter = assignedCenters[i] ?? null;
         const finalPosition = new THREE.Vector3(
           shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
           shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
           originalPosition.z,
         );
 
+        const modelName = processedItems.length === 1
+          ? sanitizeImportedModelDisplayName(file.name)
+          : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
+
         const model: LoadedModel = {
           id: importedModelId || generateId(),
-          name: sanitizeImportedModelDisplayName(file.name),
-          fileUrl: '', // No URL
+          name: modelName,
+          fileUrl: '',
           fileSizeBytes: file.size,
           geometry: processed,
           transform: {
             position: finalPosition,
-            rotation: importedTransform.rotation, // Keep rotation
-            scale: importedTransform.scale        // Keep scale
+            rotation: importedTransform.rotation,
+            scale: importedTransform.scale,
           },
           visible: true,
-          color,
+          color: '#a3a3a3',
           polygonCount: processed.geometry.getAttribute('position').count / 3,
           ignoreAutoLift: true,
           manualZMoveOverride: true,
         };
 
-        setModels(prev => [...prev, model]);
-        setActiveModelId(model.id);
-        setSelectedModelIds([model.id]);
+        newModels.push(model);
+        supportEntries.push({ model, sourceTransform, supportData });
+      }
 
-        if (supportData) {
-          if (typeof window !== 'undefined') {
-            requestAnimationFrame(() => {
-              mergeFromLychee(supportData);
-              if (!transformsEqual(sourceTransform, model.transform)) {
-                transformSupportsForModel(model.id, sourceTransform, model.transform);
-              }
-            });
-          } else {
-            mergeFromLychee(supportData);
+      if (newModels.length === 0) {
+        throw new Error(`Plugin "${pluginImport.pluginId}" returned no importable models.`);
+      }
+
+      setModels((prev) => [...prev, ...newModels]);
+      setActiveModelId(newModels[newModels.length - 1].id);
+      setSelectedModelIds(newModels.map((m) => m.id));
+
+      // Load supports for all models in a single animation frame batch
+      const pendingSupports = supportEntries.filter((e) => !!e.supportData);
+      if (pendingSupports.length > 0) {
+        const applySupports = () => {
+          for (const { model, sourceTransform, supportData } of pendingSupports) {
+            applyImportDefaultsToRaftState();
+            mergeFromImportFormat(supportData!);
             if (!transformsEqual(sourceTransform, model.transform)) {
               transformSupportsForModel(model.id, sourceTransform, model.transform);
             }
           }
+        };
+        if (typeof window !== 'undefined') {
+          requestAnimationFrame(applySupports);
+        } else {
+          applySupports();
         }
-
-        const supportCount = countSupportEntries(supportData ?? null);
-        if (!options?.suppressReport) {
-          emitSceneImportReport(
-            supportCount > 0
-              ? `Imported LYS scene: 1 model, ${supportCount} supports.`
-              : 'Imported LYS scene: 1 model.',
-            'success',
-          );
-        }
-
-        console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
-        return true;
-      } else {
-        const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
-        console.error('[SceneCollection] LYS import failed:', errorMessage);
-        if (!options?.suppressReport) {
-          emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
-        }
-        if (!options?.suppressReport && typeof window !== 'undefined') {
-          window.alert(`Import Scene failed:\n${errorMessage}`);
-        }
-        return false;
       }
+
+      const totalSupportCount = supportEntries.reduce(
+        (sum, e) => sum + countSupportEntries(e.supportData ?? null),
+        0,
+      );
+      if (!options?.suppressReport) {
+        const sourceLabel = extension.slice(1).toUpperCase();
+        const modelLabel = newModels.length === 1 ? '1 model' : `${newModels.length} models`;
+        emitSceneImportReport(
+          totalSupportCount > 0
+            ? `Imported ${sourceLabel} scene: ${modelLabel}, ${totalSupportCount} supports.`
+            : `Imported ${sourceLabel} scene: ${modelLabel}.`,
+          'success',
+        );
+      }
+
+      console.log(`[SceneCollection] ${extension} import successful: ${newModels.map((m) => m.name).join(', ')}`);
+      return true;
     } catch (err) {
-      console.error("[SceneCollection] Failed to process LYS geometry:", err);
+      console.error('[SceneCollection] Failed to process plugin scene geometry:', err);
       const msg = err instanceof Error ? err.message : String(err);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`LYS import failed: ${msg}`, 'error');
+        emitSceneImportReport(`Scene import failed: ${msg}`, 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
         window.alert(`Import Scene failed:\n${msg}`);
@@ -3232,7 +3433,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, lysImport, processGeometry, requestSceneImportPlacementChoice, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -3415,7 +3616,9 @@ export function useSceneCollectionManager() {
       const offPlateImportedModels = importedModels.filter((model) => !isModelFootprintInsidePlate(model));
       const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
 
-      let shouldAutoArrangeOnImport = true;
+      // Preserve authored placement by default. Only auto-arrange if models are off-plate
+      // and the user explicitly chooses auto-arrange in the prompt.
+      let shouldAutoArrangeOnImport = false;
       if (shouldPromptForPlacement) {
         const choice = await requestSceneImportPlacementChoice({
           source: 'VOXL',
@@ -3456,7 +3659,8 @@ export function useSceneCollectionManager() {
 
       if (voxlSupportsContainData(document)) {
         const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
-        mergeFromLychee(remappedSupports);
+        applyImportDefaultsToRaftState();
+        mergeFromImportFormat(remappedSupports);
 
         for (const imported of importedModels) {
           const sourceTransform = sourceTransformsByModelId.get(imported.id);
@@ -3518,13 +3722,13 @@ export function useSceneCollectionManager() {
     if (extension === '.voxl') {
       return await handleImportVoxlFile(file, options);
     }
-    if (extension === '.lys') {
-      return await handleImportLysFile(file, options);
+    if (extension) {
+      return await handleImportPluginSceneFile(file, options);
     }
 
     console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
     return false;
-  }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
+  }, [getSceneExtension, handleImportPluginSceneFile, handleImportVoxlFile]);
 
   const importSceneFiles = useCallback(async (
     filesInput: FileList | File[],
@@ -3593,7 +3797,7 @@ export function useSceneCollectionManager() {
     return successCount > 0;
   }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
-  const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const onImportSceneChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       void importSceneFiles(e.target.files);
       e.target.value = '';
@@ -3619,81 +3823,45 @@ export function useSceneCollectionManager() {
     return true;
   }, [importSceneFile, loadFiles, recentOpenedFiles]);
 
-  // Legacy Lychee loader wrapper
-  const handleLoadLychee = async () => {
+  // Legacy support JSON loader wrapper
+  const handleLoadSupportJson = async () => {
     try {
       const res = await fetch('/dragonfruit_supports.json');
       const data = await res.json();
-      loadFromLychee(data);
-      console.log('Loaded Lychee data:', data);
+      applyImportDefaultsToRaftState();
+      loadFromImportFormat(data);
+      console.log('Loaded LYS data:', data);
     } catch (e) {
-      console.error('Failed to load Lychee data:', e);
+      console.error('Failed to load LYS data:', e);
     }
   };
 
-  // New Import Handler for Lychee Files (Legacy - single step)
-  const importLycheeSupportFile = useCallback(async (file: File) => {
+  // Support JSON import handler (Legacy - single step)
+  const importSupportDataFile = useCallback(async (file: File) => {
     try {
       const text = await file.text();
-      const json = JSON.parse(text);
-
-      // Determine if it's raw Lychee (has 'supports') or pre-converted DragonFruit (has 'trunks')
-      // But here we assume raw Lychee as per the goal.
-      // LysConverter.convert handles the Raw Lychee structure.
-      // Dynamic import to avoid circular deps if any (though usually fine here)
-      const { LysConverter } = await import('@/components/lys-import/LysConverter');
-
-      console.log('[SceneCollection] Converting Lychee file...');
-      const converted = LysConverter.convert(json, getSettings());
-
-      const targetModelId = activeModelIdRef.current ?? modelsRef.current[0]?.id ?? null;
-      if (targetModelId) {
-        LysConverter.reassignModelId(converted, targetModelId);
+      const json = JSON.parse(text) as unknown;
+      const parsed = asDragonfruitImportFormat(json);
+      if (!parsed) {
+        emitSceneImportReport('Support import failed: unsupported support JSON format.', 'error');
+        return;
       }
 
-      console.log('[SceneCollection] Loading into Store...');
-      loadFromLychee(converted);
+      applyImportDefaultsToRaftState();
+      loadFromImportFormat(parsed);
+      emitSceneImportReport('Imported support data.', 'success');
 
     } catch (err) {
-      console.error('[SceneCollection] Failed to import Lychee file:', err);
+      console.error('[SceneCollection] Failed to import LYS file:', err);
+      emitSceneImportReport('Support import failed.', 'error');
     }
-  }, []);
+  }, [emitSceneImportReport]);
 
-  // Two-Step Lychee Import (JSON -> STL -> Apply Transforms -> Create Supports)
-  const lycheeImport = useLycheeImport();
-
-  const handleLycheeModelLoaded = useCallback((result: LycheeImportResult) => {
-    // Create model from the import result
-    const color = '#a3a3a3';
-
-    const model: LoadedModel = {
-      id: result.modelId,
-      name: 'Lychee Import',
-      fileUrl: '', // No URL for imported models
-      geometry: result.geometry,
-      transform: {
-        position: result.transform.position,
-        rotation: result.transform.rotation,
-        scale: result.transform.scale
-      },
-      visible: true,
-      color,
-      polygonCount: result.geometry.geometry.getAttribute('position').count / 3
-    };
-
-    setModels(prev => [...prev, model]);
-    setActiveModelId(result.modelId);
-    setSelectedModelIds([result.modelId]);
-
-    console.log('[SceneCollection] Lychee import complete:', {
-      modelId: result.modelId,
-      supports: result.supportCount
-    });
-  }, []);
-
-  const handleLycheeStlFile = useCallback((file: File) => {
-    lycheeImport.processStlFile(file, handleLycheeModelLoaded);
-  }, [lycheeImport.processStlFile, handleLycheeModelLoaded]);
+  const pluginImportPhase: 'idle' | 'awaiting_stl' | 'processing' = 'idle';
+  const pluginImportError: string | null = null;
+  const handlePluginJsonFile: ((file: File) => void) | undefined = undefined;
+  const handlePluginStlFile: ((file: File) => void) | undefined = undefined;
+  const cancelPluginImport: (() => void) | undefined = undefined;
 
   // Delete Handler Integration
   useEffect(() => {
@@ -4035,23 +4203,21 @@ export function useSceneCollectionManager() {
     }, []),
 
     // Legacy/Other
-    handleLoadLychee,
-    importLycheeSupportFile,
+    handleLoadSupportJson,
+    importSupportDataFile,
 
-    // Two-Step Lychee Import
-    lycheeImportPhase: lycheeImport.phase,
-    lycheeImportError: lycheeImport.error,
-    handleLycheeJsonFile: lycheeImport.processJsonFile,
-    handleLycheeStlFile,
-    cancelLycheeImport: lycheeImport.cancelImport,
+    // Two-Step Plugin Scene Import
+    pluginImportPhase: pluginImportPhase as 'idle' | 'awaiting_stl' | 'processing',
+    pluginImportError,
+    handlePluginJsonFile,
+    handlePluginStlFile,
+    cancelPluginImport,
 
-    // LYS Import (1-step)
-    importLysFile: handleImportLysFile,
+    // Plugin Scene Import (1-step)
+    importPluginSceneFile: handleImportPluginSceneFile,
     importSceneFile,
     importSceneFiles,
-    onImportLysChange,
-    isLysLoading: lysImport.isLoading,
-    lysError: lysImport.error,
+    onImportSceneChange,
 
     // Debug primitives
     addDebugPrimitive,

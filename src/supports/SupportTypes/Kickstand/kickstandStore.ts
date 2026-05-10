@@ -1,3 +1,5 @@
+"use client";
+
 import { useSyncExternalStore } from 'react';
 import type { KickstandBuildResult, KickstandState } from './types';
 import * as THREE from 'three';

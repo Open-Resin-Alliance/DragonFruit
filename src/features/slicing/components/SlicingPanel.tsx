@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { ChevronDown, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
@@ -79,7 +80,7 @@ function normalizeExportBaseName(rawName: string | null | undefined): string {
   const trimmed = (rawName ?? '').trim();
   if (!trimmed) return 'MyPrint';
 
-  const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json))+$/i, '');
+  const withoutKnownExt = trimmed.replace(KNOWN_SOURCE_EXTENSION_STRIP_RE, '');
   const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
   return cleaned || 'MyPrint';
 }
