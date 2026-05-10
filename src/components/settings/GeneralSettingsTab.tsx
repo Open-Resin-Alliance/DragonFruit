@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Bug, ClipboardCopy, Database, LayoutGrid, RotateCcw } from 'lucide-react';
+import type { ImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
   FLOATING_LAYOUT_STORAGE_KEY,
@@ -14,6 +15,8 @@ interface GeneralSettingsTabProps {
   onResetFloatingLayout: () => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (enabled: boolean) => void;
+  importDefaults: ImportDefaultsSettings;
+  onImportDefaultsChange: (next: ImportDefaultsSettings) => void;
 }
 
 export function GeneralSettingsTab({
@@ -22,9 +25,12 @@ export function GeneralSettingsTab({
   onResetFloatingLayout,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
+  importDefaults,
+  onImportDefaultsChange,
 }: GeneralSettingsTabProps) {
   const [layoutDump, setLayoutDump] = React.useState<string>('');
   const [dumpStatus, setDumpStatus] = React.useState<string | null>(null);
+  const rootsLockedByLineRaft = importDefaults.raftBottomMode === 'line';
 
   const handleDumpCurrentLayout = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -185,6 +191,144 @@ export function GeneralSettingsTab({
             </button>
           </div>
         </div>
+      </section>
+
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <Database className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Import Defaults
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Applied automatically when importing Scene Files.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+            Default Raft Base
+          </div>
+          <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Chooses raft bottom mode for imported supports.
+          </div>
+
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
+            {([
+              { value: 'off', label: 'Off' },
+              { value: 'line', label: 'Line' },
+              { value: 'solid', label: 'Solid' },
+            ] as const).map((option) => {
+              const isActive = importDefaults.raftBottomMode === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onImportDefaultsChange({
+                    ...importDefaults,
+                    raftBottomMode: option.value,
+                    rootsEnabled: option.value === 'line' ? true : importDefaults.rootsEnabled,
+                  })}
+                  className="h-9 rounded-md border text-[12px] font-semibold transition-colors"
+                  style={isActive
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {importDefaults.raftBottomMode === 'solid' ? (
+          <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Default Raft Wall
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Enable perimeter wall for imported solid rafts.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onImportDefaultsChange({ ...importDefaults, raftWallEnabled: !importDefaults.raftWallEnabled })}
+                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={importDefaults.raftWallEnabled
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                {importDefaults.raftWallEnabled ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {!rootsLockedByLineRaft ? (
+          <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Roots Enabled on Import
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  OFF makes imported root diameter match trunk diameter.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onImportDefaultsChange({ ...importDefaults, rootsEnabled: !importDefaults.rootsEnabled })}
+                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={importDefaults.rootsEnabled
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                {importDefaults.rootsEnabled ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section

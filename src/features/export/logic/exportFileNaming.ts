@@ -1,11 +1,12 @@
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 
 export function normalizeExportBaseName(rawName: string | null | undefined): string {
   const trimmed = (rawName ?? '').trim();
   if (!trimmed) return 'MyPrint';
 
   // Strip common source suffixes if present (including chained suffixes).
-  const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json|voxl))+$/i, '');
+  const withoutKnownExt = trimmed.replace(KNOWN_SOURCE_EXTENSION_STRIP_RE, '');
   const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
   return cleaned || 'MyPrint';
 }

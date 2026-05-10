@@ -1,3 +1,5 @@
+import type { ComponentType } from 'react';
+
 export type RemoteMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select';
 
 export type RemoteMaterialFieldOption = {
@@ -153,6 +155,20 @@ export type PluginNetworkOperationHandlerContract = (
   payload: unknown,
 ) => Promise<{ status: number; body: unknown }>;
 
+/**
+ * First-class scene overlay loader contributed by a plugin.
+ *
+ * The host obtains the loader from the central plugin registry and turns it
+ * into a client-side lazy component without importing plugin-owned UI code
+ * directly.
+ */
+export type PluginSceneOverlayLoaderContract = () => Promise<{
+  default: ComponentType<{
+    data: unknown;
+    visible: boolean;
+  }>;
+}>;
+
 export type PluginSlicingFormatDefinitionContract = {
   id: string;
   outputFormat: string;
@@ -282,6 +298,39 @@ export type ComplexPluginCapabilities = {
   uploadWithProgress?: boolean;
   slicerEncoder?: boolean;
   tauriRuntimePlugin?: boolean;
+  fileType?: boolean;
+};
+
+/**
+ * Declares a file extension that a plugin can import.
+ *
+ * Plugins that set `capabilities.fileType = true` must include at least one
+ * entry in `ComplexPluginDefinition.fileTypes` and export a `handleFileTypeImport`
+ * function from `fileTypeHandlers.ts` (see `plugins/CONTRIBUTING_COMPLEX_PLUGINS.md`).
+ */
+export type PluginFileTypeDefinition = {
+  /** File extension including the leading dot, e.g. '.lys'. Must be lowercase. */
+  fileExtension: string;
+  /** Optional MIME type hint for drag-and-drop and file picker filtering. */
+  mimeType?: string;
+  /** Human-readable label used in UI (e.g. native file picker filter names). */
+  displayName: string;
+  /**
+   * When true, the file is treated as a scene import (like .voxl) rather than
+   * a mesh import. The host routes the file through the plugin's handler before
+   * adding it to the scene.
+   */
+  isSceneFile?: boolean;
+  /**
+   * When set, the host shows a one-time dismissible warning dialog before
+   * invoking the plugin handler. The `storageKey` is used as the localStorage
+   * key to persist the user's "don't show again" choice.
+   */
+  importWarning?: {
+    title: string;
+    body: string;
+    storageKey: string;
+  };
 };
 
 /**
@@ -298,4 +347,7 @@ export type ComplexPluginDefinition = {
   slicingFormatsByOutput?: Record<string, PluginSlicingFormatDefinitionContract>;
   localMaterialSettingsByOutput?: Record<string, PluginLocalMaterialSettingsAdapterContract>;
   localMaterialSettingsByOutputAndMode?: PluginLocalMaterialSettingsByModeContract;
+  sceneOverlayLoader?: PluginSceneOverlayLoaderContract;
+  /** File types this plugin can import. Required when `capabilities.fileType` is true. */
+  fileTypes?: PluginFileTypeDefinition[];
 };

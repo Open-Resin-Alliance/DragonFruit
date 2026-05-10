@@ -10,6 +10,7 @@ const pluginsRoot = path.join(repoRoot, 'plugins');
 const generatedTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPlugins.ts');
 const generatedNetworkTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginNetworkHandlers.ts');
 const generatedUploadTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
+const generatedFileTypeTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginFileTypeHandlers.ts');
 const generatedRustPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
 const generatedEncoderRustPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'src', 'encoders', 'generated_plugin_encoders.rs');
 
@@ -27,6 +28,7 @@ function parseCapabilitiesFromPluginDefinitionSource(sourceText) {
             uploadWithProgress: hasTrueFlag('uploadWithProgress'),
             slicerEncoder: hasTrueFlag('slicerEncoder'),
             tauriRuntimePlugin: hasTrueFlag('tauriRuntimePlugin'),
+            fileType: hasTrueFlag('fileType'),
       };
 }
 
@@ -34,6 +36,16 @@ async function readPluginCapabilities(pluginId) {
       const definitionPath = path.join(pluginsRoot, pluginId, 'pluginDefinition.ts');
       const source = await readText(definitionPath);
       return parseCapabilitiesFromPluginDefinitionSource(source);
+}
+
+async function hasPluginDefinition(pluginId) {
+      const definitionPath = path.join(pluginsRoot, pluginId, 'pluginDefinition.ts');
+      try {
+            await fs.access(definitionPath);
+            return true;
+      } catch {
+            return false;
+      }
 }
 
 async function main() {
@@ -47,16 +59,30 @@ async function main() {
             throw new Error('[plugin-registry-smoke] allowlist has no plugin ids');
       }
 
-      const [generatedTs, generatedNetworkTs, generatedUploadTs, generatedRust, generatedEncoderRust] = await Promise.all([
+      const [generatedTs, generatedNetworkTs, generatedUploadTs, generatedFileTypeTs, generatedRust, generatedEncoderRust] = await Promise.all([
             readText(generatedTsPath),
             readText(generatedNetworkTsPath),
             readText(generatedUploadTsPath),
+            readText(generatedFileTypeTsPath),
             readText(generatedRustPath),
             readText(generatedEncoderRustPath),
       ]);
 
+      const localPresence = await Promise.all(
+            ids.map(async (id) => ({ id, present: await hasPluginDefinition(id) })),
+      );
+      const locallyAvailableIds = localPresence.filter((entry) => entry.present).map((entry) => entry.id);
+      const missingIds = localPresence.filter((entry) => !entry.present).map((entry) => entry.id);
+
+      if (missingIds.length > 0) {
+            console.warn(
+                  `[plugin-registry-smoke] Warning: allowlisted plugin(s) missing locally (likely uninitialized submodule): ${missingIds.join(', ')}`,
+            );
+            console.warn('[plugin-registry-smoke] Skipping smoke validation for missing local plugin sources.');
+      }
+
       const capabilityEntries = await Promise.all(
-            ids.map(async (id) => ({ id, capabilities: await readPluginCapabilities(id) })),
+            locallyAvailableIds.map(async (id) => ({ id, capabilities: await readPluginCapabilities(id) })),
       );
 
       for (const { id, capabilities } of capabilityEntries) {
@@ -76,6 +102,10 @@ async function main() {
                   throw new Error(`[plugin-registry-smoke] ${path.basename(generatedUploadTsPath)} missing upload handler entry for '${id}'`);
             }
 
+            if (capabilities.fileType && !generatedFileTypeTs.includes(`pluginId: '${id}'`)) {
+                  throw new Error(`[plugin-registry-smoke] ${path.basename(generatedFileTypeTsPath)} missing file-type handler entry for '${id}'`);
+            }
+
             if (capabilities.tauriRuntimePlugin && !generatedRust.includes(`"${id}"`)) {
                   throw new Error(`[plugin-registry-smoke] ${path.basename(generatedRustPath)} missing rust runtime plugin id '${id}'`);
             }
@@ -90,11 +120,14 @@ async function main() {
             }
       }
 
-      if (!generatedEncoderRust.includes('create_plugin_encoder()')) {
+      if (
+            capabilityEntries.some((entry) => entry.capabilities.slicerEncoder) &&
+            !generatedEncoderRust.includes('create_plugin_encoder()')
+      ) {
             throw new Error(`[plugin-registry-smoke] ${path.basename(generatedEncoderRustPath)} missing create_plugin_encoder() invocation`);
       }
 
-      console.log(`[plugin-registry-smoke] OK (${ids.length} plugin id(s))`);
+      console.log(`[plugin-registry-smoke] OK (${locallyAvailableIds.length} local plugin id(s), ${missingIds.length} missing)`);
 }
 
 main().catch((error) => {

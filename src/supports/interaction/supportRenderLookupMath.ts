@@ -106,6 +106,9 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput, opti
 
   for (const brace of Object.values(state.braces)) {
     if (shouldAbort?.()) break;
+    const braceSegmentId = `braceSegment:${brace.id}`;
+    supportIdBySegmentId[braceSegmentId] = brace.id;
+    entitySegmentModelIdById[braceSegmentId] = brace.modelId;
     supportIdByKnotId[brace.startKnotId] = brace.id;
     supportIdByKnotId[brace.endKnotId] = brace.id;
   }

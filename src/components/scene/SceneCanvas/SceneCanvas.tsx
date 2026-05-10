@@ -51,8 +51,6 @@ import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimi
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
-
-import { GhostOverlay } from '@/components/lys-import/GhostOverlay';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { CameraFocusHotkeyController, CameraHomeResetController, CameraIntroController, SpaceMouseController, useStlLoadCameraIntro } from '@/components/scene/camera';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
@@ -363,7 +361,7 @@ export function SceneCanvas({
   supportDragGroupRef,
   holdSupportDragDelta,
   supportDragTransactionId = 0,
-  ghostData,
+  renderSceneOverlays,
   duplicatePreviewModel,
   duplicatePreviewTransforms,
   duplicateActivePreviewTransform,
@@ -490,7 +488,7 @@ export function SceneCanvas({
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
   holdSupportDragDelta?: boolean;
   supportDragTransactionId?: number;
-  ghostData?: any;
+  renderSceneOverlays?: () => React.ReactNode;
   duplicatePreviewModel?: LoadedModel | null;
   duplicatePreviewTransforms?: Array<{
     position: THREE.Vector3;
@@ -6089,8 +6087,8 @@ export function SceneCanvas({
               {/* Kickstand Placement Controller - handles Ctrl-hover preview and click placement */}
               {mode === 'support' && <KickstandPlacementController />}
 
-              {/* LYS Ghost Viewer (Temporary) */}
-              <GhostOverlay data={ghostData} visible={!!ghostData} />
+              {renderSceneOverlays?.()}
+
             </React.Suspense>
           </SelectionProvider>
         </PickingProviderWrapper>
