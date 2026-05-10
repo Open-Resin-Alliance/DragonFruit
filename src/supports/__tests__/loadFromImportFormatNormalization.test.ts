@@ -241,6 +241,107 @@ test('loadFromImportFormat preserves authored brace host positions on large endp
     resetStore();
 });
 
+test('loadFromImportFormat preserves imported uniform brace knot diameters', () => {
+    resetStore();
+
+    const data: DragonfruitImportFormat = {
+        version: 1,
+        meta: {
+            source: 'unit-test',
+            objectCenter: { x: 0, y: 0, z: 0 },
+        },
+        roots: [
+            {
+                id: 'root-left',
+                modelId: 'model-1',
+                transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+                diameter: 6,
+                diskHeight: 1,
+                coneHeight: 1,
+            },
+            {
+                id: 'root-right',
+                modelId: 'model-1',
+                transform: { pos: { x: 12, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+                diameter: 6,
+                diskHeight: 1,
+                coneHeight: 1,
+            },
+        ],
+        trunks: [
+            {
+                id: 'trunk-left',
+                modelId: 'model-1',
+                rootId: 'root-left',
+                segments: [
+                    {
+                        id: 'seg-left',
+                        type: 'straight',
+                        diameter: 0.8,
+                        topJoint: { id: 'joint-left-top', pos: { x: 0, y: 0, z: 10 }, diameter: 0.9 },
+                    },
+                ],
+            },
+            {
+                id: 'trunk-right',
+                modelId: 'model-1',
+                rootId: 'root-right',
+                segments: [
+                    {
+                        id: 'seg-right',
+                        type: 'straight',
+                        diameter: 1.6,
+                        topJoint: { id: 'joint-right-top', pos: { x: 12, y: 0, z: 10 }, diameter: 1.7 },
+                    },
+                ],
+            },
+        ],
+        branches: [],
+        leaves: [],
+        twigs: [],
+        sticks: [],
+        braces: [
+            {
+                id: 'brace-1',
+                modelId: 'model-1',
+                startKnotId: 'k-left',
+                endKnotId: 'k-right',
+                profile: { diameter: 1.0 },
+            },
+        ],
+        knots: [
+            {
+                id: 'k-left',
+                parentShaftId: 'seg-left',
+                t: 0.5,
+                pos: { x: 0, y: 0, z: 5 },
+                diameter: 1.1,
+                _importHint: 'braceImported',
+            },
+            {
+                id: 'k-right',
+                parentShaftId: 'seg-right',
+                t: 0.5,
+                pos: { x: 12, y: 0, z: 5 },
+                diameter: 1.1,
+                _importHint: 'braceImported',
+            },
+        ],
+    };
+
+    loadFromImportFormat(data);
+    const snapshot = getSnapshot();
+
+    const knotLeft = snapshot.knots['k-left'];
+    const knotRight = snapshot.knots['k-right'];
+
+    assert.ok(knotLeft && knotRight, 'Expected brace host knots to exist after load');
+    assert.ok(almostEqual(knotLeft.diameter ?? 0, 1.1), 'Left imported brace knot should keep uniform imported diameter');
+    assert.ok(almostEqual(knotRight.diameter ?? 0, 1.1), 'Right imported brace knot should keep uniform imported diameter');
+
+    resetStore();
+});
+
 test('loadFromImportFormat preserves terminal leaf tip endpoint intent, projects large base clamps, and keeps descendant-host branch knots projected', () => {
     resetStore();
 

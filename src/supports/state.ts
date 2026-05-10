@@ -710,7 +710,13 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
 
             const t = computeClosestTOnSegmentFromPoint(authoredPos, activeEndpoints.start, activeEndpoints.end, activeSegment);
             const computedPos = calculateKnotPositionOnSegmentFromT(activeEndpoints.start, activeEndpoints.end, activeSegment, t);
-            const computedDiameter = activeSegment.diameter + JOINT_DIAMETER_OFFSET_MM;
+            const preserveImportedBraceUniformDiameter =
+                braceHostKnotIds.has(knot.id)
+                && knot._importHint === 'braceImported'
+                && Number.isFinite(knot.diameter as number);
+            const computedDiameter = preserveImportedBraceUniformDiameter
+                ? (knot.diameter as number)
+                : activeSegment.diameter + JOINT_DIAMETER_OFFSET_MM;
             const parentShaftChanged = nextParentShaftId !== knot.parentShaftId;
 
             const dx = computedPos.x - authoredPos.x;

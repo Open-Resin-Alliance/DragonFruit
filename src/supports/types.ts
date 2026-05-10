@@ -76,7 +76,7 @@ export interface Knot {
      * 'preserve' → keep authored pos; 'project' → project to shaft geometry.
      * Not present for runtime-created knots.
      */
-    _importHint?: 'preserve' | 'project';
+    _importHint?: 'preserve' | 'project' | 'braceImported';
 }
 
 /**
