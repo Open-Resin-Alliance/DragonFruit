@@ -37,7 +37,7 @@ export function setRaftSettings(settings: RaftSettings): void {
   const normalized = normalizeRaftSettings(next);
   currentRaftSettings = {
     ...normalized,
-    wallEnabled: normalized.bottomMode === 'off' ? false : normalized.wallEnabled,
+    wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
   };
   notify();
 }
@@ -47,7 +47,7 @@ export function updateRaftSettings(partial: Partial<RaftSettings>): void {
   const normalized = normalizeRaftSettings(next);
   currentRaftSettings = {
     ...normalized,
-    wallEnabled: normalized.bottomMode === 'off' ? false : normalized.wallEnabled,
+    wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
   };
   notify();
 }

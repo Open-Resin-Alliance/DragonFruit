@@ -242,6 +242,7 @@ export function GeneralSettingsTab({
                   onClick={() => onImportDefaultsChange({
                     ...importDefaults,
                     raftBottomMode: option.value,
+                    raftWallEnabled: option.value === 'solid' ? importDefaults.raftWallEnabled : false,
                     rootsEnabled: option.value === 'line' ? true : importDefaults.rootsEnabled,
                   })}
                   className="h-9 rounded-md border text-[12px] font-semibold transition-colors"
@@ -264,36 +265,38 @@ export function GeneralSettingsTab({
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Default Raft Wall
+        {importDefaults.raftBottomMode === 'solid' ? (
+          <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Default Raft Wall
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Enable perimeter wall for imported solid rafts.
+                </div>
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Enable perimeter wall when raft base is not Off.
-              </div>
+              <button
+                type="button"
+                onClick={() => onImportDefaultsChange({ ...importDefaults, raftWallEnabled: !importDefaults.raftWallEnabled })}
+                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={importDefaults.raftWallEnabled
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                {importDefaults.raftWallEnabled ? 'ON' : 'OFF'}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => onImportDefaultsChange({ ...importDefaults, raftWallEnabled: !importDefaults.raftWallEnabled })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={importDefaults.raftWallEnabled
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {importDefaults.raftWallEnabled ? 'ON' : 'OFF'}
-            </button>
           </div>
-        </div>
+        ) : null}
 
         {!rootsLockedByLineRaft ? (
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>

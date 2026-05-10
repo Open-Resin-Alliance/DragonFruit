@@ -85,11 +85,12 @@ test('normalizeImportDefaultsSettings falls back to safe defaults', () => {
 test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode', () => {
   const normalized = normalizeImportDefaultsSettings({
     raftBottomMode: 'line',
-    raftWallEnabled: false,
+    raftWallEnabled: true,
     rootsEnabled: false,
   });
 
   assert.equal(normalized.raftBottomMode, 'line');
+  assert.equal(normalized.raftWallEnabled, false);
   assert.equal(normalized.rootsEnabled, true);
 });
 
@@ -130,5 +131,16 @@ test('getImportDefaultsRaftPatch disables wall when raft base is off', () => {
   });
 
   assert.equal(patch.bottomMode, 'off');
+  assert.equal(patch.wallEnabled, false);
+});
+
+test('getImportDefaultsRaftPatch disables wall when raft base is line', () => {
+  const patch = getImportDefaultsRaftPatch({
+    raftBottomMode: 'line',
+    raftWallEnabled: true,
+    rootsEnabled: true,
+  });
+
+  assert.equal(patch.bottomMode, 'line');
   assert.equal(patch.wallEnabled, false);
 });

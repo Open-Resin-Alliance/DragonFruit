@@ -36,9 +36,11 @@ export function normalizeImportDefaultsSettings(value: unknown): ImportDefaultsS
 
   return {
     raftBottomMode,
-    raftWallEnabled: typeof raw.raftWallEnabled === 'boolean'
-      ? raw.raftWallEnabled
-      : DEFAULT_IMPORT_DEFAULTS_SETTINGS.raftWallEnabled,
+    raftWallEnabled: raftBottomMode === 'solid'
+      ? (typeof raw.raftWallEnabled === 'boolean'
+        ? raw.raftWallEnabled
+        : DEFAULT_IMPORT_DEFAULTS_SETTINGS.raftWallEnabled)
+      : false,
     rootsEnabled,
   };
 }
@@ -132,6 +134,6 @@ export function getImportDefaultsRaftPatch(settings: ImportDefaultsSettings): Pi
   const normalized = normalizeImportDefaultsSettings(settings);
   return {
     bottomMode: normalized.raftBottomMode,
-    wallEnabled: normalized.raftBottomMode === 'off' ? false : normalized.raftWallEnabled,
+    wallEnabled: normalized.raftBottomMode === 'solid' ? normalized.raftWallEnabled : false,
   };
 }
