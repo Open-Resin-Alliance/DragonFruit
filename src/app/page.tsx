@@ -75,7 +75,10 @@ import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
-import { computeHighPrecisionArrangeUpdatesWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import {
+  computeHighPrecisionArrangeResultWorker,
+  computeHighPrecisionArrangeUpdatesWorker,
+} from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -1447,7 +1450,7 @@ export default function Home() {
   const [arrangeArrayGapX, setArrangeArrayGapX] = React.useState(5);
   const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
   const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
-  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'array' | null>(null);
+  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'high_precision_fill' | 'array' | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1869,6 +1872,16 @@ export default function Home() {
   const showArrangeBlockingOverlay = isAutoArranging;
 
   const arrangeOverlayContent = React.useMemo(() => {
+    if (activeArrangeOperation === 'high_precision_fill') {
+      return {
+        title: 'High-Precision Fill Running…',
+        detailLines: [
+          'Using SAT-based 2.5D nesting to pack duplicates onto the plate.',
+          'Please be patient while we compute the densest valid fill.',
+        ],
+      };
+    }
+
     if (activeArrangeOperation === 'high_precision') {
       return {
         title: 'High-Precision Arrange Running…',
@@ -1919,6 +1932,7 @@ export default function Home() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }, [arrangeOverlayElapsedSec]);
   const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
+  const [duplicatePrecisionMode, setDuplicatePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
   const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
   const [duplicateArrayCountZ, setDuplicateArrayCountZ] = React.useState(1);
@@ -1926,23 +1940,6 @@ export default function Home() {
   const [duplicateArrayGapY, setDuplicateArrayGapY] = React.useState(5);
   const [duplicateArrayGapZ, setDuplicateArrayGapZ] = React.useState(5);
   const [isDuplicating, setIsDuplicating] = React.useState(false);
-  const effectiveDuplicateTotalCopies = React.useMemo(() => {
-    if (duplicateLayoutMode === 'array') {
-      const countX = Math.max(1, Math.round(duplicateArrayCountX));
-      const countY = Math.max(1, Math.round(duplicateArrayCountY));
-      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
-      return Math.max(1, Math.min(128, countX * countY * countZ));
-    }
-
-    return Math.max(1, Math.round(duplicateTotalCopies));
-  }, [
-    duplicateArrayCountX,
-    duplicateArrayCountY,
-    duplicateArrayCountZ,
-    duplicateLayoutMode,
-    duplicateTotalCopies,
-  ]);
-  const isDuplicateSetupBlockingArrange = Boolean(scene.activeModel) && effectiveDuplicateTotalCopies > 1;
   const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
     position: THREE.Vector3;
     rotation: THREE.Euler;
@@ -1967,6 +1964,30 @@ export default function Home() {
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null>(null);
+  const effectiveDuplicateTotalCopies = React.useMemo(() => {
+    if (duplicateLayoutMode === 'array') {
+      const countX = Math.max(1, Math.round(duplicateArrayCountX));
+      const countY = Math.max(1, Math.round(duplicateArrayCountY));
+      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
+      return Math.max(1, Math.min(128, countX * countY * countZ));
+    }
+
+    if (duplicatePrecisionMode === 'high_precision') {
+      return Math.max(1, duplicatePreviewTransforms.length + (duplicateSourcePreviewTransform ? 1 : 0));
+    }
+
+    return Math.max(1, Math.round(duplicateTotalCopies));
+  }, [
+    duplicateArrayCountX,
+    duplicateArrayCountY,
+    duplicateArrayCountZ,
+    duplicateLayoutMode,
+    duplicatePrecisionMode,
+    duplicatePreviewTransforms.length,
+    duplicateSourcePreviewTransform,
+    duplicateTotalCopies,
+  ]);
+  const isDuplicateSetupBlockingArrange = Boolean(scene.activeModel) && effectiveDuplicateTotalCopies > 1;
   const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
   const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
   const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
@@ -11239,6 +11260,88 @@ export default function Home() {
     window.setTimeout(resolve, ms);
   }), []);
 
+  const buildHighPrecisionArrangeSupportLocalPoints = React.useCallback((
+    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
+  ) => {
+    const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
+
+    for (const model of scene.models) {
+      const supportBounds = supportBoundsByModelId.get(model.id);
+      if (!supportBounds || supportBounds.isEmpty()) continue;
+
+      const t = modelTransformById.get(model.id) ?? model.transform;
+      const worldMatrix = new THREE.Matrix4().compose(
+        t.position,
+        new THREE.Quaternion().setFromEuler(t.rotation),
+        t.scale,
+      );
+      const invWorldMatrix = worldMatrix.clone().invert();
+
+      const xs = [supportBounds.min.x, supportBounds.max.x];
+      const ys = [supportBounds.min.y, supportBounds.max.y];
+      const zs = [supportBounds.min.z, supportBounds.max.z];
+
+      const points: THREE.Vector3[] = [];
+      const seen = new Set<string>();
+      const tmp = new THREE.Vector3();
+      for (const x of xs) {
+        for (const y of ys) {
+          for (const z of zs) {
+            tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
+            const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+            points.push(tmp.clone());
+          }
+        }
+      }
+
+      if (points.length === 0) continue;
+
+      const key = [
+        supportBounds.min.x.toFixed(4),
+        supportBounds.min.y.toFixed(4),
+        supportBounds.min.z.toFixed(4),
+        supportBounds.max.x.toFixed(4),
+        supportBounds.max.y.toFixed(4),
+        supportBounds.max.z.toFixed(4),
+        points.length,
+      ].join('|');
+
+      supportLocalPointsByModelId.set(model.id, { points, key });
+    }
+
+    return supportLocalPointsByModelId;
+  }, [scene.models, supportBoundsByModelId]);
+
+  const buildHighPrecisionArrangeModels = React.useCallback((
+    sourceModels: (typeof scene.models),
+    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
+  ): HighPrecisionArrangeModel[] => {
+    const supportLocalPointsByModelId = buildHighPrecisionArrangeSupportLocalPoints(modelTransformById);
+
+    return sourceModels.map((model): HighPrecisionArrangeModel => {
+      const t = modelTransformById.get(model.id) ?? model.transform;
+      const supportLocal = supportLocalPointsByModelId.get(model.id);
+
+      return {
+        id: model.id,
+        visible: model.visible,
+        transform: {
+          position: t.position.clone(),
+          rotation: t.rotation.clone(),
+          scale: t.scale.clone(),
+        },
+        geometry: {
+          center: model.geometry.center.clone(),
+          geometry: model.geometry.geometry,
+          supportLocalPoints: supportLocal?.points,
+          supportHullKey: supportLocal?.key,
+        },
+      };
+    });
+  }, [buildHighPrecisionArrangeSupportLocalPoints]);
+
   const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (scope === 'all') {
       return scene.models.filter((m) => m.visible);
@@ -11797,77 +11900,8 @@ export default function Home() {
       const modelTransformById = new Map(
         scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
       );
-
-      const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
-      for (const model of scene.models) {
-        const supportBounds = supportBoundsByModelId.get(model.id);
-        if (!supportBounds || supportBounds.isEmpty()) continue;
-
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const worldMatrix = new THREE.Matrix4().compose(
-          t.position,
-          new THREE.Quaternion().setFromEuler(t.rotation),
-          t.scale,
-        );
-        const invWorldMatrix = worldMatrix.clone().invert();
-
-        const xs = [supportBounds.min.x, supportBounds.max.x];
-        const ys = [supportBounds.min.y, supportBounds.max.y];
-        const zs = [supportBounds.min.z, supportBounds.max.z];
-
-        const points: THREE.Vector3[] = [];
-        const seen = new Set<string>();
-        const tmp = new THREE.Vector3();
-        for (const x of xs) {
-          for (const y of ys) {
-            for (const z of zs) {
-              tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
-              const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
-              if (seen.has(dedupeKey)) continue;
-              seen.add(dedupeKey);
-              points.push(tmp.clone());
-            }
-          }
-        }
-
-        if (points.length === 0) continue;
-
-        const key = [
-          supportBounds.min.x.toFixed(4),
-          supportBounds.min.y.toFixed(4),
-          supportBounds.min.z.toFixed(4),
-          supportBounds.max.x.toFixed(4),
-          supportBounds.max.y.toFixed(4),
-          supportBounds.max.z.toFixed(4),
-          points.length,
-        ].join('|');
-
-        supportLocalPointsByModelId.set(model.id, { points, key });
-      }
-
-      const toHighPrecisionArrangeModel = (model: (typeof scene.models)[number]): HighPrecisionArrangeModel => {
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const supportLocal = supportLocalPointsByModelId.get(model.id);
-
-        return {
-          id: model.id,
-          visible: model.visible,
-          transform: {
-            position: t.position.clone(),
-            rotation: t.rotation.clone(),
-            scale: t.scale.clone(),
-          },
-          geometry: {
-            center: model.geometry.center.clone(),
-            geometry: model.geometry.geometry,
-            supportLocalPoints: supportLocal?.points,
-            supportHullKey: supportLocal?.key,
-          },
-        };
-      };
-
       const visibleIdSet = new Set(visibleModels.map((model) => model.id));
-      const highPrecisionSceneModels = scene.models.map(toHighPrecisionArrangeModel);
+      const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
       const highPrecisionVisibleModels = highPrecisionSceneModels.filter((model) => visibleIdSet.has(model.id));
 
       const updates = await computeHighPrecisionArrangeUpdatesWorker({
@@ -11906,8 +11940,8 @@ export default function Home() {
     resolveArrangeVisibleModels,
     scene,
     sleep,
-    supportBoundsByModelId,
     transformMgr,
+    buildHighPrecisionArrangeModels,
     applyArrangeTransforms,
   ]);
 
@@ -13171,19 +13205,34 @@ export default function Home() {
   }, [handleTopBarSaveScene, scene.models.length]);
 
   React.useEffect(() => {
+    let cancelled = false;
+
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (!scene.activeModel) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     const model = scene.activeModel;
+
+    if (duplicateLayoutMode === 'auto' && duplicatePrecisionMode === 'high_precision') {
+      setDuplicatePreviewTransforms([]);
+      setDuplicateSourcePreviewTransform(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
     const depth = sourceDims.depth;
@@ -13369,7 +13418,12 @@ export default function Home() {
     });
 
     setDuplicatePreviewTransforms(previews);
+
+    return () => {
+      cancelled = true;
+    };
   }, [
+    buildHighPrecisionArrangeModels,
     duplicateArrayCountX,
     duplicateArrayCountY,
     duplicateArrayCountZ,
@@ -13377,7 +13431,7 @@ export default function Home() {
     duplicateArrayGapY,
     duplicateArrayGapZ,
     duplicateLayoutMode,
-    resolveArrangeVisibleModels,
+    duplicatePrecisionMode,
     duplicateSpacingMm,
     duplicateTotalCopies,
     getModelSupportAwareDimensionsMm,
@@ -13460,11 +13514,138 @@ export default function Home() {
     }
   }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
 
-  const handleFillPlateDuplicate = React.useCallback(() => {
-    if (isDuplicating) return;
+  const handleFillPlateDuplicate = React.useCallback(async () => {
+    if (isDuplicating || isAutoArranging) return;
     if (duplicateLayoutMode !== 'auto') return;
     const model = scene.activeModel;
     if (!model) return;
+
+    if (duplicatePrecisionMode === 'high_precision') {
+      const minSpinnerMs = 220;
+      const startedAt = performance.now();
+      const maxProbeCopies = 128;
+
+      setDuplicateApplySourceModel(null);
+      setDuplicateApplySourceTransform(null);
+      setDuplicateSourcePreviewTransform(null);
+      setDuplicatePreviewTransforms([]);
+      setIsDuplicating(true);
+      setActiveArrangeOperation('high_precision_fill');
+      setArrangeOverlayModelCount(maxProbeCopies);
+      setIsAutoArranging(true);
+      await sleep(0);
+
+      try {
+        const modelTransformById = new Map(
+          scene.models.map((sceneModel) => [sceneModel.id, sceneModel.transform] as const),
+        );
+        const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
+        const highPrecisionSourceModel = highPrecisionSceneModels.find((candidate) => candidate.id === model.id);
+        if (!highPrecisionSourceModel) return;
+
+        const duplicateSceneModels: HighPrecisionArrangeModel[] = Array.from({ length: maxProbeCopies }, (_, index) => ({
+          ...highPrecisionSourceModel,
+          id: `${model.id}__duplicate_fill_${index}`,
+          visible: true,
+          transform: {
+            position: highPrecisionSourceModel.transform.position.clone(),
+            rotation: highPrecisionSourceModel.transform.rotation.clone(),
+            scale: highPrecisionSourceModel.transform.scale.clone(),
+          },
+          geometry: {
+            center: highPrecisionSourceModel.geometry.center.clone(),
+            geometry: highPrecisionSourceModel.geometry.geometry,
+            supportLocalPoints: highPrecisionSourceModel.geometry.supportLocalPoints?.map((point) => point.clone()),
+            supportHullKey: highPrecisionSourceModel.geometry.supportHullKey,
+          },
+        }));
+
+        const result = await computeHighPrecisionArrangeResultWorker({
+          visibleModels: duplicateSceneModels,
+          sceneModels: [...highPrecisionSceneModels.filter((sceneModel) => sceneModel.id !== model.id), ...duplicateSceneModels],
+          widthMm: scene.view3dSettings.widthMm,
+          depthMm: scene.view3dSettings.depthMm,
+          originMode: scene.view3dSettings.originMode,
+          arrangeSpacingMm: duplicateSpacingMm,
+          arrangeAllowRotateOnZ: true,
+          arrangeAnchorMode: 'center',
+          getArrangeTransform: (arrangeModel) => arrangeModel.transform,
+          hullCache: arrangeHullFootprintCacheRef.current,
+          safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+        });
+
+        const packedIdSet = new Set(result.packedIds);
+        const packedUpdates = result.updates.filter((update) => packedIdSet.has(update.id));
+        if (packedUpdates.length <= 1) return;
+
+        let sourceUpdate = packedUpdates[0];
+        let sourceDistanceSq = Number.POSITIVE_INFINITY;
+        for (const update of packedUpdates) {
+          const dx = update.transform.position.x - model.transform.position.x;
+          const dy = update.transform.position.y - model.transform.position.y;
+          const distanceSq = (dx * dx) + (dy * dy);
+          if (distanceSq < sourceDistanceSq) {
+            sourceDistanceSq = distanceSq;
+            sourceUpdate = update;
+          }
+        }
+
+        const duplicateTransforms = packedUpdates
+          .filter((update) => update.id !== sourceUpdate.id)
+          .map((update) => ({
+            position: update.transform.position.clone(),
+            rotation: update.transform.rotation.clone(),
+            scale: update.transform.scale.clone(),
+          }));
+
+        if (duplicateTransforms.length === 0) return;
+
+        const createdIds = scene.duplicateModelWithTransforms(
+          model.id,
+          duplicateTransforms,
+          {
+            position: sourceUpdate.transform.position.clone(),
+            rotation: sourceUpdate.transform.rotation.clone(),
+            scale: sourceUpdate.transform.scale.clone(),
+          },
+        );
+
+        const firstCreatedId = createdIds[0] ?? null;
+        const firstCreatedTransform = duplicateTransforms[0] ?? null;
+        if (firstCreatedId && firstCreatedTransform) {
+          setDisplayActiveModelId(firstCreatedId);
+          transformMgr.transformHook.setPosition(
+            firstCreatedTransform.position.x,
+            firstCreatedTransform.position.y,
+            firstCreatedTransform.position.z,
+          );
+          transformMgr.transformHook.setRotation(
+            firstCreatedTransform.rotation.x,
+            firstCreatedTransform.rotation.y,
+            firstCreatedTransform.rotation.z,
+          );
+          transformMgr.transformHook.setScale(
+            firstCreatedTransform.scale.x,
+            firstCreatedTransform.scale.y,
+            firstCreatedTransform.scale.z,
+          );
+        }
+
+        setDuplicateTotalCopies(1);
+      } catch (error) {
+        console.warn('[Duplicate][HighPrecision] Failed applying fill-plate duplicate.', error);
+      } finally {
+        const elapsed = performance.now() - startedAt;
+        if (elapsed < minSpinnerMs) {
+          await sleep(minSpinnerMs - elapsed);
+        }
+        setIsDuplicating(false);
+        setIsAutoArranging(false);
+        setActiveArrangeOperation(null);
+        setArrangeOverlayModelCount(null);
+      }
+      return;
+    }
 
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
@@ -13550,7 +13731,18 @@ export default function Home() {
 
     const targetCopies = Math.min(128, Math.max(1, capacity));
     setDuplicateTotalCopies(targetCopies);
-  }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
+  }, [
+    buildHighPrecisionArrangeModels,
+    duplicateLayoutMode,
+    duplicatePrecisionMode,
+    duplicateSpacingMm,
+    getModelSupportAwareDimensionsMm,
+    isAutoArranging,
+    isDuplicating,
+    scene,
+    sleep,
+    transformMgr.transformHook,
+  ]);
 
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
@@ -14215,6 +14407,8 @@ export default function Home() {
                   activeModelName={scene.activeModel?.name ?? null}
                   layoutMode={duplicateLayoutMode}
                   onLayoutModeChange={setDuplicateLayoutMode}
+                  precisionMode={duplicatePrecisionMode}
+                  onPrecisionModeChange={setDuplicatePrecisionMode}
                   totalCopies={duplicateTotalCopies}
                   onTotalCopiesChange={setDuplicateTotalCopies}
                   spacingMm={duplicateSpacingMm}
@@ -14234,7 +14428,7 @@ export default function Home() {
                   onConfirm={handleConfirmDuplicate}
                   onFillPlate={handleFillPlateDuplicate}
                   previewCount={duplicatePreviewTransforms.length}
-                  isApplying={isDuplicating}
+                  isApplying={isDuplicating || (isAutoArranging && activeArrangeOperation === 'high_precision_fill')}
                 />
               </>
             )}

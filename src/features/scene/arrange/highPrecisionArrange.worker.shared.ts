@@ -27,6 +27,12 @@ export type SerializedArrangeUpdate = {
   transform: SerializedArrangeTransform;
 };
 
+export type SerializedHighPrecisionArrangeResult = {
+  updates: SerializedArrangeUpdate[];
+  packedIds: string[];
+  spilledIds: string[];
+};
+
 export type HighPrecisionArrangeWorkerInput = {
   visibleModels: SerializedArrangeModel[];
   sceneModels: SerializedArrangeModel[];
@@ -48,7 +54,7 @@ export type HighPrecisionArrangeWorkerRequest = {
 export type HighPrecisionArrangeWorkerResult = {
   type: 'result';
   requestId: number;
-  updates: SerializedArrangeUpdate[];
+  result: SerializedHighPrecisionArrangeResult;
 };
 
 export type HighPrecisionArrangeWorkerError = {

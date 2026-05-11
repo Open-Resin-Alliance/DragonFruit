@@ -77,7 +77,13 @@ export type HighPrecisionArrangeUpdate = {
   transform: ArrangeTransform;
 };
 
-export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeInput): HighPrecisionArrangeUpdate[] {
+export type HighPrecisionArrangeResult = {
+  updates: HighPrecisionArrangeUpdate[];
+  packedIds: string[];
+  spilledIds: string[];
+};
+
+export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInput): HighPrecisionArrangeResult {
   const {
     visibleModels,
     sceneModels,
@@ -91,7 +97,13 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     hullCache,
   } = input;
 
-  if (visibleModels.length <= 1) return [];
+  if (visibleModels.length <= 1) {
+    return {
+      updates: [],
+      packedIds: [],
+      spilledIds: [],
+    };
+  }
 
   // Numerical tolerance guard used in spacing enforcement to avoid near-contact jitter.
   const SAT_EPS_MM = 0.05;
@@ -1070,7 +1082,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
   }
 
   // Final phase: materialize transform updates for scene application.
-  return [...placed, ...spills].map((entry) => {
+  const updates = [...placed, ...spills].map((entry) => {
     const t = modelTransformById.get(entry.model.id) ?? entry.model.transform;
     return {
       id: entry.model.id,
@@ -1081,4 +1093,14 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
       },
     };
   });
+
+  return {
+    updates,
+    packedIds: placed.map((entry) => entry.model.id),
+    spilledIds: spills.map((entry) => entry.model.id),
+  };
+}
+
+export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeInput): HighPrecisionArrangeUpdate[] {
+  return computeHighPrecisionArrangeResult(input).updates;
 }

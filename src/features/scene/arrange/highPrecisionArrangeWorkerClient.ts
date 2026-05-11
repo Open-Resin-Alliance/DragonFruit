@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import {
-  computeHighPrecisionArrangeUpdates,
+  computeHighPrecisionArrangeResult,
   type ArrangeModel,
   type HighPrecisionArrangeInput,
+  type HighPrecisionArrangeResult,
   type HighPrecisionArrangeUpdate,
 } from './highPrecisionArrange';
 import type {
@@ -14,7 +15,7 @@ import type {
 
 let worker: Worker | null = null;
 let requestSeq = 1;
-const pending = new Map<number, { resolve: (updates: HighPrecisionArrangeUpdate[]) => void; reject: (reason?: unknown) => void }>();
+const pending = new Map<number, { resolve: (result: HighPrecisionArrangeResult) => void; reject: (reason?: unknown) => void }>();
 
 const ensureWorker = () => {
   if (typeof Worker === 'undefined') return null;
@@ -33,7 +34,7 @@ const ensureWorker = () => {
         return;
       }
 
-      const updates: HighPrecisionArrangeUpdate[] = msg.updates.map((u) => ({
+      const updates: HighPrecisionArrangeUpdate[] = msg.result.updates.map((u) => ({
         id: u.id,
         transform: {
           position: new THREE.Vector3(u.transform.position[0], u.transform.position[1], u.transform.position[2]),
@@ -47,7 +48,11 @@ const ensureWorker = () => {
         },
       }));
 
-      entry.resolve(updates);
+      entry.resolve({
+        updates,
+        packedIds: msg.result.packedIds,
+        spilledIds: msg.result.spilledIds,
+      });
     };
     worker.onerror = (event) => {
       for (const [, entry] of pending) {
@@ -114,10 +119,10 @@ const serializeInput = (input: HighPrecisionArrangeInput): HighPrecisionArrangeW
   safetyMarginMm: input.safetyMarginMm,
 });
 
-export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecisionArrangeInput): Promise<HighPrecisionArrangeUpdate[]> {
+export async function computeHighPrecisionArrangeResultWorker(input: HighPrecisionArrangeInput): Promise<HighPrecisionArrangeResult> {
   const w = ensureWorker();
   if (!w) {
-    return computeHighPrecisionArrangeUpdates(input);
+    return computeHighPrecisionArrangeResult(input);
   }
 
   const requestId = requestSeq++;
@@ -137,7 +142,7 @@ export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecis
     if (model.geometry.supportLocalPoints) transferables.push(model.geometry.supportLocalPoints.buffer);
   }
 
-  return new Promise<HighPrecisionArrangeUpdate[]>((resolve, reject) => {
+  return new Promise<HighPrecisionArrangeResult>((resolve, reject) => {
     pending.set(requestId, { resolve, reject });
     try {
       w.postMessage(request, transferables);
@@ -146,4 +151,9 @@ export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecis
       reject(err);
     }
   });
+}
+
+export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecisionArrangeInput): Promise<HighPrecisionArrangeUpdate[]> {
+  const result = await computeHighPrecisionArrangeResultWorker(input);
+  return result.updates;
 }
