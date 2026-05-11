@@ -1,6 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
+import { usePicking } from '@/components/picking';
 import { subscribe, getSnapshot } from './state';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
@@ -141,6 +142,7 @@ export function SupportProxyMeshLayer({
   enablePointerSelection = true,
   includeDetailedPrimitives = true,
 }: SupportProxyMeshLayerProps) {
+  const { hit } = usePicking();
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const kickstandState = useKickstandStoreState();
@@ -814,8 +816,9 @@ export function SupportProxyMeshLayer({
   const handleProxyShaftClick = React.useCallback((shaft: InstancedShaft) => {
     if (!pointerSelectionEnabled) return;
     if (!shaft.modelId) return;
+    if (hit.category === 'gizmo') return;
     onModelPointerSelect?.(shaft.modelId);
-  }, [onModelPointerSelect, pointerSelectionEnabled]);
+  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
     if (!pointerHoverEnabled) return;
@@ -825,8 +828,9 @@ export function SupportProxyMeshLayer({
   const handleProxyRootClick = React.useCallback((root: InstancedRoot) => {
     if (!pointerSelectionEnabled) return;
     if (!root.modelId) return;
+    if (hit.category === 'gizmo') return;
     onModelPointerSelect?.(root.modelId);
-  }, [onModelPointerSelect, pointerSelectionEnabled]);
+  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyRootPointerMove = React.useCallback((root: InstancedRoot) => {
     if (!pointerHoverEnabled) return;
@@ -836,8 +840,9 @@ export function SupportProxyMeshLayer({
   const handleProxyJointClick = React.useCallback((joint: InstancedJoint) => {
     if (!pointerSelectionEnabled) return;
     if (!joint.modelId) return;
+    if (hit.category === 'gizmo') return;
     onModelPointerSelect?.(joint.modelId);
-  }, [onModelPointerSelect, pointerSelectionEnabled]);
+  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyJointPointerMove = React.useCallback((joint: InstancedJoint) => {
     if (!pointerHoverEnabled) return;
@@ -847,8 +852,9 @@ export function SupportProxyMeshLayer({
   const handleProxyConeClick = React.useCallback((cone: InstancedContactCone) => {
     if (!pointerSelectionEnabled) return;
     if (!cone.modelId) return;
+    if (hit.category === 'gizmo') return;
     onModelPointerSelect?.(cone.modelId);
-  }, [onModelPointerSelect, pointerSelectionEnabled]);
+  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyConePointerMove = React.useCallback((cone: InstancedContactCone) => {
     if (!pointerHoverEnabled) return;

@@ -74,6 +74,12 @@ export function usePrepareTransformHotkeys({
       if (matchesConfiguredHotkeyDown(event, { key: duplicateKey.key, modifier: duplicateKey.modifier })) {
         event.preventDefault();
         setTransformMode('arrange');
+        return;
+      }
+
+      if (event.key === 'Escape' && transformMode === 'mirror') {
+        event.preventDefault();
+        setTransformMode('select');
       }
     };
 

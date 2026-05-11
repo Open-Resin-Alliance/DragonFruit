@@ -2,6 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { usePicking } from '@/components/picking';
 import { subscribe, getSnapshot } from './state';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import type { RaftSettings, SupportBaseCircle } from './Rafts/Crenelated/RaftTypes';
@@ -211,6 +212,7 @@ export function RaftProxyMeshLayer({
   navigationLodActive = false,
   passive = false,
 }: RaftProxyMeshLayerProps) {
+  const { hit } = usePicking();
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const supportRoots = supportState.roots;
   const supportAnchors = supportState.anchors;
@@ -422,6 +424,9 @@ export function RaftProxyMeshLayer({
   const handleClick = React.useCallback((event: any, modelId?: string) => {
     if (!pointerEnabled) return;
     if (!modelId || !onModelPointerSelect) return;
+    
+    // Don't select model if a gizmo handle is being interacted with
+    if (hit.category === 'gizmo') return;
 
     event.stopPropagation();
     if (event.nativeEvent) {
@@ -430,7 +435,7 @@ export function RaftProxyMeshLayer({
     }
 
     onModelPointerSelect(modelId);
-  }, [onModelPointerSelect, pointerEnabled]);
+  }, [hit.category, onModelPointerSelect, pointerEnabled]);
 
   const handlePointerMove = React.useCallback((event: any, modelId?: string) => {
     if (!pointerEnabled) return;
