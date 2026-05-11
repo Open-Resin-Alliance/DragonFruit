@@ -68,6 +68,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
@@ -11184,13 +11185,27 @@ export default function Home() {
       scale: t.scale.clone(),
     };
 
-    const meshBounds = computeApproxModelWorldBounds(
+    const meshApproxBounds = computeApproxModelWorldBounds(
       model.geometry,
       effectiveTransform,
     );
+    const meshFootprint = computeProjectedFootprintSize(
+      model.geometry,
+      effectiveTransform.rotation,
+      effectiveTransform.scale,
+    );
+
+    const approxCenterX = (meshApproxBounds.min.x + meshApproxBounds.max.x) * 0.5;
+    const approxCenterY = (meshApproxBounds.min.y + meshApproxBounds.max.y) * 0.5;
+
+    let minX = approxCenterX - (meshFootprint.width * 0.5);
+    let maxX = approxCenterX + (meshFootprint.width * 0.5);
+    let minY = approxCenterY - (meshFootprint.depth * 0.5);
+    let maxY = approxCenterY + (meshFootprint.depth * 0.5);
+    let minZ = meshApproxBounds.min.z;
+    let maxZ = meshApproxBounds.max.z;
 
     const supportBoundsBase = supportBoundsByModelId.get(model.id);
-    const combinedBounds = meshBounds.clone();
     if (supportBoundsBase && !supportBoundsBase.isEmpty()) {
       const sourceMatrix = new THREE.Matrix4().compose(
         model.transform.position,
@@ -11204,15 +11219,21 @@ export default function Home() {
       );
       const delta = new THREE.Matrix4().multiplyMatrices(targetMatrix, sourceMatrix.clone().invert());
       const transformedSupportBounds = supportBoundsBase.clone().applyMatrix4(delta);
-      combinedBounds.union(transformedSupportBounds);
+
+      minX = Math.min(minX, transformedSupportBounds.min.x);
+      maxX = Math.max(maxX, transformedSupportBounds.max.x);
+      minY = Math.min(minY, transformedSupportBounds.min.y);
+      maxY = Math.max(maxY, transformedSupportBounds.max.y);
+      minZ = Math.min(minZ, transformedSupportBounds.min.z);
+      maxZ = Math.max(maxZ, transformedSupportBounds.max.z);
     }
 
     return {
-      width: Math.max(2, combinedBounds.max.x - combinedBounds.min.x),
-      depth: Math.max(2, combinedBounds.max.y - combinedBounds.min.y),
-      height: Math.max(2, combinedBounds.max.z - combinedBounds.min.z),
+      width: Math.max(2, maxX - minX),
+      depth: Math.max(2, maxY - minY),
+      height: Math.max(2, maxZ - minZ),
     };
-  }, [computeApproxModelWorldBounds, getArrangeTransform, supportBoundsByModelId]);
+  }, [getArrangeTransform, supportBoundsByModelId]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
@@ -11357,7 +11378,11 @@ export default function Home() {
         items: PackedEntry[];
       };
 
-      const evaluatePacking = (ordered: typeof modelsWithFootprints, targetRowWidth: number) => {
+      const evaluatePacking = (
+        ordered: typeof modelsWithFootprints,
+        targetRowWidth: number,
+        enableRotation: boolean,
+      ) => {
         const rows: Row[] = [];
         const spills: SpillEntry[] = [];
         const placementSizeCache = new Map<string, { width: number; depth: number }>();
@@ -11400,7 +11425,7 @@ export default function Home() {
           const currentZ = t.rotation.z;
           const currentCanonical = normalizeToPi(currentZ);
 
-          if (!arrangeAllowRotateOnZ) {
+          if (!enableRotation) {
             const dims = footprintAtAngle(current.model, currentCanonical);
             return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
           }
@@ -11564,7 +11589,41 @@ export default function Home() {
           totalWidth,
           totalDepth,
           score: deadSpace + spillPenalty + aspectPenalty,
+          usedRotation: enableRotation,
         };
+      };
+
+      const countPackedItems = (layout: ReturnType<typeof evaluatePacking>) => (
+        layout.rows.reduce((acc, row) => acc + row.items.length, 0)
+      );
+
+      const isBetterLayout = (
+        candidate: ReturnType<typeof evaluatePacking>,
+        currentBest: ReturnType<typeof evaluatePacking> | null,
+      ) => {
+        if (!currentBest) return true;
+
+        if (candidate.spills.length !== currentBest.spills.length) {
+          return candidate.spills.length < currentBest.spills.length;
+        }
+
+        const candidatePackedCount = countPackedItems(candidate);
+        const bestPackedCount = countPackedItems(currentBest);
+        if (candidatePackedCount !== bestPackedCount) {
+          return candidatePackedCount > bestPackedCount;
+        }
+
+        const scoreDelta = candidate.score - currentBest.score;
+        if (Math.abs(scoreDelta) > 1e-6) {
+          return scoreDelta < 0;
+        }
+
+        // When layouts are effectively tied, do not force rotation.
+        if (candidate.usedRotation !== currentBest.usedRotation) {
+          return !candidate.usedRotation;
+        }
+
+        return false;
       };
 
       const byAreaDesc = [...modelsWithFootprints].sort((a, b) => (b.baseWidth * b.baseDepth) - (a.baseWidth * a.baseDepth));
@@ -11587,11 +11646,14 @@ export default function Home() {
       const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
 
       let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
+      const rotationModes = arrangeAllowRotateOnZ ? [false, true] : [false];
       for (const ordered of orderingCandidates) {
         for (const targetRowWidth of uniqueTargetRowWidths) {
-          const layout = evaluatePacking(ordered, targetRowWidth);
-          if (!bestLayout || layout.score < bestLayout.score) {
-            bestLayout = layout;
+          for (const enableRotation of rotationModes) {
+            const layout = evaluatePacking(ordered, targetRowWidth, enableRotation);
+            if (isBetterLayout(layout, bestLayout)) {
+              bestLayout = layout;
+            }
           }
         }
       }
