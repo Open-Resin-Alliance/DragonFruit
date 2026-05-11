@@ -137,7 +137,13 @@ export function generateCrenelatedWallManual(
   const topOuter = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(outer, -topInset) : outer);
   const topInner = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(inner, -topInset) : inner);
 
-  if (topOuter.length !== outer.length || topInner.length !== inner.length || topOuter.length < 3 || topInner.length < 3) {
+  if (
+    inner.length !== outer.length
+    || topOuter.length !== outer.length
+    || topInner.length !== outer.length
+    || topOuter.length < 3
+    || topInner.length < 3
+  ) {
     return generatePerimeterWall(outer, {
       wallThickness,
       wallHeight,

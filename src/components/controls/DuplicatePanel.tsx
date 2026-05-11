@@ -2,6 +2,7 @@ import React from 'react';
 import { CopyPlus, Loader2 } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
 
 export type DuplicateLayoutMode = 'auto' | 'array';
 
@@ -9,6 +10,8 @@ interface DuplicatePanelProps {
   activeModelName: string | null;
   layoutMode: DuplicateLayoutMode;
   onLayoutModeChange: (value: DuplicateLayoutMode) => void;
+  precisionMode: ArrangePrecisionMode;
+  onPrecisionModeChange: (value: ArrangePrecisionMode) => void;
   totalCopies: number;
   onTotalCopiesChange: (value: number) => void;
   spacingMm: number;
@@ -35,6 +38,8 @@ export function DuplicatePanel({
   activeModelName,
   layoutMode,
   onLayoutModeChange,
+  precisionMode,
+  onPrecisionModeChange,
   totalCopies,
   onTotalCopiesChange,
   spacingMm,
@@ -121,6 +126,7 @@ export function DuplicatePanel({
   const displayTotalCopies = Math.max(1, layoutMode === 'array'
     ? (Math.max(1, Math.round(arrayCountX)) * Math.max(1, Math.round(arrayCountY)) * Math.max(1, Math.round(arrayCountZ)))
     : Math.max(1, Math.round(totalCopies)));
+  const isHighPrecisionFillMode = layoutMode === 'auto' && precisionMode === 'high_precision';
 
   const isConfirmDuplicateDisabled = panelDisabled || previewCount <= 0 || displayTotalCopies <= 1;
   const isFillPlateDisabled = panelDisabled || layoutMode !== 'auto';
@@ -163,7 +169,9 @@ export function DuplicatePanel({
         right={(
           <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
             <CopyPlus className="w-3 h-3" style={{ color: 'var(--accent)' }} />
-            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>+{previewCount} preview</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              {isHighPrecisionFillMode ? 'SAT fill' : `+${previewCount} preview`}
+            </span>
           </div>
         )}
       />
@@ -171,8 +179,7 @@ export function DuplicatePanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Selected Model</div>
-            <div className="mt-0.5 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+            <div className="text-xs font-medium truncate text-center" style={{ color: 'var(--text-strong)' }}>
               {activeModelName ?? 'Select a model first'}
             </div>
           </div>
@@ -201,23 +208,53 @@ export function DuplicatePanel({
             </div>
           </div>
 
+          {layoutMode === 'auto' && (
+            <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Precision Mode</div>
+              <div className="grid grid-cols-2 gap-1 min-w-0">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onPrecisionModeChange('standard')}
+                  disabled={panelDisabled}
+                  style={panelDisabled ? undefined : (precisionMode === 'standard' ? activeModeStyle : undefined)}
+                  title="Current duplicate auto-layout algorithm"
+                >
+                  Standard
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onPrecisionModeChange('high_precision')}
+                  disabled={panelDisabled}
+                  style={panelDisabled ? undefined : (precisionMode === 'high_precision' ? activeModeStyle : undefined)}
+                  title="Use SAT-based fill-plate packing"
+                >
+                  High-Precision
+                </button>
+              </div>
+            </div>
+          )}
+
           {layoutMode === 'auto' ? (
             <>
-              <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total Copies</label>
-                <ScrollableNumberField
-                  className="mt-1"
-                  value={totalCopies}
-                  onChange={setClampedCopies}
-                  min={1}
-                  max={128}
-                  step={1}
-                  disabled={panelDisabled}
-                  ariaLabel="Total copies"
-                  decreaseTitle="Decrease total copies"
-                  increaseTitle="Increase total copies"
-                />
-              </div>
+              {precisionMode !== 'high_precision' && (
+                <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
+                  <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total Copies</label>
+                  <ScrollableNumberField
+                    className="mt-1"
+                    value={totalCopies}
+                    onChange={setClampedCopies}
+                    min={1}
+                    max={128}
+                    step={1}
+                    disabled={panelDisabled}
+                    ariaLabel="Total copies"
+                    decreaseTitle="Decrease total copies"
+                    increaseTitle="Increase total copies"
+                  />
+                </div>
+              )}
 
               <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange Distance</label>
@@ -280,25 +317,6 @@ export function DuplicatePanel({
           )}
 
           <Button
-            onClick={onConfirm}
-            variant={isConfirmDuplicateDisabled ? 'secondary' : 'primary'}
-            size="sm"
-            className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-            disabled={isConfirmDuplicateDisabled}
-            style={isConfirmDuplicateDisabled ? disabledButtonStyle : undefined}
-            title={!hasSelection ? 'Select a model to duplicate' : 'Generate duplicates from preview'}
-          >
-            {isApplying ? (
-              <span className="inline-flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Duplicating…
-              </span>
-            ) : (
-              `Confirm Duplicate (${Math.max(0, previewCount)} new)`
-            )}
-          </Button>
-
-          <Button
             onClick={onFillPlate}
             variant={isFillPlateDisabled ? 'secondary' : 'accent'}
             size="sm"
@@ -308,11 +326,43 @@ export function DuplicatePanel({
             title={
               layoutMode !== 'auto'
                 ? 'Fill Plate is available in Auto layout mode'
-                : (!hasSelection ? 'Select a model to fill the plate' : 'Set copies to fill current plate capacity')
+                : (!hasSelection
+                  ? 'Select a model to fill the plate'
+                  : (precisionMode === 'high_precision'
+                    ? 'Compute SAT-packed duplicates that fit on the plate'
+                    : 'Set copies to fill current plate capacity'))
             }
           >
-            Fill Plate
+            {isApplying && isHighPrecisionFillMode ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Filling Plate…
+              </span>
+            ) : (
+              'Fill Plate'
+            )}
           </Button>
+
+          {!isHighPrecisionFillMode && (
+            <Button
+              onClick={onConfirm}
+              variant={isConfirmDuplicateDisabled ? 'secondary' : 'primary'}
+              size="sm"
+              className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              disabled={isConfirmDuplicateDisabled}
+              style={isConfirmDuplicateDisabled ? disabledButtonStyle : undefined}
+              title={!hasSelection ? 'Select a model to duplicate' : 'Generate duplicates from preview'}
+            >
+              {isApplying ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Duplicating…
+                </span>
+              ) : (
+                `Confirm Duplicate (${Math.max(0, previewCount)} new)`
+              )}
+            </Button>
+          )}
         </div>
       )}
     </Card>

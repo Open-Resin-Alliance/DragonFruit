@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  computeHighPrecisionArrangeUpdates,
+  computeHighPrecisionArrangeResult,
   type ArrangeModel,
   type ArrangeTransform,
   type HighPrecisionArrangeInput,
@@ -91,11 +91,15 @@ self.onmessage = (event: MessageEvent<HighPrecisionArrangeWorkerRequest>) => {
       hullCache: new Map(),
     };
 
-    const updates = computeHighPrecisionArrangeUpdates(input).map(serializeUpdate);
+    const result = computeHighPrecisionArrangeResult(input);
     const out: HighPrecisionArrangeWorkerMessage = {
       type: 'result',
       requestId: msg.requestId,
-      updates,
+      result: {
+        updates: result.updates.map(serializeUpdate),
+        packedIds: result.packedIds,
+        spilledIds: result.spilledIds,
+      },
     };
     self.postMessage(out);
   } catch (error) {

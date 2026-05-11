@@ -61,6 +61,7 @@ Generated outputs:
 - `src/features/plugins/generatedBuiltinComplexPlugins.ts`
 - `src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts`
 - `src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts`
+- `src/features/plugins/generatedBuiltinComplexPluginFileTypeHandlers.ts`
 - `src-tauri/src/generated_builtin_plugins.rs`
 - `rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs`
 - `src-tauri/generated_crate_requirements.toml` (audit of all plugin cargo dependencies)
@@ -79,10 +80,83 @@ Do not edit generated files manually.
 | `uploadWithProgress: true` | `plugins/<vendor>/network/index.ts`                                    | `uploadPrintJobWithProgress`          |
 | `tauriRuntimePlugin: true` | `plugins/<vendor>/rust/plugin.rs` + `plugins/<vendor>/rust/network.rs` | runtime registration/dispatch symbols |
 | `slicerEncoder: true`      | `plugins/<vendor>/slicing/rust/encoder_impl.rs`                        | `create_plugin_encoder()`             |
+| `fileType: true`           | `plugins/<vendor>/fileTypeHandlers.ts`                                 | `handleFileTypeImport`                |
 
 If capabilities and files disagree, generation fails intentionally.
 
-### 4.1) Multiple container formats per plugin (optional)
+### 4.1) File type import capability
+
+Set `fileType: true` when your plugin can import files of a given extension into DragonFruit scenes.
+
+The plugin must:
+
+1. Declare one or more `fileTypes` entries in `pluginDefinition.ts` (see type `PluginFileTypeDefinition` in `complexPluginContracts.ts`).
+2. Export `handleFileTypeImport` from `fileTypeHandlers.ts`.
+
+**`pluginDefinition.ts` example** (file-type plugin):
+
+```ts
+import type { ComplexPluginDefinition } from "@/features/plugins/complexPluginContracts";
+
+const PLUGIN_DEFINITION: ComplexPluginDefinition = {
+  id: "my-format",
+  manifest: {
+    id: "my-format-builtin",
+    name: "My Format",
+    version: "0.1.0",
+  },
+  capabilities: {
+    networkOperations: false,
+    uploadWithProgress: false,
+    slicerEncoder: false,
+    tauriRuntimePlugin: false,
+    fileType: true,
+  },
+  fileTypes: [
+    {
+      fileExtension: ".myf",
+      displayName: "My Format Scene",
+      isSceneFile: true,
+      importWarning: {
+        title: "Importing My Format",
+        body: "Some details may not import perfectly.",
+        storageKey: "dragonfruit.myFormatImportWarningDismissed",
+      },
+    },
+  ],
+};
+
+export default PLUGIN_DEFINITION;
+```
+
+**`fileTypeHandlers.ts` required shape**:
+
+```ts
+import type { PluginFileTypeHandler } from "@/features/plugins/pluginFileTypeBridge";
+import type { PluginFileTypeDefinition } from "@/features/plugins/complexPluginContracts";
+
+export const handleFileTypeImport: PluginFileTypeHandler = async (
+  file: File,
+  fileTypeDefinition: PluginFileTypeDefinition,
+) => {
+  // Parse and convert the file here.
+  // Return success: false with a user-facing error message on failure.
+  return {
+    success: true,
+    payload: {
+      /* parsed scene data */
+    },
+  };
+};
+```
+
+The host reads `GENERATED_BUILTIN_COMPLEX_PLUGIN_FILE_TYPE_HANDLERS` from the generated registry to dispatch file imports to the correct plugin at runtime. The host also reads the `fileTypes` metadata (from the definition) to build OS-level file picker filters and drive scene file routing.
+
+**Naming rule**: File-type plugin code must use the format's technical acronym (e.g. `LYS`), never brand or product names.
+
+---
+
+### 4.2) Multiple container formats per plugin (optional)
 
 If your plugin supports multiple container formats (e.g., Anycubic with both AFF and AZFF), provide:
 
@@ -124,7 +198,7 @@ pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
 
 The function returns multiple encoder instances, one per format. Each encoder's `output_format()` method must match at least one extension in `formats.json`.
 
-### 4.2) Required Cargo crates for slicer encoder (optional)
+### 4.3) Required Cargo crates for slicer encoder (optional)
 
 If your encoder implementation requires extra Rust crates beyond the core dragonfruit-slicer-v3 deps, declare them in:
 
@@ -188,6 +262,7 @@ const PLUGIN_DEFINITION: ComplexPluginDefinition = {
     uploadWithProgress: false,
     slicerEncoder: false,
     tauriRuntimePlugin: false,
+    fileType: false,
   },
 };
 
@@ -215,22 +290,24 @@ Optional but recommended:
 
 ## 7) Error matrix (generator failures)
 
-| Error pattern                                                                       | Meaning                                                                       | Fix                                                      |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `Discovered plugin(s) not in allowlist`                                             | Plugin folder contains `pluginDefinition.ts` but ID is missing from allowlist | Add ID to `src/config/complex-plugin-allowlist.json`     |
-| `Allowlisted plugin(s) missing pluginDefinition.ts`                                 | Allowlist includes a plugin ID with no source definition                      | Add `pluginDefinition.ts` or remove stale allowlist ID   |
-| `must declare a capabilities block`                                                 | Plugin definition omits `capabilities`                                        | Add `capabilities` object                                |
-| `declares networkOperations=true but is missing network/networkHandlers.ts`         | Capability/file mismatch                                                      | Add file or set capability false                         |
-| `has network/networkHandlers.ts but capabilities.networkOperations is not true`     | Extra file for disabled capability                                            | Set capability true or remove file                       |
-| `declares uploadWithProgress=true but is missing network/index.ts`                  | Capability/file mismatch                                                      | Add file or set capability false                         |
-| `declares slicerEncoder=true but is missing slicing/rust/encoder_impl.rs`           | Capability/file mismatch                                                      | Add file or set capability false                         |
-| `declares tauriRuntimePlugin=true but is missing rust/plugin.rs or rust/network.rs` | Capability/file mismatch                                                      | Add both files or set capability false                   |
-| `formats.json exists but is not valid JSON`                                         | Malformed JSON in formats.json                                                | Fix JSON syntax                                          |
-| `formats.json declares extensions not matching any encoder output_format()`         | Extension in formats.json has no corresponding encoder                        | Add encoder or remove extension from formats.json        |
-| `create_plugin_encoder() declares slicerEncoder=true but returns no encoders`       | Encoder function returns empty vec                                            | Return at least one encoder instance                     |
-| `requiredCrates.toml exists but is not valid TOML`                                  | Malformed TOML in requiredCrates.toml                                         | Fix TOML syntax (test with `toml-cli`)                   |
-| `requiredCrates.toml: crate X version conflict (plugin A: 0.5, plugin B: 0.6)`      | Two plugins declare same crate with incompatible versions                     | Coordinate plugin versions or split into separate builds |
-| `requiredCrates.toml declares crate with invalid semver`                            | Version string not valid semver (e.g., `latest`)                              | Use explicit version constraint (e.g., `^1.0` or `0.5`)  |
+| Error pattern                                                                       | Meaning                                                                                         | Fix                                                                                             |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `Discovered plugin(s) not in allowlist`                                             | Plugin folder contains `pluginDefinition.ts` but ID is missing from allowlist                   | Add ID to `src/config/complex-plugin-allowlist.json`                                            |
+| `Warning: allowlisted plugin(s) missing locally`                                    | Allowlist includes plugin IDs whose local sources are absent (often missing submodule checkout) | Initialize submodules to validate those plugins locally; CI should run with full plugin sources |
+| `must declare a capabilities block`                                                 | Plugin definition omits `capabilities`                                                          | Add `capabilities` object                                                                       |
+| `declares networkOperations=true but is missing network/networkHandlers.ts`         | Capability/file mismatch                                                                        | Add file or set capability false                                                                |
+| `has network/networkHandlers.ts but capabilities.networkOperations is not true`     | Extra file for disabled capability                                                              | Set capability true or remove file                                                              |
+| `declares uploadWithProgress=true but is missing network/index.ts`                  | Capability/file mismatch                                                                        | Add file or set capability false                                                                |
+| `declares slicerEncoder=true but is missing slicing/rust/encoder_impl.rs`           | Capability/file mismatch                                                                        | Add file or set capability false                                                                |
+| `declares tauriRuntimePlugin=true but is missing rust/plugin.rs or rust/network.rs` | Capability/file mismatch                                                                        | Add both files or set capability false                                                          |
+| `declares fileType=true but is missing fileTypeHandlers.ts`                         | Capability/file mismatch                                                                        | Add `fileTypeHandlers.ts` or set capability false                                               |
+| `has fileTypeHandlers.ts but capabilities.fileType is not true`                     | Extra file for disabled capability                                                              | Set `fileType: true` or remove the file                                                         |
+| `formats.json exists but is not valid JSON`                                         | Malformed JSON in formats.json                                                                  | Fix JSON syntax                                                                                 |
+| `formats.json declares extensions not matching any encoder output_format()`         | Extension in formats.json has no corresponding encoder                                          | Add encoder or remove extension from formats.json                                               |
+| `create_plugin_encoder() declares slicerEncoder=true but returns no encoders`       | Encoder function returns empty vec                                                              | Return at least one encoder instance                                                            |
+| `requiredCrates.toml exists but is not valid TOML`                                  | Malformed TOML in requiredCrates.toml                                                           | Fix TOML syntax (test with `toml-cli`)                                                          |
+| `requiredCrates.toml: crate X version conflict (plugin A: 0.5, plugin B: 0.6)`      | Two plugins declare same crate with incompatible versions                                       | Coordinate plugin versions or split into separate builds                                        |
+| `requiredCrates.toml declares crate with invalid semver`                            | Version string not valid semver (e.g., `latest`)                                                | Use explicit version constraint (e.g., `^1.0` or `0.5`)                                         |
 
 ---
 
@@ -252,6 +329,7 @@ Before requesting review:
 - [ ] Plugin logic is isolated under `plugins/<vendor>/...`
 - [ ] `pluginDefinition.ts` exists, default-exports, and declares capabilities
 - [ ] Plugin ID is allowlisted
+- [ ] If `fileType: true`: `fileTypeHandlers.ts` exists and exports `handleFileTypeImport`; at least one entry in `pluginDefinition.ts` `fileTypes` array
 - [ ] If `slicerEncoder: true`: `encoder_impl.rs` exists and `create_plugin_encoder()` function is properly exported
 - [ ] If supporting multiple formats: `formats.json` exists and all extensions have matching encoders
 - [ ] If using extra cargo crates: `requiredCrates.toml` exists (if needed) and is valid TOML with semver versions

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { ChevronDown, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
@@ -33,6 +34,7 @@ export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
 interface SlicingPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
+  estimatedLayerCountOverride?: number | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onSliceRunStarted?: () => void;
@@ -78,7 +80,7 @@ function normalizeExportBaseName(rawName: string | null | undefined): string {
   const trimmed = (rawName ?? '').trim();
   if (!trimmed) return 'MyPrint';
 
-  const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json))+$/i, '');
+  const withoutKnownExt = trimmed.replace(KNOWN_SOURCE_EXTENSION_STRIP_RE, '');
   const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
   return cleaned || 'MyPrint';
 }
@@ -263,6 +265,7 @@ function resolveInitialMinimumAaAlphaOverrideEnabled(): boolean {
 export function SlicingPanel({
   models,
   activeModel,
+  estimatedLayerCountOverride,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
   onSliceRunStarted,
@@ -558,6 +561,10 @@ export function SlicingPanel({
   }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
 
   const estimatedLayerCount = useMemo(() => {
+    if (Number.isFinite(estimatedLayerCountOverride) && Number(estimatedLayerCountOverride) > 0) {
+      return Math.max(0, Math.round(Number(estimatedLayerCountOverride)));
+    }
+
     if (effectiveLayerHeightMm == null || visibleModels.length === 0) return 0;
 
     const layerHeightMm = Math.max(0.001, effectiveLayerHeightMm || 0.05);
@@ -571,7 +578,7 @@ export function SlicingPanel({
     }
 
     return Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-  }, [effectiveLayerHeightMm, visibleModels]);
+  }, [effectiveLayerHeightMm, estimatedLayerCountOverride, visibleModels]);
 
   const estimatedPrintTimeLabel = useMemo(() => {
     if (!effectiveMaterialProfile || estimatedLayerCount <= 0) return '—';

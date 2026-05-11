@@ -15,10 +15,12 @@ export * from './nanodlpUploadWithProgress';
 export * from './nanodlpMonitoring';
 
 import { uploadToNanoDlpWithProgress } from './nanodlpUploadWithProgress';
+import { uploadToNanoDlpFromPathWithProgress } from './nanodlpUploadWithProgress';
 
 export async function uploadPrintJobWithProgress(args: {
 	hostUrl: string;
-	zipBlob: Blob;
+	zipBlob?: Blob | null;
+	zipFilePath?: string | null;
 	path: string;
 	profileId: string;
 	callbacks: {
@@ -48,6 +50,31 @@ export async function uploadPrintJobWithProgress(args: {
 		onError?: (error: string) => void;
 	};
 }): Promise<{ ok: boolean; plateId: number | null }> {
+	if (args.zipBlob && args.zipBlob.size > 0) {
+		return uploadToNanoDlpWithProgress(
+			args.hostUrl,
+			args.zipBlob,
+			args.path,
+			args.profileId,
+			args.callbacks,
+		);
+	}
+
+	const normalizedPath = typeof args.zipFilePath === 'string' ? args.zipFilePath.trim() : '';
+	if (normalizedPath.length > 0) {
+		return uploadToNanoDlpFromPathWithProgress(
+			args.hostUrl,
+			normalizedPath,
+			args.path,
+			args.profileId,
+			args.callbacks,
+		);
+	}
+
+	if (!args.zipBlob || args.zipBlob.size <= 0) {
+		throw new Error('No NanoDLP upload payload available.');
+	}
+
 	return uploadToNanoDlpWithProgress(
 		args.hostUrl,
 		args.zipBlob,

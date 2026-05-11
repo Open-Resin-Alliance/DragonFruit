@@ -10,3 +10,6 @@
 [submodule "plugins/sirayatech"]
 	path = plugins/sirayatech
 	url = https://github.com/Open-Resin-Alliance/df-plugin-sirayatech
+[submodule "plugins/lys-import"]
+	path = plugins/lys-import
+	url = https://github.com/Open-Resin-Alliance/df-plugin-lys

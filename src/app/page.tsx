@@ -39,6 +39,11 @@ import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetri
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
+import { MirrorTool } from '@/features/mirror/MirrorTool';
+import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
+import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@/features/mirror/logic/buildMirrorSupportTransforms';
+import type { MirrorAxis } from '@/features/mirror/types';
+import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
@@ -63,12 +68,17 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
-import { computeHighPrecisionArrangeUpdatesWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
+import {
+  computeHighPrecisionArrangeResultWorker,
+  computeHighPrecisionArrangeUpdatesWorker,
+} from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -117,6 +127,7 @@ import {
   type PrinterMonitoringSnapshot,
   type PrinterMonitoringWebcamInfo,
 } from '@/features/plugins/pluginRegistry';
+import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -145,7 +156,7 @@ import {
   savePrintArtifactWithNativeDialog,
   writeBytesToNativePath,
 } from '@/features/slicing/tauri/nativeSlicerBridge';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, transformSupportsForModel } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -164,7 +175,7 @@ import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayer
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
-import type { ModelTransform } from '@/hooks/useModelTransform';
+import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
 import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
@@ -392,8 +403,19 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
-const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.obj', '.3mf', '.lys', '.voxl']);
-const LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY = 'dragonfruit.lysImportWarningDismissed';
+const PLUGIN_SCENE_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
+  (def) => (def.fileTypes ?? []).filter((ft) => ft.isSceneFile),
+);
+const PLUGIN_ALL_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
+  (def) => def.fileTypes ?? [],
+);
+const PREPARE_DROP_EXTENSIONS = new Set([
+  '.stl', '.obj', '.3mf', '.voxl',
+  ...PLUGIN_ALL_FILE_TYPES.map((ft) => ft.fileExtension),
+]);
+const PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
+  PLUGIN_SCENE_FILE_TYPES.find((ft) => ft.fileExtension === '.lys')?.importWarning?.storageKey
+  ?? 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
@@ -405,6 +427,7 @@ const DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
 const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
+const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
 
 type TransformStoreCommitResult = {
   updated: boolean;
@@ -465,13 +488,14 @@ function getDroppedFileMimeType(name: string): string {
   if (ext === '.obj') return 'model/obj';
   if (ext === '.3mf') return 'model/3mf';
   if (ext === '.voxl') return 'application/json';
-  if (ext === '.lys') return 'application/octet-stream';
-  return 'application/octet-stream';
+  const pluginType = PLUGIN_ALL_FILE_TYPES.find((ft) => ft.fileExtension === ext);
+  return pluginType?.mimeType ?? 'application/octet-stream';
 }
 
 function isSceneFileName(name: string): boolean {
   const ext = getFileExtension(name);
-  return ext === '.voxl' || ext === '.lys';
+  if (ext === '.voxl') return true;
+  return PLUGIN_SCENE_FILE_TYPES.some((ft) => ft.fileExtension === ext);
 }
 
 function normalizeActiveVoxlScenePath(path: string | null | undefined): string | null {
@@ -750,6 +774,39 @@ function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port
   return `${base}/${trimmed.replace(/^\/+/, '')}`;
 }
 
+type JsonObject = Record<string, unknown>;
+
+function asJsonObject(value: unknown): JsonObject {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as JsonObject;
+  }
+  return {};
+}
+
+async function readJsonObject(response: { json: () => Promise<unknown> }): Promise<JsonObject> {
+  try {
+    const payload = await response.json();
+    return asJsonObject(payload);
+  } catch {
+    return {};
+  }
+}
+
+function readBooleanField(payload: JsonObject, key: string): boolean | null {
+  const value = payload[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function readStringField(payload: JsonObject, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function readNumberField(payload: JsonObject, key: string): number | null {
+  const value = payload[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -843,6 +900,7 @@ export default function Home() {
   const transformHistoryCommitNonceRef = React.useRef(0);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const suppressNextTransformPersistenceRef = React.useRef(false);
+  const suppressTransformPersistenceCycleCountRef = React.useRef(0);
   const skipNextTransformEndCommitRef = React.useRef<{
     modelId: string;
     operation: 'move' | 'scale';
@@ -898,9 +956,9 @@ export default function Home() {
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
   const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
-  const [showLysImportWarningModal, setShowLysImportWarningModal] = React.useState(false);
-  const [suppressLysImportWarning, setSuppressLysImportWarning] = React.useState(false);
-  const [lysImportWarningSkipFuture, setLysImportWarningSkipFuture] = React.useState(false);
+  const [showPluginImportWarningModal, setShowPluginImportWarningModal] = React.useState(false);
+  const [suppressPluginImportWarning, setSuppressPluginImportWarning] = React.useState(false);
+  const [pluginImportWarningSkipFuture, setPluginImportWarningSkipFuture] = React.useState(false);
   const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
   const [loadedSceneSaveSource, setLoadedSceneSaveSource] = React.useState<{ name: string; path: string | null } | null>(null);
   const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
@@ -910,7 +968,7 @@ export default function Home() {
   const [showCloseUnsavedChangesModal, setShowCloseUnsavedChangesModal] = React.useState(false);
   const [closeUnsavedChangesBusy, setCloseUnsavedChangesBusy] = React.useState<'none' | 'save_and_close' | 'discard_and_close'>('none');
   const [hasUnsavedSceneChanges, setHasUnsavedSceneChanges] = React.useState(false);
-  const lysImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
+  const pluginImportWarningPendingResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
   const sceneSaveChoiceResolveRef = React.useRef<((choice: 'overwrite' | 'save_as' | 'cancel') => void) | null>(null);
 
   // ZIP file picker modal
@@ -1132,8 +1190,10 @@ export default function Home() {
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
+  const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
+  const lastCompletedResinEstimateSignatureRef = React.useRef<string>('');
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
   const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
   const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
@@ -1390,7 +1450,7 @@ export default function Home() {
   const [arrangeArrayGapX, setArrangeArrayGapX] = React.useState(5);
   const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
   const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
-  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'array' | null>(null);
+  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'high_precision_fill' | 'array' | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1403,18 +1463,18 @@ export default function Home() {
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const stored = window.localStorage.getItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY);
-      setSuppressLysImportWarning(stored === '1');
+      const stored = window.localStorage.getItem(PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY);
+      setSuppressPluginImportWarning(stored === '1');
     } catch {
-      setSuppressLysImportWarning(false);
+      setSuppressPluginImportWarning(false);
     }
   }, []);
 
   React.useEffect(() => {
     return () => {
-      if (lysImportWarningPendingResolveRef.current) {
-        const resolve = lysImportWarningPendingResolveRef.current;
-        lysImportWarningPendingResolveRef.current = null;
+      if (pluginImportWarningPendingResolveRef.current) {
+        const resolve = pluginImportWarningPendingResolveRef.current;
+        pluginImportWarningPendingResolveRef.current = null;
         resolve(false);
       }
     };
@@ -1435,53 +1495,53 @@ export default function Home() {
     };
   }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
 
-  const hasLysSceneFile = React.useCallback((filesInput: FileList | File[]) => {
+  const hasPluginSceneFile = React.useCallback((filesInput: FileList | File[]) => {
     const files = Array.from(filesInput);
     return files.some((file) => file.name.trim().toLowerCase().endsWith('.lys'));
   }, []);
 
-  const maybeConfirmLysImportWarning = React.useCallback(async (filesInput: FileList | File[]) => {
-    if (suppressLysImportWarning) return true;
-    if (!hasLysSceneFile(filesInput)) return true;
+  const maybeConfirmPluginImportWarning = React.useCallback(async (filesInput: FileList | File[]) => {
+    if (suppressPluginImportWarning) return true;
+    if (!hasPluginSceneFile(filesInput)) return true;
 
-    if (lysImportWarningPendingResolveRef.current) {
-      const pendingResolve = lysImportWarningPendingResolveRef.current;
-      lysImportWarningPendingResolveRef.current = null;
+    if (pluginImportWarningPendingResolveRef.current) {
+      const pendingResolve = pluginImportWarningPendingResolveRef.current;
+      pluginImportWarningPendingResolveRef.current = null;
       pendingResolve(false);
     }
 
-    setLysImportWarningSkipFuture(false);
-    setShowLysImportWarningModal(true);
+    setPluginImportWarningSkipFuture(false);
+    setShowPluginImportWarningModal(true);
     return await new Promise<boolean>((resolve) => {
-      lysImportWarningPendingResolveRef.current = resolve;
+      pluginImportWarningPendingResolveRef.current = resolve;
     });
-  }, [hasLysSceneFile, suppressLysImportWarning]);
+  }, [hasPluginSceneFile, suppressPluginImportWarning]);
 
-  const resolveLysImportWarning = React.useCallback((proceed: boolean) => {
-    const resolve = lysImportWarningPendingResolveRef.current;
-    lysImportWarningPendingResolveRef.current = null;
-    setLysImportWarningSkipFuture(false);
-    setShowLysImportWarningModal(false);
+  const resolvePluginImportWarning = React.useCallback((proceed: boolean) => {
+    const resolve = pluginImportWarningPendingResolveRef.current;
+    pluginImportWarningPendingResolveRef.current = null;
+    setPluginImportWarningSkipFuture(false);
+    setShowPluginImportWarningModal(false);
     resolve?.(proceed);
   }, []);
 
-  const handleCancelLysImportWarning = React.useCallback(() => {
-    resolveLysImportWarning(false);
-  }, [resolveLysImportWarning]);
+  const handleCancelPluginImportWarning = React.useCallback(() => {
+    resolvePluginImportWarning(false);
+  }, [resolvePluginImportWarning]);
 
-  const handleContinueLysImportWarning = React.useCallback(() => {
-    if (lysImportWarningSkipFuture) {
-      setSuppressLysImportWarning(true);
+  const handleContinuePluginImportWarning = React.useCallback(() => {
+    if (pluginImportWarningSkipFuture) {
+      setSuppressPluginImportWarning(true);
       if (typeof window !== 'undefined') {
         try {
-          window.localStorage.setItem(LYS_IMPORT_WARNING_DISMISSED_STORAGE_KEY, '1');
+          window.localStorage.setItem(PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY, '1');
         } catch {
           // Ignore persistence failure and still proceed.
         }
       }
     }
-    resolveLysImportWarning(true);
-  }, [lysImportWarningSkipFuture, resolveLysImportWarning]);
+    resolvePluginImportWarning(true);
+  }, [pluginImportWarningSkipFuture, resolvePluginImportWarning]);
 
   const resolveSceneSaveChoice = React.useCallback((choice: 'overwrite' | 'save_as' | 'cancel') => {
     const resolve = sceneSaveChoiceResolveRef.current;
@@ -1570,14 +1630,14 @@ export default function Home() {
     recomputeUnsavedSceneChanges();
   }, [recomputeUnsavedSceneChanges, scene.models.length]);
 
-  const importSceneFilesWithLysWarning = React.useCallback(async (
+  const importSceneFilesWithPluginWarning = React.useCallback(async (
     filesInput: FileList | File[],
     options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
   ): Promise<boolean> => {
     const sceneFiles = Array.from(filesInput);
     if (sceneFiles.length === 0) return false;
 
-    const proceed = await maybeConfirmLysImportWarning(sceneFiles);
+    const proceed = await maybeConfirmPluginImportWarning(sceneFiles);
     if (!proceed) return false;
 
     const imported = sceneFiles.length === 1
@@ -1605,7 +1665,7 @@ export default function Home() {
     }
 
     return imported;
-  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmLysImportWarning]);
+  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmPluginImportWarning]);
 
   // ── ZIP import helpers ───────────────────────────────────────────────────
 
@@ -1719,9 +1779,9 @@ export default function Home() {
   const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
-    void importSceneFilesWithLysWarning(files);
+    void importSceneFilesWithPluginWarning(files);
     e.target.value = '';
-  }, [importSceneFilesWithLysWarning]);
+  }, [importSceneFilesWithPluginWarning]);
 
   const handleLoadMeshChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1732,9 +1792,9 @@ export default function Home() {
       void scene.loadFiles(processed.meshFiles);
     }
     if (processed.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(processed.sceneFiles, { resultingScenePath: null });
     }
-  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+  }, [expandPickedFilesWithZip, importSceneFilesWithPluginWarning, scene]);
 
   const handleImportSceneChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1742,19 +1802,19 @@ export default function Home() {
     e.target.value = '';
     const processed = await expandPickedFilesWithZip(files, 'scene');
     if (processed.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(processed.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(processed.sceneFiles, { resultingScenePath: null });
     }
     if (processed.meshFiles.length > 0) {
       void scene.loadFiles(processed.meshFiles);
     }
-  }, [expandPickedFilesWithZip, importSceneFilesWithLysWarning, scene]);
+  }, [expandPickedFilesWithZip, importSceneFilesWithPluginWarning, scene]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
     if (!entry) return false;
 
     if (entry.kind === 'scene' && entry.name.trim().toLowerCase().endsWith('.lys')) {
-      const proceed = await maybeConfirmLysImportWarning([
+      const proceed = await maybeConfirmPluginImportWarning([
         new File([], entry.name, { type: 'application/octet-stream' }),
       ]);
       if (!proceed) return false;
@@ -1775,7 +1835,7 @@ export default function Home() {
             lastModified: Date.now(),
           });
 
-          const importedFromSource = await importSceneFilesWithLysWarning([restoredFile], {
+          const importedFromSource = await importSceneFilesWithPluginWarning([restoredFile], {
             resultingScenePath: sourcePath,
             sourcePaths: [sourcePath],
           });
@@ -1803,7 +1863,7 @@ export default function Home() {
       }
     }
     return reopened;
-  }, [importSceneFilesWithLysWarning, markSceneSaveBaseline, maybeConfirmLysImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
+  }, [importSceneFilesWithPluginWarning, markSceneSaveBaseline, maybeConfirmPluginImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -1812,6 +1872,16 @@ export default function Home() {
   const showArrangeBlockingOverlay = isAutoArranging;
 
   const arrangeOverlayContent = React.useMemo(() => {
+    if (activeArrangeOperation === 'high_precision_fill') {
+      return {
+        title: 'High-Precision Fill Running…',
+        detailLines: [
+          'Using SAT-based 2.5D nesting to pack duplicates onto the plate.',
+          'Please be patient while we compute the densest valid fill.',
+        ],
+      };
+    }
+
     if (activeArrangeOperation === 'high_precision') {
       return {
         title: 'High-Precision Arrange Running…',
@@ -1862,6 +1932,7 @@ export default function Home() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }, [arrangeOverlayElapsedSec]);
   const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
+  const [duplicatePrecisionMode, setDuplicatePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
   const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
   const [duplicateArrayCountZ, setDuplicateArrayCountZ] = React.useState(1);
@@ -1869,23 +1940,6 @@ export default function Home() {
   const [duplicateArrayGapY, setDuplicateArrayGapY] = React.useState(5);
   const [duplicateArrayGapZ, setDuplicateArrayGapZ] = React.useState(5);
   const [isDuplicating, setIsDuplicating] = React.useState(false);
-  const effectiveDuplicateTotalCopies = React.useMemo(() => {
-    if (duplicateLayoutMode === 'array') {
-      const countX = Math.max(1, Math.round(duplicateArrayCountX));
-      const countY = Math.max(1, Math.round(duplicateArrayCountY));
-      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
-      return Math.max(1, Math.min(128, countX * countY * countZ));
-    }
-
-    return Math.max(1, Math.round(duplicateTotalCopies));
-  }, [
-    duplicateArrayCountX,
-    duplicateArrayCountY,
-    duplicateArrayCountZ,
-    duplicateLayoutMode,
-    duplicateTotalCopies,
-  ]);
-  const isDuplicateSetupBlockingArrange = Boolean(scene.activeModel) && effectiveDuplicateTotalCopies > 1;
   const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
     position: THREE.Vector3;
     rotation: THREE.Euler;
@@ -1910,6 +1964,30 @@ export default function Home() {
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null>(null);
+  const effectiveDuplicateTotalCopies = React.useMemo(() => {
+    if (duplicateLayoutMode === 'array') {
+      const countX = Math.max(1, Math.round(duplicateArrayCountX));
+      const countY = Math.max(1, Math.round(duplicateArrayCountY));
+      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
+      return Math.max(1, Math.min(128, countX * countY * countZ));
+    }
+
+    if (duplicatePrecisionMode === 'high_precision') {
+      return Math.max(1, duplicatePreviewTransforms.length + (duplicateSourcePreviewTransform ? 1 : 0));
+    }
+
+    return Math.max(1, Math.round(duplicateTotalCopies));
+  }, [
+    duplicateArrayCountX,
+    duplicateArrayCountY,
+    duplicateArrayCountZ,
+    duplicateLayoutMode,
+    duplicatePrecisionMode,
+    duplicatePreviewTransforms.length,
+    duplicateSourcePreviewTransform,
+    duplicateTotalCopies,
+  ]);
+  const isDuplicateSetupBlockingArrange = Boolean(scene.activeModel) && effectiveDuplicateTotalCopies > 1;
   const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
   const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
   const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
@@ -1931,6 +2009,17 @@ export default function Home() {
   // and cancelled-flag races during scene initialization).
   const importSceneFromLaunchEntriesRef = React.useRef<((entries: LaunchSceneFileEntry[]) => Promise<boolean>) | null>(null);
   const [pendingStartupSceneHandoff, setPendingStartupSceneHandoff] = React.useState(false);
+
+  const suppressTransformPersistenceCycles = React.useCallback((cycles = 1) => {
+    const normalized = Math.max(0, Math.trunc(cycles));
+    if (normalized > 0) {
+      suppressTransformPersistenceCycleCountRef.current = Math.max(
+        suppressTransformPersistenceCycleCountRef.current,
+        normalized,
+      );
+    }
+    suppressNextTransformPersistenceRef.current = true;
+  }, []);
   const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
     signature: '',
     atMs: 0,
@@ -3298,16 +3387,97 @@ export default function Home() {
     return promise;
   }, [computeBaseResinMlChunked]);
 
-  // First, check if we should even calculate volumes based on mode.
-  // Printing-mode reopen with an existing artifact should stay responsive;
-  // avoid re-running heavy support/raft volume aggregation in that case.
-  const shouldCalculateVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  // Support/raft aggregation is comparatively heavy, so keep it scoped to
+  // export + pre-artifact printing. Base model volume estimation runs in the
+  // background across active editing modes (for warm, up-to-date estimates).
+  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  const resinBuildVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+
+    const width = scene.view3dSettings.widthMm;
+    const depth = scene.view3dSettings.depthMm;
+    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
+    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+
+    return new THREE.Box3(
+      new THREE.Vector3(minX, minY, 0),
+      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+    );
+  }, [
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.enabled,
+    scene.view3dSettings.maxZMm,
+    scene.view3dSettings.originMode,
+    scene.view3dSettings.widthMm,
+  ]);
+
+  const resinInBoundsModelIdSet = React.useMemo(() => {
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return new Set<string>();
+    if (!resinBuildVolumeBounds) return new Set(visibleModels.map((model) => model.id));
+
+    const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
+    const inBoundsModelIds = new Set<string>();
+
+    for (const model of visibleModels) {
+      const effectiveTransform =
+        (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
+          ? transformMgr.transform
+          : model.transform;
+
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+      const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
+        ? computePreciseModelWorldBounds(model.geometry, effectiveTransform)
+        : approxBounds;
+
+      if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+        inBoundsModelIds.add(model.id);
+      }
+    }
+
+    return inBoundsModelIds;
+  }, [
+    displayActiveModelId,
+    resinBuildVolumeBounds,
+    scene.activeModelId,
+    scene.models,
+    transformMgr.transform,
+  ]);
+
+  const visibleResinModels = React.useMemo(() => {
+    return scene.models.filter((model) => model.visible && resinInBoundsModelIdSet.has(model.id));
+  }, [resinInBoundsModelIdSet, scene.models]);
+  const shouldEstimateResinInBackground = visibleResinModels.length > 0
+    && (scene.mode !== 'printing' || !printingArtifact);
+
+  const resinEstimateComputationSignature = React.useMemo(() => {
+    if (visibleResinModels.length === 0) return '';
+
+    const parts = visibleResinModels.map((model) => {
+      const geometry = model.geometry.geometry;
+      const positionAttr = geometry.getAttribute('position') as ({ version?: number; data?: { version?: number } } | null);
+      const indexAttr = geometry.getIndex() as ({ version?: number } | null);
+
+      const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
+      const positionVersion = positionAttr?.version ?? positionAttr?.data?.version ?? 0;
+      const indexVersion = indexAttr?.version ?? 0;
+
+      const sx = Math.abs(model.transform.scale.x || 1).toFixed(6);
+      const sy = Math.abs(model.transform.scale.y || 1).toFixed(6);
+      const sz = Math.abs(model.transform.scale.z || 1).toFixed(6);
+
+      return `${model.id}:${sourceKey}:${positionVersion}:${indexVersion}:${sx}:${sy}:${sz}`;
+    });
+
+    parts.sort((a, b) => a.localeCompare(b));
+    return parts.join('|');
+  }, [visibleResinModels]);
 
   const supportAndRaftResinMl = React.useMemo(() => {
-    if (!shouldCalculateVolumes) return 0;
+    if (!shouldCalculateSupportAndRaftVolumes) return 0;
 
     // Expensive calculation ONLY runs when mode is export/printing
-    const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
+    const visibleModelIds = resinInBoundsModelIdSet;
     if (visibleModelIds.size === 0) return 0;
 
     const mm3ToMl = (mm3: number) => Math.max(0, mm3) / 1000;
@@ -3626,7 +3796,8 @@ export default function Home() {
 
     return supportMl + raftMl;
   }, [
-    shouldCalculateVolumes,
+    resinInBoundsModelIdSet,
+    shouldCalculateSupportAndRaftVolumes,
     computeFootprint,
     computeRaftOuterBoundary,
     raftSettingsSnapshot,
@@ -3645,26 +3816,37 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
+    if (!shouldEstimateResinInBackground) return;
+
+    const intervalId = window.setInterval(() => {
+      setResinEstimateRefreshTick((previous) => previous + 1);
+    }, RESIN_ESTIMATE_BACKGROUND_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [shouldEstimateResinInBackground]);
+
+  React.useEffect(() => {
     let cancelled = false;
 
-    if (!shouldCalculateVolumes) {
+    if (!shouldEstimateResinInBackground) {
+      if (visibleResinModels.length === 0) {
+        lastCompletedResinEstimateSignatureRef.current = '';
+        setPrintingEstimatedResinMl(null);
+      }
       setIsPrintingEstimatedResinBusy(false);
       return () => {
         cancelled = true;
       };
     }
 
-    const visibleModels = scene.models.filter((model) => model.visible);
-
-    if (visibleModels.length === 0) {
-      setPrintingEstimatedResinMl(null);
-      setIsPrintingEstimatedResinBusy(false);
-      return () => {
-        cancelled = true;
-      };
+    const visibleModels = visibleResinModels;
+    const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
+    const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
+    if (printingEstimatedResinMl == null || hasChangedSinceLastSuccess) {
+      setIsPrintingEstimatedResinBusy(true);
     }
-
-    setIsPrintingEstimatedResinBusy(true);
 
     const run = async () => {
       let totalMl = 0;
@@ -3686,6 +3868,7 @@ export default function Home() {
       if (cancelled) return;
       const totalWithSupports = totalMl + supportAndRaftResinMl;
       setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
 
@@ -3694,7 +3877,15 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [getOrComputeBaseResinMl, scene.models, shouldCalculateVolumes, supportAndRaftResinMl]);
+  }, [
+    getOrComputeBaseResinMl,
+    printingEstimatedResinMl,
+    resinEstimateComputationSignature,
+    resinEstimateRefreshTick,
+    shouldEstimateResinInBackground,
+    supportAndRaftResinMl,
+    visibleResinModels,
+  ]);
 
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
@@ -3703,50 +3894,6 @@ export default function Home() {
     if (printingEstimatedResinMl == null) return '—';
     return `${printingEstimatedResinMl.toFixed(2)} mL`;
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
-
-  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
-    if (!activeMaterialProfile) return '—';
-
-    const visibleModels = scene.models.filter((model) => model.visible);
-    if (visibleModels.length === 0) return '—';
-
-    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
-    let maxModelHeightMm = 0;
-
-    for (const model of visibleModels) {
-      const bbox = model.geometry.bbox;
-      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
-      const sz = Math.abs(model.transform.scale.z || 1);
-      maxModelHeightMm = Math.max(maxModelHeightMm, sizeZ * sz);
-    }
-
-    const totalLayers = Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-    if (totalLayers <= 0) return '—';
-
-    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
-    const normalLayers = Math.max(0, totalLayers - bottomLayers);
-
-    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
-      : 0;
-    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
-      : 0;
-    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
-
-    const totalSec = (
-      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
-      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
-    );
-
-    const wholeSeconds = Math.max(0, Math.floor(totalSec));
-    const hours = Math.floor(wholeSeconds / 3600);
-    const minutes = Math.floor((wholeSeconds % 3600) / 60);
-    const seconds = wholeSeconds % 60;
-
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [activeMaterialProfile, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
@@ -3993,11 +4140,12 @@ export default function Home() {
               port: target.port,
             });
 
-            const payload = await response.json().catch(() => ({} as any));
+            const payload = await readJsonObject(response);
             if (!response.ok) return [target.id, false] as const;
 
-            if (payload && typeof payload.ok === 'boolean') {
-              return [target.id, payload.ok === true] as const;
+            const payloadOk = readBooleanField(payload, 'ok');
+            if (payloadOk != null) {
+              return [target.id, payloadOk === true] as const;
             }
 
             try {
@@ -4959,9 +5107,10 @@ export default function Home() {
             .then(async (response) => {
               if (!response.ok) return false;
 
-              const payload = await response.json().catch(() => null) as any;
-              if (payload && typeof payload.ok === 'boolean') {
-                return payload.ok === true;
+              const payload = await readJsonObject(response);
+              const payloadOk = readBooleanField(payload, 'ok');
+              if (payloadOk != null) {
+                return payloadOk === true;
               }
 
               try {
@@ -5255,7 +5404,7 @@ export default function Home() {
           host,
         });
 
-        const payload = await response.json().catch(() => null) as any;
+        const payload = await readJsonObject(response);
         const rawMaterials = Array.isArray(payload?.materials) ? payload.materials : [];
 
         const parsed: FleetUploadMaterialOption[] = rawMaterials
@@ -5350,7 +5499,7 @@ export default function Home() {
             port,
           });
 
-          const payload = await response.json().catch(() => ({} as any));
+          const payload = await readJsonObject(response);
           if (cancelled) return;
           const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
           setSelectedPrinterMonitorSnapshot(snapshot);
@@ -5413,7 +5562,7 @@ export default function Home() {
         try {
           const response = await pluginNetworkFetch(requestPayload);
 
-          const payload = await response.json().catch(() => ({} as any));
+          const payload = await readJsonObject(response);
           if (cancelled) return;
 
           const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
@@ -5533,7 +5682,7 @@ export default function Home() {
     try {
       const response = await pluginNetworkFetch(requestPayload);
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
@@ -5949,14 +6098,14 @@ export default function Home() {
         const requestStartedAt = Date.now();
         const response = await pluginNetworkFetch(requestPayload);
 
-        const payload = await response.json().catch(() => ({} as any));
+        const payload = await readJsonObject(response);
         if (cancelled) return;
         const parsed = printingMonitoringAdapter.parseWebcamInfoPayload(payload, host, port);
         const elapsedMs = Date.now() - requestStartedAt;
 
         const parsedMessage = String(parsed?.message ?? '').toLowerCase();
-        const payloadMessage = typeof payload?.message === 'string' ? payload.message.toLowerCase() : '';
-        const ack = typeof payload?.ack === 'number' ? payload.ack : null;
+        const payloadMessage = (readStringField(payload, 'message') ?? '').toLowerCase();
+        const ack = readNumberField(payload, 'ack');
         const timedOut = parsedMessage.includes('timed out')
           || payloadMessage.includes('timed out')
           || parsedMessage.includes('no-response')
@@ -6403,9 +6552,10 @@ export default function Home() {
             });
 
             if (!response.ok) {
-              const payload = await response.json().catch(() => null) as { error?: unknown } | null;
-              const reason = typeof payload?.error === 'string' && payload.error.trim().length > 0
-                ? payload.error.trim()
+              const payload = await readJsonObject(response);
+              const payloadError = readStringField(payload, 'error');
+              const reason = typeof payloadError === 'string' && payloadError.trim().length > 0
+                ? payloadError.trim()
                 : `HTTP ${response.status}`;
               throw new Error(reason);
             }
@@ -6588,7 +6738,7 @@ export default function Home() {
               port,
             });
 
-            const payload = await response.json().catch(() => ({} as any));
+            const payload = await readJsonObject(response);
             const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
             return [device.id, snapshot] as const;
           } catch {
@@ -7432,7 +7582,7 @@ export default function Home() {
         scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
       }
       if (expanded.sceneFiles.length > 0) {
-        await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+        await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
       }
       return;
     }
@@ -7444,9 +7594,9 @@ export default function Home() {
       scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
     }
     if (expanded.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
     }
-  }, [buildSyntheticFileChangeEvent, importSceneFilesWithLysWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
+  }, [buildSyntheticFileChangeEvent, importSceneFilesWithPluginWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
     const nativeFiles = await pickSceneFilesWithNativeDialog();
@@ -7458,7 +7608,7 @@ export default function Home() {
       const sceneFiles = [...nonZip.map((e) => e.file), ...expandedFromZips.sceneFiles];
 
       if (sceneFiles.length > 0) {
-        await importSceneFilesWithLysWarning(
+        await importSceneFilesWithPluginWarning(
           sceneFiles,
           {
             resultingScenePath: nonZip.length === 1 && expandedFromZips.sceneFiles.length === 0
@@ -7482,12 +7632,12 @@ export default function Home() {
     if (webFiles.length === 0) return;
     const expanded = await expandPickedFilesWithZip(webFiles, 'scene');
     if (expanded.sceneFiles.length > 0) {
-      await importSceneFilesWithLysWarning(expanded.sceneFiles, { resultingScenePath: null });
+      await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
     }
     if (expanded.meshFiles.length > 0) {
       void scene.loadFiles(expanded.meshFiles);
     }
-  }, [importSceneFilesWithLysWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
+  }, [importSceneFilesWithPluginWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
@@ -7515,11 +7665,11 @@ export default function Home() {
     }
 
     if (files.length === 0) return false;
-    return await importSceneFilesWithLysWarning(files, {
+    return await importSceneFilesWithPluginWarning(files, {
       resultingScenePath: files.length === 1 ? sceneEntries[0]?.path ?? null : null,
       sourcePaths: sceneEntries.map((entry) => entry.path),
     });
-  }, [importSceneFilesWithLysWarning]);
+  }, [importSceneFilesWithPluginWarning]);
 
   // Keep the ref in sync with the latest callback.
   React.useEffect(() => {
@@ -7738,8 +7888,8 @@ export default function Home() {
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
-    setPrintingSendStageText('Uploading print job…');
-    setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingSendStageText('Uploading Print Job…');
+    setPrintingSendStatusText('Uploading Print Job to Printer…');
     setPrintingUploadTelemetry(null);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDialogOpen(true);
@@ -7748,24 +7898,12 @@ export default function Home() {
 
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
-      let zipBlob = printingArtifact.blob;
+      const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
+      const zipBlob = printingArtifact.blob ?? null;
       throwIfCanceled();
 
-      // If we have a local temp path and no blob, read the blob from native bridge
-      if (!zipBlob && nativeTempPath) {
-        try {
-          const fileBytes = await readPrintArtifactBytesFromPath(nativeTempPath);
-          if (fileBytes && fileBytes.length > 0) {
-            const normalizedBytes = Uint8Array.from(fileBytes);
-            zipBlob = new Blob([normalizedBytes], { type: 'application/octet-stream' });
-          }
-        } catch (readError) {
-          console.warn('Failed to read artifact from native path:', readError);
-        }
-      }
-
-      if (!zipBlob) {
-        throw new Error('No print artifact blob available for printer upload.');
+      if (!zipBlob && !zipFilePath) {
+        throw new Error('No print artifact payload available for printer upload.');
       }
 
       throwIfCanceled();
@@ -7786,6 +7924,7 @@ export default function Home() {
         networkMode,
         hostUrl,
         zipBlob,
+        zipFilePath,
         path: pathBase,
         profileId: selectedMaterialId,
         callbacks: {
@@ -7865,7 +8004,7 @@ export default function Home() {
             jobName: pathBase,
           });
 
-          const readyPayload = await responseReady.json().catch(() => ({} as any));
+          const readyPayload = await readJsonObject(responseReady);
           const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
           const matchedPlateId = Number(
             (matchedPlate as any)?.PlateID
@@ -8049,8 +8188,8 @@ export default function Home() {
         plateId: printingReadyPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
-      if (response.ok && payload?.ok) {
+      const payload = await readJsonObject(response);
+      if (response.ok && payload?.ok === true) {
         setPrintingSendStageText('Print started');
         setPrintingUploadDialogStage('started');
         setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
@@ -8097,7 +8236,7 @@ export default function Home() {
         plateId: roundedPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -8159,7 +8298,7 @@ export default function Home() {
         plateId: roundedPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -8233,7 +8372,7 @@ export default function Home() {
         plateId: printingMonitorPlateId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string'
           ? payload.error
@@ -8261,7 +8400,7 @@ export default function Home() {
         port,
         plateId: printingMonitorPlateId,
       });
-      const statusPayload = await statusResponse.json().catch(() => ({} as any));
+      const statusPayload = await readJsonObject(statusResponse);
       if (statusResponse.ok) {
         setPrintingMonitorSnapshot(printingMonitoringAdapter.parseStatusPayload(statusPayload, `${host}:${port}`));
       }
@@ -8324,7 +8463,7 @@ export default function Home() {
         mainboardId: resolvedMainboardId,
       });
 
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
       const commandOk = typeof payload?.ok === 'boolean' ? payload.ok : (response.ok ? true : false);
       setPrintingMonitorLastFeatureToggleResponse({
         operation,
@@ -8406,7 +8545,7 @@ export default function Home() {
 
     try {
       const response = await pluginNetworkFetch(requestPayload);
-      const payload = await response.json().catch(() => ({} as any));
+      const payload = await readJsonObject(response);
 
       setPrintingMonitorDebugState((previous) => ({
         ...previous,
@@ -8708,7 +8847,7 @@ export default function Home() {
       }
 
       try {
-        await importSceneFilesWithLysWarning(sceneFiles);
+        await importSceneFilesWithPluginWarning(sceneFiles);
       } finally {
         if (shouldPrearmLoadingUi) {
           setNativePickerPreparationState({
@@ -8727,7 +8866,7 @@ export default function Home() {
       const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
       scene.onFileChange(meshEvent);
     }
-  }, [importSceneFilesWithLysWarning, scene, waitForUiTick]);
+  }, [importSceneFilesWithPluginWarning, scene, waitForUiTick]);
 
   const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
     const normalizedSupportedPaths = paths
@@ -10015,6 +10154,18 @@ export default function Home() {
       return;
     }
 
+    // Mirror mode/session writes model transforms explicitly through raw scene
+    // updates. Persistence during this window can race and re-apply stale
+    // reflected transforms after finalize.
+    if (transformMgr.transformMode === 'mirror' || mirrorSessionRef.current) {
+      return;
+    }
+
+    if (suppressTransformPersistenceCycleCountRef.current > 0) {
+      suppressTransformPersistenceCycleCountRef.current -= 1;
+      return;
+    }
+
     if (suppressNextTransformPersistenceRef.current) {
       suppressNextTransformPersistenceRef.current = false;
       return;
@@ -10115,6 +10266,7 @@ export default function Home() {
     transformMgr.transform.scale.y,
     transformMgr.transform.scale.z,
     transformMgr.isTransforming,
+    transformMgr.transformMode,
     isFiniteTransform,
   ]);
 
@@ -10169,12 +10321,25 @@ export default function Home() {
     supportStateSnapshot.twigs,
   ]);
 
-  // For non-printing workflows, avoid expensive world-triangle projection work.
+  // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
     max: scene.sceneBounds?.max.z ?? 100,
   }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
+
+  const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
+    const maxZMm = Math.max(0, Number(range.max) || 0);
+    const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
+    const clampedMaxZMm = buildHeightLimitMm > 0
+      ? Math.min(maxZMm, buildHeightLimitMm)
+      : maxZMm;
+
+    return {
+      min: 0,
+      max: clampedMaxZMm,
+    };
+  }, [activePrinterProfile?.buildVolumeMm.height]);
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
@@ -10230,9 +10395,10 @@ export default function Home() {
   useEffect(() => {
     // Projected world-triangle bounds are expensive.
     // Analysis can run on fallback bounds to keep mode-entry instant.
-    // Printing only needs accurate support/raft-aware bounds before a print artifact
-    // exists; reopening printing with an existing artifact should avoid this rebuild.
-    const needsAccurateZRange = scene.mode === 'printing' && !printingArtifact;
+    // Printing needs accurate support/raft-aware bounds before a print artifact
+    // exists; Export needs the same fidelity so layer estimates match real slicing.
+    const needsAccurateZRange = (scene.mode === 'printing' && !printingArtifact) || scene.mode === 'export';
+    const shouldUseSlicerAlignedRange = scene.mode === 'printing' || scene.mode === 'export';
     
     if (needsAccurateZRange) {
       const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
@@ -10249,7 +10415,10 @@ export default function Home() {
       const run = () => {
         if (cancelled) return;
         const projected = buildProjectedCrossSectionZRange(scene.models);
-        const nextRange = projected ?? fallbackZRange;
+        const baseRange = projected ?? fallbackZRange;
+        const nextRange = shouldUseSlicerAlignedRange
+          ? normalizeToSlicerZRange(baseRange)
+          : baseRange;
         projectedZRangeCacheRef.current.set(projectedZRangeCacheKey, nextRange);
         if (projectedZRangeCacheRef.current.size > 8) {
           const oldest = projectedZRangeCacheRef.current.keys().next().value;
@@ -10277,10 +10446,11 @@ export default function Home() {
         }
       };
     } else {
-      // Use fast fallback for prepare/support/export modes
-      setSceneZRange(fallbackZRange);
+      // Use fast fallback for non-export modes where projected bounds aren't required.
+      setSceneZRange(shouldUseSlicerAlignedRange ? normalizeToSlicerZRange(fallbackZRange) : fallbackZRange);
     }
   }, [
+    normalizeToSlicerZRange,
     fallbackZRange,
     printingArtifact,
     projectedZRangeCacheKey,
@@ -10292,6 +10462,53 @@ export default function Home() {
     hasGeometry: scene.models.length > 0,
     zRange: sceneZRange
   });
+
+  const estimatedSlicerLayerCount = React.useMemo(() => {
+    if (scene.models.length === 0) return 0;
+
+    const layerHeightMm = Math.max(0.001, slicedLayerHeightMm || 0.05);
+    const printableMaxZMm = Math.max(0, Number(sceneZRange.max) || 0);
+    const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
+    const slicerHeightMm = buildHeightLimitMm > 0
+      ? Math.min(printableMaxZMm, buildHeightLimitMm)
+      : printableMaxZMm;
+
+    return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
+  }, [activePrinterProfile?.buildVolumeMm.height, scene.models.length, sceneZRange.max, slicedLayerHeightMm]);
+
+  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile) return '—';
+
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return '—';
+
+    const totalLayers = estimatedSlicerLayerCount;
+    if (totalLayers <= 0) return '—';
+
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const wholeSeconds = Math.max(0, Math.floor(totalSec));
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    const seconds = wholeSeconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
@@ -10670,6 +10887,13 @@ export default function Home() {
 
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
+  const LysGhostOverlay = React.useMemo(
+    () => {
+      const loader = getPluginSceneOverlayLoader('lys-import');
+      return loader ? React.lazy(loader) : null;
+    },
+    [],
+  );
 
   const computeModelWorldBounds = React.useCallback((
     model: (typeof scene.models)[number],
@@ -10982,13 +11206,27 @@ export default function Home() {
       scale: t.scale.clone(),
     };
 
-    const meshBounds = computeApproxModelWorldBounds(
+    const meshApproxBounds = computeApproxModelWorldBounds(
       model.geometry,
       effectiveTransform,
     );
+    const meshFootprint = computeProjectedFootprintSize(
+      model.geometry,
+      effectiveTransform.rotation,
+      effectiveTransform.scale,
+    );
+
+    const approxCenterX = (meshApproxBounds.min.x + meshApproxBounds.max.x) * 0.5;
+    const approxCenterY = (meshApproxBounds.min.y + meshApproxBounds.max.y) * 0.5;
+
+    let minX = approxCenterX - (meshFootprint.width * 0.5);
+    let maxX = approxCenterX + (meshFootprint.width * 0.5);
+    let minY = approxCenterY - (meshFootprint.depth * 0.5);
+    let maxY = approxCenterY + (meshFootprint.depth * 0.5);
+    let minZ = meshApproxBounds.min.z;
+    let maxZ = meshApproxBounds.max.z;
 
     const supportBoundsBase = supportBoundsByModelId.get(model.id);
-    const combinedBounds = meshBounds.clone();
     if (supportBoundsBase && !supportBoundsBase.isEmpty()) {
       const sourceMatrix = new THREE.Matrix4().compose(
         model.transform.position,
@@ -11002,19 +11240,107 @@ export default function Home() {
       );
       const delta = new THREE.Matrix4().multiplyMatrices(targetMatrix, sourceMatrix.clone().invert());
       const transformedSupportBounds = supportBoundsBase.clone().applyMatrix4(delta);
-      combinedBounds.union(transformedSupportBounds);
+
+      minX = Math.min(minX, transformedSupportBounds.min.x);
+      maxX = Math.max(maxX, transformedSupportBounds.max.x);
+      minY = Math.min(minY, transformedSupportBounds.min.y);
+      maxY = Math.max(maxY, transformedSupportBounds.max.y);
+      minZ = Math.min(minZ, transformedSupportBounds.min.z);
+      maxZ = Math.max(maxZ, transformedSupportBounds.max.z);
     }
 
     return {
-      width: Math.max(2, combinedBounds.max.x - combinedBounds.min.x),
-      depth: Math.max(2, combinedBounds.max.y - combinedBounds.min.y),
-      height: Math.max(2, combinedBounds.max.z - combinedBounds.min.z),
+      width: Math.max(2, maxX - minX),
+      depth: Math.max(2, maxY - minY),
+      height: Math.max(2, maxZ - minZ),
     };
-  }, [computeApproxModelWorldBounds, getArrangeTransform, supportBoundsByModelId]);
+  }, [getArrangeTransform, supportBoundsByModelId]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
   }), []);
+
+  const buildHighPrecisionArrangeSupportLocalPoints = React.useCallback((
+    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
+  ) => {
+    const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
+
+    for (const model of scene.models) {
+      const supportBounds = supportBoundsByModelId.get(model.id);
+      if (!supportBounds || supportBounds.isEmpty()) continue;
+
+      const t = modelTransformById.get(model.id) ?? model.transform;
+      const worldMatrix = new THREE.Matrix4().compose(
+        t.position,
+        new THREE.Quaternion().setFromEuler(t.rotation),
+        t.scale,
+      );
+      const invWorldMatrix = worldMatrix.clone().invert();
+
+      const xs = [supportBounds.min.x, supportBounds.max.x];
+      const ys = [supportBounds.min.y, supportBounds.max.y];
+      const zs = [supportBounds.min.z, supportBounds.max.z];
+
+      const points: THREE.Vector3[] = [];
+      const seen = new Set<string>();
+      const tmp = new THREE.Vector3();
+      for (const x of xs) {
+        for (const y of ys) {
+          for (const z of zs) {
+            tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
+            const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+            points.push(tmp.clone());
+          }
+        }
+      }
+
+      if (points.length === 0) continue;
+
+      const key = [
+        supportBounds.min.x.toFixed(4),
+        supportBounds.min.y.toFixed(4),
+        supportBounds.min.z.toFixed(4),
+        supportBounds.max.x.toFixed(4),
+        supportBounds.max.y.toFixed(4),
+        supportBounds.max.z.toFixed(4),
+        points.length,
+      ].join('|');
+
+      supportLocalPointsByModelId.set(model.id, { points, key });
+    }
+
+    return supportLocalPointsByModelId;
+  }, [scene.models, supportBoundsByModelId]);
+
+  const buildHighPrecisionArrangeModels = React.useCallback((
+    sourceModels: (typeof scene.models),
+    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
+  ): HighPrecisionArrangeModel[] => {
+    const supportLocalPointsByModelId = buildHighPrecisionArrangeSupportLocalPoints(modelTransformById);
+
+    return sourceModels.map((model): HighPrecisionArrangeModel => {
+      const t = modelTransformById.get(model.id) ?? model.transform;
+      const supportLocal = supportLocalPointsByModelId.get(model.id);
+
+      return {
+        id: model.id,
+        visible: model.visible,
+        transform: {
+          position: t.position.clone(),
+          rotation: t.rotation.clone(),
+          scale: t.scale.clone(),
+        },
+        geometry: {
+          center: model.geometry.center.clone(),
+          geometry: model.geometry.geometry,
+          supportLocalPoints: supportLocal?.points,
+          supportHullKey: supportLocal?.key,
+        },
+      };
+    });
+  }, [buildHighPrecisionArrangeSupportLocalPoints]);
 
   const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (scope === 'all') {
@@ -11155,7 +11481,11 @@ export default function Home() {
         items: PackedEntry[];
       };
 
-      const evaluatePacking = (ordered: typeof modelsWithFootprints, targetRowWidth: number) => {
+      const evaluatePacking = (
+        ordered: typeof modelsWithFootprints,
+        targetRowWidth: number,
+        enableRotation: boolean,
+      ) => {
         const rows: Row[] = [];
         const spills: SpillEntry[] = [];
         const placementSizeCache = new Map<string, { width: number; depth: number }>();
@@ -11198,7 +11528,7 @@ export default function Home() {
           const currentZ = t.rotation.z;
           const currentCanonical = normalizeToPi(currentZ);
 
-          if (!arrangeAllowRotateOnZ) {
+          if (!enableRotation) {
             const dims = footprintAtAngle(current.model, currentCanonical);
             return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
           }
@@ -11362,7 +11692,41 @@ export default function Home() {
           totalWidth,
           totalDepth,
           score: deadSpace + spillPenalty + aspectPenalty,
+          usedRotation: enableRotation,
         };
+      };
+
+      const countPackedItems = (layout: ReturnType<typeof evaluatePacking>) => (
+        layout.rows.reduce((acc, row) => acc + row.items.length, 0)
+      );
+
+      const isBetterLayout = (
+        candidate: ReturnType<typeof evaluatePacking>,
+        currentBest: ReturnType<typeof evaluatePacking> | null,
+      ) => {
+        if (!currentBest) return true;
+
+        if (candidate.spills.length !== currentBest.spills.length) {
+          return candidate.spills.length < currentBest.spills.length;
+        }
+
+        const candidatePackedCount = countPackedItems(candidate);
+        const bestPackedCount = countPackedItems(currentBest);
+        if (candidatePackedCount !== bestPackedCount) {
+          return candidatePackedCount > bestPackedCount;
+        }
+
+        const scoreDelta = candidate.score - currentBest.score;
+        if (Math.abs(scoreDelta) > 1e-6) {
+          return scoreDelta < 0;
+        }
+
+        // When layouts are effectively tied, do not force rotation.
+        if (candidate.usedRotation !== currentBest.usedRotation) {
+          return !candidate.usedRotation;
+        }
+
+        return false;
       };
 
       const byAreaDesc = [...modelsWithFootprints].sort((a, b) => (b.baseWidth * b.baseDepth) - (a.baseWidth * a.baseDepth));
@@ -11385,11 +11749,14 @@ export default function Home() {
       const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
 
       let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
+      const rotationModes = arrangeAllowRotateOnZ ? [false, true] : [false];
       for (const ordered of orderingCandidates) {
         for (const targetRowWidth of uniqueTargetRowWidths) {
-          const layout = evaluatePacking(ordered, targetRowWidth);
-          if (!bestLayout || layout.score < bestLayout.score) {
-            bestLayout = layout;
+          for (const enableRotation of rotationModes) {
+            const layout = evaluatePacking(ordered, targetRowWidth, enableRotation);
+            if (isBetterLayout(layout, bestLayout)) {
+              bestLayout = layout;
+            }
           }
         }
       }
@@ -11533,77 +11900,8 @@ export default function Home() {
       const modelTransformById = new Map(
         scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
       );
-
-      const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
-      for (const model of scene.models) {
-        const supportBounds = supportBoundsByModelId.get(model.id);
-        if (!supportBounds || supportBounds.isEmpty()) continue;
-
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const worldMatrix = new THREE.Matrix4().compose(
-          t.position,
-          new THREE.Quaternion().setFromEuler(t.rotation),
-          t.scale,
-        );
-        const invWorldMatrix = worldMatrix.clone().invert();
-
-        const xs = [supportBounds.min.x, supportBounds.max.x];
-        const ys = [supportBounds.min.y, supportBounds.max.y];
-        const zs = [supportBounds.min.z, supportBounds.max.z];
-
-        const points: THREE.Vector3[] = [];
-        const seen = new Set<string>();
-        const tmp = new THREE.Vector3();
-        for (const x of xs) {
-          for (const y of ys) {
-            for (const z of zs) {
-              tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
-              const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
-              if (seen.has(dedupeKey)) continue;
-              seen.add(dedupeKey);
-              points.push(tmp.clone());
-            }
-          }
-        }
-
-        if (points.length === 0) continue;
-
-        const key = [
-          supportBounds.min.x.toFixed(4),
-          supportBounds.min.y.toFixed(4),
-          supportBounds.min.z.toFixed(4),
-          supportBounds.max.x.toFixed(4),
-          supportBounds.max.y.toFixed(4),
-          supportBounds.max.z.toFixed(4),
-          points.length,
-        ].join('|');
-
-        supportLocalPointsByModelId.set(model.id, { points, key });
-      }
-
-      const toHighPrecisionArrangeModel = (model: (typeof scene.models)[number]): HighPrecisionArrangeModel => {
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const supportLocal = supportLocalPointsByModelId.get(model.id);
-
-        return {
-          id: model.id,
-          visible: model.visible,
-          transform: {
-            position: t.position.clone(),
-            rotation: t.rotation.clone(),
-            scale: t.scale.clone(),
-          },
-          geometry: {
-            center: model.geometry.center.clone(),
-            geometry: model.geometry.geometry,
-            supportLocalPoints: supportLocal?.points,
-            supportHullKey: supportLocal?.key,
-          },
-        };
-      };
-
       const visibleIdSet = new Set(visibleModels.map((model) => model.id));
-      const highPrecisionSceneModels = scene.models.map(toHighPrecisionArrangeModel);
+      const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
       const highPrecisionVisibleModels = highPrecisionSceneModels.filter((model) => visibleIdSet.has(model.id));
 
       const updates = await computeHighPrecisionArrangeUpdatesWorker({
@@ -11642,8 +11940,8 @@ export default function Home() {
     resolveArrangeVisibleModels,
     scene,
     sleep,
-    supportBoundsByModelId,
     transformMgr,
+    buildHighPrecisionArrangeModels,
     applyArrangeTransforms,
   ]);
 
@@ -11860,6 +12158,15 @@ export default function Home() {
     });
   }, [scene.view3dSettings.depthMm, scene.view3dSettings.originMode, scene.view3dSettings.widthMm]);
 
+  const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
+  const setTransformModeWithMirrorFinalize = React.useCallback((nextMode: TransformMode) => {
+    if (transformMgr.transformMode === 'mirror' && nextMode !== 'mirror') {
+      suppressTransformPersistenceCycles(10);
+      finalizeMirrorSessionRef.current();
+    }
+    transformMgr.setTransformMode(nextMode);
+  }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
+
   useUndoRedoHotkeys();
   useDeleteHotkey();
   useCameraProjectionHotkey();
@@ -11867,7 +12174,7 @@ export default function Home() {
     appMode: scene.mode,
     hasModels: scene.models.length > 0,
     transformMode: transformMgr.transformMode,
-    setTransformMode: transformMgr.setTransformMode,
+    setTransformMode: setTransformModeWithMirrorFinalize,
     onArrangeAll: () => {
       void (arrangeLayoutMode === 'array'
         ? handleManualArrayArrangeModels('all')
@@ -12121,19 +12428,10 @@ export default function Home() {
       };
     }
 
-    if (scene.isLysLoading) {
+    if (scene.pluginImportPhase === 'processing') {
       return {
         active: true,
-        label: 'Loading Scene…',
-        detail: 'Parsing and applying scene transforms',
-        progress: null as number | null,
-      };
-    }
-
-    if (scene.lycheeImportPhase === 'processing') {
-      return {
-        active: true,
-        label: 'Loading Lychee Scene…',
+        label: 'Loading LYS Scene…',
         detail: 'Converting support data and model metadata',
         progress: null as number | null,
       };
@@ -12145,7 +12443,7 @@ export default function Home() {
       detail: '',
       progress: null as number | null,
     };
-  }, [nativePickerPreparationState, scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
+  }, [nativePickerPreparationState, scene.importProgress, scene.pluginImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
@@ -12154,8 +12452,7 @@ export default function Home() {
     const isSceneImportActive =
       (scene.importProgress.active
         && (scene.importProgress.type === 'scene' || scene.importProgress.type === 'mesh'))
-      || scene.isLysLoading
-      || scene.lycheeImportPhase === 'processing';
+      || scene.pluginImportPhase === 'processing';
 
     if (isSceneImportActive && scene.models.length === 0) {
       setHoldEmptyStateSceneImportUi(true);
@@ -12165,7 +12462,7 @@ export default function Home() {
     if (!isSceneImportActive && holdEmptyStateSceneImportUi) {
       setHoldEmptyStateSceneImportUi(false);
     }
-  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.isLysLoading, scene.lycheeImportPhase, scene.models.length]);
+  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.pluginImportPhase, scene.models.length]);
 
   const showEmptyStatePanel = scene.models.length === 0 || holdEmptyStateSceneImportUi;
   const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
@@ -12908,19 +13205,34 @@ export default function Home() {
   }, [handleTopBarSaveScene, scene.models.length]);
 
   React.useEffect(() => {
+    let cancelled = false;
+
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (!scene.activeModel) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     const model = scene.activeModel;
+
+    if (duplicateLayoutMode === 'auto' && duplicatePrecisionMode === 'high_precision') {
+      setDuplicatePreviewTransforms([]);
+      setDuplicateSourcePreviewTransform(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
     const depth = sourceDims.depth;
@@ -13106,7 +13418,12 @@ export default function Home() {
     });
 
     setDuplicatePreviewTransforms(previews);
+
+    return () => {
+      cancelled = true;
+    };
   }, [
+    buildHighPrecisionArrangeModels,
     duplicateArrayCountX,
     duplicateArrayCountY,
     duplicateArrayCountZ,
@@ -13114,7 +13431,7 @@ export default function Home() {
     duplicateArrayGapY,
     duplicateArrayGapZ,
     duplicateLayoutMode,
-    resolveArrangeVisibleModels,
+    duplicatePrecisionMode,
     duplicateSpacingMm,
     duplicateTotalCopies,
     getModelSupportAwareDimensionsMm,
@@ -13197,11 +13514,138 @@ export default function Home() {
     }
   }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
 
-  const handleFillPlateDuplicate = React.useCallback(() => {
-    if (isDuplicating) return;
+  const handleFillPlateDuplicate = React.useCallback(async () => {
+    if (isDuplicating || isAutoArranging) return;
     if (duplicateLayoutMode !== 'auto') return;
     const model = scene.activeModel;
     if (!model) return;
+
+    if (duplicatePrecisionMode === 'high_precision') {
+      const minSpinnerMs = 220;
+      const startedAt = performance.now();
+      const maxProbeCopies = 128;
+
+      setDuplicateApplySourceModel(null);
+      setDuplicateApplySourceTransform(null);
+      setDuplicateSourcePreviewTransform(null);
+      setDuplicatePreviewTransforms([]);
+      setIsDuplicating(true);
+      setActiveArrangeOperation('high_precision_fill');
+      setArrangeOverlayModelCount(maxProbeCopies);
+      setIsAutoArranging(true);
+      await sleep(0);
+
+      try {
+        const modelTransformById = new Map(
+          scene.models.map((sceneModel) => [sceneModel.id, sceneModel.transform] as const),
+        );
+        const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
+        const highPrecisionSourceModel = highPrecisionSceneModels.find((candidate) => candidate.id === model.id);
+        if (!highPrecisionSourceModel) return;
+
+        const duplicateSceneModels: HighPrecisionArrangeModel[] = Array.from({ length: maxProbeCopies }, (_, index) => ({
+          ...highPrecisionSourceModel,
+          id: `${model.id}__duplicate_fill_${index}`,
+          visible: true,
+          transform: {
+            position: highPrecisionSourceModel.transform.position.clone(),
+            rotation: highPrecisionSourceModel.transform.rotation.clone(),
+            scale: highPrecisionSourceModel.transform.scale.clone(),
+          },
+          geometry: {
+            center: highPrecisionSourceModel.geometry.center.clone(),
+            geometry: highPrecisionSourceModel.geometry.geometry,
+            supportLocalPoints: highPrecisionSourceModel.geometry.supportLocalPoints?.map((point) => point.clone()),
+            supportHullKey: highPrecisionSourceModel.geometry.supportHullKey,
+          },
+        }));
+
+        const result = await computeHighPrecisionArrangeResultWorker({
+          visibleModels: duplicateSceneModels,
+          sceneModels: [...highPrecisionSceneModels.filter((sceneModel) => sceneModel.id !== model.id), ...duplicateSceneModels],
+          widthMm: scene.view3dSettings.widthMm,
+          depthMm: scene.view3dSettings.depthMm,
+          originMode: scene.view3dSettings.originMode,
+          arrangeSpacingMm: duplicateSpacingMm,
+          arrangeAllowRotateOnZ: true,
+          arrangeAnchorMode: 'center',
+          getArrangeTransform: (arrangeModel) => arrangeModel.transform,
+          hullCache: arrangeHullFootprintCacheRef.current,
+          safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+        });
+
+        const packedIdSet = new Set(result.packedIds);
+        const packedUpdates = result.updates.filter((update) => packedIdSet.has(update.id));
+        if (packedUpdates.length <= 1) return;
+
+        let sourceUpdate = packedUpdates[0];
+        let sourceDistanceSq = Number.POSITIVE_INFINITY;
+        for (const update of packedUpdates) {
+          const dx = update.transform.position.x - model.transform.position.x;
+          const dy = update.transform.position.y - model.transform.position.y;
+          const distanceSq = (dx * dx) + (dy * dy);
+          if (distanceSq < sourceDistanceSq) {
+            sourceDistanceSq = distanceSq;
+            sourceUpdate = update;
+          }
+        }
+
+        const duplicateTransforms = packedUpdates
+          .filter((update) => update.id !== sourceUpdate.id)
+          .map((update) => ({
+            position: update.transform.position.clone(),
+            rotation: update.transform.rotation.clone(),
+            scale: update.transform.scale.clone(),
+          }));
+
+        if (duplicateTransforms.length === 0) return;
+
+        const createdIds = scene.duplicateModelWithTransforms(
+          model.id,
+          duplicateTransforms,
+          {
+            position: sourceUpdate.transform.position.clone(),
+            rotation: sourceUpdate.transform.rotation.clone(),
+            scale: sourceUpdate.transform.scale.clone(),
+          },
+        );
+
+        const firstCreatedId = createdIds[0] ?? null;
+        const firstCreatedTransform = duplicateTransforms[0] ?? null;
+        if (firstCreatedId && firstCreatedTransform) {
+          setDisplayActiveModelId(firstCreatedId);
+          transformMgr.transformHook.setPosition(
+            firstCreatedTransform.position.x,
+            firstCreatedTransform.position.y,
+            firstCreatedTransform.position.z,
+          );
+          transformMgr.transformHook.setRotation(
+            firstCreatedTransform.rotation.x,
+            firstCreatedTransform.rotation.y,
+            firstCreatedTransform.rotation.z,
+          );
+          transformMgr.transformHook.setScale(
+            firstCreatedTransform.scale.x,
+            firstCreatedTransform.scale.y,
+            firstCreatedTransform.scale.z,
+          );
+        }
+
+        setDuplicateTotalCopies(1);
+      } catch (error) {
+        console.warn('[Duplicate][HighPrecision] Failed applying fill-plate duplicate.', error);
+      } finally {
+        const elapsed = performance.now() - startedAt;
+        if (elapsed < minSpinnerMs) {
+          await sleep(minSpinnerMs - elapsed);
+        }
+        setIsDuplicating(false);
+        setIsAutoArranging(false);
+        setActiveArrangeOperation(null);
+        setArrangeOverlayModelCount(null);
+      }
+      return;
+    }
 
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
@@ -13287,7 +13731,18 @@ export default function Home() {
 
     const targetCopies = Math.min(128, Math.max(1, capacity));
     setDuplicateTotalCopies(targetCopies);
-  }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
+  }, [
+    buildHighPrecisionArrangeModels,
+    duplicateLayoutMode,
+    duplicatePrecisionMode,
+    duplicateSpacingMm,
+    getModelSupportAwareDimensionsMm,
+    isAutoArranging,
+    isDuplicating,
+    scene,
+    sleep,
+    transformMgr.transformHook,
+  ]);
 
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
@@ -13312,6 +13767,384 @@ export default function Home() {
   const handlePlaceOnFaceBeforeApply = React.useCallback((_normal: THREE.Vector3, continueApply: () => void) => {
     return requestDestructiveTransformSupportDeletionWithContinuation('Place On Face', continueApply);
   }, [requestDestructiveTransformSupportDeletionWithContinuation]);
+
+  const mirrorToolActive = scene.mode === 'prepare' && transformMgr.transformMode === 'mirror';
+
+  // Mirror session state: while the user is in Mirror mode we don't bake the
+  // geometry per-click (a 2.4M-vert bake is slow on big meshes). Instead, each
+  // click toggles a parity bit and applies a negative-scale transform — the GPU
+  // renders the flip immediately. On exit we run one combined bake against the
+  // accumulated parity bits and reset the scale to positive.
+  const mirrorSessionRef = React.useRef<{
+    modelId: string;
+    flips: { x: boolean; y: boolean; z: boolean };
+    initialTransform: ModelTransform;
+    previewTransform: ModelTransform;
+    initialGeometry: GeometryWithBounds;
+  } | null>(null);
+  const mirrorPrevToolActiveRef = React.useRef(false);
+  const mirrorLocalOriginRef = React.useRef(new THREE.Vector3(0, 0, 0));
+  // Tracks a pending deferred bake so we can cancel/flush it on mode switch.
+  const pendingBakeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks an in-flight bake worker so it can be terminated on flush.
+  const pendingBakeWorkerRef = React.useRef<Worker | null>(null);
+
+  const syncTransformManagerToTransform = React.useCallback((nextTransform: ModelTransform) => {
+    // Keep transform-manager state aligned with raw mirror updates so the
+    // persistence bridge cannot write a stale transform back into the model.
+    suppressTransformPersistenceCycles(8);
+    transformMgr.transformHook.setPosition(
+      nextTransform.position.x,
+      nextTransform.position.y,
+      nextTransform.position.z,
+    );
+    transformMgr.transformHook.setRotation(
+      nextTransform.rotation.x,
+      nextTransform.rotation.y,
+      nextTransform.rotation.z,
+    );
+    transformMgr.transformHook.setScale(
+      nextTransform.scale.x,
+      nextTransform.scale.y,
+      nextTransform.scale.z,
+    );
+  }, [suppressTransformPersistenceCycles, transformMgr.transformHook]);
+
+  const finalizeMirrorSession = React.useCallback(() => {
+    const session = mirrorSessionRef.current;
+    mirrorSessionRef.current = null;
+    if (!session) return;
+
+    const { modelId, flips, previewTransform, initialGeometry } = session;
+    const anyFlip = flips.x || flips.y || flips.z;
+
+    console.log('[Mirror] finalizeMirrorSession:', { modelId, flips, anyFlip });
+
+    if (!anyFlip) {
+      // Net-zero session (e.g. user clicked X twice). Nothing to commit.
+      console.log('[Mirror] No flips to commit, returning');
+      return;
+    }
+
+    let baked: THREE.BufferGeometry | null = null;
+    try {
+      baked = bakeWithFlips(initialGeometry.geometry, flips);
+    } catch (error) {
+      console.error('[Mirror] bakeWithFlips threw during finalize, preserving live mirrored state:', error);
+      return;
+    }
+    console.log('[Mirror] bakeWithFlips result:', { baked, isValid: !!baked });
+    if (!baked) {
+      console.log('[Mirror] bakeWithFlips returned null, aborting');
+      return;
+    }
+
+    // Preserve mirrored orientation while converting from reflected preview
+    // transform to baked geometry: finalTransform * bakedGeometry == previewTransform * sourceGeometry.
+    const bakeLocalMatrix = new THREE.Matrix4().identity();
+    const bakeLocalElements = bakeLocalMatrix.elements;
+    bakeLocalElements[0] = flips.x ? -1 : 1;
+    bakeLocalElements[5] = flips.y ? -1 : 1;
+    bakeLocalElements[10] = flips.z ? -1 : 1;
+
+    const previewMatrix = new THREE.Matrix4().compose(
+      previewTransform.position.clone(),
+      quaternionFromGlobalEuler(previewTransform.rotation),
+      previewTransform.scale.clone(),
+    );
+    const finalizedMatrix = previewMatrix.clone().multiply(bakeLocalMatrix);
+    const finalizedPosition = new THREE.Vector3();
+    const finalizedQuaternion = new THREE.Quaternion();
+    const finalizedScale = new THREE.Vector3();
+    finalizedMatrix.decompose(finalizedPosition, finalizedQuaternion, finalizedScale);
+    const finalizedTransform: ModelTransform = {
+      position: finalizedPosition,
+      rotation: new THREE.Euler().setFromQuaternion(finalizedQuaternion, 'ZYX'),
+      scale: finalizedScale,
+    };
+
+    // Replace geometry FIRST (direct setModels call using modelsRef.current),
+    // then apply the finalized transform AFTER via a functional setModels updater.
+    // This ordering matters: replaceModelGeometry uses a direct state value from
+    // modelsRef.current (pre-mirror transform), so any prior setModelTransformRaw
+    // functional updates get overwritten by the direct call. By setting the transform
+    // AFTER replaceModelGeometry, the functional updater applies on top of the
+    // direct state and the final batched React state has both the correct geometry
+    // AND the correct transform.
+    const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
+    console.log('[Mirror] Replacing geometry with axes:', axes);
+    scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
+      includeSupportState: !flips.z,
+    });
+    console.log('[Mirror] Applying finalized mirrored transform');
+    scene.setModelTransformRaw(modelId, {
+      position: finalizedTransform.position.clone(),
+      rotation: finalizedTransform.rotation.clone(),
+      scale: finalizedTransform.scale.clone(),
+    });
+    syncTransformManagerToTransform(finalizedTransform);
+  }, [scene, transformMgr, syncTransformManagerToTransform]);
+
+  // Schedules baking off the main thread via a Web Worker so the visual mirror
+  // renders instantly. Cancels any in-flight worker/timer so rapid successive
+  // clicks only trigger one bake pass. The session stays alive until the worker
+  // completes (or flushPendingBake terminates it) so flushPendingBake can still
+  // call finalizeMirrorSession as a synchronous fallback.
+  const scheduleBake = React.useCallback(() => {
+    // Cancel any previously scheduled bake.
+    if (pendingBakeTimerRef.current !== null) {
+      clearTimeout(pendingBakeTimerRef.current);
+      pendingBakeTimerRef.current = null;
+    }
+    if (pendingBakeWorkerRef.current) {
+      pendingBakeWorkerRef.current.terminate();
+      pendingBakeWorkerRef.current = null;
+    }
+
+    const session = mirrorSessionRef.current;
+    if (!session) return;
+
+    const { modelId, flips, previewTransform, initialGeometry } = session;
+    const anyFlip = flips.x || flips.y || flips.z;
+    if (!anyFlip) {
+      // Net-zero session: clear without baking.
+      mirrorSessionRef.current = null;
+      return;
+    }
+
+    // Compute the finalised transform on the main thread (pure matrix math, fast).
+    const bakeLocalMatrix = new THREE.Matrix4().identity();
+    const ble = bakeLocalMatrix.elements;
+    ble[0] = flips.x ? -1 : 1;
+    ble[5] = flips.y ? -1 : 1;
+    ble[10] = flips.z ? -1 : 1;
+    const previewMatrix = new THREE.Matrix4().compose(
+      previewTransform.position.clone(),
+      quaternionFromGlobalEuler(previewTransform.rotation),
+      previewTransform.scale.clone(),
+    );
+    const finalizedMatrix = previewMatrix.clone().multiply(bakeLocalMatrix);
+    const fPos = new THREE.Vector3();
+    const fQuat = new THREE.Quaternion();
+    const fScale = new THREE.Vector3();
+    finalizedMatrix.decompose(fPos, fQuat, fScale);
+    const finalizedTransform: ModelTransform = {
+      position: fPos,
+      rotation: new THREE.Euler().setFromQuaternion(fQuat, 'ZYX'),
+      scale: fScale,
+    };
+
+    // Snapshot the geometry arrays needed by the worker.
+    const source = initialGeometry.geometry;
+    const posAttr = source.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!posAttr) {
+      // No position attribute – fall back to synchronous bake.
+      finalizeMirrorSession();
+      return;
+    }
+
+    // Slice (memcpy) the arrays we need to modify; the originals stay on the
+    // main thread so the session geometry remains intact for flush fallback.
+    const positions = (posAttr.array as Float32Array).slice();
+    const normAttr = source.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    const normals = normAttr ? (normAttr.array as Float32Array).slice() : null;
+    const idxAttr = source.getIndex();
+    const rawIdx = idxAttr?.array;
+    let indices: Uint16Array | Uint32Array | null = null;
+    let indexType: 'uint16' | 'uint32' | null = null;
+    if (rawIdx) {
+      indices = rawIdx.slice() as Uint16Array | Uint32Array;
+      indexType = rawIdx instanceof Uint16Array ? 'uint16' : 'uint32';
+    }
+    const posItemSize = posAttr.itemSize;
+    const normItemSize = normAttr?.itemSize ?? 3;
+    const axes: number[] = [];
+    if (flips.x) axes.push(0);
+    if (flips.y) axes.push(1);
+    if (flips.z) axes.push(2);
+    const axisLabel = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
+    const includeSupports = !flips.z;
+
+    const worker = new Worker(
+      new URL('@/features/mirror/workers/bakeMirrorWorker', import.meta.url),
+      { type: 'module' },
+    );
+    pendingBakeWorkerRef.current = worker;
+
+    const transferables: Transferable[] = [positions.buffer];
+    if (normals) transferables.push(normals.buffer);
+    if (indices) transferables.push(indices.buffer);
+    worker.postMessage({ positions, normals, indices, posItemSize, normItemSize, axes }, transferables);
+
+    worker.onmessage = (e: MessageEvent) => {
+      // Discard result if a newer bake/flush already took over.
+      if (pendingBakeWorkerRef.current !== worker) {
+        worker.terminate();
+        return;
+      }
+      pendingBakeWorkerRef.current = null;
+      worker.terminate();
+
+      // Clear the session now that the worker has committed the bake.
+      mirrorSessionRef.current = null;
+
+      const { positions: bp, normals: bn, indices: bi } = e.data as {
+        positions: Float32Array;
+        normals: Float32Array | null;
+        indices: Uint16Array | Uint32Array | null;
+      };
+
+      // Reconstruct a Three.js geometry from the worker-returned arrays.
+      // We avoid a full geometry.clone() – only the modified arrays were
+      // copied; all other attributes (UV, vertex colour, etc.) are shared
+      // by reference from the source (safe since they are never modified).
+      const baked = new THREE.BufferGeometry();
+      baked.setAttribute('position', new THREE.BufferAttribute(bp, posItemSize));
+      if (bn) {
+        baked.setAttribute('normal', new THREE.BufferAttribute(bn, normItemSize));
+      } else {
+        baked.computeVertexNormals();
+      }
+      if (bi) {
+        baked.setIndex(new THREE.BufferAttribute(bi, 1));
+      }
+      const srcAttrs = source.attributes;
+      for (const name of Object.keys(srcAttrs)) {
+        if (name !== 'position' && name !== 'normal') {
+          baked.setAttribute(name, srcAttrs[name] as THREE.BufferAttribute);
+        }
+      }
+      baked.computeBoundingBox();
+      baked.computeBoundingSphere();
+
+      scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axisLabel})`, {
+        includeSupportState: includeSupports,
+      });
+      scene.setModelTransformRaw(modelId, {
+        position: finalizedTransform.position.clone(),
+        rotation: finalizedTransform.rotation.clone(),
+        scale: finalizedTransform.scale.clone(),
+      });
+      syncTransformManagerToTransform(finalizedTransform);
+    };
+
+    worker.onerror = () => {
+      if (pendingBakeWorkerRef.current !== worker) return;
+      pendingBakeWorkerRef.current = null;
+      worker.terminate();
+      console.error('[Mirror] bake worker failed – falling back to synchronous bake');
+      finalizeMirrorSession();
+    };
+  }, [scene, finalizeMirrorSession, syncTransformManagerToTransform]);
+
+  // Cancels any pending deferred bake (timer or worker) and runs it
+  // synchronously now. Used when exiting mirror mode so geometry is committed
+  // before the tool switch fires.
+  const flushPendingBake = React.useCallback(() => {
+    if (pendingBakeTimerRef.current !== null) {
+      clearTimeout(pendingBakeTimerRef.current);
+      pendingBakeTimerRef.current = null;
+    }
+    if (pendingBakeWorkerRef.current) {
+      pendingBakeWorkerRef.current.terminate();
+      pendingBakeWorkerRef.current = null;
+    }
+    finalizeMirrorSession();
+  }, [finalizeMirrorSession]);
+
+  React.useEffect(() => {
+    finalizeMirrorSessionRef.current = flushPendingBake;
+  }, [flushPendingBake]);
+
+  React.useEffect(() => {
+    const wasActive = mirrorPrevToolActiveRef.current;
+    mirrorPrevToolActiveRef.current = mirrorToolActive;
+    console.log('[Mirror] useEffect check - wasActive:', wasActive, 'mirrorToolActive:', mirrorToolActive);
+    if (wasActive && !mirrorToolActive) {
+      console.log('[Mirror] Calling flushPendingBake from useEffect');
+      flushPendingBake();
+    }
+  }, [mirrorToolActive, flushPendingBake]);
+
+  const handleMirror = React.useCallback((axis: MirrorAxis) => {
+    const modelId = scene.activeModelId;
+    if (!modelId) return;
+    const model = scene.models.find((m) => m.id === modelId);
+    if (!model) return;
+
+    console.log('[Mirror] handleMirror called, axis:', axis, 'modelId:', modelId);
+
+    if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
+      // Finalize any prior session that was for a different model first.
+      console.log('[Mirror] Creating new session');
+      if (mirrorSessionRef.current) flushPendingBake();
+      mirrorSessionRef.current = {
+        modelId,
+        flips: { x: false, y: false, z: false },
+        initialTransform: {
+          position: model.transform.position.clone(),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
+        },
+        previewTransform: {
+          position: model.transform.position.clone(),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
+        },
+        initialGeometry: model.geometry,
+      };
+    }
+
+    const session = mirrorSessionRef.current;
+    if (!session) return;
+
+    const performMirror = () => {
+      session.flips[axis] = !session.flips[axis];
+      console.log('[Mirror] performMirror axis:', axis, 'flips now:', session.flips);
+
+      // Reflect the model's transform across the world-space axis through the
+      // model's world bbox center. This produces a true world-space mirror
+      // regardless of the model's existing rotation.
+      const nextTransform = reflectTransformAcrossWorldAxis(
+        model.transform,
+        mirrorLocalOriginRef.current,
+        axis,
+      );
+      session.previewTransform = {
+        position: nextTransform.position.clone(),
+        rotation: nextTransform.rotation.clone(),
+        scale: nextTransform.scale.clone(),
+      };
+
+      // For X/Y also push supports through the same reflection. Z deletes
+      // supports up-front via the destructive modal.
+      if (axis !== 'z') {
+        const supportTransforms = buildMirrorSupportTransforms({
+          current: model.transform,
+          modelLocalBboxCenter: mirrorLocalOriginRef.current.clone(),
+          axis,
+        });
+        if (supportTransforms) {
+          transformSupportsForModel(modelId, supportTransforms.before, supportTransforms.after);
+        }
+      }
+
+      scene.setModelTransformRaw(modelId, nextTransform);
+      syncTransformManagerToTransform(nextTransform);
+
+      // Schedule baking in the next task so the visual mirror renders
+      // immediately. The session stays alive until the bake completes.
+      // On mode switch, flushPendingBake() will cancel and run synchronously.
+      scheduleBake();
+    };
+
+    if (axis === 'z') {
+      const proceedNow = requestDestructiveTransformSupportDeletionWithContinuation('Mirror Z', performMirror);
+      if (proceedNow) performMirror();
+    } else {
+      performMirror();
+    }
+  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, scheduleBake, syncTransformManagerToTransform]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
@@ -13574,6 +14407,8 @@ export default function Home() {
                   activeModelName={scene.activeModel?.name ?? null}
                   layoutMode={duplicateLayoutMode}
                   onLayoutModeChange={setDuplicateLayoutMode}
+                  precisionMode={duplicatePrecisionMode}
+                  onPrecisionModeChange={setDuplicatePrecisionMode}
                   totalCopies={duplicateTotalCopies}
                   onTotalCopiesChange={setDuplicateTotalCopies}
                   spacingMm={duplicateSpacingMm}
@@ -13593,7 +14428,7 @@ export default function Home() {
                   onConfirm={handleConfirmDuplicate}
                   onFillPlate={handleFillPlateDuplicate}
                   previewCount={duplicatePreviewTransforms.length}
-                  isApplying={isDuplicating}
+                  isApplying={isDuplicating || (isAutoArranging && activeArrangeOperation === 'high_precision_fill')}
                 />
               </>
             )}
@@ -13604,13 +14439,13 @@ export default function Home() {
               key="analysis-scan-card"
               islands={islands}
               hasGeometry={!!scene.geom}
-              onLoadLychee={scene.handleLoadLychee}
-              onImportLycheeFile={scene.importLycheeSupportFile}
-              lycheeImportPhase={scene.lycheeImportPhase}
-              lycheeImportError={scene.lycheeImportError}
-              onLycheeJsonFile={scene.handleLycheeJsonFile}
-              onLycheeStlFile={scene.handleLycheeStlFile}
-              onCancelLycheeImport={scene.cancelLycheeImport}
+              onLoadSupportJson={scene.handleLoadSupportJson}
+              onImportSupportFile={scene.importSupportDataFile}
+              pluginImportPhase={scene.pluginImportPhase}
+              pluginImportError={scene.pluginImportError}
+              onPluginJsonFile={scene.handlePluginJsonFile}
+              onPluginStlFile={scene.handlePluginStlFile}
+              onCancelPluginImport={scene.cancelPluginImport}
             />
 
             <IslandScanWorkflowCard key="analysis-workflow" islands={islands} hasGeometry={!!scene.geom} />
@@ -13701,6 +14536,7 @@ export default function Home() {
               key="export-slicing"
               models={scene.models}
               activeModel={scene.activeModel}
+              estimatedLayerCountOverride={estimatedSlicerLayerCount}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
@@ -14162,7 +14998,11 @@ export default function Home() {
             supportDragGroupRef={supportDragGroupRef}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             supportDragTransactionId={supportDragTransactionId}
-            ghostData={ghostData}
+            renderSceneOverlays={() => (
+              ghostData && LysGhostOverlay
+                ? <LysGhostOverlay data={ghostData} visible />
+                : null
+            )}
             duplicatePreviewModel={
               isDuplicating
                 ? duplicateApplySourceModel
@@ -14203,6 +15043,12 @@ export default function Home() {
                 onBeforeFaceApply={handlePlaceOnFaceBeforeApply}
               />
             )}
+            {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (
+              <MirrorTool
+                activeModelId={displayActiveModelId}
+                onMirror={handleMirror}
+              />
+            )}
           </SceneCanvas>
 
           {/* Transform Toolbar */}
@@ -14210,7 +15056,7 @@ export default function Home() {
             <>
               <TransformToolbar
                 mode={transformMgr.transformMode}
-                onModeChange={transformMgr.setTransformMode}
+                onModeChange={setTransformModeWithMirrorFinalize}
               />
               <SnapAngleReadout />
               <RotationHintTooltip />
@@ -14227,7 +15073,7 @@ export default function Home() {
                 models={scene.models}
                 selectedModelIds={scene.selectedModelIds}
                 inBoundsModelIds={inBoundsModelIds}
-                numLayers={slicing.numLayers}
+                numLayers={estimatedSlicerLayerCount}
                 heightMm={slicing.heightMm}
                 estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
                 estimatedResinLabelOverride={estimatedVolumeMlLabel}
@@ -14758,12 +15604,12 @@ export default function Home() {
         />
       )}
 
-      {showLysImportWarningModal && (
+      {showPluginImportWarningModal && (
         <div
           className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              handleCancelLysImportWarning();
+              handleCancelPluginImportWarning();
             }
           }}
         >
@@ -14810,7 +15656,7 @@ export default function Home() {
                   color: 'var(--text-muted)',
                 }}
                 aria-label="Close LYS import warning"
-                onClick={handleCancelLysImportWarning}
+                onClick={handleCancelPluginImportWarning}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -14825,8 +15671,8 @@ export default function Home() {
                 <label className="inline-flex items-center gap-2 text-xs select-none" style={{ color: 'var(--text-muted)' }}>
                   <input
                     type="checkbox"
-                    checked={lysImportWarningSkipFuture}
-                    onChange={(event) => setLysImportWarningSkipFuture(event.target.checked)}
+                    checked={pluginImportWarningSkipFuture}
+                    onChange={(event) => setPluginImportWarningSkipFuture(event.target.checked)}
                     className="h-3.5 w-3.5 rounded border"
                     style={{ accentColor: '#f59e0b' }}
                   />
@@ -14837,7 +15683,7 @@ export default function Home() {
                   <button
                     type="button"
                     className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                    onClick={handleCancelLysImportWarning}
+                    onClick={handleCancelPluginImportWarning}
                   >
                     Cancel
                   </button>
@@ -14849,7 +15695,7 @@ export default function Home() {
                       background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
                       color: '#fde68a',
                     }}
-                    onClick={handleContinueLysImportWarning}
+                    onClick={handleContinuePluginImportWarning}
                   >
                     Continue
                   </button>

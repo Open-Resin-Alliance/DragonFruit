@@ -9,9 +9,11 @@ import { setAnatomyPreviewActiveSettingKey } from '../AnatomyPreview/previewStat
 interface RaftSettingsCardProps {
     settings: RaftSettings;
     onChange: (settings: Partial<RaftSettings>) => void;
+    activeModelId?: string | null;
+    selectedModelIds?: string[];
 }
 
-export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) {
+export function RaftSettingsCard({ settings, onChange, activeModelId, selectedModelIds }: RaftSettingsCardProps) {
     if (!settings) return null;
 
     const makeFocusHandlers = React.useCallback((key: string) => {
@@ -101,7 +103,7 @@ export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) 
 
     const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base no-spinners';
 
-    const isWallEnabled = settings.bottomMode !== 'off' && settings.wallEnabled;
+    const isWallEnabled = settings.bottomMode === 'solid' && settings.wallEnabled;
 
     return (
         <div className="space-y-2.5">
@@ -111,12 +113,14 @@ export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) 
                     <ModeButton active={settings.bottomMode === 'solid'} onClick={() => onChange({ bottomMode: 'solid' })}>Solid</ModeButton>
                     <ModeButton active={settings.bottomMode === 'line'} onClick={() => onChange({ bottomMode: 'line' })}>Line</ModeButton>
                 </div>
-                <ToggleButton
-                    checked={isWallEnabled}
-                    onChange={() => onChange({ wallEnabled: !isWallEnabled })}
-                    label="Wall"
-                    tone="secondary"
-                />
+                {settings.bottomMode === 'solid' && (
+                    <ToggleButton
+                        checked={isWallEnabled}
+                        onChange={() => onChange({ wallEnabled: !isWallEnabled })}
+                        label="Wall"
+                        tone="secondary"
+                    />
+                )}
             </div>
 
             {settings.bottomMode !== 'off' && (

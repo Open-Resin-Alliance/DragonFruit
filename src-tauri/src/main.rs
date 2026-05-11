@@ -28,6 +28,9 @@ type DragonFruitWindow = tauri::Window<tauri::Cef>;
 #[cfg(not(feature = "tauri-cef"))]
 type DragonFruitWindow = tauri::Window<tauri::Wry>;
 
+/// Scene file extensions contributed by built-in fileType plugins — auto-generated, do not edit.
+use plugin_registry::GENERATED_BUILTIN_PLUGIN_SCENE_FILE_EXTENSIONS as BUILTIN_PLUGIN_SCENE_EXTENSIONS;
+
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     let stamp = std::time::SystemTime::now()
@@ -116,7 +119,9 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
         dialog = match ext {
             "stl" | "obj" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf"]),
             "voxl" => dialog.add_filter("Scene Files", &["voxl"]),
-            "lys" => dialog.add_filter("Scene Files", &["lys"]),
+            x if BUILTIN_PLUGIN_SCENE_EXTENSIONS.contains(&x) => {
+                dialog.add_filter("Scene Files", BUILTIN_PLUGIN_SCENE_EXTENSIONS)
+            }
             "json" => dialog.add_filter("JSON Files", &["json"]),
             _ => dialog.add_filter("Print Files", &[ext]),
         };
@@ -2201,13 +2206,11 @@ fn is_scene_file_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| {
-            ext.trim()
-                .trim_start_matches('.')
-                .eq_ignore_ascii_case("voxl")
-                || ext
-                    .trim()
-                    .trim_start_matches('.')
-                    .eq_ignore_ascii_case("lys")
+            let normalized = ext.trim().trim_start_matches('.');
+            normalized.eq_ignore_ascii_case("voxl")
+                || BUILTIN_PLUGIN_SCENE_EXTENSIONS
+                    .iter()
+                    .any(|&s| normalized.eq_ignore_ascii_case(s))
         })
         .unwrap_or(false)
 }
@@ -2246,14 +2249,19 @@ struct SceneFileHandoffPayload {
 fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
     let mut dialog = rfd::FileDialog::new();
 
+    // Build scene extension list: voxl + all plugin-registered extensions + zip (for bundles)
+    let mut scene_exts: Vec<&str> = vec!["voxl"];
+    scene_exts.extend_from_slice(BUILTIN_PLUGIN_SCENE_EXTENSIONS);
+    scene_exts.push("zip");
+
     let normalized = category.trim().to_ascii_lowercase();
     dialog = match normalized.as_str() {
         "mesh" => dialog.add_filter("Mesh Files", &["stl", "obj", "3mf", "zip"]),
-        "scene" => dialog.add_filter("Scene Files", &["voxl", "lys", "zip"]),
+        "scene" => dialog.add_filter("Scene Files", &scene_exts),
         "bundle" => dialog.add_filter("JSON Files", &["json"]),
         _ => dialog
             .add_filter("Mesh Files", &["stl", "obj", "3mf", "zip"])
-            .add_filter("Scene Files", &["voxl", "lys", "zip"]),
+            .add_filter("Scene Files", &scene_exts),
     };
 
     dialog
@@ -2526,6 +2534,67 @@ async fn read_print_file_bytes(source_path: String) -> Result<Response, String> 
     })
     .await
     .map_err(|err| format!("Read task failed to join: {err}"))??;
+
+    Ok(Response::new(bytes))
+}
+
+#[tauri::command]
+async fn read_print_file_size(source_path: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = std::path::PathBuf::from(source_path.trim());
+        if !source.exists() {
+            return Err("Source print file no longer exists on disk".to_string());
+        }
+
+        std::fs::metadata(&source)
+            .map(|meta| meta.len())
+            .map_err(|err| format!("Failed reading print file metadata: {err}"))
+    })
+    .await
+    .map_err(|err| format!("Read-size task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn read_print_file_chunk(
+    source_path: String,
+    offset: u64,
+    length: u64,
+) -> Result<Response, String> {
+    const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let source = std::path::PathBuf::from(source_path.trim());
+        if !source.exists() {
+            return Err("Source print file no longer exists on disk".to_string());
+        }
+
+        let mut file = std::fs::File::open(&source)
+            .map_err(|err| format!("Failed opening print file: {err}"))?;
+
+        let file_len = file
+            .metadata()
+            .map_err(|err| format!("Failed reading print file metadata: {err}"))?
+            .len();
+
+        if offset >= file_len {
+            return Ok(Vec::new());
+        }
+
+        let remaining = file_len - offset;
+        let requested = length.max(1).min(MAX_CHUNK_BYTES as u64).min(remaining) as usize;
+
+        use std::io::{Read, Seek, SeekFrom};
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|err| format!("Failed seeking print file chunk: {err}"))?;
+
+        let mut chunk = vec![0u8; requested];
+        file.read_exact(&mut chunk)
+            .map_err(|err| format!("Failed reading print file chunk: {err}"))?;
+
+        Ok(chunk)
+    })
+    .await
+    .map_err(|err| format!("Read-chunk task failed to join: {err}"))??;
 
     Ok(Response::new(bytes))
 }
@@ -2976,6 +3045,8 @@ fn main() {
             reveal_main_window_command,
             write_bytes_to_path,
             read_print_file_bytes,
+            read_print_file_size,
+            read_print_file_chunk,
             read_print_layer_png,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,

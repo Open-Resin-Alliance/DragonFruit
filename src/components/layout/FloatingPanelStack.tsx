@@ -72,7 +72,7 @@ const PANEL_GAP = 12;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
-  'visual-settings': 56,
+  'visual-settings': 48,
   'prepare-smoothing-settings': 340,
   'transform-debug-overlay': 420,
 };
@@ -719,6 +719,10 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
   const getPanelWidth = React.useCallback((panelId: string) => {
     const baseWidth = getPanelBaseWidth(panelId);
+    if (panelId === 'visual-settings') {
+      const visualSettingsScale = Math.min(1, panelWidthScale);
+      return Math.max(44, Math.round(baseWidth * visualSettingsScale));
+    }
     if (PANEL_SCALE_EXEMPT_IDS.has(panelId)) {
       if (panelWidthScale <= 1) {
         return baseWidth;
@@ -726,13 +730,13 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       const supportUltrawideBoost = panelId === 'support-settings'
         ? (panelWidthScale >= 1.14 ? 1.1 : panelWidthScale >= 1.08 ? 1.06 : 1)
         : 1;
-      return Math.max(panelId === 'visual-settings' ? 52 : 72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
+      return Math.max(panelId === 'visual-settings' ? 44 : 72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
     }
     const analysisCompactFactor = panelId.startsWith('analysis-')
       ? (panelWidthScale < 1 ? 0.88 : 1)
       : 1;
     const scaledWidth = Math.round(baseWidth * panelWidthScale * analysisCompactFactor);
-    return Math.max(panelId === 'visual-settings' ? 52 : 72, scaledWidth);
+    return Math.max(panelId === 'visual-settings' ? 44 : 72, scaledWidth);
   }, [panelWidthScale]);
 
   const getPanelSize = React.useCallback((panelId: string): PanelSize => {

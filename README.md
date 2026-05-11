@@ -42,7 +42,8 @@ To get started with DragonFruit, follow one of these variants depending on your 
 ### Submodule note (plugin development)
 
 DragonFruit supports complex plugins that can be sourced as Git submodules (for example `plugins/ctb`).
-If your local clone is missing plugin folders, initialize and update repository submodules before running generation/build checks.
+If your local clone is missing plugin folders, generation/build will continue with available plugins only (missing submodules are skipped with warnings).
+Initialize/update submodules when you need to develop or validate those specific plugin integrations.
 
 ### Variant 1: Frontend Development (Next.js)
 
