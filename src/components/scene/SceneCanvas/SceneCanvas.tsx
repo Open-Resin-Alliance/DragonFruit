@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
 import { OrbitControls } from '@react-three/drei';
+import { ZUpGizmoViewcube } from './ZUpGizmoViewcube';
+import { ZUpGizmoHelper } from './ZUpGizmoHelper';
 import {
   CrossSectionStencilCap,
   type CrossSectionCapDebugOverrides,
@@ -49,8 +51,6 @@ import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimi
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
-
-import { GhostOverlay } from '@/components/lys-import/GhostOverlay';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { CameraFocusHotkeyController, CameraHomeResetController, CameraIntroController, SpaceMouseController, useStlLoadCameraIntro } from '@/components/scene/camera';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
@@ -173,6 +173,30 @@ function resolveTrackpadGestureAction(
   if (!modifierPressed) return primaryAction;
   return primaryAction === 'pan' ? 'orbit' : 'pan';
 }
+
+function computeFloatingPanelWidthScale(width: number, height: number) {
+  if (width >= 3200 && height >= 1100) return 1.14;
+  if (width >= 2600 && height >= 980) return 1.08;
+  if (width <= 1100 || height <= 700) return 0.72;
+  if (width <= 1366 || height <= 820) return 0.82;
+  if (width <= 1600 || height <= 900) return 0.9;
+  if (width <= 1800 || height <= 980) return 0.95;
+  return 1;
+}
+
+function computeVisualSettingsPanelWidth(width: number, height: number) {
+  const baseWidth = 48;
+  const scale = Math.min(1, computeFloatingPanelWidthScale(width, height));
+  return Math.max(44, Math.round(baseWidth * scale));
+}
+
+const FLOATING_PANEL_RIGHT_INSET_PX = 12;
+// Drei GizmoHelper positions by gizmo center, not right edge.
+// GizmoViewcube renders at scale [60,60,60] on a unit box, so half-extent is 30px.
+const VIEW_CUBE_HALF_EXTENT_PX = 30;
+// Bottom margin is 72px to cube center; cube half-height is 30px, giving 42px gap from bottom.
+// Match this gap on the right side so the cube feels equally spaced from panel and screen bottom.
+const VIEW_CUBE_PANEL_GAP_PX = 42;
 
 function GhostPreviewInstances({
   geometry,
@@ -337,7 +361,7 @@ export function SceneCanvas({
   supportDragGroupRef,
   holdSupportDragDelta,
   supportDragTransactionId = 0,
-  ghostData,
+  renderSceneOverlays,
   duplicatePreviewModel,
   duplicatePreviewTransforms,
   duplicateActivePreviewTransform,
@@ -464,7 +488,7 @@ export function SceneCanvas({
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
   holdSupportDragDelta?: boolean;
   supportDragTransactionId?: number;
-  ghostData?: any;
+  renderSceneOverlays?: () => React.ReactNode;
   duplicatePreviewModel?: LoadedModel | null;
   duplicatePreviewTransforms?: Array<{
     position: THREE.Vector3;
@@ -581,8 +605,55 @@ export function SceneCanvas({
     () => getSavedCameraTrackpadSettings().orbitAcceleration,
     () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration,
   );
+  const cameraTrackpadZoomAcceleration = React.useSyncExternalStore(
+    subscribeToCameraTrackpadSettings,
+    () => getSavedCameraTrackpadSettings().zoomAcceleration,
+    () => DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration,
+  );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const [viewportSizeForUiAnchors, setViewportSizeForUiAnchors] = React.useState({ width: 0, height: 0 });
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateViewportSize = () => {
+      const next = {
+        width: container.clientWidth,
+        height: container.clientHeight,
+      };
+
+      setViewportSizeForUiAnchors((prev) => {
+        if (prev.width === next.width && prev.height === next.height) return prev;
+        return next;
+      });
+    };
+
+    updateViewportSize();
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(container);
+    window.addEventListener('resize', updateViewportSize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateViewportSize);
+    };
+  }, []);
+
+  const nonPrintingViewCubeRightMargin = React.useMemo(() => {
+    const width = viewportSizeForUiAnchors.width > 0
+      ? viewportSizeForUiAnchors.width
+      : (typeof window === 'undefined' ? 1920 : window.innerWidth);
+    const height = viewportSizeForUiAnchors.height > 0
+      ? viewportSizeForUiAnchors.height
+      : (typeof window === 'undefined' ? 1080 : window.innerHeight);
+
+    const visualSettingsPanelWidth = computeVisualSettingsPanelWidth(width, height);
+    const visualSettingsLeftInset = visualSettingsPanelWidth + FLOATING_PANEL_RIGHT_INSET_PX;
+    return visualSettingsLeftInset + VIEW_CUBE_PANEL_GAP_PX + VIEW_CUBE_HALF_EXTENT_PX;
+  }, [viewportSizeForUiAnchors.height, viewportSizeForUiAnchors.width]);
 
   const smoothingProcessing = React.useSyncExternalStore(
     subscribeToMeshSmoothingProcessingState,
@@ -1027,6 +1098,7 @@ export function SceneCanvas({
   const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId } =
     useStlLoadCameraIntro(models, buildVolumeCenterTarget, { deferIntro: deferCameraIntro });
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
+  const [cameraHomeResetCompletedRunId, setCameraHomeResetCompletedRunId] = React.useState(0);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
   const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
@@ -1190,6 +1262,11 @@ export function SceneCanvas({
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
+  const [gizmoColors, setGizmoColors] = React.useState({
+    face: '#1f2937',
+    text: '#f8fafc',
+    accent: '#baf72e',
+  });
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
   const likelySupportGeometryTintColor = '#c8752a';
@@ -1685,7 +1762,37 @@ export function SceneCanvas({
 
     resolveOutOfBoundsStripeColor();
 
-    const observer = new MutationObserver(resolveOutOfBoundsStripeColor);
+    const resolveGizmoColors = () => {
+      const rootStyles = getComputedStyle(document.documentElement);
+      const tryColor = (variable: string, fallback: string) => {
+        const raw = rootStyles.getPropertyValue(variable).trim();
+        if (!raw) return fallback;
+        try {
+          const c = new THREE.Color();
+          c.setStyle(raw);
+          return c.getStyle();
+        } catch {
+          return fallback;
+        }
+      };
+
+      const accent = tryColor('--accent-secondary', '#baf72e');
+      // Derive face/text colors from theme surface/text tokens.
+      // --surface-1 is the panel background; --text-strong is primary text.
+      const face = tryColor('--surface-1', '#1f2937');
+      const text = tryColor('--text-strong', '#f8fafc');
+      setGizmoColors((prev) => {
+        if (prev.face === face && prev.text === text && prev.accent === accent) return prev;
+        return { face, text, accent };
+      });
+    };
+
+    resolveGizmoColors();
+
+    const observer = new MutationObserver(() => {
+      resolveOutOfBoundsStripeColor();
+      resolveGizmoColors();
+    });
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class', 'style', 'data-theme'],
@@ -3133,6 +3240,9 @@ export function SceneCanvas({
   const entryAnimRef = React.useRef<Record<string, { startMs: number | null; fromZ: number; skipBounce: boolean }>>({});
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
+  const isHomeResetAnimating = cameraHomeResetRunId > cameraHomeResetCompletedRunId;
+  const hasModelsOnPlate = models.length > 0;
+  const cameraInteractionCycleEnabled = hasModelsOnPlate && !isIntroAnimating && !isHomeResetAnimating;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
   const dynamicDpr: [number, number] = isLinux
     ? [1, 1]
@@ -3417,6 +3527,7 @@ export function SceneCanvas({
   // Handle canvas background clicks (deselect support)
   const handleCanvasClick = React.useCallback(
     (e: React.MouseEvent) => {
+      if (!cameraInteractionCycleEnabled) return;
       console.log('[Canvas] handleCanvasClick fired, mode:', mode);
 
       const target = e.target as HTMLElement | null;
@@ -3447,10 +3558,11 @@ export function SceneCanvas({
       // Non-canvas background clicks should not affect 3D selection state.
       return;
     },
-    [isMarqueeSelecting, mode],
+    [cameraInteractionCycleEnabled, isMarqueeSelecting, mode],
   );
 
   const handleScenePointerMissed = React.useCallback(() => {
+    if (!cameraInteractionCycleEnabled) return;
     if (isMarqueeSelecting) return;
     if (window.__modelClickedThisFrame) return;
     if (isOrbitInteracting || spaceMouseNavigationActive) return;
@@ -3473,7 +3585,7 @@ export function SceneCanvas({
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSupportSelection();
     }
-  }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
+  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -3513,10 +3625,12 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!controls || !camera) return;
 
+    const normalizedTrackpadZoomAcceleration = cameraTrackpadZoomAcceleration / DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration;
+
     if (cameraFeelPreset === 'raw') {
       controls.rotateSpeed = 1.0;
       controls.panSpeed = 1.0;
-      controls.zoomSpeed = 1.0;
+      controls.zoomSpeed = normalizedTrackpadZoomAcceleration;
       return;
     }
 
@@ -3601,7 +3715,11 @@ export function SceneCanvas({
 
     const targetRotateSpeed = THREE.MathUtils.clamp(tuning.rotateBase * acceleration, tuning.rotateMin, tuning.rotateMax);
     const targetPanSpeed = THREE.MathUtils.clamp(tuning.panBase * acceleration, tuning.panMin, tuning.panMax);
-    const targetZoomSpeed = THREE.MathUtils.clamp(tuning.zoomBase * acceleration, tuning.zoomMin, tuning.zoomMax);
+    const targetZoomSpeed = THREE.MathUtils.clamp(
+      tuning.zoomBase * acceleration * normalizedTrackpadZoomAcceleration,
+      tuning.zoomMin * normalizedTrackpadZoomAcceleration,
+      tuning.zoomMax * normalizedTrackpadZoomAcceleration,
+    );
 
     controls.rotateSpeed = THREE.MathUtils.lerp(controls.rotateSpeed, targetRotateSpeed, tuning.responseLerp);
     controls.panSpeed = THREE.MathUtils.lerp(controls.panSpeed, targetPanSpeed, tuning.responseLerp);
@@ -3610,6 +3728,7 @@ export function SceneCanvas({
     activeBuildVolumeSettings.depthMm,
     activeBuildVolumeSettings.maxZMm,
     activeBuildVolumeSettings.widthMm,
+    cameraTrackpadZoomAcceleration,
     cameraFeelPreset,
   ]);
 
@@ -3759,6 +3878,8 @@ export function SceneCanvas({
 
     const onWheel = (event: WheelEvent) => {
       if (!container.contains(event.target as Node | null)) return;
+      const controls = orbitControlsRef.current;
+      if (!controls || controls.enabled === false) return;
       // Trackpad: allow zoom only for pinch gestures (ctrlKey).
       // Regular two-finger scroll should never trigger zoom.
       if (isLikelyTrackpadWheelEvent(event) && !event.ctrlKey) {
@@ -4148,10 +4269,11 @@ export function SceneCanvas({
   }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
 
   const handleSpaceMouseNavigationFrame = React.useCallback(() => {
+    if (!cameraInteractionCycleEnabled) return;
     updateCameraBelowBuildPlate();
     onCameraChange?.();
     window.dispatchEvent(new Event('picking-pan-change'));
-  }, [onCameraChange, updateCameraBelowBuildPlate]);
+  }, [cameraInteractionCycleEnabled, onCameraChange, updateCameraBelowBuildPlate]);
 
   React.useEffect(() => {
     return () => {
@@ -4254,6 +4376,31 @@ export function SceneCanvas({
       detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
   }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+
+  React.useEffect(() => {
+    if (cameraInteractionCycleEnabled) return;
+
+    clearPendingTrackpadGestureEnd();
+    trackpadGestureActionRef.current = null;
+    forceEndWheelZoomInteraction();
+
+    if (orbitInteractionActiveRef.current) {
+      handleOrbitEnd();
+    } else {
+      setIsOrbitInteracting(false);
+      setIsOrbitRotating(false);
+    }
+
+    if (spaceMouseNavigationActive) {
+      setSpaceMouseNavigationActive(false);
+    }
+  }, [
+    cameraInteractionCycleEnabled,
+    clearPendingTrackpadGestureEnd,
+    forceEndWheelZoomInteraction,
+    handleOrbitEnd,
+    spaceMouseNavigationActive,
+  ]);
 
   const scheduleTrackpadGestureEnd = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -4448,7 +4595,7 @@ export function SceneCanvas({
   }, [freezeViewportActive, frozenViewportDataUrl]);
 
   React.useEffect(() => {
-    if (spaceMouseNavigationActive) {
+    if (cameraInteractionCycleEnabled && spaceMouseNavigationActive) {
       window.dispatchEvent(new Event('picking-pan-start'));
       return;
     }
@@ -4456,7 +4603,7 @@ export function SceneCanvas({
     window.dispatchEvent(new CustomEvent('picking-pan-end', {
       detail: { resumeAfterMs: navigationResumeDelayMs },
     }));
-  }, [navigationResumeDelayMs, spaceMouseNavigationActive]);
+  }, [cameraInteractionCycleEnabled, navigationResumeDelayMs, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,
@@ -4705,15 +4852,20 @@ export function SceneCanvas({
         <CameraProjectionController mode={cameraProjectionMode} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
-        <PickingProviderWrapper enabled={gpuPickingTest} mode={mode} transformMode={transformMode}>
-          <PickingStateSyncer />
-          <PickingEmptySpaceHoverResetter enabled={mode === 'prepare' || mode === 'support'} />
+        <PickingProviderWrapper
+          enabled={gpuPickingTest}
+          mode={mode}
+          transformMode={transformMode}
+          interactionEnabled={cameraInteractionCycleEnabled}
+        >
+          <PickingStateSyncer enabled={cameraInteractionCycleEnabled} />
+          <PickingEmptySpaceHoverResetter enabled={cameraInteractionCycleEnabled && (mode === 'prepare' || mode === 'support')} />
 
           {/* Selection Provider - manages model selection state */}
           <SelectionProvider initialSelection={activeModelId || 'default-model'}>
             <SelectionSync activeModelId={activeModelId ?? null} />
             {/* Selection Manager - handles click-to-select/deselect logic */}
-            <SelectionManager enabled={mode === 'prepare'} mode={mode} handleCanvasDeselect={false} />
+            <SelectionManager enabled={cameraInteractionCycleEnabled && mode === 'prepare'} mode={mode} handleCanvasDeselect={false} />
 
             <React.Suspense fallback={null}>
               {models.map((model) => {
@@ -4737,7 +4889,7 @@ export function SceneCanvas({
                 const isActive = isCaptureTintModel || model.id === activeModelId;
                 const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive;
+                const suppressModelInteraction = !cameraInteractionCycleEnabled || isGizmoDragging || isPostGizmoInteractionGuardActive || supportGizmoInteractionActive || isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive;
                 const interactionLodEnabled = (isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
@@ -4818,8 +4970,8 @@ export function SceneCanvas({
                       onSupportClick={onSupportClick}
                       onSupportHover={handleSupportHover}
                       onActiveModelChange={onActiveModelChange}
-                      disableRaycast={disableRaycast}
-                      blockSupportPlacement={isGizmoDragging || blockSupportPlacement}
+                      disableRaycast={disableRaycast || !cameraInteractionCycleEnabled}
+                      blockSupportPlacement={!cameraInteractionCycleEnabled || isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
                       isSelected={
                         isCaptureTintModel ||
@@ -5935,8 +6087,8 @@ export function SceneCanvas({
               {/* Kickstand Placement Controller - handles Ctrl-hover preview and click placement */}
               {mode === 'support' && <KickstandPlacementController />}
 
-              {/* LYS Ghost Viewer (Temporary) */}
-              <GhostOverlay data={ghostData} visible={!!ghostData} />
+              {renderSceneOverlays?.()}
+
             </React.Suspense>
           </SelectionProvider>
         </PickingProviderWrapper>
@@ -5969,12 +6121,12 @@ export function SceneCanvas({
           dampingFactor={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
           rotateSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
           panSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
-          zoomSpeed={cameraFeelPreset === 'raw' ? 1.6 : cameraFeelPreset === 'precise' ? 1.25 : cameraFeelPreset === 'fast' ? 1.75 : 1.45}
+          zoomSpeed={(cameraFeelPreset === 'raw' ? 1.6 : cameraFeelPreset === 'precise' ? 1.25 : cameraFeelPreset === 'fast' ? 1.75 : 1.45) * (cameraTrackpadZoomAcceleration / DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration)}
           screenSpacePanning
           zoomToCursor
           enablePan
           enabled={
-            models.length > 0
+            cameraInteractionCycleEnabled
             && !(mode === 'prepare' && transformMode === 'smoothing' && smoothingBrushState.isStrokeActive)
             && !isGizmoDragging
             && !isMarqueeSelecting
@@ -5985,26 +6137,45 @@ export function SceneCanvas({
           target={orbitTarget}
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
+        {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
+          <ZUpGizmoHelper
+            alignment="bottom-right"
+            margin={mode === 'printing' ? [72, 72] : [nonPrintingViewCubeRightMargin, 72]}
+          >
+            <ZUpGizmoViewcube
+              font="600 24px Inter, system-ui, sans-serif"
+              color={gizmoColors.face}
+              textColor={gizmoColors.text}
+              strokeColor={gizmoColors.accent}
+              hoverColor={gizmoColors.accent}
+              opacity={0.75}
+            />
+          </ZUpGizmoHelper>
+        )}
         <OrbitPivotIndicator visible={!thumbnailCaptureActive && isOrbitInteracting && isOrbitRotating} />
-        <SpaceMouseController
-          pivotPoint={selectedSpaceMousePivotPoint}
-          pivotCandidates={spaceMousePivotCandidates}
-          fallbackPivot={buildVolumeCenterTarget}
-          mouseOrbitDragRunId={mouseOrbitDragRunId}
-          onNavigationActiveChange={setSpaceMouseNavigationActive}
-          onNavigationFrame={handleSpaceMouseNavigationFrame}
-        />
-        <CameraFocusHotkeyController
-          hoverPointRef={lastHoveredModelPointRef}
-          setOrbitTargetFromPoint={setOrbitTargetFromPoint}
-          models={models}
-          activeModelId={activeModelId}
-          selectedModelIds={selectedModelIds ?? []}
-          hoveredModelId={hoveredModelId}
-          orbitTarget={orbitTarget}
-          cameraRef={cameraRef}
-          orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
-        />
+        {cameraInteractionCycleEnabled && (
+          <SpaceMouseController
+            pivotPoint={selectedSpaceMousePivotPoint}
+            pivotCandidates={spaceMousePivotCandidates}
+            fallbackPivot={buildVolumeCenterTarget}
+            mouseOrbitDragRunId={mouseOrbitDragRunId}
+            onNavigationActiveChange={setSpaceMouseNavigationActive}
+            onNavigationFrame={handleSpaceMouseNavigationFrame}
+          />
+        )}
+        {cameraInteractionCycleEnabled && (
+          <CameraFocusHotkeyController
+            hoverPointRef={lastHoveredModelPointRef}
+            setOrbitTargetFromPoint={setOrbitTargetFromPoint}
+            models={models}
+            activeModelId={activeModelId}
+            selectedModelIds={selectedModelIds ?? []}
+            hoveredModelId={hoveredModelId}
+            orbitTarget={orbitTarget}
+            cameraRef={cameraRef}
+            orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
+          />
+        )}
         <CameraIntroController
           bounds={introControllerBounds}
           runId={introControllerRunId}
@@ -6018,6 +6189,7 @@ export function SceneCanvas({
           homePosition={defaultCamera.position}
           homeTarget={[buildVolumeCenterTarget.x, buildVolumeCenterTarget.y, buildVolumeCenterTarget.z]}
           homeFovDeg={defaultCamera.fov}
+          onComplete={setCameraHomeResetCompletedRunId}
         />
         <CameraModeEntryFramingController
           runId={modeEntryFramingRunId}

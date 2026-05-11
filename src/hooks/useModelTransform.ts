@@ -7,7 +7,7 @@ const PLATFORM_SNAP_CLEARANCE_MM = 0.001;
 
 const approxEqual = (a: number, b: number) => Math.abs(a - b) <= EPSILON;
 
-export type TransformMode = 'select' | 'transform' | 'smoothing' | 'arrange' | 'placeOnFace';
+export type TransformMode = 'select' | 'transform' | 'smoothing' | 'arrange' | 'placeOnFace' | 'mirror';
 
 export interface ModelTransform {
   position: THREE.Vector3;

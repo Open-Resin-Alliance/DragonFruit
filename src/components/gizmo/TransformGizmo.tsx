@@ -20,6 +20,7 @@ type ViewCullState = {
 };
 
 const VIEW_CULL_HIDE_THRESHOLD = 0.02;
+const VIEW_CULL_INTERACTION_THRESHOLD = 0.8;
 
 function createAxisVisibility(value = 1): AxisVisibility {
   return { x: value, y: value, z: value };
@@ -428,6 +429,12 @@ export function TransformGizmo({
 
   const partIsHidden = (part: string) => isHidden(part) || isViewHidden(part);
 
+  const partIsInteractable = (part: string) => {
+    if (part === activePart) return true;
+    if (partIsHidden(part)) return false;
+    return getViewCullOpacity(part) > VIEW_CULL_INTERACTION_THRESHOLD;
+  };
+
   const shouldRenderPart = (part: string) => !isViewHidden(part);
 
   React.useEffect(() => {
@@ -469,6 +476,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('axis-x')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('axis-x')}
+              interactionsEnabled={partIsInteractable('axis-x')}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -491,6 +499,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('axis-y')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('axis-y')}
+              interactionsEnabled={partIsInteractable('axis-y')}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -513,6 +522,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('axis-z')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('axis-z')}
+              interactionsEnabled={partIsInteractable('axis-z')}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -540,6 +550,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('ring-x')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('ring-x')}
+              interactionsEnabled={partIsInteractable('ring-x')}
               suppressAxisAnimations={suppressAxisAnimations}
               gizmoPosition={posVec}
               onDragStart={() => handleDragStart('ring-x')}
@@ -558,6 +569,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('ring-y')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('ring-y')}
+              interactionsEnabled={partIsInteractable('ring-y')}
               suppressAxisAnimations={suppressAxisAnimations}
               gizmoPosition={posVec}
               onDragStart={() => handleDragStart('ring-y')}
@@ -576,6 +588,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('ring-z')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('ring-z')}
+              interactionsEnabled={partIsInteractable('ring-z')}
               suppressAxisAnimations={suppressAxisAnimations}
               gizmoPosition={posVec}
               onDragStart={() => handleDragStart('ring-z')}
@@ -599,6 +612,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('scale-x')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-x')}
+              interactionsEnabled={partIsInteractable('scale-x')}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
@@ -616,6 +630,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('scale-y')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-y')}
+              interactionsEnabled={partIsInteractable('scale-y')}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
@@ -633,6 +648,7 @@ export function TransformGizmo({
               isHidden={partIsHidden('scale-z')}
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-z')}
+              interactionsEnabled={partIsInteractable('scale-z')}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}

@@ -59,15 +59,26 @@ export function CameraClipPlaneStabilizer() {
 }
 
 function FillLight({ intensity }: { intensity: number }) {
-  // Fixed-position fill light that mimics a frontal fill without tracking the
-  // camera. Camera movement (orbit, zoom, F-focus) will never change the
-  // model's illumination.
+  const { camera } = useThree();
+  const lightRef = React.useRef<THREE.PointLight | null>(null);
+
+  useFrame(() => {
+    if (!lightRef.current) return;
+    lightRef.current.position.copy(camera.position);
+  });
+
+  // Camera-following fill/headlight so the region under inspection remains
+  // evenly readable while preserving the scene's global ambient + directional
+  // lighting stack.
   return (
-    <directionalLight
+    <pointLight
+      ref={lightRef}
       name="fill-light"
-      position={[0, -80, 60]}
       intensity={intensity}
+      decay={0}
+      distance={0}
       color="#ffffff"
+      userData={{ followCaptureCamera: true }}
     />
   );
 }

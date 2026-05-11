@@ -108,6 +108,12 @@ type DeleteConfirmTarget =
   | { kind: 'printer'; id: string; name: string }
   | { kind: 'material'; id: string; name: string };
 
+type RemoteMaterialsCacheEntry = {
+  materials: RemoteMaterialProfile[];
+  selectedMaterialId: string;
+  fetchedAt: number;
+};
+
 
 const REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY = 'dragonfruit.network.remoteMaterialByPrinter.v1';
 
@@ -893,6 +899,7 @@ export function ProfileSettingsModal({
   }, [remoteMaterials, selectedRemoteMaterialId]);
 
   const selectedRemoteMaterialIdRef = React.useRef('');
+  const remoteMaterialsCacheRef = React.useRef<Map<string, RemoteMaterialsCacheEntry>>(new Map());
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
@@ -944,6 +951,13 @@ export function ProfileSettingsModal({
   const selectedPrinterResolvedId = selectedPrinter?.id ?? '';
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
   const selectedRemoteMaterialHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
+  const remoteMaterialsCacheKey = React.useMemo(() => {
+    if (!networkUiAdapter) return '';
+    if (!selectedPrinterResolvedId) return '';
+    const normalizedHost = selectedRemoteMaterialHost.trim().toLowerCase();
+    if (!normalizedHost) return '';
+    return `${networkUiAdapter.pluginId}::${selectedPrinterResolvedId}::${normalizedHost}`;
+  }, [networkUiAdapter, selectedPrinterResolvedId, selectedRemoteMaterialHost]);
   const selectedPrinterPreset = React.useMemo(() => {
     if (!selectedPrinter) return null;
     const presetId = resolveOfficialPresetIdFromProfile(selectedPrinter);
@@ -1803,19 +1817,34 @@ export function ProfileSettingsModal({
     }
   }, [selectedPrinterUpdate]);
 
-  const loadRemoteMaterials = React.useCallback(async () => {
+  const loadRemoteMaterials = React.useCallback(async (options?: { background?: boolean }) => {
     if (!selectedPrinterResolvedId) return;
     if (!networkUiAdapter) return;
 
     const host = selectedRemoteMaterialHost;
     if (!host) {
       setRemoteMaterials([]);
+      setIsLoadingRemoteMaterials(false);
       setRemoteMaterialsError(`Connect to a ${selectedNetworkModeLabel} printer to load on-device materials.`);
       return;
     }
 
+    const useBackgroundRefresh = options?.background === true;
+    const cachedEntry = remoteMaterialsCacheKey
+      ? remoteMaterialsCacheRef.current.get(remoteMaterialsCacheKey) ?? null
+      : null;
+
+    if (cachedEntry?.materials?.length) {
+      setRemoteMaterials(cachedEntry.materials);
+      if (!selectedRemoteMaterialIdRef.current && cachedEntry.selectedMaterialId) {
+        setSelectedRemoteMaterialId(cachedEntry.selectedMaterialId);
+      }
+    }
+
     setIsLoadingRemoteMaterials(true);
-    setRemoteMaterialsError(null);
+    if (!useBackgroundRefresh) {
+      setRemoteMaterialsError(null);
+    }
 
     try {
       const response = await pluginNetworkFetch({
@@ -1855,18 +1884,30 @@ export function ProfileSettingsModal({
         setSelectedRemoteMaterialId('');
       }
 
+      if (remoteMaterialsCacheKey) {
+        remoteMaterialsCacheRef.current.set(remoteMaterialsCacheKey, {
+          materials,
+          selectedMaterialId: nextSelected?.id ?? '',
+          fetchedAt: Date.now(),
+        });
+      }
+
       const errorMessage = typeof payload?.error === 'string' ? payload.error : '';
       if (errorMessage) {
         setRemoteMaterialsError(errorMessage);
+      } else {
+        setRemoteMaterialsError(null);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : `Failed to load ${selectedNetworkModeLabel} materials.`;
-      setRemoteMaterials([]);
+      if (!cachedEntry?.materials?.length) {
+        setRemoteMaterials([]);
+      }
       setRemoteMaterialsError(message);
     } finally {
       setIsLoadingRemoteMaterials(false);
     }
-  }, [effectiveNetworkUiAdapter, networkUiAdapter, persistedRemoteMaterialIdForSelectedPrinter, selectedPrinter, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
+  }, [effectiveNetworkUiAdapter, networkUiAdapter, remoteMaterialsCacheKey, selectedNetworkModeLabel, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
 
   React.useEffect(() => {
     if (!shouldUseRemoteOnDeviceMaterials || !selectedPrinterResolvedId) {
@@ -1877,14 +1918,33 @@ export function ProfileSettingsModal({
       return;
     }
 
-    void loadRemoteMaterials();
-  }, [loadRemoteMaterials, selectedPrinterResolvedId, shouldUseRemoteOnDeviceMaterials]);
+    const cachedEntry = remoteMaterialsCacheKey
+      ? remoteMaterialsCacheRef.current.get(remoteMaterialsCacheKey) ?? null
+      : null;
+    if (cachedEntry?.materials?.length) {
+      setRemoteMaterials(cachedEntry.materials);
+      if (!selectedRemoteMaterialIdRef.current && cachedEntry.selectedMaterialId) {
+        setSelectedRemoteMaterialId(cachedEntry.selectedMaterialId);
+      }
+    }
+
+    void loadRemoteMaterials({ background: true });
+  }, [loadRemoteMaterials, remoteMaterialsCacheKey, selectedPrinterResolvedId, shouldUseRemoteOnDeviceMaterials]);
 
   const handleSelectRemoteMaterial = React.useCallback((material: RemoteMaterialProfile) => {
     if (!selectedPrinter) return;
     const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues(material.meta ?? {});
     setSelectedRemoteMaterialId(material.id);
     writeRemoteMaterialByPrinter(selectedPrinter.id, material.id);
+    if (remoteMaterialsCacheKey) {
+      const cachedEntry = remoteMaterialsCacheRef.current.get(remoteMaterialsCacheKey);
+      if (cachedEntry) {
+        remoteMaterialsCacheRef.current.set(remoteMaterialsCacheKey, {
+          ...cachedEntry,
+          selectedMaterialId: material.id,
+        });
+      }
+    }
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
       selectedMaterialName: material.name,
@@ -1893,9 +1953,10 @@ export function ProfileSettingsModal({
       selectedMaterialBottomExposureSec: processValues.bottomExposureSec,
       selectedMaterialBottomLayerCount: processValues.bottomLayerCount,
     });
-  }, [effectiveNetworkUiAdapter, selectedPrinter]);
+  }, [effectiveNetworkUiAdapter, remoteMaterialsCacheKey, selectedPrinter]);
 
   const openRemoteMaterialEditDialog = React.useCallback(() => {
+    if (effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice) return;
     if (!selectedRemoteMaterial) return;
     setRemoteMaterialEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(selectedRemoteMaterial.meta ?? {}));
     setRemoteMaterialEditTab('basic');
@@ -1903,6 +1964,7 @@ export function ProfileSettingsModal({
   }, [effectiveNetworkUiAdapter, selectedRemoteMaterial]);
 
   const openRemoteMaterialEditDialogForMaterial = React.useCallback((material: RemoteMaterialProfile) => {
+    if (effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice) return;
     if (material.locked) return;
     handleSelectRemoteMaterial(material);
     setRemoteMaterialEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(material.meta ?? {}));
@@ -3884,16 +3946,45 @@ export function ProfileSettingsModal({
                 <div className="flex items-center gap-1.5 shrink-0">
                   {shouldUseRemoteOnDeviceMaterials && (
                     <>
-                      <button
-                        type="button"
-                        onClick={openRemoteMaterialEditDialog}
-                        disabled={!selectedRemoteMaterial}
-                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Edit
-                      </button>
+                      {effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice ? (
+                        <div className="relative group">
+                          <button
+                            type="button"
+                            disabled
+                            aria-label="Edit material (work in progress)"
+                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md opacity-35 cursor-not-allowed"
+                            style={{ color: 'var(--text-strong)', pointerEvents: 'none' }}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                          <div
+                            className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[220px] rounded-md border px-2.5 py-2 text-[10px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
+                              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+                              color: 'var(--text-muted)',
+                              boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                            }}
+                            role="tooltip"
+                            aria-hidden="true"
+                          >
+                            <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>Work in progress</div>
+                            <div>{effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice}</div>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={openRemoteMaterialEditDialog}
+                          disabled={!selectedRemoteMaterial}
+                          className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                          style={{ color: 'var(--text-strong)' }}
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Edit
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => { void loadRemoteMaterials(); }}
@@ -3942,7 +4033,7 @@ export function ProfileSettingsModal({
                 <>
                   <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
-                      {isLoadingRemoteMaterials ? (
+                      {isLoadingRemoteMaterials && remoteMaterials.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
                           Loading materials from printer…
                         </div>
@@ -3959,7 +4050,9 @@ export function ProfileSettingsModal({
                               key={material.id}
                               type="button"
                               onClick={() => handleSelectRemoteMaterial(material)}
-                              onDoubleClick={() => openRemoteMaterialEditDialogForMaterial(material)}
+                              onDoubleClick={effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice
+                                ? undefined
+                                : () => openRemoteMaterialEditDialogForMaterial(material)}
                               className="w-full rounded-md border px-2.5 py-2 text-left"
                               style={active
                                 ? {

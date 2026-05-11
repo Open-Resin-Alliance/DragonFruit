@@ -234,14 +234,32 @@ export function PickingOrbitPauser() {
   return null;
 }
 
-function PickingModeConfigSync({ mode, transformMode }: { mode?: SupportMode; transformMode?: TransformMode }) {
+function PickingModeConfigSync({
+  mode,
+  transformMode,
+  interactionEnabled,
+}: {
+  mode?: SupportMode;
+  transformMode?: TransformMode;
+  interactionEnabled?: boolean;
+}) {
   const { setConfig } = usePicking();
 
   useEffect(() => {
+    if (!interactionEnabled) {
+      setConfig({
+        enabled: false,
+        includeGizmo: false,
+        allowedCategories: null,
+      });
+      return;
+    }
+
     const nextMode = mode ?? 'prepare';
 
     if (nextMode === 'support') {
       setConfig({
+        enabled: true,
         includeGizmo: false,
         allowedCategories: ['support', 'joint', 'knot', 'segment', 'raft', 'model'],
       });
@@ -252,6 +270,7 @@ function PickingModeConfigSync({ mode, transformMode }: { mode?: SupportMode; tr
       // In prepare/modify mode, prioritize transform responsiveness and avoid
       // traversing dense support registrations every hover sample.
       setConfig({
+        enabled: true,
         includeGizmo: true,
         allowedCategories: ['model', 'gizmo'],
       });
@@ -259,10 +278,11 @@ function PickingModeConfigSync({ mode, transformMode }: { mode?: SupportMode; tr
     }
 
     setConfig({
+      enabled: true,
       includeGizmo: true,
       allowedCategories: ['model', 'gizmo', 'support', 'joint', 'knot', 'segment', 'raft'],
     });
-  }, [mode, setConfig, transformMode]);
+  }, [interactionEnabled, mode, setConfig, transformMode]);
 
   return null;
 }
@@ -270,7 +290,25 @@ function PickingModeConfigSync({ mode, transformMode }: { mode?: SupportMode; tr
 /**
  * Wrapper that always applies PickingProvider, but conditionally enables debug mode.
  */
-export function PickingProviderWrapper({ enabled, mode, transformMode, children }: { enabled?: boolean; mode?: SupportMode; transformMode?: TransformMode; children: React.ReactNode }) {
+export function PickingProviderWrapper({
+  enabled,
+  mode,
+  transformMode,
+  interactionEnabled = true,
+  children,
+}: {
+  enabled?: boolean;
+  mode?: SupportMode;
+  transformMode?: TransformMode;
+  interactionEnabled?: boolean;
+  children: React.ReactNode;
+}) {
   // Always render PickingProvider, pass enabled as debug flag
-  return <PickingProvider debug={enabled}><PickingOrbitPauser /><PickingModeConfigSync mode={mode} transformMode={transformMode} />{children}</PickingProvider>;
+  return (
+    <PickingProvider debug={enabled}>
+      {interactionEnabled && <PickingOrbitPauser />}
+      <PickingModeConfigSync mode={mode} transformMode={transformMode} interactionEnabled={interactionEnabled} />
+      {children}
+    </PickingProvider>
+  );
 }

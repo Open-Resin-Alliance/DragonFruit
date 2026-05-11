@@ -44,6 +44,10 @@ type FocusTransition = {
   prevEnabled: boolean | undefined;
 };
 
+type FocusPointOptions = {
+  preserveCameraPosition?: boolean;
+};
+
 function computeModelWorldCenter(model: LoadedModel): THREE.Vector3 {
   const localBounds = model.geometry.bbox.clone();
   localBounds.translate(new THREE.Vector3(
@@ -88,7 +92,7 @@ export function CameraFocusHotkeyController({
   cameraRef,
   orbitControlsRef,
 }: CameraFocusHotkeyControllerProps) {
-  const { camera, controls, size } = useThree();
+  const { size } = useThree();
   const sizeRef = React.useRef(size);
   React.useEffect(() => { sizeRef.current = size; }, [size]);
   const transitionRef = React.useRef<FocusTransition | null>(null);
@@ -96,7 +100,9 @@ export function CameraFocusHotkeyController({
   useFrame(() => {
     const transition = transitionRef.current;
     if (!transition) return;
-    if (!isOrbitLikeControls(controls)) return;
+    const camera = cameraRef.current;
+    const controls = orbitControlsRef.current;
+    if (!camera || !controls || !isOrbitLikeControls(controls)) return;
 
     const now = performance.now();
     if (transition.startTime === null) transition.startTime = now;
@@ -128,7 +134,19 @@ export function CameraFocusHotkeyController({
     }
   }, -1);
 
-  const snapCameraToPoint = React.useCallback((point: THREE.Vector3, modelRadius?: number) => {
+  const snapCameraToPoint = React.useCallback((
+    point: THREE.Vector3,
+    modelRadius?: number,
+    options?: FocusPointOptions,
+  ) => {
+    const camera = cameraRef.current;
+    const controls = orbitControlsRef.current;
+    if (!camera || !controls || !isOrbitLikeControls(controls)) {
+      // No orbit controls yet — just update the pivot state
+      setOrbitTargetFromPoint(point, { animate: false });
+      return;
+    }
+
     if (!isOrbitLikeControls(controls)) {
       // No orbit controls yet — just update the pivot state
       setOrbitTargetFromPoint(point, { animate: false });
@@ -177,7 +195,10 @@ export function CameraFocusHotkeyController({
     }
 
     const endTarget = point.clone();
-    const endPos = endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
+    const preserveCameraPosition = !!options?.preserveCameraPosition;
+    const endPos = preserveCameraPosition
+      ? camera.position.clone()
+      : endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
 
     // Disable damping so no pending velocity is applied during update()
     const prevDamping = controls.enableDamping;
@@ -202,7 +223,7 @@ export function CameraFocusHotkeyController({
       prevDamping,
       prevEnabled,
     };
-  }, [camera, controls, setOrbitTargetFromPoint]);
+  }, [cameraRef, orbitControlsRef, setOrbitTargetFromPoint]);
 
   useCameraFocusHotkey(() => {
     const visibleModels = models.filter((model) => model.visible);
@@ -216,14 +237,14 @@ export function CameraFocusHotkeyController({
       );
 
     // Hovering a selected model: re-target the orbit pivot to the hovered
-    // surface point but keep the current zoom / distance unchanged.
+    // surface point but keep the current zoom / camera position unchanged.
     if (hoverPoint && hoveredSelectedModel) {
-      snapCameraToPoint(hoverPoint);
+      snapCameraToPoint(hoverPoint, undefined, { preserveCameraPosition: true });
       return;
     }
 
     if (visibleModels.length === 0) {
-      if (hoverPoint) snapCameraToPoint(hoverPoint);
+      if (hoverPoint) snapCameraToPoint(hoverPoint, undefined, { preserveCameraPosition: true });
       return;
     }
 

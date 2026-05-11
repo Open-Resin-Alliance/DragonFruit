@@ -10,6 +10,7 @@ const allowlistPath = path.join(repoRoot, 'src', 'config', 'complex-plugin-allow
 const tsGeneratedPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPlugins.ts');
 const tsGeneratedNetworkHandlersPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginNetworkHandlers.ts');
 const tsGeneratedUploadHandlersPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
+const tsGeneratedFileTypeHandlersPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginFileTypeHandlers.ts');
 const rustGeneratedPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
 const rustSlicerGeneratedEncodersPath = path.join(repoRoot, 'rust', 'dragonfruit-slicing-engine', 'src', 'encoders', 'generated_plugin_encoders.rs');
 const cargoAuditPath = path.join(repoRoot, 'src-tauri', 'generated_crate_requirements.toml');
@@ -28,6 +29,7 @@ function parseCapabilitiesFromPluginDefinitionSource(sourceText) {
             uploadWithProgress: hasTrueFlag('uploadWithProgress'),
             slicerEncoder: hasTrueFlag('slicerEncoder'),
             tauriRuntimePlugin: hasTrueFlag('tauriRuntimePlugin'),
+            fileType: hasTrueFlag('fileType'),
       };
 }
 
@@ -91,6 +93,18 @@ function enforceCapabilityConsistency(discovered) {
             if (!capabilities.tauriRuntimePlugin && hasAnyTauriFile) {
                   throw new Error(
                         `[plugin-registry] Plugin "${id}" has rust/plugin.rs or rust/network.rs but capabilities.tauriRuntimePlugin is not true`,
+                  );
+            }
+
+            if (capabilities.fileType && !plugin.hasTsFileTypeHandler) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" declares fileType=true but is missing fileTypeHandlers.ts`,
+                  );
+            }
+
+            if (!capabilities.fileType && plugin.hasTsFileTypeHandler) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" has fileTypeHandlers.ts but capabilities.fileType is not true`,
                   );
             }
       }
@@ -306,6 +320,7 @@ async function discoverPlugins() {
             const rustNetworkPath = path.join(pluginDir, 'rust', 'network.rs');
             const tsNetworkHandlerPath = path.join(pluginDir, 'network', 'networkHandlers.ts');
             const tsUploadHandlerPath = path.join(pluginDir, 'network', 'index.ts');
+            const tsFileTypeHandlerPath = path.join(pluginDir, 'fileTypeHandlers.ts');
             const rustSlicerEncoderPath = path.join(pluginDir, 'slicing', 'rust', 'encoder_impl.rs');
             const formatsJsonPath = path.join(pluginDir, 'slicing', 'formats.json');
             const requiredCratesPath = path.join(pluginDir, 'slicing', 'rust', 'requiredCrates.toml');
@@ -320,6 +335,14 @@ async function discoverPlugins() {
             const hasTsNetworkHandler = await fs.access(tsNetworkHandlerPath).then(() => true).catch(() => false);
             const hasTsUploadHandler = await fs.access(tsUploadHandlerPath).then(() => true).catch(() => false);
             const hasRustSlicingEncoder = await fs.access(rustSlicerEncoderPath).then(() => true).catch(() => false);
+            const hasTsFileTypeHandler = await fs.access(tsFileTypeHandlerPath).then(() => true).catch(() => false);
+
+            // Extract file extensions (without leading dot) from the pluginDefinition source for Rust generation.
+            // Matches fileExtension: '.ext' or fileExtension: ".ext" patterns.
+            const fileTypeExtensions = capabilities.fileType
+                  ? [...pluginDefinitionSource.matchAll(/fileExtension\s*:\s*['"]\.([a-zA-Z0-9]+)['"]/g)]
+                        .map((m) => m[1].toLowerCase())
+                  : [];
 
             let formatsMetadata = null;
             const hasFormatsJson = await fs.access(formatsJsonPath).then(() => true).catch(() => false);
@@ -350,6 +373,8 @@ async function discoverPlugins() {
                   hasTsNetworkHandler,
                   hasTsUploadHandler,
                   hasRustSlicingEncoder,
+                  hasTsFileTypeHandler,
+                  fileTypeExtensions,
                   capabilities,
                   hasFormatsJson,
                   formatsMetadata,
@@ -398,11 +423,9 @@ function enforceAllowlist(discovered, allowlistIds) {
       const allowlistedButMissing = allowlistIds
             .filter((id) => !discoveredIds.has(id));
 
-      if (allowlistedButMissing.length > 0) {
-            throw new Error(
-                  `[plugin-registry] Allowlisted plugin(s) missing pluginDefinition.ts: ${allowlistedButMissing.join(', ')}`,
-            );
-      }
+      return {
+            allowlistedButMissing,
+      };
 }
 
 function computeAllowlistHash(rawAllowlistJson) {
@@ -506,6 +529,39 @@ ${entries}
 `;
 }
 
+function buildTsGeneratedFileTypeHandlersFile(discovered) {
+      const fileTypeCapable = discovered.filter((plugin) => plugin.capabilities.fileType && plugin.hasTsFileTypeHandler);
+
+      const imports = fileTypeCapable
+            .map((plugin) => {
+                  const safe = plugin.id.replace(/[^a-zA-Z0-9]+/g, '_');
+                  return `import { handleFileTypeImport as ${safe}_file_type_handler } from '../../../plugins/${plugin.id}/fileTypeHandlers';`;
+            })
+            .join('\n');
+
+      const entries = fileTypeCapable
+            .map((plugin) => {
+                  const safe = plugin.id.replace(/[^a-zA-Z0-9]+/g, '_');
+                  return `  { pluginId: '${plugin.id}', handler: ${safe}_file_type_handler }`;
+            })
+            .join(',\n');
+
+      return `/* AUTO-GENERATED FILE. DO NOT EDIT.
+ * Generated by scripts/generate-plugin-registry.mjs
+ */
+import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
+${imports ? `${imports}\n` : ''}
+export type GeneratedBuiltinComplexPluginFileTypeHandler = {
+  pluginId: string;
+  handler: PluginFileTypeHandler;
+};
+
+export const GENERATED_BUILTIN_COMPLEX_PLUGIN_FILE_TYPE_HANDLERS: GeneratedBuiltinComplexPluginFileTypeHandler[] = [
+${entries}
+];
+`;
+}
+
 function buildRustGeneratedFile(discovered, allowlistHash) {
       const rustCapable = discovered.filter((plugin) => plugin.capabilities.tauriRuntimePlugin && plugin.hasRustPlugin && plugin.hasRustNetwork);
 
@@ -544,6 +600,14 @@ function buildRustGeneratedFile(discovered, allowlistHash) {
 
       const ids = rustCapable.map((plugin) => `"${plugin.id}"`).join(', ');
 
+      // Collect all scene file extensions from fileType-capable plugins (de-duplicated, sorted)
+      const allSceneExts = [...new Set(
+            discovered
+                  .filter((p) => p.capabilities.fileType && p.fileTypeExtensions.length > 0)
+                  .flatMap((p) => p.fileTypeExtensions),
+      )].sort();
+      const sceneExtsLiteral = allSceneExts.map((e) => `"${e}"`).join(', ');
+
       return `// AUTO-GENERATED FILE. DO NOT EDIT.
 // Generated by scripts/generate-plugin-registry.mjs
 
@@ -554,6 +618,8 @@ ${pathModules}
 #[allow(dead_code)]
 pub const GENERATED_BUILTIN_PLUGIN_IDS: &[&str] = &[${ids}];
 pub const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256: &str = "${allowlistHash}";
+/// Scene file extensions contributed by built-in fileType plugins (without leading dot).
+pub const GENERATED_BUILTIN_PLUGIN_SCENE_FILE_EXTENSIONS: &[&str] = &[${sceneExtsLiteral}];
 
 pub fn register_generated_plugins() -> Result<(), String> {
 ${registerCalls}
@@ -630,8 +696,15 @@ async function writeFileIfChanged(filePath, content) {
 async function main() {
       const discovered = await discoverPlugins();
       const allowlist = await readAllowlist();
-      enforceAllowlist(discovered, allowlist.ids);
+      const allowlistResult = enforceAllowlist(discovered, allowlist.ids);
       enforceCapabilityConsistency(discovered);
+
+      if (allowlistResult.allowlistedButMissing.length > 0) {
+            console.warn(
+                  `[plugin-registry] Warning: allowlisted plugin(s) missing locally (likely uninitialized submodule): ${allowlistResult.allowlistedButMissing.join(', ')}`,
+            );
+            console.warn('[plugin-registry] Continuing with locally available complex plugins only.');
+      }
 
       const filteredDiscovered = discovered
             .filter((entry) => allowlist.ids.includes(entry.id))
@@ -641,6 +714,7 @@ async function main() {
       const tsSource = buildTsGeneratedFile(filteredDiscovered, allowlistHash);
       const tsNetworkHandlersSource = buildTsGeneratedNetworkHandlersFile(filteredDiscovered);
       const tsUploadHandlersSource = buildTsGeneratedUploadHandlersFile(filteredDiscovered);
+      const tsFileTypeHandlersSource = buildTsGeneratedFileTypeHandlersFile(filteredDiscovered);
       const rustSource = buildRustGeneratedFile(filteredDiscovered, allowlistHash);
       const rustSlicerEncodersSource = buildRustSlicerGeneratedEncodersFile(filteredDiscovered);
 
@@ -658,6 +732,7 @@ async function main() {
       await ensureParent(tsGeneratedPath);
       await ensureParent(tsGeneratedNetworkHandlersPath);
       await ensureParent(tsGeneratedUploadHandlersPath);
+      await ensureParent(tsGeneratedFileTypeHandlersPath);
       await ensureParent(rustGeneratedPath);
       await ensureParent(rustSlicerGeneratedEncodersPath);
       await ensureParent(cargoAuditPath);
@@ -666,6 +741,7 @@ async function main() {
       if (await writeFileIfChanged(tsGeneratedPath, tsSource)) changedFiles += 1;
       if (await writeFileIfChanged(tsGeneratedNetworkHandlersPath, tsNetworkHandlersSource)) changedFiles += 1;
       if (await writeFileIfChanged(tsGeneratedUploadHandlersPath, tsUploadHandlersSource)) changedFiles += 1;
+      if (await writeFileIfChanged(tsGeneratedFileTypeHandlersPath, tsFileTypeHandlersSource)) changedFiles += 1;
       if (await writeFileIfChanged(rustGeneratedPath, rustSource)) changedFiles += 1;
       if (await writeFileIfChanged(rustSlicerGeneratedEncodersPath, rustSlicerEncodersSource)) changedFiles += 1;
       if (await writeFileIfChanged(cargoAuditPath, cargoAuditContent)) changedFiles += 1;

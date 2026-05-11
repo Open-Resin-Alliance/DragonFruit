@@ -402,6 +402,310 @@ fn compute_component_area_stats_8_connected(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RleSpan {
+    start: u32,
+    end: u32,
+    component: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ComponentNode {
+    parent: usize,
+    rank: u8,
+    pixels: u32,
+}
+
+#[derive(Debug, Default)]
+struct ComponentSpanTracker {
+    components: Vec<ComponentNode>,
+    prev_row_spans: Vec<RleSpan>,
+    current_row_spans: Vec<RleSpan>,
+}
+
+impl ComponentSpanTracker {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    fn push_span(&mut self, start: usize, end: usize) {
+        if end < start {
+            return;
+        }
+        let component = self.components.len();
+        self.components.push(ComponentNode {
+            parent: component,
+            rank: 0,
+            pixels: (end - start + 1) as u32,
+        });
+        self.current_row_spans.push(RleSpan {
+            start: start as u32,
+            end: end as u32,
+            component,
+        });
+    }
+
+    #[inline]
+    fn finish_row(&mut self) {
+        if !self.current_row_spans.is_empty() && !self.prev_row_spans.is_empty() {
+            let mut prev_start_idx = 0usize;
+            for span in &mut self.current_row_spans {
+                let adjacency_start = span.start.saturating_sub(1);
+                let adjacency_end = span.end.saturating_add(1);
+
+                while prev_start_idx < self.prev_row_spans.len()
+                    && self.prev_row_spans[prev_start_idx].end < adjacency_start
+                {
+                    prev_start_idx += 1;
+                }
+
+                let mut probe = prev_start_idx;
+                while probe < self.prev_row_spans.len()
+                    && self.prev_row_spans[probe].start <= adjacency_end
+                {
+                    span.component = component_union(
+                        &mut self.components,
+                        span.component,
+                        self.prev_row_spans[probe].component,
+                    );
+                    probe += 1;
+                }
+            }
+        }
+
+        self.prev_row_spans.clear();
+        self.prev_row_spans
+            .extend_from_slice(&self.current_row_spans);
+        self.current_row_spans.clear();
+    }
+
+    fn finalize(mut self, pixel_area_mm2: f64) -> (u32, f64, f64, u32) {
+        if self.components.is_empty() {
+            return (0, 0.0, 0.0, 0);
+        }
+
+        let mut seen_roots = vec![false; self.components.len()];
+        let mut total_solid_pixels = 0u32;
+        let mut largest_area_mm2 = 0.0f64;
+        let mut smallest_area_mm2 = f64::INFINITY;
+        let mut area_count = 0u32;
+
+        for index in 0..self.components.len() {
+            let root = component_find(&mut self.components, index);
+            if seen_roots[root] {
+                continue;
+            }
+            seen_roots[root] = true;
+
+            let pixels = self.components[root].pixels;
+            if pixels == 0 {
+                continue;
+            }
+
+            area_count = area_count.saturating_add(1);
+            total_solid_pixels = total_solid_pixels.saturating_add(pixels);
+
+            let area_mm2 = pixels as f64 * pixel_area_mm2;
+            if area_mm2 > largest_area_mm2 {
+                largest_area_mm2 = area_mm2;
+            }
+            if area_mm2 < smallest_area_mm2 {
+                smallest_area_mm2 = area_mm2;
+            }
+        }
+
+        if area_count == 0 {
+            (0, 0.0, 0.0, 0)
+        } else {
+            (
+                total_solid_pixels,
+                largest_area_mm2,
+                smallest_area_mm2,
+                area_count,
+            )
+        }
+    }
+}
+
+#[inline]
+fn component_find(nodes: &mut [ComponentNode], index: usize) -> usize {
+    let parent = nodes[index].parent;
+    if parent == index {
+        return index;
+    }
+
+    let root = component_find(nodes, parent);
+    nodes[index].parent = root;
+    root
+}
+
+#[inline]
+fn component_union(nodes: &mut [ComponentNode], a: usize, b: usize) -> usize {
+    let mut root_a = component_find(nodes, a);
+    let mut root_b = component_find(nodes, b);
+
+    if root_a == root_b {
+        return root_a;
+    }
+
+    if nodes[root_a].rank < nodes[root_b].rank {
+        std::mem::swap(&mut root_a, &mut root_b);
+    }
+
+    nodes[root_b].parent = root_a;
+    nodes[root_a].pixels = nodes[root_a].pixels.saturating_add(nodes[root_b].pixels);
+
+    if nodes[root_a].rank == nodes[root_b].rank {
+        nodes[root_a].rank = nodes[root_a].rank.saturating_add(1);
+    }
+
+    root_a
+}
+
+/// Compute 8-connected component area stats directly from row-major RLE runs.
+///
+/// This avoids materializing a full binary mask + per-pixel flood fill,
+/// reducing work to run/span adjacency checks for non-AA layers.
+fn compute_component_area_stats_from_rle_8_connected(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    pixel_area_mm2: f64,
+) -> (u32, f64, f64, u32) {
+    if width == 0 || height == 0 || runs.is_empty() {
+        return (0, 0.0, 0.0, 0);
+    }
+
+    let mut components: Vec<ComponentNode> = Vec::new();
+    let mut prev_row_spans: Vec<RleSpan> = Vec::new();
+    let mut current_row_spans: Vec<RleSpan> = Vec::new();
+
+    let mut row = 0usize;
+    let mut col = 0usize;
+
+    for run in runs {
+        if row >= height {
+            break;
+        }
+
+        let mut remaining = run.length as usize;
+        while remaining > 0 && row < height {
+            let row_remaining = width.saturating_sub(col);
+            if row_remaining == 0 {
+                prev_row_spans.clear();
+                prev_row_spans.extend_from_slice(&current_row_spans);
+                current_row_spans.clear();
+                row = row.saturating_add(1);
+                col = 0;
+                continue;
+            }
+
+            let take = remaining.min(row_remaining);
+
+            if run.value > 0 {
+                let start = col as u32;
+                let end = (col + take - 1) as u32;
+                let component = components.len();
+                components.push(ComponentNode {
+                    parent: component,
+                    rank: 0,
+                    pixels: take as u32,
+                });
+                current_row_spans.push(RleSpan {
+                    start,
+                    end,
+                    component,
+                });
+            }
+
+            col += take;
+            remaining -= take;
+
+            if col == width {
+                if !current_row_spans.is_empty() && !prev_row_spans.is_empty() {
+                    let mut prev_start_idx = 0usize;
+
+                    for span in &mut current_row_spans {
+                        let adjacency_start = span.start.saturating_sub(1);
+                        let adjacency_end = span.end.saturating_add(1);
+
+                        while prev_start_idx < prev_row_spans.len()
+                            && prev_row_spans[prev_start_idx].end < adjacency_start
+                        {
+                            prev_start_idx += 1;
+                        }
+
+                        let mut probe = prev_start_idx;
+                        while probe < prev_row_spans.len()
+                            && prev_row_spans[probe].start <= adjacency_end
+                        {
+                            span.component = component_union(
+                                &mut components,
+                                span.component,
+                                prev_row_spans[probe].component,
+                            );
+                            probe += 1;
+                        }
+                    }
+                }
+
+                prev_row_spans.clear();
+                prev_row_spans.extend_from_slice(&current_row_spans);
+                current_row_spans.clear();
+
+                row += 1;
+                col = 0;
+            }
+        }
+    }
+
+    if components.is_empty() {
+        return (0, 0.0, 0.0, 0);
+    }
+
+    let mut seen_roots = vec![false; components.len()];
+    let mut total_solid_pixels = 0u32;
+    let mut largest_area_mm2 = 0.0f64;
+    let mut smallest_area_mm2 = f64::INFINITY;
+    let mut area_count = 0u32;
+
+    for index in 0..components.len() {
+        let root = component_find(&mut components, index);
+        if seen_roots[root] {
+            continue;
+        }
+        seen_roots[root] = true;
+
+        let pixels = components[root].pixels;
+        if pixels == 0 {
+            continue;
+        }
+
+        area_count = area_count.saturating_add(1);
+        total_solid_pixels = total_solid_pixels.saturating_add(pixels);
+
+        let area_mm2 = pixels as f64 * pixel_area_mm2;
+        if area_mm2 > largest_area_mm2 {
+            largest_area_mm2 = area_mm2;
+        }
+        if area_mm2 < smallest_area_mm2 {
+            smallest_area_mm2 = area_mm2;
+        }
+    }
+
+    if area_count == 0 {
+        (0, 0.0, 0.0, 0)
+    } else {
+        (
+            total_solid_pixels,
+            largest_area_mm2,
+            smallest_area_mm2,
+            area_count,
+        )
+    }
+}
+
 fn aa_subpixel_steps(level: &str) -> u8 {
     match level {
         "2x" => 2,
@@ -515,10 +819,9 @@ pub fn rasterize_layer_with_stats(
     let scanline_starts = scanline_index.starts;
     let y_start = scanline_index.y_start;
     let y_end_exclusive = scanline_index.y_end_exclusive;
-
-    // Keep area stats on a strict binary mask while allowing grayscale AA output.
-    let mut stats_mask = if compute_area_stats && aa_enabled {
-        Some(vec![0u8; width * height])
+    let track_aa_components = compute_area_stats && aa_enabled;
+    let mut aa_component_tracker = if track_aa_components {
+        Some(ComponentSpanTracker::new())
     } else {
         None
     };
@@ -535,6 +838,16 @@ pub fn rasterize_layer_with_stats(
     let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
     let mut row_accum = vec![0u32; width];
+    let mut row_delta = if aa_enabled {
+        vec![0i32; width + 1]
+    } else {
+        Vec::new()
+    };
+    let mut row_hit_delta = if track_aa_components {
+        vec![0i32; width + 1]
+    } else {
+        Vec::new()
+    };
     let mut current_physical_y = if y_start < y_end_exclusive {
         y_start / aa_steps
     } else {
@@ -548,11 +861,50 @@ pub fn rasterize_layer_with_stats(
             if aa_enabled && current_physical_y < height {
                 let r_start = current_physical_y * width;
                 let mask_row = &mut mask[r_start..r_start + width];
-                for (acc, out) in row_accum.iter_mut().zip(mask_row.iter_mut()) {
-                    if *acc > 0 {
-                        let resolved = (*acc / (aa_steps as u32)).min(255) as u8;
-                        *out = resolved.max(min_aa_alpha_u8);
-                        *acc = 0;
+                let mut coverage = 0i32;
+                let mut occupied = 0i32;
+                let mut run_start: Option<usize> = None;
+
+                for x in 0..width {
+                    coverage += row_delta[x];
+                    let acc = if coverage > 0 {
+                        row_accum[x].saturating_add(coverage as u32)
+                    } else {
+                        row_accum[x]
+                    };
+                    if acc > 0 {
+                        let resolved = (acc / (aa_steps as u32)).min(255) as u8;
+                        mask_row[x] = resolved.max(min_aa_alpha_u8);
+                    }
+                    row_accum[x] = 0;
+                    row_delta[x] = 0;
+
+                    if track_aa_components {
+                        occupied += row_hit_delta[x];
+                        let is_occupied = occupied > 0;
+                        if is_occupied {
+                            if run_start.is_none() {
+                                run_start = Some(x);
+                            }
+                        } else if let Some(start) = run_start.take() {
+                            if let Some(ref mut tracker) = aa_component_tracker {
+                                tracker.push_span(start, x - 1);
+                            }
+                        }
+                        row_hit_delta[x] = 0;
+                    }
+                }
+
+                row_delta[width] = 0;
+                if track_aa_components {
+                    if let Some(start) = run_start {
+                        if let Some(ref mut tracker) = aa_component_tracker {
+                            tracker.push_span(start, width - 1);
+                        }
+                    }
+                    row_hit_delta[width] = 0;
+                    if let Some(ref mut tracker) = aa_component_tracker {
+                        tracker.finish_row();
                     }
                 }
             }
@@ -574,14 +926,6 @@ pub fn rasterize_layer_with_stats(
         let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
 
         for span in spans {
-            if let Some(ref mut binary) = stats_mask {
-                let b_start = row_start + span.start;
-                let b_end = row_start + span.end;
-                if b_end < binary.len() {
-                    binary[b_start..=b_end].fill(255);
-                }
-            }
-
             if !aa_enabled {
                 let row = &mut mask[row_start..row_start + width];
                 row[span.start..=span.end].fill(255);
@@ -607,15 +951,19 @@ pub fn rasterize_layer_with_stats(
                         let interior_start = (left_i + 1).max(0) as usize;
                         let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
                         if interior_end >= interior_start {
-                            for x in interior_start..=interior_end {
-                                row_accum[x] += 255;
-                            }
+                            row_delta[interior_start] += 255;
+                            row_delta[interior_end + 1] -= 255;
                         }
 
                         if right_i >= 0 && right_i < width as i32 {
                             row_accum[right_i as usize] += right_cov as u32;
                         }
                     }
+                }
+
+                if track_aa_components {
+                    row_hit_delta[span.start] += 1;
+                    row_hit_delta[span.end + 1] -= 1;
                 }
             }
 
@@ -638,11 +986,49 @@ pub fn rasterize_layer_with_stats(
         let r_start = current_physical_y * width;
         if r_start < mask.len() {
             let mask_row = &mut mask[r_start..r_start + width];
-            for (acc, out) in row_accum.iter_mut().zip(mask_row.iter_mut()) {
-                if *acc > 0 {
-                    let resolved = (*acc / (aa_steps as u32)).min(255) as u8;
-                    *out = resolved.max(min_aa_alpha_u8);
-                    *acc = 0;
+            let mut coverage = 0i32;
+            let mut occupied = 0i32;
+            let mut run_start: Option<usize> = None;
+            for x in 0..width {
+                coverage += row_delta[x];
+                let acc = if coverage > 0 {
+                    row_accum[x].saturating_add(coverage as u32)
+                } else {
+                    row_accum[x]
+                };
+                if acc > 0 {
+                    let resolved = (acc / (aa_steps as u32)).min(255) as u8;
+                    mask_row[x] = resolved.max(min_aa_alpha_u8);
+                }
+                row_accum[x] = 0;
+                row_delta[x] = 0;
+
+                if track_aa_components {
+                    occupied += row_hit_delta[x];
+                    let is_occupied = occupied > 0;
+                    if is_occupied {
+                        if run_start.is_none() {
+                            run_start = Some(x);
+                        }
+                    } else if let Some(start) = run_start.take() {
+                        if let Some(ref mut tracker) = aa_component_tracker {
+                            tracker.push_span(start, x - 1);
+                        }
+                    }
+                    row_hit_delta[x] = 0;
+                }
+            }
+
+            row_delta[width] = 0;
+            if track_aa_components {
+                if let Some(start) = run_start {
+                    if let Some(ref mut tracker) = aa_component_tracker {
+                        tracker.push_span(start, width - 1);
+                    }
+                }
+                row_hit_delta[width] = 0;
+                if let Some(ref mut tracker) = aa_component_tracker {
+                    tracker.finish_row();
                 }
             }
         }
@@ -659,10 +1045,14 @@ pub fn rasterize_layer_with_stats(
         stats.max_y = max_y;
 
         if compute_area_stats {
-            let stats_source = stats_mask.as_deref().unwrap_or(&mask);
-            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) = if aa_enabled {
+                aa_component_tracker
+                    .take()
+                    .map(|tracker| tracker.finalize(pixel_area_mm2))
+                    .unwrap_or((0, 0.0, 0.0, 0))
+            } else {
                 compute_component_area_stats_8_connected(
-                    stats_source,
+                    &mask,
                     width,
                     height,
                     min_x as usize,
@@ -670,7 +1060,8 @@ pub fn rasterize_layer_with_stats(
                     min_y as usize,
                     max_y as usize,
                     pixel_area_mm2,
-                );
+                )
+            };
 
             stats.total_solid_pixels = total_pixels;
             let total_area = (total_pixels as f64) * pixel_area_mm2;
@@ -755,8 +1146,9 @@ pub fn rasterize_layer_rle(
     let scanline_starts = scanline_index.starts;
     let y_start = scanline_index.y_start;
     let y_end_exclusive = scanline_index.y_end_exclusive;
-    let mut stats_mask = if compute_area_stats {
-        Some(vec![0u8; width * height])
+    let track_aa_components = compute_area_stats && aa_enabled;
+    let mut aa_component_tracker = if track_aa_components {
+        Some(ComponentSpanTracker::new())
     } else {
         None
     };
@@ -780,6 +1172,16 @@ pub fn rasterize_layer_rle(
     // Single-row scratch buffer — width bytes max (7680 at 8 K).
     let mut row_buf = vec![0u8; width];
     let mut row_accum = vec![0u32; width];
+    let mut row_delta = if aa_enabled {
+        vec![0i32; width + 1]
+    } else {
+        Vec::new()
+    };
+    let mut row_hit_delta = if track_aa_components {
+        vec![0i32; width + 1]
+    } else {
+        Vec::new()
+    };
     let mut current_physical_y = first_physical_y;
     // last_emitted_py: the most recent physical row fully committed to `rle`.
     // Starts at first_physical_y - 1 (we just emitted zeros 0..first_physical_y).
@@ -792,11 +1194,50 @@ pub fn rasterize_layer_rle(
         ($next_py:expr) => {{
             // Resolve AA accumulator into row_buf for the row being flushed.
             if aa_enabled {
-                for (acc, out) in row_accum.iter_mut().zip(row_buf.iter_mut()) {
-                    if *acc > 0 {
-                        let resolved = (*acc / (aa_steps as u32)).min(255) as u8;
-                        *out = resolved.max(min_aa_alpha_u8);
-                        *acc = 0;
+                let mut coverage = 0i32;
+                let mut occupied = 0i32;
+                let mut run_start: Option<usize> = None;
+
+                for x in 0..width {
+                    coverage += row_delta[x];
+                    let acc = if coverage > 0 {
+                        row_accum[x].saturating_add(coverage as u32)
+                    } else {
+                        row_accum[x]
+                    };
+                    if acc > 0 {
+                        let resolved = (acc / (aa_steps as u32)).min(255) as u8;
+                        row_buf[x] = resolved.max(min_aa_alpha_u8);
+                    }
+                    row_accum[x] = 0;
+                    row_delta[x] = 0;
+
+                    if track_aa_components {
+                        occupied += row_hit_delta[x];
+                        let is_occupied = occupied > 0;
+                        if is_occupied {
+                            if run_start.is_none() {
+                                run_start = Some(x);
+                            }
+                        } else if let Some(start) = run_start.take() {
+                            if let Some(ref mut tracker) = aa_component_tracker {
+                                tracker.push_span(start, x - 1);
+                            }
+                        }
+                        row_hit_delta[x] = 0;
+                    }
+                }
+
+                row_delta[width] = 0;
+                if track_aa_components {
+                    if let Some(start) = run_start {
+                        if let Some(ref mut tracker) = aa_component_tracker {
+                            tracker.push_span(start, width - 1);
+                        }
+                    }
+                    row_hit_delta[width] = 0;
+                    if let Some(ref mut tracker) = aa_component_tracker {
+                        tracker.finish_row();
                     }
                 }
             }
@@ -834,14 +1275,6 @@ pub fn rasterize_layer_rle(
         let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
 
         for span in spans {
-            if let Some(ref mut binary) = stats_mask {
-                let b_start = physical_y * width + span.start;
-                let b_end = physical_y * width + span.end;
-                if b_end < binary.len() {
-                    binary[b_start..=b_end].fill(255);
-                }
-            }
-
             if !aa_enabled {
                 row_buf[span.start..=span.end].fill(255);
             } else {
@@ -865,15 +1298,19 @@ pub fn rasterize_layer_rle(
                         let interior_start = (left_i + 1).max(0) as usize;
                         let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
                         if interior_end >= interior_start {
-                            for x in interior_start..=interior_end {
-                                row_accum[x] += 255;
-                            }
+                            row_delta[interior_start] += 255;
+                            row_delta[interior_end + 1] -= 255;
                         }
 
                         if right_i >= 0 && right_i < width as i32 {
                             row_accum[right_i as usize] += right_cov as u32;
                         }
                     }
+                }
+
+                if track_aa_components {
+                    row_hit_delta[span.start] += 1;
+                    row_hit_delta[span.end + 1] -= 1;
                 }
             }
 
@@ -904,6 +1341,8 @@ pub fn rasterize_layer_rle(
         stats.total_solid_pixels /= aa_steps as u32;
     }
 
+    let runs = rle.finish();
+
     if stats.total_solid_pixels > 0 {
         stats.min_x = min_x;
         stats.min_y = min_y;
@@ -911,20 +1350,19 @@ pub fn rasterize_layer_rle(
         stats.max_y = max_y;
 
         if compute_area_stats {
-            let stats_source = stats_mask
-                .as_deref()
-                .expect("stats mask must exist when compute_area_stats is true");
-            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-                compute_component_area_stats_8_connected(
-                    stats_source,
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) = if aa_enabled {
+                aa_component_tracker
+                    .take()
+                    .map(|tracker| tracker.finalize(pixel_area_mm2))
+                    .unwrap_or((0, 0.0, 0.0, 0))
+            } else {
+                compute_component_area_stats_from_rle_8_connected(
+                    &runs,
                     width,
                     height,
-                    min_x as usize,
-                    max_x as usize,
-                    min_y as usize,
-                    max_y as usize,
                     pixel_area_mm2,
-                );
+                )
+            };
 
             stats.total_solid_pixels = total_pixels;
             let total_area = (total_pixels as f64) * pixel_area_mm2;
@@ -941,7 +1379,7 @@ pub fn rasterize_layer_rle(
         }
     }
 
-    (rle.finish(), stats)
+    (runs, stats)
 }
 
 #[cfg(test)]
@@ -1152,6 +1590,68 @@ mod tests {
             (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
                 < 1e-6,
             "total area should equal the sum of component areas"
+        );
+    }
+
+    #[test]
+    fn disconnected_islands_report_component_stats_with_aa() {
+        let mut job = job_for_single_layer();
+        job.anti_aliasing_level = "4x".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        // Large island
+        push_box_triangles(&mut flat, -20.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+        // Smaller, disconnected island
+        push_box_triangles(&mut flat, 20.0, 0.0, 0.0, 1.0, 8.0, 8.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (_mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0, true);
+
+        assert_eq!(
+            stats.area_count, 2,
+            "AA path should preserve disconnected 8-connected component count"
+        );
+        assert!(
+            stats.largest_area_mm2 > stats.smallest_area_mm2,
+            "largest area should exceed smallest area for differently sized disconnected islands"
+        );
+        assert!(
+            (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
+                < 1e-6,
+            "total area should equal the sum of component areas in AA path"
+        );
+    }
+
+    #[test]
+    fn disconnected_islands_report_component_stats_in_rle_path_with_aa() {
+        let mut job = job_for_single_layer();
+        job.anti_aliasing_level = "4x".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        // Large island
+        push_box_triangles(&mut flat, -20.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+        // Smaller, disconnected island
+        push_box_triangles(&mut flat, 20.0, 0.0, 0.0, 1.0, 8.0, 8.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (_runs, stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+
+        assert_eq!(
+            stats.area_count, 2,
+            "AA RLE path should preserve disconnected 8-connected component count"
+        );
+        assert!(
+            stats.largest_area_mm2 > stats.smallest_area_mm2,
+            "largest area should exceed smallest area for differently sized disconnected islands"
+        );
+        assert!(
+            (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
+                < 1e-6,
+            "total area should equal the sum of component areas in AA RLE path"
         );
     }
 }

@@ -53,6 +53,8 @@ import {
     subscribeToRaftStore,
     setRaftSettings,
     updateRaftSettings,
+    wasRaftSettingsManuallyModified,
+    resetRaftSessionModificationFlag,
 } from '../Rafts/Crenelated/RaftState';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 import type { SupportKind } from './supportKindState';
@@ -324,14 +326,19 @@ export function SupportSidebar() {
         const RAFT_STORAGE_KEY = 'raft-settings';
 
         loadSettingsFromLocalStorage();
-        try {
-            const storedRaft = localStorage.getItem(RAFT_STORAGE_KEY);
-            if (storedRaft) {
-                const parsed = JSON.parse(storedRaft);
-                setRaftSettings(parsed);
+        
+        // Skip loading localStorage raft settings if the user already manually modified them in this session.
+        // This preserves manual changes when reopening Support Studio and respects import defaults.
+        if (!wasRaftSettingsManuallyModified()) {
+            try {
+                const storedRaft = localStorage.getItem(RAFT_STORAGE_KEY);
+                if (storedRaft) {
+                    const parsed = JSON.parse(storedRaft);
+                    setRaftSettings(parsed);
+                }
+            } catch (err) {
+                console.error('[SupportSidebar] Failed to load raft settings:', err);
             }
-        } catch (err) {
-            console.error('[SupportSidebar] Failed to load raft settings:', err);
         }
 
         checkPresetDrift(getSettings());

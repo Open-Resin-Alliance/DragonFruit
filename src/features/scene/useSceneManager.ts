@@ -2,7 +2,9 @@ import { useState, useCallback, useEffect } from 'react';
 import * as THREE from 'three';
 import { useStlGeometry } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { loadFromLychee } from '@/supports/state';
+import { loadFromImportFormat } from '@/supports/state';
+import { updateRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 
@@ -40,14 +42,15 @@ export function useSceneManager() {
     e.target.value = '';
   }, []);
 
-  const handleLoadLychee = async () => {
+  const handleLoadSupportJson = async () => {
     try {
       const res = await fetch('/dragonfruit_supports.json');
       const data = await res.json();
-      loadFromLychee(data);
-      console.log('Loaded Lychee data:', data);
+      updateRaftSettings(getImportDefaultsRaftPatch(getSavedImportDefaultsSettings()));
+      loadFromImportFormat(data);
+      console.log('Loaded LYS data:', data);
     } catch (e) {
-      console.error('Failed to load Lychee data:', e);
+      console.error('Failed to load LYS data:', e);
     }
   };
 
@@ -118,6 +121,6 @@ export function useSceneManager() {
     geom,
     polygonCount,
     onFileChange,
-    handleLoadLychee
+    handleLoadSupportJson
   };
 }

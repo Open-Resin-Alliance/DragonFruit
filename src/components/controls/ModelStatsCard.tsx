@@ -210,6 +210,13 @@ export function ModelStatsCard({
     return selectedLayerCounts.reduce((max, entry) => (entry.count != null && entry.count > max ? entry.count : max), 0);
   }, [selectedLayerCounts]);
 
+  const resolvedLayerCount = React.useMemo(() => {
+    if (Number.isFinite(numLayers) && numLayers > 0) {
+      return Math.max(0, Math.round(numLayers));
+    }
+    return maxLayerCount;
+  }, [maxLayerCount, numLayers]);
+
   const resinTargetModels = React.useMemo(() => {
     const visibleModels = models.filter((entry) => entry.visible);
 
@@ -486,7 +493,7 @@ export function ModelStatsCard({
 
               <span>Layers:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {maxLayerCount != null ? maxLayerCount : '-'}
+                {resolvedLayerCount != null ? resolvedLayerCount : '-'}
               </span>
 
               <span>Est. print time:</span>

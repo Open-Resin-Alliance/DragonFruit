@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { getSnapshot, loadFromLychee, resetStore, transformAllSupportsForSingleModel, transformSupportsForModel } from '../state';
+import { getSnapshot, loadFromImportFormat, resetStore, transformAllSupportsForSingleModel, transformSupportsForModel } from '../state';
 import { getKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 import type { DragonfruitImportFormat } from '../types';
 
@@ -116,7 +116,7 @@ function makeBaseData(): DragonfruitImportFormat {
 
 test('transformSupportsForModel keeps support roots grounded during pure Z translation', () => {
   resetStore();
-  loadFromLychee(makeBaseData());
+  loadFromImportFormat(makeBaseData());
 
   const before = {
     position: new THREE.Vector3(0, 0, 0),
@@ -158,7 +158,7 @@ test('transformSupportsForModel keeps support roots grounded during pure Z trans
 
 test('transformAllSupportsForSingleModel keeps roots grounded during pure Z translation', () => {
   resetStore();
-  loadFromLychee(makeBaseData());
+  loadFromImportFormat(makeBaseData());
 
   const before = {
     position: new THREE.Vector3(0, 0, 0),
@@ -183,7 +183,7 @@ test('transformAllSupportsForSingleModel keeps roots grounded during pure Z tran
 
 test('transformSupportsForModel preserves full root transform behavior for rotation/scale changes', () => {
   resetStore();
-  loadFromLychee(makeBaseData());
+  loadFromImportFormat(makeBaseData());
 
   const before = {
     position: new THREE.Vector3(0, 0, 0),

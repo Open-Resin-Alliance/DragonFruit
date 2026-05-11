@@ -50,6 +50,7 @@ export type ArrangeModel = {
 
 export type HullCacheEntry = {
   points: THREE.Vector2[];
+  axes: THREE.Vector2[];
   halfW: number;
   halfD: number;
   localMinX: number;
@@ -77,7 +78,13 @@ export type HighPrecisionArrangeUpdate = {
   transform: ArrangeTransform;
 };
 
-export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeInput): HighPrecisionArrangeUpdate[] {
+export type HighPrecisionArrangeResult = {
+  updates: HighPrecisionArrangeUpdate[];
+  packedIds: string[];
+  spilledIds: string[];
+};
+
+export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInput): HighPrecisionArrangeResult {
   const {
     visibleModels,
     sceneModels,
@@ -91,7 +98,13 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     hullCache,
   } = input;
 
-  if (visibleModels.length <= 1) return [];
+  if (visibleModels.length <= 1) {
+    return {
+      updates: [],
+      packedIds: [],
+      spilledIds: [],
+    };
+  }
 
   // Numerical tolerance guard used in spacing enforcement to avoid near-contact jitter.
   const SAT_EPS_MM = 0.05;
@@ -116,25 +129,41 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
 
   type HullData = HullCacheEntry;
 
+  const axesFromPolygon = (poly: THREE.Vector2[]) => {
+    const axes: THREE.Vector2[] = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      const edge = new THREE.Vector2(b.x - a.x, b.y - a.y);
+      if (edge.lengthSq() <= 1e-10) continue;
+      axes.push(new THREE.Vector2(-edge.y, edge.x).normalize());
+    }
+    return axes;
+  };
+
+  const fallbackHullPoints = [
+    new THREE.Vector2(-1, -1),
+    new THREE.Vector2(1, -1),
+    new THREE.Vector2(1, 1),
+    new THREE.Vector2(-1, 1),
+  ];
+  const fallbackHullData: HullData = {
+    points: fallbackHullPoints,
+    axes: axesFromPolygon(fallbackHullPoints),
+    halfW: 1,
+    halfD: 1,
+    localMinX: -1,
+    localMaxX: 1,
+    localMinY: -1,
+    localMaxY: 1,
+  };
+
   // Phase 1: Build/cache model footprints (2D convex hulls at a target Z rotation).
   const getHullAtRotation = (model: ArrangeModel, rotationZ: number): HullData => {
     const t = modelTransformById.get(model.id) ?? model.transform;
     const positionAttr = model.geometry.geometry.getAttribute('position') as THREE.BufferAttribute;
     if (!positionAttr || positionAttr.count < 3) {
-      return {
-        points: [
-          new THREE.Vector2(-1, -1),
-          new THREE.Vector2(1, -1),
-          new THREE.Vector2(1, 1),
-          new THREE.Vector2(-1, 1),
-        ],
-        halfW: 1,
-        halfD: 1,
-        localMinX: -1,
-        localMaxX: 1,
-        localMinY: -1,
-        localMaxY: 1,
-      };
+      return fallbackHullData;
     }
 
     const key = [
@@ -199,12 +228,8 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     const hull = convexHull2d(points2d);
     const points = hull.length >= 3
       ? hull
-      : [
-        new THREE.Vector2(-1, -1),
-        new THREE.Vector2(1, -1),
-        new THREE.Vector2(1, 1),
-        new THREE.Vector2(-1, 1),
-      ];
+      : fallbackHullPoints;
+    const axes = axesFromPolygon(points);
 
     let localMinX = Infinity;
     let localMaxX = -Infinity;
@@ -226,6 +251,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
 
     const next: HullData = {
       points,
+      axes,
       halfW: Math.max(1, (localMaxX - localMinX) * 0.5),
       halfD: Math.max(1, (localMaxY - localMinY) * 0.5),
       localMinX,
@@ -238,42 +264,51 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     return next;
   };
 
-  const axesFromPolygon = (poly: THREE.Vector2[]) => {
-    const axes: THREE.Vector2[] = [];
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i];
-      const b = poly[(i + 1) % poly.length];
-      const edge = new THREE.Vector2(b.x - a.x, b.y - a.y);
-      if (edge.lengthSq() <= 1e-10) continue;
-      axes.push(new THREE.Vector2(-edge.y, edge.x).normalize());
-    }
-    return axes;
-  };
-
-  const projectPolygon = (poly: THREE.Vector2[], center: THREE.Vector2, axis: THREE.Vector2) => {
-    let min = Infinity;
-    let max = -Infinity;
-    for (const p of poly) {
-      const dot = (p.x + center.x) * axis.x + (p.y + center.y) * axis.y;
-      min = Math.min(min, dot);
-      max = Math.max(max, dot);
-    }
-    return { min, max };
-  };
-
   // SAT overlap test expanded with minimum clearance (spacing) margin.
-  const polygonsOverlapWithSpacing = (
+  const separatesOnAxis = (
     polyA: THREE.Vector2[],
     centerA: THREE.Vector2,
     polyB: THREE.Vector2[],
     centerB: THREE.Vector2,
+    axis: THREE.Vector2,
     spacingMm: number,
   ) => {
-    const axes = [...axesFromPolygon(polyA), ...axesFromPolygon(polyB)];
-    for (const axis of axes) {
-      const pa = projectPolygon(polyA, centerA, axis);
-      const pb = projectPolygon(polyB, centerB, axis);
-      if ((pa.max + spacingMm) <= pb.min || (pb.max + spacingMm) <= pa.min) {
+    const centerADot = (centerA.x * axis.x) + (centerA.y * axis.y);
+    const centerBDot = (centerB.x * axis.x) + (centerB.y * axis.y);
+
+    let minA = Infinity;
+    let maxA = -Infinity;
+    for (const p of polyA) {
+      const dot = (p.x * axis.x) + (p.y * axis.y) + centerADot;
+      minA = Math.min(minA, dot);
+      maxA = Math.max(maxA, dot);
+    }
+
+    let minB = Infinity;
+    let maxB = -Infinity;
+    for (const p of polyB) {
+      const dot = (p.x * axis.x) + (p.y * axis.y) + centerBDot;
+      minB = Math.min(minB, dot);
+      maxB = Math.max(maxB, dot);
+    }
+
+    return (maxA + spacingMm) <= minB || (maxB + spacingMm) <= minA;
+  };
+
+  const polygonsOverlapWithSpacing = (
+    proxyA: CollisionProxy,
+    centerA: THREE.Vector2,
+    proxyB: CollisionProxy,
+    centerB: THREE.Vector2,
+    spacingMm: number,
+  ) => {
+    for (const axis of proxyA.axes) {
+      if (separatesOnAxis(proxyA.hull, centerA, proxyB.hull, centerB, axis, spacingMm)) {
+        return false;
+      }
+    }
+    for (const axis of proxyB.axes) {
+      if (separatesOnAxis(proxyA.hull, centerA, proxyB.hull, centerB, axis, spacingMm)) {
         return false;
       }
     }
@@ -283,6 +318,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
   type CollisionProxy = {
     center: THREE.Vector2;
     hull: THREE.Vector2[];
+    axes: THREE.Vector2[];
     halfW: number;
     halfD: number;
     localMinX: number;
@@ -417,7 +453,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     const candidates = lookup ? lookup.query(candidate, center, minSpacing) : others;
     for (const other of candidates) {
       if (!intersectsBroadphase(candidate, center, other, other.center, minSpacing)) continue;
-      if (polygonsOverlapWithSpacing(candidate.hull, center, other.hull, other.center, minSpacing)) return false;
+      if (polygonsOverlapWithSpacing(candidate, center, other, other.center, minSpacing)) return false;
     }
     return true;
   };
@@ -467,14 +503,6 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     return a.anchorDistSq < b.anchorDistSq;
   };
 
-  // Anchor requested by UI; applied as a post-pack translation after dense fill.
-  const finalAnchor = (() => {
-    if (arrangeAnchorMode === 'front_left') return new THREE.Vector2(minX, minY);
-    if (arrangeAnchorMode === 'front_right') return new THREE.Vector2(maxX, minY);
-    if (arrangeAnchorMode === 'back_left') return new THREE.Vector2(minX, maxY);
-    if (arrangeAnchorMode === 'back_right') return new THREE.Vector2(maxX, maxY);
-    return new THREE.Vector2((minX + maxX) * 0.5, (minY + maxY) * 0.5);
-  })();
   // Packing objective is intentionally fixed to top-left for better fill consistency.
   const packingAnchor = new THREE.Vector2(minX, minY);
 
@@ -487,6 +515,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
       return {
         center: new THREE.Vector2(t.position.x, t.position.y),
         hull: h.points,
+        axes: h.axes,
         halfW: h.halfW,
         halfD: h.halfD,
         localMinX: h.localMinX,
@@ -585,7 +614,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
       const h = getHullAtRotation(model, angle);
       const proxy: CollisionProxy = {
         center: new THREE.Vector2(),
-        hull: h.points, halfW: h.halfW, halfD: h.halfD,
+        hull: h.points, axes: h.axes, halfW: h.halfW, halfD: h.halfD,
         localMinX: h.localMinX, localMaxX: h.localMaxX,
         localMinY: h.localMinY, localMaxY: h.localMaxY,
       };
@@ -664,7 +693,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     const MAX_CANDIDATE_BUFFER = aggressive ? 10000 : (PERF_COMPLEX_SCENE ? 560 : 1500);
 
     const placed: Placed[] = [];
-    let spills: Placed[] = [];
+    const spills: Placed[] = [];
 
     for (const model of order) {
       const t = modelTransformById.get(model.id) ?? model.transform;
@@ -695,7 +724,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
         const h = getHullAtRotation(model, rotationZ);
         const candidateProxy: CollisionProxy = {
           center: new THREE.Vector2(),
-          hull: h.points, halfW: h.halfW, halfD: h.halfD,
+          hull: h.points, axes: h.axes, halfW: h.halfW, halfD: h.halfD,
           localMinX: h.localMinX, localMaxX: h.localMaxX,
           localMinY: h.localMinY, localMaxY: h.localMaxY,
         };
@@ -826,6 +855,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
           center: best.center,
           rotationZ: best.rotationZ,
           hull: best.proxy.hull,
+          axes: best.proxy.axes,
           halfW: best.proxy.halfW,
           halfD: best.proxy.halfD,
           localMinX: best.proxy.localMinX,
@@ -848,6 +878,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
         center: spillCenter,
         rotationZ: t.rotation.z,
         hull: fallback.points,
+        axes: fallback.axes,
         halfW: fallback.halfW,
         halfD: fallback.halfD,
         localMinX: fallback.localMinX,
@@ -920,14 +951,19 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
   const COMPACTION_PASSES = PERF_COMPLEX_SCENE ? 6 : 8;
   const COMPACTION_STEPS = PERF_COMPLEX_SCENE ? 12 : 16;
 
-  const binarySlide = (entry: Placed, dir: THREE.Vector2, others: CollisionProxy[]) => {
+  const binarySlide = (
+    entry: Placed,
+    dir: THREE.Vector2,
+    others: CollisionProxy[],
+    lookup?: CollisionLookup,
+  ) => {
     const start = entry.center.clone();
     if (dir.lengthSq() <= 1e-10) return false;
     let lo = 0; let hi = 1;
     for (let s = 0; s < COMPACTION_STEPS; s++) {
       const mid = (lo + hi) * 0.5;
       const c = new THREE.Vector2(start.x + dir.x * mid, start.y + dir.y * mid);
-      if (canPlaceAt(entry, c, others)) lo = mid; else hi = mid;
+      if (canPlaceAt(entry, c, others, lookup)) lo = mid; else hi = mid;
     }
     if (lo > 1e-4) {
       entry.center.set(start.x + dir.x * lo, start.y + dir.y * lo);
@@ -948,12 +984,13 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
       for (let oi = 0; oi < placed.length; oi++) {
         if (oi !== idx) others.push(placed[oi]);
       }
+      const othersLookup = makeCollisionLookup(others, estimateCollisionCellSize(others.length));
       const toAnchor = new THREE.Vector2(packingAnchor.x - entry.center.x, packingAnchor.y - entry.center.y);
-      if (binarySlide(entry, toAnchor, others)) moved = true;
+      if (binarySlide(entry, toAnchor, others, othersLookup)) moved = true;
       const toAnchorX = new THREE.Vector2(packingAnchor.x - entry.center.x, 0);
-      if (binarySlide(entry, toAnchorX, others)) moved = true;
+      if (binarySlide(entry, toAnchorX, others, othersLookup)) moved = true;
       const toAnchorY = new THREE.Vector2(0, packingAnchor.y - entry.center.y);
-      if (binarySlide(entry, toAnchorY, others)) moved = true;
+      if (binarySlide(entry, toAnchorY, others, othersLookup)) moved = true;
     }
 
     if (!moved) break;
@@ -961,6 +998,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
 
   // Phase 4: Apply requested user anchor as a safe group translation on packed in-plate models.
   if (placed.length > 0) {
+    const blockerLookup = makeCollisionLookup(blockers, estimateCollisionCellSize(blockers.length));
     const getPlacedBounds = (entries: Placed[]) => {
       let bMinX = Infinity;
       let bMaxX = -Infinity;
@@ -1005,9 +1043,9 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
       for (const entry of placed) {
         const shiftedCenter = new THREE.Vector2(entry.center.x + dx, entry.center.y + dy);
         if (!withinPlateAt(entry, shiftedCenter)) return false;
-        for (const blocker of blockers) {
+        for (const blocker of blockerLookup.query(entry, shiftedCenter, minSpacing)) {
           if (!intersectsBroadphase(entry, shiftedCenter, blocker, blocker.center, minSpacing)) continue;
-          if (polygonsOverlapWithSpacing(entry.hull, shiftedCenter, blocker.hull, blocker.center, minSpacing)) {
+          if (polygonsOverlapWithSpacing(entry, shiftedCenter, blocker, blocker.center, minSpacing)) {
             return false;
           }
         }
@@ -1070,7 +1108,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
   }
 
   // Final phase: materialize transform updates for scene application.
-  return [...placed, ...spills].map((entry) => {
+  const updates = [...placed, ...spills].map((entry) => {
     const t = modelTransformById.get(entry.model.id) ?? entry.model.transform;
     return {
       id: entry.model.id,
@@ -1081,4 +1119,14 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
       },
     };
   });
+
+  return {
+    updates,
+    packedIds: placed.map((entry) => entry.model.id),
+    spilledIds: spills.map((entry) => entry.model.id),
+  };
+}
+
+export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeInput): HighPrecisionArrangeUpdate[] {
+  return computeHighPrecisionArrangeResult(input).updates;
 }

@@ -18,6 +18,7 @@ interface GizmoRotationProps {
   isHidden?: boolean;
   suppressHover?: boolean;
   opacityScale?: number;
+  interactionsEnabled?: boolean;
   suppressAxisAnimations?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
@@ -39,6 +40,7 @@ export function GizmoRotation({
   isHidden,
   suppressHover = false,
   opacityScale = 1,
+  interactionsEnabled = true,
   suppressAxisAnimations = false,
   enableLighting = true,
   gizmoPosition,
@@ -206,6 +208,9 @@ export function GizmoRotation({
     if (e.button === 2) {
       return;
     }
+    if (!interactionsEnabled) {
+      return;
+    }
     
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
@@ -228,12 +233,14 @@ export function GizmoRotation({
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled) return;
     e.stopPropagation();
     onPointerEnter();
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: true, axis } }));
   };
 
   const handlePointerLeaveLocal = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled) return;
     e.stopPropagation();
     onPointerLeave();
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
@@ -464,7 +471,7 @@ export function GizmoRotation({
           not block pointer events during another gizmo's active drag. */}
       <mesh
         ref={pickMeshRef}
-        visible={!isHidden}
+        visible={!isHidden && interactionsEnabled}
         position={initialHandlePos}
         onPointerDown={handlePointerDown}
         onPointerEnter={handlePointerEnterLocal}
@@ -523,9 +530,9 @@ export function GizmoRotation({
         ref={handleRootRef}
         position={initialHandlePos}
         scale={isHighlighted ? 1.08 : 1.0}
-        onPointerDown={handlePointerDown}
-        onPointerEnter={handlePointerEnterLocal}
-        onPointerLeave={handlePointerLeaveLocal}
+        onPointerDown={interactionsEnabled ? handlePointerDown : undefined}
+        onPointerEnter={interactionsEnabled ? handlePointerEnterLocal : undefined}
+        onPointerLeave={interactionsEnabled ? handlePointerLeaveLocal : undefined}
       >
         {/* Billboard group to improve arrow readability relative to camera */}
         <group ref={billboardGroupRef}>

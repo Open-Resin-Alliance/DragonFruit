@@ -22,7 +22,7 @@ async function loadTauriCore(): Promise<TauriCoreModule | null> {
 type FetchLikeResponse = {
   ok: boolean;
   status: number;
-  json: () => Promise<any>;
+  json: () => Promise<unknown>;
 };
 
 /**
@@ -78,4 +78,38 @@ export async function pluginNetworkFetch(
     body: JSON.stringify(payload),
   });
   return response;
+}
+
+export async function readNativeFileSize(sourcePath: string): Promise<number | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  try {
+    const size = await core.invoke<number>('read_print_file_size', {
+      sourcePath,
+    });
+    return Number.isFinite(size) && size >= 0 ? size : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function readNativeFileChunk(
+  sourcePath: string,
+  offset: number,
+  length: number,
+): Promise<Uint8Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  try {
+    const result = await core.invoke<ArrayBuffer>('read_print_file_chunk', {
+      sourcePath,
+      offset,
+      length,
+    });
+    return new Uint8Array(result);
+  } catch {
+    return null;
+  }
 }

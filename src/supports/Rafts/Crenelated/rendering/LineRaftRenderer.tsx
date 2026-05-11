@@ -7,10 +7,9 @@ import { subscribe, getSnapshot } from '@/supports/state';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { convexHull2d } from '../geometry/convexHull2d';
 import { computeFootprint } from '../geometry/computeFootprint';
-import { delaunayTriangulate2d } from '../geometry/delaunayTriangulate2d';
+import { buildLineRaftEdgePairs } from '../geometry/buildLineRaftEdgePairs';
 import { generateUnionedLineRaftMesh } from '../geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '../geometry/generateChamferedBeam';
-import { generatePerimeterBorderBeam } from '../geometry/generatePerimeterBorderBeam';
 import { generatePerimeterWall } from '../geometry/generatePerimeterWall';
 import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWallManual';
 import type { SupportBaseCircle } from '../RaftTypes';
@@ -297,87 +296,12 @@ export default function LineRaftRenderer({
     const profile = computeFootprint(circles, { marginMm: 0.2 + chamferInset, samplesPerCircle: 24 });
     const hasBorderRing = !!profile && profile.length >= 3;
 
-    // Outer ring (natural border)
-    const hull = convexHull2d(nodes2d);
-
-    // Build index mapping for hull points to nearest original node index
-    const hullIndices: number[] = hull.map((hp) => {
-      let best = 0;
-      let bestD2 = Infinity;
-      for (let i = 0; i < nodes2d.length; i++) {
-        const p = nodes2d[i];
-        const dx = p.x - hp.x;
-        const dy = p.y - hp.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < bestD2) {
-          bestD2 = d2;
-          best = i;
-        }
-      }
-      return best;
+    const edgePairs = buildLineRaftEdgePairs(nodes2d, {
+      hasBorderRing,
+      keepFactor: 8,
+      absMaxLen: 220,
+      enforceConnected: true,
     });
-
-    // Seed: hull ring edges
-    const hullEdges: Array<[number, number]> = [];
-    if (hullIndices.length >= 2) {
-      for (let i = 0; i < hullIndices.length; i++) {
-        const a = hullIndices[i];
-        const b = hullIndices[(i + 1) % hullIndices.length];
-        if (a !== b) hullEdges.push([a, b]);
-      }
-    }
-
-    const hullEdgeSet = new Set<EdgeKey>();
-    for (const [a, b] of hullEdges) hullEdgeSet.add(edgeKey(a, b));
-
-    // Interior edges: Delaunay triangulation (planar / non-crossing) + pruning.
-    const tris = delaunayTriangulate2d(nodes2d);
-
-    const nn = new Array(nodes2d.length).fill(Infinity);
-    for (let i = 0; i < nodes2d.length; i++) {
-      for (let j = 0; j < nodes2d.length; j++) {
-        if (i === j) continue;
-        nn[i] = Math.min(nn[i], edgeLen(nodes2d[i], nodes2d[j]));
-      }
-      if (!Number.isFinite(nn[i])) nn[i] = 0;
-    }
-
-    const keepFactor = 3.2;
-    const absMaxLen = 120;
-    const edges = new Set<EdgeKey>();
-    const edgePairs: Array<[number, number]> = [];
-
-    // If we have a dedicated perimeter border ring mesh, do NOT also add hull beam edges.
-    // Otherwise (fallback), keep hull edges so the network still has a boundary.
-    if (!hasBorderRing) {
-      for (const [a, b] of hullEdges) {
-        const key = edgeKey(a, b);
-        if (!edges.has(key)) {
-          edges.add(key);
-          edgePairs.push([a, b]);
-        }
-      }
-    }
-
-    // Add pruned Delaunay edges
-    for (const [i, j, k] of tris) {
-      const triEdges: Array<[number, number]> = [
-        [i, j],
-        [j, k],
-        [k, i],
-      ];
-      for (const [a, b] of triEdges) {
-        const key = edgeKey(a, b);
-        if (edges.has(key)) continue;
-        if (hasBorderRing && hullEdgeSet.has(key)) continue;
-        const len = edgeLen(nodes2d[a], nodes2d[b]);
-        const localMax = keepFactor * Math.min(nn[a], nn[b]);
-        if (len > absMaxLen) continue;
-        if (nn[a] > 0 && nn[b] > 0 && len > localMax) continue;
-        edges.add(key);
-        edgePairs.push([a, b]);
-      }
-    }
 
     // Beam height: explicit line height setting
     const beamHeight = Math.max(0.01, raft.lineHeightMm);
@@ -415,17 +339,6 @@ export default function LineRaftRenderer({
         mesh.userData.modelId = modelId;
         beamMeshes.push(mesh);
       }
-    }
-
-    // Perimeter border beam: single manifold ring mesh (chamfered outer edge).
-    if (hasBorderRing) {
-      const borderMesh = generatePerimeterBorderBeam(profile, { widthMm: raft.lineWidthMm, heightMm: beamHeight, chamferAngleDeg: raft.chamferAngle });
-      borderMesh.renderOrder = ghostRenderOrder;
-      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
-      borderMesh.castShadow = false;
-      borderMesh.receiveShadow = true;
-      borderMesh.userData.modelId = modelId;
-      beamMeshes.push(borderMesh);
     }
 
     // Wall: perimeter only (never along internal beams)
