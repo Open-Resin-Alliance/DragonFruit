@@ -466,6 +466,26 @@ fn matches_model_hint(supported_model: &str, model_hint: Option<&'static str>) -
     }
 }
 
+fn device_matches_requested_model_hint(device: &Value, requested_model_hint: Option<&'static str>) -> bool {
+    let Some(expected) = requested_model_hint else {
+        return true;
+    };
+
+    let model = device
+        .get("printerModel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let normalized = normalize_model_name(model);
+
+    if expected == "athena-2" {
+        normalized.contains("athena 2") || normalized.contains("athena2")
+    } else {
+        normalized.contains("athena")
+            && !normalized.contains("athena 2")
+            && !normalized.contains("athena2")
+    }
+}
+
 fn resolve_known_network_filter(machine_name: &str) -> Option<String> {
     let normalized_machine = normalize_machine_name(machine_name);
     if normalized_machine.is_empty() {
@@ -1235,31 +1255,33 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
             let normalized_device_machine_name = device_machine_name
                 .as_deref()
                 .map(normalize_machine_name);
+            let normalized_device_network_filter = device_network_filter
+                .as_deref()
+                .map(normalize_machine_name);
             let network_filter_matched = normalized_requested_network_filter
                 .as_ref()
                 .zip(normalized_device_machine_name.as_ref())
                 .map(|(expected, actual)| expected == actual)
+                .unwrap_or(false);
+            let explicit_known_filter_mismatch = normalized_requested_network_filter
+                .as_ref()
+                .zip(normalized_device_network_filter.as_ref())
+                .map(|(expected, known)| expected != known)
                 .unwrap_or(false);
             let model_hint_matched = supported_model
                 .map(|model| matches_model_hint(model, requested_model_hint))
                 .unwrap_or(false);
 
             if supported_model.is_none()
+                || explicit_known_filter_mismatch
                 || (!model_hint_matched && !network_filter_matched)
-                || (requested_network_filter.is_some()
-                    && !network_filter_matched)
-                || (requested_network_filter.is_none()
-                    && !athena_network_filters().is_empty()
-                    && device_network_filter.is_none())
             {
                 let reason = if supported_model.is_none() {
                     "unsupported-model"
-                } else if !model_hint_matched && !network_filter_matched {
-                    "model-hint-mismatch"
-                } else if requested_network_filter.is_some() {
-                    "network-filter-mismatch"
+                } else if explicit_known_filter_mismatch {
+                    "explicit-known-filter-mismatch"
                 } else {
-                    "known-filter-missing"
+                    "model-hint-mismatch"
                 };
 
                 log_nanodlp_filter_debug(
@@ -1273,6 +1295,7 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
                         "requestedNetworkFilter": requested_network_filter,
                         "modelHintMatched": model_hint_matched,
                         "networkFilterMatched": network_filter_matched,
+                        "explicitKnownFilterMismatch": explicit_known_filter_mismatch,
                         "supportedModel": supported_model,
                         "printerModel": printer_model,
                         "deviceMachineName": device_machine_name,
@@ -1298,7 +1321,13 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
                 } else {
                     match requested_network_filter.as_deref() {
                         Some(filter) => {
-                            format!("Printer model mismatch: expected {filter}, found \"{}\".", printer_model)
+                            format!(
+                                "Printer model mismatch: expected {filter}, found \"{}\".",
+                                device_network_filter
+                                    .as_deref()
+                                    .filter(|v| !v.trim().is_empty())
+                                    .unwrap_or(printer_model.as_str())
+                            )
                         }
                         None => match requested_label {
                             Some(label) => {
@@ -1571,12 +1600,32 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
             let machine_name = resolve_device_machine_name(host, port, 2500).await;
             let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
             let normalized_expected = normalize_machine_name(expected_filter);
+            let known_network_filter = machine_name
+                .as_deref()
+                .and_then(resolve_known_network_filter);
+            let normalized_known_network_filter = known_network_filter
+                .as_deref()
+                .map(normalize_machine_name);
             let matched = normalized_machine_name
                 .as_deref()
                 .map(|name| name == normalized_expected)
                 .unwrap_or(false);
+            let explicit_known_filter_mismatch = normalized_known_network_filter
+                .as_deref()
+                .map(|known| known != normalized_expected)
+                .unwrap_or(false);
+            let model_hint_fallback = device_matches_requested_model_hint(&device, requested_model_hint);
+            let accepted = matched || (!explicit_known_filter_mismatch && model_hint_fallback);
             log_nanodlp_filter_debug(
-                if matched { "discover/match" } else { "discover/reject" },
+                if matched {
+                    "discover/match"
+                } else if explicit_known_filter_mismatch {
+                    "discover/reject"
+                } else if model_hint_fallback {
+                    "discover/fallback"
+                } else {
+                    "discover/reject"
+                },
                 debug_filter,
                 json!({
                     "phase": "local-hostnames",
@@ -1584,12 +1633,24 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                     "port": port,
                     "machineName": machine_name,
                     "normalizedMachineName": normalized_machine_name,
+                    "knownNetworkFilter": known_network_filter,
+                    "normalizedKnownNetworkFilter": normalized_known_network_filter,
                     "expectedFilter": expected_filter,
                     "normalizedExpectedFilter": normalized_expected,
-                    "reason": if matched { "network-filter-match" } else { "network-filter-mismatch" },
+                    "requestedModelHint": requested_model_hint,
+                    "modelHintFallback": model_hint_fallback,
+                    "reason": if matched {
+                        "network-filter-match"
+                    } else if explicit_known_filter_mismatch {
+                        "explicit-known-filter-mismatch"
+                    } else if model_hint_fallback {
+                        "model-hint-fallback"
+                    } else {
+                        "network-filter-mismatch"
+                    },
                 }),
             );
-            if matched {
+            if accepted {
                 filtered.push(device);
             }
         }
@@ -1629,12 +1690,32 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                 let machine_name = resolve_device_machine_name(host, port, 2500).await;
                 let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
                 let normalized_expected = normalize_machine_name(expected_filter);
+                let known_network_filter = machine_name
+                    .as_deref()
+                    .and_then(resolve_known_network_filter);
+                let normalized_known_network_filter = known_network_filter
+                    .as_deref()
+                    .map(normalize_machine_name);
                 let matched = normalized_machine_name
                     .as_deref()
                     .map(|name| name == normalized_expected)
                     .unwrap_or(false);
+                let explicit_known_filter_mismatch = normalized_known_network_filter
+                    .as_deref()
+                    .map(|known| known != normalized_expected)
+                    .unwrap_or(false);
+                let model_hint_fallback = device_matches_requested_model_hint(&device, requested_model_hint);
+                let accepted = matched || (!explicit_known_filter_mismatch && model_hint_fallback);
                 log_nanodlp_filter_debug(
-                    if matched { "discover/match" } else { "discover/reject" },
+                    if matched {
+                        "discover/match"
+                    } else if explicit_known_filter_mismatch {
+                        "discover/reject"
+                    } else if model_hint_fallback {
+                        "discover/fallback"
+                    } else {
+                        "discover/reject"
+                    },
                     debug_filter,
                     json!({
                         "phase": "subnet-progressive",
@@ -1642,12 +1723,24 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                         "port": port,
                         "machineName": machine_name,
                         "normalizedMachineName": normalized_machine_name,
+                        "knownNetworkFilter": known_network_filter,
+                        "normalizedKnownNetworkFilter": normalized_known_network_filter,
                         "expectedFilter": expected_filter,
                         "normalizedExpectedFilter": normalized_expected,
-                        "reason": if matched { "network-filter-match" } else { "network-filter-mismatch" },
+                        "requestedModelHint": requested_model_hint,
+                        "modelHintFallback": model_hint_fallback,
+                        "reason": if matched {
+                            "network-filter-match"
+                        } else if explicit_known_filter_mismatch {
+                            "explicit-known-filter-mismatch"
+                        } else if model_hint_fallback {
+                            "model-hint-fallback"
+                        } else {
+                            "network-filter-mismatch"
+                        },
                     }),
                 );
-                if matched {
+                if accepted {
                     filtered.push(device);
                 }
             }
@@ -1724,12 +1817,32 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                 let machine_name = resolve_device_machine_name(host, port, 2500).await;
                 let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
                 let normalized_expected = normalize_machine_name(expected_filter);
+                let known_network_filter = machine_name
+                    .as_deref()
+                    .and_then(resolve_known_network_filter);
+                let normalized_known_network_filter = known_network_filter
+                    .as_deref()
+                    .map(normalize_machine_name);
                 let matched = normalized_machine_name
                     .as_deref()
                     .map(|name| name == normalized_expected)
                     .unwrap_or(false);
+                let explicit_known_filter_mismatch = normalized_known_network_filter
+                    .as_deref()
+                    .map(|known| known != normalized_expected)
+                    .unwrap_or(false);
+                let model_hint_fallback = device_matches_requested_model_hint(&device, requested_model_hint);
+                let accepted = matched || (!explicit_known_filter_mismatch && model_hint_fallback);
                 log_nanodlp_filter_debug(
-                    if matched { "discover/match" } else { "discover/reject" },
+                    if matched {
+                        "discover/match"
+                    } else if explicit_known_filter_mismatch {
+                        "discover/reject"
+                    } else if model_hint_fallback {
+                        "discover/fallback"
+                    } else {
+                        "discover/reject"
+                    },
                     debug_filter,
                     json!({
                         "phase": "subnet-full",
@@ -1737,12 +1850,24 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                         "port": port,
                         "machineName": machine_name,
                         "normalizedMachineName": normalized_machine_name,
+                        "knownNetworkFilter": known_network_filter,
+                        "normalizedKnownNetworkFilter": normalized_known_network_filter,
                         "expectedFilter": expected_filter,
                         "normalizedExpectedFilter": normalized_expected,
-                        "reason": if matched { "network-filter-match" } else { "network-filter-mismatch" },
+                        "requestedModelHint": requested_model_hint,
+                        "modelHintFallback": model_hint_fallback,
+                        "reason": if matched {
+                            "network-filter-match"
+                        } else if explicit_known_filter_mismatch {
+                            "explicit-known-filter-mismatch"
+                        } else if model_hint_fallback {
+                            "model-hint-fallback"
+                        } else {
+                            "network-filter-mismatch"
+                        },
                     }),
                 );
-                if matched {
+                if accepted {
                     filtered.push(device);
                 }
             }
