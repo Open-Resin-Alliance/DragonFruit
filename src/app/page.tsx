@@ -171,7 +171,7 @@ import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayer
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
-import type { ModelTransform } from '@/hooks/useModelTransform';
+import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
 import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
@@ -896,6 +896,7 @@ export default function Home() {
   const transformHistoryCommitNonceRef = React.useRef(0);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const suppressNextTransformPersistenceRef = React.useRef(false);
+  const suppressTransformPersistenceCycleCountRef = React.useRef(0);
   const skipNextTransformEndCommitRef = React.useRef<{
     modelId: string;
     operation: 'move' | 'scale';
@@ -1986,6 +1987,17 @@ export default function Home() {
   // and cancelled-flag races during scene initialization).
   const importSceneFromLaunchEntriesRef = React.useRef<((entries: LaunchSceneFileEntry[]) => Promise<boolean>) | null>(null);
   const [pendingStartupSceneHandoff, setPendingStartupSceneHandoff] = React.useState(false);
+
+  const suppressTransformPersistenceCycles = React.useCallback((cycles = 1) => {
+    const normalized = Math.max(0, Math.trunc(cycles));
+    if (normalized > 0) {
+      suppressTransformPersistenceCycleCountRef.current = Math.max(
+        suppressTransformPersistenceCycleCountRef.current,
+        normalized,
+      );
+    }
+    suppressNextTransformPersistenceRef.current = true;
+  }, []);
   const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
     signature: '',
     atMs: 0,
@@ -10120,6 +10132,18 @@ export default function Home() {
       return;
     }
 
+    // Mirror mode/session writes model transforms explicitly through raw scene
+    // updates. Persistence during this window can race and re-apply stale
+    // reflected transforms after finalize.
+    if (transformMgr.transformMode === 'mirror' || mirrorSessionRef.current) {
+      return;
+    }
+
+    if (suppressTransformPersistenceCycleCountRef.current > 0) {
+      suppressTransformPersistenceCycleCountRef.current -= 1;
+      return;
+    }
+
     if (suppressNextTransformPersistenceRef.current) {
       suppressNextTransformPersistenceRef.current = false;
       return;
@@ -10220,6 +10244,7 @@ export default function Home() {
     transformMgr.transform.scale.y,
     transformMgr.transform.scale.z,
     transformMgr.isTransforming,
+    transformMgr.transformMode,
     isFiniteTransform,
   ]);
 
@@ -12037,6 +12062,15 @@ export default function Home() {
     });
   }, [scene.view3dSettings.depthMm, scene.view3dSettings.originMode, scene.view3dSettings.widthMm]);
 
+  const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
+  const setTransformModeWithMirrorFinalize = React.useCallback((nextMode: TransformMode) => {
+    if (transformMgr.transformMode === 'mirror' && nextMode !== 'mirror') {
+      suppressTransformPersistenceCycles(10);
+      finalizeMirrorSessionRef.current();
+    }
+    transformMgr.setTransformMode(nextMode);
+  }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
+
   useUndoRedoHotkeys();
   useDeleteHotkey();
   useCameraProjectionHotkey();
@@ -12044,7 +12078,7 @@ export default function Home() {
     appMode: scene.mode,
     hasModels: scene.models.length > 0,
     transformMode: transformMgr.transformMode,
-    setTransformMode: transformMgr.setTransformMode,
+    setTransformMode: setTransformModeWithMirrorFinalize,
     onArrangeAll: () => {
       void (arrangeLayoutMode === 'array'
         ? handleManualArrayArrangeModels('all')
@@ -13491,45 +13525,118 @@ export default function Home() {
     modelId: string;
     flips: { x: boolean; y: boolean; z: boolean };
     initialTransform: ModelTransform;
+    previewTransform: ModelTransform;
     initialGeometry: GeometryWithBounds;
   } | null>(null);
   const mirrorPrevToolActiveRef = React.useRef(false);
+  const mirrorLocalOriginRef = React.useRef(new THREE.Vector3(0, 0, 0));
+
+  const syncTransformManagerToTransform = React.useCallback((nextTransform: ModelTransform) => {
+    // Keep transform-manager state aligned with raw mirror updates so the
+    // persistence bridge cannot write a stale transform back into the model.
+    suppressTransformPersistenceCycles(8);
+    transformMgr.transformHook.setPosition(
+      nextTransform.position.x,
+      nextTransform.position.y,
+      nextTransform.position.z,
+    );
+    transformMgr.transformHook.setRotation(
+      nextTransform.rotation.x,
+      nextTransform.rotation.y,
+      nextTransform.rotation.z,
+    );
+    transformMgr.transformHook.setScale(
+      nextTransform.scale.x,
+      nextTransform.scale.y,
+      nextTransform.scale.z,
+    );
+  }, [suppressTransformPersistenceCycles, transformMgr.transformHook]);
 
   const finalizeMirrorSession = React.useCallback(() => {
     const session = mirrorSessionRef.current;
     mirrorSessionRef.current = null;
     if (!session) return;
 
-    const { modelId, flips, initialTransform, initialGeometry } = session;
+    const { modelId, flips, previewTransform, initialGeometry } = session;
     const anyFlip = flips.x || flips.y || flips.z;
+
+    console.log('[Mirror] finalizeMirrorSession:', { modelId, flips, anyFlip });
 
     if (!anyFlip) {
       // Net-zero session (e.g. user clicked X twice). Nothing to commit.
+      console.log('[Mirror] No flips to commit, returning');
       return;
     }
 
-    // Reset the model transform to the session's starting state. The bake
-    // produces a "natively flipped" mesh that, when rendered with the original
-    // transform, matches what the user has been seeing during the session.
-    scene.setModelTransformRaw(modelId, {
-      position: initialTransform.position.clone(),
-      rotation: initialTransform.rotation.clone(),
-      scale: initialTransform.scale.clone(),
-    });
+    let baked: THREE.BufferGeometry | null = null;
+    try {
+      baked = bakeWithFlips(initialGeometry.geometry, flips);
+    } catch (error) {
+      console.error('[Mirror] bakeWithFlips threw during finalize, preserving live mirrored state:', error);
+      return;
+    }
+    console.log('[Mirror] bakeWithFlips result:', { baked, isValid: !!baked });
+    if (!baked) {
+      console.log('[Mirror] bakeWithFlips returned null, aborting');
+      return;
+    }
 
-    const baked = bakeWithFlips(initialGeometry.geometry, flips);
-    if (!baked) return;
+    // Preserve mirrored orientation while converting from reflected preview
+    // transform to baked geometry: finalTransform * bakedGeometry == previewTransform * sourceGeometry.
+    const bakeLocalMatrix = new THREE.Matrix4().identity();
+    const bakeLocalElements = bakeLocalMatrix.elements;
+    bakeLocalElements[0] = flips.x ? -1 : 1;
+    bakeLocalElements[5] = flips.y ? -1 : 1;
+    bakeLocalElements[10] = flips.z ? -1 : 1;
+
+    const previewMatrix = new THREE.Matrix4().compose(
+      previewTransform.position.clone(),
+      quaternionFromGlobalEuler(previewTransform.rotation),
+      previewTransform.scale.clone(),
+    );
+    const finalizedMatrix = previewMatrix.clone().multiply(bakeLocalMatrix);
+    const finalizedPosition = new THREE.Vector3();
+    const finalizedQuaternion = new THREE.Quaternion();
+    const finalizedScale = new THREE.Vector3();
+    finalizedMatrix.decompose(finalizedPosition, finalizedQuaternion, finalizedScale);
+    const finalizedTransform: ModelTransform = {
+      position: finalizedPosition,
+      rotation: new THREE.Euler().setFromQuaternion(finalizedQuaternion, 'ZYX'),
+      scale: finalizedScale,
+    };
+
+    // Replace geometry FIRST (direct setModels call using modelsRef.current),
+    // then apply the finalized transform AFTER via a functional setModels updater.
+    // This ordering matters: replaceModelGeometry uses a direct state value from
+    // modelsRef.current (pre-mirror transform), so any prior setModelTransformRaw
+    // functional updates get overwritten by the direct call. By setting the transform
+    // AFTER replaceModelGeometry, the functional updater applies on top of the
+    // direct state and the final batched React state has both the correct geometry
+    // AND the correct transform.
     const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
+    console.log('[Mirror] Replacing geometry with axes:', axes);
     scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
       includeSupportState: !flips.z,
     });
-    transformMgr.performAutoSnap();
-  }, [scene, transformMgr]);
+    console.log('[Mirror] Applying finalized mirrored transform');
+    scene.setModelTransformRaw(modelId, {
+      position: finalizedTransform.position.clone(),
+      rotation: finalizedTransform.rotation.clone(),
+      scale: finalizedTransform.scale.clone(),
+    });
+    syncTransformManagerToTransform(finalizedTransform);
+  }, [scene, transformMgr, syncTransformManagerToTransform]);
+
+  React.useEffect(() => {
+    finalizeMirrorSessionRef.current = finalizeMirrorSession;
+  }, [finalizeMirrorSession]);
 
   React.useEffect(() => {
     const wasActive = mirrorPrevToolActiveRef.current;
     mirrorPrevToolActiveRef.current = mirrorToolActive;
+    console.log('[Mirror] useEffect check - wasActive:', wasActive, 'mirrorToolActive:', mirrorToolActive);
     if (wasActive && !mirrorToolActive) {
+      console.log('[Mirror] Calling finalizeMirrorSession from useEffect');
       finalizeMirrorSession();
     }
   }, [mirrorToolActive, finalizeMirrorSession]);
@@ -13540,8 +13647,11 @@ export default function Home() {
     const model = scene.models.find((m) => m.id === modelId);
     if (!model) return;
 
+    console.log('[Mirror] handleMirror called, axis:', axis, 'modelId:', modelId);
+
     if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
       // Finalize any prior session that was for a different model first.
+      console.log('[Mirror] Creating new session');
       if (mirrorSessionRef.current) finalizeMirrorSession();
       mirrorSessionRef.current = {
         modelId,
@@ -13551,30 +13661,42 @@ export default function Home() {
           rotation: model.transform.rotation.clone(),
           scale: model.transform.scale.clone(),
         },
+        previewTransform: {
+          position: model.transform.position.clone(),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
+        },
         initialGeometry: model.geometry,
       };
     }
 
     const session = mirrorSessionRef.current;
+    if (!session) return;
 
     const performMirror = () => {
       session.flips[axis] = !session.flips[axis];
+      console.log('[Mirror] performMirror axis:', axis, 'flips now:', session.flips);
 
       // Reflect the model's transform across the world-space axis through the
       // model's world bbox center. This produces a true world-space mirror
       // regardless of the model's existing rotation.
       const nextTransform = reflectTransformAcrossWorldAxis(
         model.transform,
-        model.geometry.center,
+        mirrorLocalOriginRef.current,
         axis,
       );
+      session.previewTransform = {
+        position: nextTransform.position.clone(),
+        rotation: nextTransform.rotation.clone(),
+        scale: nextTransform.scale.clone(),
+      };
 
       // For X/Y also push supports through the same reflection. Z deletes
       // supports up-front via the destructive modal.
       if (axis !== 'z') {
         const supportTransforms = buildMirrorSupportTransforms({
           current: model.transform,
-          modelLocalBboxCenter: model.geometry.center.clone(),
+          modelLocalBboxCenter: mirrorLocalOriginRef.current.clone(),
           axis,
         });
         if (supportTransforms) {
@@ -13583,7 +13705,12 @@ export default function Home() {
       }
 
       scene.setModelTransformRaw(modelId, nextTransform);
-      transformMgr.performAutoSnap();
+      syncTransformManagerToTransform(nextTransform);
+
+      // Commit mirror immediately to avoid exit-time race conditions where
+      // deferred session finalization can be overwritten by stale transform
+      // persistence during tool-mode switches.
+      finalizeMirrorSession();
     };
 
     if (axis === 'z') {
@@ -13592,7 +13719,7 @@ export default function Home() {
     } else {
       performMirror();
     }
-  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, finalizeMirrorSession]);
+  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, finalizeMirrorSession, syncTransformManagerToTransform]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
@@ -14502,7 +14629,7 @@ export default function Home() {
             <>
               <TransformToolbar
                 mode={transformMgr.transformMode}
-                onModeChange={transformMgr.setTransformMode}
+                onModeChange={setTransformModeWithMirrorFinalize}
               />
               <SnapAngleReadout />
               <RotationHintTooltip />
