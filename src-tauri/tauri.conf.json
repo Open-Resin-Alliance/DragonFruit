@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DragonFruit",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
     "beforeDevCommand": "npm run predev:once && npm run dev",
@@ -13,7 +13,9 @@
     "active": true,
     "fileAssociations": [
       {
-        "ext": ["voxl"],
+        "ext": [
+          "voxl"
+        ],
         "name": "DragonFruit Scene File",
         "description": "DragonFruit scene",
         "mimeType": "application/vnd.dragonfruit.voxl+json"
@@ -75,7 +77,10 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default", "logging"]
+      "capabilities": [
+        "default",
+        "logging"
+      ]
     }
   }
 }
