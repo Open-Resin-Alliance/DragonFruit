@@ -13530,6 +13530,10 @@ export default function Home() {
   } | null>(null);
   const mirrorPrevToolActiveRef = React.useRef(false);
   const mirrorLocalOriginRef = React.useRef(new THREE.Vector3(0, 0, 0));
+  // Tracks a pending deferred bake so we can cancel/flush it on mode switch.
+  const pendingBakeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks an in-flight bake worker so it can be terminated on flush.
+  const pendingBakeWorkerRef = React.useRef<Worker | null>(null);
 
   const syncTransformManagerToTransform = React.useCallback((nextTransform: ModelTransform) => {
     // Keep transform-manager state aligned with raw mirror updates so the
@@ -13627,19 +13631,186 @@ export default function Home() {
     syncTransformManagerToTransform(finalizedTransform);
   }, [scene, transformMgr, syncTransformManagerToTransform]);
 
-  React.useEffect(() => {
-    finalizeMirrorSessionRef.current = finalizeMirrorSession;
+  // Schedules baking off the main thread via a Web Worker so the visual mirror
+  // renders instantly. Cancels any in-flight worker/timer so rapid successive
+  // clicks only trigger one bake pass. The session stays alive until the worker
+  // completes (or flushPendingBake terminates it) so flushPendingBake can still
+  // call finalizeMirrorSession as a synchronous fallback.
+  const scheduleBake = React.useCallback(() => {
+    // Cancel any previously scheduled bake.
+    if (pendingBakeTimerRef.current !== null) {
+      clearTimeout(pendingBakeTimerRef.current);
+      pendingBakeTimerRef.current = null;
+    }
+    if (pendingBakeWorkerRef.current) {
+      pendingBakeWorkerRef.current.terminate();
+      pendingBakeWorkerRef.current = null;
+    }
+
+    const session = mirrorSessionRef.current;
+    if (!session) return;
+
+    const { modelId, flips, previewTransform, initialGeometry } = session;
+    const anyFlip = flips.x || flips.y || flips.z;
+    if (!anyFlip) {
+      // Net-zero session: clear without baking.
+      mirrorSessionRef.current = null;
+      return;
+    }
+
+    // Compute the finalised transform on the main thread (pure matrix math, fast).
+    const bakeLocalMatrix = new THREE.Matrix4().identity();
+    const ble = bakeLocalMatrix.elements;
+    ble[0] = flips.x ? -1 : 1;
+    ble[5] = flips.y ? -1 : 1;
+    ble[10] = flips.z ? -1 : 1;
+    const previewMatrix = new THREE.Matrix4().compose(
+      previewTransform.position.clone(),
+      quaternionFromGlobalEuler(previewTransform.rotation),
+      previewTransform.scale.clone(),
+    );
+    const finalizedMatrix = previewMatrix.clone().multiply(bakeLocalMatrix);
+    const fPos = new THREE.Vector3();
+    const fQuat = new THREE.Quaternion();
+    const fScale = new THREE.Vector3();
+    finalizedMatrix.decompose(fPos, fQuat, fScale);
+    const finalizedTransform: ModelTransform = {
+      position: fPos,
+      rotation: new THREE.Euler().setFromQuaternion(fQuat, 'ZYX'),
+      scale: fScale,
+    };
+
+    // Snapshot the geometry arrays needed by the worker.
+    const source = initialGeometry.geometry;
+    const posAttr = source.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!posAttr) {
+      // No position attribute – fall back to synchronous bake.
+      finalizeMirrorSession();
+      return;
+    }
+
+    // Slice (memcpy) the arrays we need to modify; the originals stay on the
+    // main thread so the session geometry remains intact for flush fallback.
+    const positions = (posAttr.array as Float32Array).slice();
+    const normAttr = source.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    const normals = normAttr ? (normAttr.array as Float32Array).slice() : null;
+    const idxAttr = source.getIndex();
+    const rawIdx = idxAttr?.array;
+    let indices: Uint16Array | Uint32Array | null = null;
+    let indexType: 'uint16' | 'uint32' | null = null;
+    if (rawIdx) {
+      indices = rawIdx.slice() as Uint16Array | Uint32Array;
+      indexType = rawIdx instanceof Uint16Array ? 'uint16' : 'uint32';
+    }
+    const posItemSize = posAttr.itemSize;
+    const normItemSize = normAttr?.itemSize ?? 3;
+    const axes: number[] = [];
+    if (flips.x) axes.push(0);
+    if (flips.y) axes.push(1);
+    if (flips.z) axes.push(2);
+    const axisLabel = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
+    const includeSupports = !flips.z;
+
+    const worker = new Worker(
+      new URL('@/features/mirror/workers/bakeMirrorWorker', import.meta.url),
+      { type: 'module' },
+    );
+    pendingBakeWorkerRef.current = worker;
+
+    const transferables: Transferable[] = [positions.buffer];
+    if (normals) transferables.push(normals.buffer);
+    if (indices) transferables.push(indices.buffer);
+    worker.postMessage({ positions, normals, indices, posItemSize, normItemSize, axes }, transferables);
+
+    worker.onmessage = (e: MessageEvent) => {
+      // Discard result if a newer bake/flush already took over.
+      if (pendingBakeWorkerRef.current !== worker) {
+        worker.terminate();
+        return;
+      }
+      pendingBakeWorkerRef.current = null;
+      worker.terminate();
+
+      // Clear the session now that the worker has committed the bake.
+      mirrorSessionRef.current = null;
+
+      const { positions: bp, normals: bn, indices: bi } = e.data as {
+        positions: Float32Array;
+        normals: Float32Array | null;
+        indices: Uint16Array | Uint32Array | null;
+      };
+
+      // Reconstruct a Three.js geometry from the worker-returned arrays.
+      // We avoid a full geometry.clone() – only the modified arrays were
+      // copied; all other attributes (UV, vertex colour, etc.) are shared
+      // by reference from the source (safe since they are never modified).
+      const baked = new THREE.BufferGeometry();
+      baked.setAttribute('position', new THREE.BufferAttribute(bp, posItemSize));
+      if (bn) {
+        baked.setAttribute('normal', new THREE.BufferAttribute(bn, normItemSize));
+      } else {
+        baked.computeVertexNormals();
+      }
+      if (bi) {
+        baked.setIndex(new THREE.BufferAttribute(bi, 1));
+      }
+      const srcAttrs = source.attributes;
+      for (const name of Object.keys(srcAttrs)) {
+        if (name !== 'position' && name !== 'normal') {
+          baked.setAttribute(name, srcAttrs[name] as THREE.BufferAttribute);
+        }
+      }
+      baked.computeBoundingBox();
+      baked.computeBoundingSphere();
+
+      scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axisLabel})`, {
+        includeSupportState: includeSupports,
+      });
+      scene.setModelTransformRaw(modelId, {
+        position: finalizedTransform.position.clone(),
+        rotation: finalizedTransform.rotation.clone(),
+        scale: finalizedTransform.scale.clone(),
+      });
+      syncTransformManagerToTransform(finalizedTransform);
+    };
+
+    worker.onerror = () => {
+      if (pendingBakeWorkerRef.current !== worker) return;
+      pendingBakeWorkerRef.current = null;
+      worker.terminate();
+      console.error('[Mirror] bake worker failed – falling back to synchronous bake');
+      finalizeMirrorSession();
+    };
+  }, [scene, finalizeMirrorSession, syncTransformManagerToTransform]);
+
+  // Cancels any pending deferred bake (timer or worker) and runs it
+  // synchronously now. Used when exiting mirror mode so geometry is committed
+  // before the tool switch fires.
+  const flushPendingBake = React.useCallback(() => {
+    if (pendingBakeTimerRef.current !== null) {
+      clearTimeout(pendingBakeTimerRef.current);
+      pendingBakeTimerRef.current = null;
+    }
+    if (pendingBakeWorkerRef.current) {
+      pendingBakeWorkerRef.current.terminate();
+      pendingBakeWorkerRef.current = null;
+    }
+    finalizeMirrorSession();
   }, [finalizeMirrorSession]);
+
+  React.useEffect(() => {
+    finalizeMirrorSessionRef.current = flushPendingBake;
+  }, [flushPendingBake]);
 
   React.useEffect(() => {
     const wasActive = mirrorPrevToolActiveRef.current;
     mirrorPrevToolActiveRef.current = mirrorToolActive;
     console.log('[Mirror] useEffect check - wasActive:', wasActive, 'mirrorToolActive:', mirrorToolActive);
     if (wasActive && !mirrorToolActive) {
-      console.log('[Mirror] Calling finalizeMirrorSession from useEffect');
-      finalizeMirrorSession();
+      console.log('[Mirror] Calling flushPendingBake from useEffect');
+      flushPendingBake();
     }
-  }, [mirrorToolActive, finalizeMirrorSession]);
+  }, [mirrorToolActive, flushPendingBake]);
 
   const handleMirror = React.useCallback((axis: MirrorAxis) => {
     const modelId = scene.activeModelId;
@@ -13652,7 +13823,7 @@ export default function Home() {
     if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
       // Finalize any prior session that was for a different model first.
       console.log('[Mirror] Creating new session');
-      if (mirrorSessionRef.current) finalizeMirrorSession();
+      if (mirrorSessionRef.current) flushPendingBake();
       mirrorSessionRef.current = {
         modelId,
         flips: { x: false, y: false, z: false },
@@ -13707,10 +13878,10 @@ export default function Home() {
       scene.setModelTransformRaw(modelId, nextTransform);
       syncTransformManagerToTransform(nextTransform);
 
-      // Commit mirror immediately to avoid exit-time race conditions where
-      // deferred session finalization can be overwritten by stale transform
-      // persistence during tool-mode switches.
-      finalizeMirrorSession();
+      // Schedule baking in the next task so the visual mirror renders
+      // immediately. The session stays alive until the bake completes.
+      // On mode switch, flushPendingBake() will cancel and run synchronously.
+      scheduleBake();
     };
 
     if (axis === 'z') {
@@ -13719,7 +13890,7 @@ export default function Home() {
     } else {
       performMirror();
     }
-  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, finalizeMirrorSession, syncTransformManagerToTransform]);
+  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, scheduleBake, syncTransformManagerToTransform]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
