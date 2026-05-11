@@ -58,6 +58,13 @@ type VisibleModelEntry = {
   geometry: ProxyModelGeometry;
 };
 
+type FlatProxyGeometry = {
+  shafts: InstancedShaft[];
+  roots: InstancedRoot[];
+  joints: InstancedJoint[];
+  cones: InstancedContactCone[];
+};
+
 type SharedProxyCacheEntry = {
   supportTrunksRef: ReturnType<typeof getSnapshot>['trunks'];
   supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
@@ -889,82 +896,200 @@ export function SupportProxyMeshLayer({
     modelDropOffsetsById,
   ]);
 
+  // Flatten all visible model geometries into two batched groups (base + highlighted) so the
+  // entire scene is rendered with a constant number of draw calls regardless of model count.
+  // This restores the "singular mesh" performance characteristic that was lost when per-model
+  // groups were introduced in the ZIP Import / Batch Export refactor.
+  const flattenedGeometry = React.useMemo(() => {
+    const createEmpty = (): FlatProxyGeometry => ({ shafts: [], roots: [], joints: [], cones: [] });
+    const base = createEmpty();
+    const highlighted = createEmpty();
+
+    const appendShaft = (target: FlatProxyGeometry, shaft: InstancedShaft, zOffset: number) => {
+      if (Math.abs(zOffset) < 1e-6) {
+        target.shafts.push(shaft);
+        return;
+      }
+      target.shafts.push({
+        ...shaft,
+        start: { x: shaft.start.x, y: shaft.start.y, z: shaft.start.z + zOffset },
+        end: { x: shaft.end.x, y: shaft.end.y, z: shaft.end.z + zOffset },
+      });
+    };
+
+    const appendRoot = (target: FlatProxyGeometry, root: InstancedRoot, zOffset: number) => {
+      if (Math.abs(zOffset) < 1e-6) {
+        target.roots.push(root);
+        return;
+      }
+      target.roots.push({
+        ...root,
+        basePos: { x: root.basePos.x, y: root.basePos.y, z: root.basePos.z + zOffset },
+      });
+    };
+
+    const appendJoint = (target: FlatProxyGeometry, joint: InstancedJoint, zOffset: number) => {
+      if (Math.abs(zOffset) < 1e-6) {
+        target.joints.push(joint);
+        return;
+      }
+      target.joints.push({
+        ...joint,
+        pos: { x: joint.pos.x, y: joint.pos.y, z: joint.pos.z + zOffset },
+      });
+    };
+
+    const appendCone = (target: FlatProxyGeometry, cone: InstancedContactCone, zOffset: number) => {
+      if (Math.abs(zOffset) < 1e-6) {
+        target.cones.push(cone);
+        return;
+      }
+      target.cones.push({
+        ...cone,
+        pos: { x: cone.pos.x, y: cone.pos.y, z: cone.pos.z + zOffset },
+      });
+    };
+
+    for (const entry of visibleModelEntries) {
+      const target = entry.modelId && highlightedModelIdSet.has(entry.modelId) ? highlighted : base;
+      const zOffset = entry.zOffset;
+
+      for (const shaft of entry.geometry.shafts) appendShaft(target, shaft, zOffset);
+      for (const root of entry.geometry.roots) appendRoot(target, root, zOffset);
+      if (includeDetailedPrimitives) {
+        for (const joint of entry.geometry.joints) appendJoint(target, joint, zOffset);
+        for (const cone of entry.geometry.cones) appendCone(target, cone, zOffset);
+      }
+    }
+
+    return { base, highlighted };
+  }, [visibleModelEntries, highlightedModelIdSet, includeDetailedPrimitives]);
+
   if (visibleModelEntries.length === 0) {
     return null;
   }
 
+  const hasBase = flattenedGeometry.base.shafts.length > 0
+    || flattenedGeometry.base.roots.length > 0
+    || (includeDetailedPrimitives && (flattenedGeometry.base.joints.length > 0 || flattenedGeometry.base.cones.length > 0));
+
+  const hasHighlighted = flattenedGeometry.highlighted.shafts.length > 0
+    || flattenedGeometry.highlighted.roots.length > 0
+    || (includeDetailedPrimitives && (flattenedGeometry.highlighted.joints.length > 0 || flattenedGeometry.highlighted.cones.length > 0));
+
   return (
     <group>
-      {visibleModelEntries.map((entry) => {
-        const isHighlighted = Boolean(entry.modelId && highlightedModelIdSet.has(entry.modelId));
-        const color = isHighlighted ? ACTIVE_SUPPORT_COLOR : DEFAULT_SUPPORT_COLOR;
-        const { geometry } = entry;
-        const hasGeometry = geometry.shafts.length > 0
-          || geometry.roots.length > 0
-          || (includeDetailedPrimitives && (geometry.joints.length > 0 || geometry.cones.length > 0));
-        if (!hasGeometry) return null;
-        return (
-          <group
-            key={entry.modelKey}
-            userData={{ modelId: entry.modelId ?? null }}
-            position={entry.zOffset !== 0 ? [0, 0, entry.zOffset] as [number, number, number] : undefined}
-          >
-            {geometry.shafts.length > 0 && (
-              <InstancedShaftGroup
-                shafts={geometry.shafts}
-                color={color}
-                transparent={proxyTransparent}
-                opacity={proxyOpacity}
-                radialSegments={10}
-                clippingPlanes={clippingPlanes}
-                outOfBoundsMaterial={outOfBoundsMaterial}
-                onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
-                onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
-                onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
-              />
-            )}
-            {geometry.roots.length > 0 && (
-              <InstancedRootsGroup
-                roots={geometry.roots}
-                color={color}
-                transparent={proxyTransparent}
-                opacity={proxyOpacity}
-                clippingPlanes={clippingPlanes}
-                outOfBoundsMaterial={outOfBoundsMaterial}
-                onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
-                onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
-                onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
-              />
-            )}
-            {includeDetailedPrimitives && geometry.joints.length > 0 && (
-              <InstancedJointGroup
-                joints={geometry.joints}
-                color={color}
-                transparent={proxyTransparent}
-                opacity={proxyOpacity}
-                clippingPlanes={clippingPlanes}
-                outOfBoundsMaterial={outOfBoundsMaterial}
-                onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
-                onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
-                onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
-              />
-            )}
-            {includeDetailedPrimitives && geometry.cones.length > 0 && (
-              <InstancedContactConeGroup
-                cones={geometry.cones}
-                color={color}
-                transparent={proxyTransparent}
-                opacity={proxyOpacity}
-                clippingPlanes={clippingPlanes}
-                outOfBoundsMaterial={outOfBoundsMaterial}
-                onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
-                onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
-                onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
-              />
-            )}
-          </group>
-        );
-      })}
+      {hasBase && (
+        <group key="proxy-base-batch">
+          {flattenedGeometry.base.shafts.length > 0 && (
+            <InstancedShaftGroup
+              shafts={flattenedGeometry.base.shafts}
+              color={DEFAULT_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              radialSegments={10}
+              clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
+              onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {flattenedGeometry.base.roots.length > 0 && (
+            <InstancedRootsGroup
+              roots={flattenedGeometry.base.roots}
+              color={DEFAULT_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
+              onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
+              onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
+              onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {includeDetailedPrimitives && flattenedGeometry.base.joints.length > 0 && (
+            <InstancedJointGroup
+              joints={flattenedGeometry.base.joints}
+              color={DEFAULT_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
+              onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
+              onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {includeDetailedPrimitives && flattenedGeometry.base.cones.length > 0 && (
+            <InstancedContactConeGroup
+              cones={flattenedGeometry.base.cones}
+              color={DEFAULT_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
+              onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
+              onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+        </group>
+      )}
+
+      {hasHighlighted && (
+        <group key="proxy-highlight-batch">
+          {flattenedGeometry.highlighted.shafts.length > 0 && (
+            <InstancedShaftGroup
+              shafts={flattenedGeometry.highlighted.shafts}
+              color={ACTIVE_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              radialSegments={10}
+              clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
+              onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {flattenedGeometry.highlighted.roots.length > 0 && (
+            <InstancedRootsGroup
+              roots={flattenedGeometry.highlighted.roots}
+              color={ACTIVE_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              outOfBoundsMaterial={outOfBoundsMaterial}
+              onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
+              onRootPointerMove={pointerHoverEnabled ? handleProxyRootPointerMove : undefined}
+              onRootPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {includeDetailedPrimitives && flattenedGeometry.highlighted.joints.length > 0 && (
+            <InstancedJointGroup
+              joints={flattenedGeometry.highlighted.joints}
+              color={ACTIVE_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
+              onJointPointerMove={pointerHoverEnabled ? handleProxyJointPointerMove : undefined}
+              onJointPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {includeDetailedPrimitives && flattenedGeometry.highlighted.cones.length > 0 && (
+            <InstancedContactConeGroup
+              cones={flattenedGeometry.highlighted.cones}
+              color={ACTIVE_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
+              onConePointerMove={pointerHoverEnabled ? handleProxyConePointerMove : undefined}
+              onConePointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+        </group>
+      )}
 
       {hoveredOverlayEntry && (
         <group

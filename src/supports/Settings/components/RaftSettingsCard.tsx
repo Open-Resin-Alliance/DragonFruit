@@ -9,9 +9,11 @@ import { setAnatomyPreviewActiveSettingKey } from '../AnatomyPreview/previewStat
 interface RaftSettingsCardProps {
     settings: RaftSettings;
     onChange: (settings: Partial<RaftSettings>) => void;
+    activeModelId?: string | null;
+    selectedModelIds?: string[];
 }
 
-export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) {
+export function RaftSettingsCard({ settings, onChange, activeModelId, selectedModelIds }: RaftSettingsCardProps) {
     if (!settings) return null;
 
     const makeFocusHandlers = React.useCallback((key: string) => {

@@ -630,7 +630,11 @@ function countSupportEntries(payload: DragonfruitImportFormat | null | undefined
 
 function applyImportDefaultsToRaftState() {
   const defaults = getSavedImportDefaultsSettings();
-  updateRaftSettings(getImportDefaultsRaftPatch(defaults));
+  const patch = getImportDefaultsRaftPatch(defaults);
+  // Merge with current settings to preserve non-raft-specific settings
+  const merged = { ...getRaftSettings(), ...patch };
+  // Apply without marking as manually modified, so manual changes in the same session can override
+  applyImportDefaultRaftSettings(merged);
 }
 
 type PluginSceneImportPayload = {
@@ -774,7 +778,7 @@ import {
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
-import { getRaftSettings, updateRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, updateRaftSettings, applyImportDefaultRaftSettings, resetRaftSessionModificationFlag } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
