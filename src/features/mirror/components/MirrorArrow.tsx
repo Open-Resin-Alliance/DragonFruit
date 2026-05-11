@@ -1,7 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { useThree } from '@react-three/fiber';
 import type { MirrorAxis } from '../types';
 import {
   HANDLE_SHAFT_LENGTH_MM,
@@ -45,7 +44,6 @@ export function MirrorArrow({
   onPointerLeave,
   onClick,
 }: MirrorArrowProps) {
-  const { camera } = useThree();
   const pickMeshRef = React.useRef<THREE.Group>(null);
   const pickIdRef = React.useRef<number | null>(null);
   const { register, unregister, hit } = usePicking();
@@ -190,7 +188,8 @@ export function MirrorArrow({
           color={isDimmed ? dimmedColor : isActive ? '#ffffff' : '#f2f2f2'}
           opacity={opacity}
           transparent
-          depthTest={false}
+          depthTest
+          depthWrite={false}
           toneMapped={false}
         />
       </mesh>
@@ -208,7 +207,8 @@ export function MirrorArrow({
             }
             opacity={opacity}
             transparent
-            depthTest={false}
+            depthTest
+            depthWrite={false}
           />
         </mesh>
 
@@ -219,7 +219,8 @@ export function MirrorArrow({
             color={isDimmed ? dimmedColor : endColorHex}
             opacity={opacity}
             transparent
-            depthTest={false}
+            depthTest
+            depthWrite={false}
           />
         </mesh>
       </group>
