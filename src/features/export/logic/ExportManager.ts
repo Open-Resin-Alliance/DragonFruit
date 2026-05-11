@@ -6,7 +6,7 @@ import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/feature
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
-import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
 import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
@@ -915,8 +915,8 @@ export class ExportManager {
 
     // 4. Add Raft (if requested and enabled) — per-model so each model gets its own raft
     if (options.includeRaft) {
-      const raftSettings = getRaftSettings();
-      if (raftSettings.bottomMode !== 'off') {
+      const globalRaftSettings = getRaftSettings();
+      if (globalRaftSettings.bottomMode !== 'off') {
         const supportState = getSnapshot();
         const allRoots = Object.values(supportState.roots);
 
@@ -936,10 +936,14 @@ export class ExportManager {
           arr.push(root);
         }
 
-        const chamferInset = Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
-
-        for (const [, roots] of rootsByModel) {
+        for (const [modelKey, roots] of rootsByModel) {
           if (roots.length === 0) continue;
+
+          // Use per-model raft settings if available, otherwise use global settings
+          const modelId = modelKey === '__orphan__' ? null : modelKey;
+          const raftSettings = modelId ? getRaftSettingsForModel(modelId) : globalRaftSettings;
+
+          const chamferInset = Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
 
           const circles: SupportBaseCircle[] = roots.map(r => ({
             x: r.transform.pos.x,
