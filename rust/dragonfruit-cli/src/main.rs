@@ -1100,6 +1100,8 @@ fn cmd_slice_run(
         png_compression_strategy: png_compression.to_string(),
         container_compression_level: 2,
         anti_aliasing_level: anti_aliasing.to_string(),
+        anti_aliasing_mode: "Blur".to_string(),
+        blur_brush_radius_px: 1,
         aa_on_supports: false,
         mirror_x,
         mirror_y,

@@ -168,6 +168,8 @@ function formatElapsedClock(ms: number): string {
 }
 
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
+const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
+const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
@@ -238,6 +240,31 @@ function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   }
 
   return 'Off';
+}
+
+function resolveInitialAaMode(): 'Blur' | 'Coverage' {
+  if (typeof window === 'undefined') return 'Blur';
+
+  const stored = window.localStorage.getItem(SLICING_AA_MODE_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_MODE_STORAGE_KEY);
+  if (stored === 'Blur' || stored === 'Coverage') {
+    return stored;
+  }
+
+  return 'Blur';
+}
+
+function resolveInitialBlurBrushRadiusPx(): number {
+  if (typeof window === 'undefined') return 1;
+
+  const stored = window.localStorage.getItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY);
+  if (stored == null || stored.trim().length === 0) return 1;
+
+  const parsed = Number(stored);
+  if (!Number.isFinite(parsed)) return 1;
+  const rounded = Math.round(parsed);
+  return [1, 2, 4, 8].includes(rounded) ? rounded : 1;
 }
 
 function resolveInitialMinimumAaAlphaPercent(): number {
@@ -312,6 +339,8 @@ export function SlicingPanel({
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
+  const [antiAliasingMode, setAntiAliasingMode] = useState<'Blur' | 'Coverage'>(resolveInitialAaMode);
+  const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
   const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
@@ -735,6 +764,19 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, antiAliasingMode);
+    window.sessionStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, antiAliasingMode);
+  }, [antiAliasingMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(Math.max(1, Math.round(blurBrushRadiusPx)));
+    window.localStorage.setItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY, serialized);
+  }, [blurBrushRadiusPx]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     const serialized = String(Math.max(0, Math.min(100, Math.round(minimumAaAlphaPercent))));
     window.localStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
@@ -988,6 +1030,8 @@ export function SlicingPanel({
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
+        antiAliasingMode,
+        blurBrushRadiusPx,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
           : profileMinimumAaAlphaPercent,
@@ -1175,20 +1219,10 @@ export function SlicingPanel({
         // If disk space error, aggressively clean ALL temp files to recover space
         if (message.includes('not enough space') || message.includes('os error 112') || message.includes('disk full')) {
           console.warn('[Slicing] Disk space error detected — cleaning ALL temp artifacts.');
-          await cleanupAllPrintTempArtifacts().then((removed) => {
-            console.info(`[Slicing] Emergency cleanup removed ${removed} temp file(s).`);
-            alert(`Disk space error! Cleaned ${removed} temporary slice files. Please free up disk space or slice at lower resolution.`);
-          }).catch((cleanupErr) => {
-            console.error('[Slicing] Emergency cleanup failed:', cleanupErr);
-            alert(`Slice ZIP export failed: ${message}\n\nFailed to clean temp files. Please manually delete files in %TEMP% matching "dragonfruit-slice-*"`);
+          await cleanupAllPrintTempArtifacts().catch((cleanupError) => {
+            console.warn('[Slicing] Temp artifact cleanup after disk-space error failed:', cleanupError);
           });
-        } else {
-          alert(`Slice ZIP export failed: ${message}`);
         }
-        
-        setCurrentPhase('Failed');
-        setSliceStatus('Failed');
-        setSlicingModalStage('failed');
       }
     } finally {
       if (slicingAbortControllerRef.current === abortController) {
@@ -1327,7 +1361,7 @@ export function SlicingPanel({
     );
   }
 
-  return (
+    return (
     <Card className="w-72">
       <CardHeader
         left={(
@@ -1465,13 +1499,92 @@ export function SlicingPanel({
             <div className="space-y-1">
               {antiAliasingAvailable ? (
                 <>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
-                  <div className="grid grid-cols-5 gap-1">
-                    {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
-                      const active = antiAliasingLevel === level;
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {antiAliasingMode === 'Blur' ? 'Blur Width' : 'Anti-Aliasing'}
+                  </div>
+
+                  {antiAliasingMode === 'Blur' ? (
+                    <div className="grid grid-cols-4 gap-1">
+                      {([1, 2, 4, 8] as const).map((radius) => {
+                        const active = blurBrushRadiusPx === radius;
+                        return (
+                          <button
+                            key={radius}
+                            type="button"
+                            disabled={!antiAliasingAvailable}
+                            aria-disabled={!antiAliasingAvailable}
+                            className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                            style={!antiAliasingAvailable
+                              ? {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+                                  color: 'color-mix(in srgb, var(--text-muted), black 18%)',
+                                  cursor: 'not-allowed',
+                                  opacity: 0.68,
+                                }
+                              : active
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                            onClick={() => setBlurBrushRadiusPx(radius)}
+                          >
+                            {`${radius}px`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-5 gap-1">
+                      {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
+                        const active = antiAliasingLevel === level;
+                        return (
+                          <button
+                            key={level}
+                            type="button"
+                            disabled={!antiAliasingAvailable}
+                            aria-disabled={!antiAliasingAvailable}
+                            className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                            style={!antiAliasingAvailable
+                              ? {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+                                  color: 'color-mix(in srgb, var(--text-muted), black 18%)',
+                                  cursor: 'not-allowed',
+                                  opacity: 0.68,
+                                }
+                              : active
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                            onClick={() => setAntiAliasingLevel(level)}
+                          >
+                            {level}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-1">
+                    {(['Blur', 'Coverage'] as const).map((mode) => {
+                      const active = antiAliasingMode === mode;
                       return (
                         <button
-                          key={level}
+                          key={mode}
                           type="button"
                           disabled={!antiAliasingAvailable}
                           aria-disabled={!antiAliasingAvailable}
@@ -1495,9 +1608,9 @@ export function SlicingPanel({
                                   background: 'var(--surface-0)',
                                   color: 'var(--text-muted)',
                                 }}
-                          onClick={() => setAntiAliasingLevel(level)}
+                          onClick={() => setAntiAliasingMode(mode)}
                         >
-                          {level}
+                          {mode}
                         </button>
                       );
                     })}
