@@ -162,7 +162,7 @@ export type SliceExportOrchestratorOptions = {
   filenameBase: string;
   outputPath?: string | null;
   antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
-  antiAliasingMode?: 'Blur' | 'Coverage';
+  antiAliasingMode?: 'Blur' | '3DAA' | 'Coverage';
   blurBrushRadiusPx?: number;
   minimumAaAlphaPercentOverride?: number;
   outputMode?: 'download' | 'return';
@@ -236,7 +236,7 @@ export type SliceExportResult = {
       containerCompressionLevel: number;
       bvhAccelerationEnabled: boolean;
       antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
-      antiAliasingMode: 'Blur' | 'Coverage';
+      antiAliasingMode: 'Blur' | '3DAA' | 'Coverage';
       blurBrushRadiusPx: number;
       aaOnSupports: boolean;
       minimumAaAlphaPercent: number;

@@ -19,7 +19,7 @@ export type NativeSolidSliceJobEnvelope = {
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
   antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
-  antiAliasingMode: 'Blur' | 'Coverage';
+  antiAliasingMode: 'Blur' | '3DAA' | 'Coverage';
   blurBrushRadiusPx: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
@@ -57,7 +57,7 @@ type NativeSolidSlicePayload = {
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
-  anti_aliasing_mode: 'Blur' | 'Coverage';
+  anti_aliasing_mode: 'Blur' | '3DAA' | 'Coverage';
   blur_brush_radius_px: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
@@ -95,7 +95,7 @@ type NativeSolidSliceMetadataPayload = {
   x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
-  anti_aliasing_mode: 'Blur' | 'Coverage';
+  anti_aliasing_mode: 'Blur' | '3DAA' | 'Coverage';
   blur_brush_radius_px: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;

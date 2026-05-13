@@ -167,7 +167,6 @@ function formatElapsedClock(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
@@ -230,28 +229,18 @@ function clampRemoteOfflineLayerHeightMm(value: number, fallback = 0.05): number
   return Math.round(clamped * 1000) / 1000;
 }
 
-function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
+function resolveInitialAaMode(): 'Off' | 'Blur' | '3DAA' {
   if (typeof window === 'undefined') return 'Off';
-
-  const stored = window.localStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY)
-    ?? window.sessionStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY);
-  if (stored === 'Off' || stored === '2x' || stored === '4x' || stored === '8x' || stored === '16x') {
-    return stored;
-  }
-
-  return 'Off';
-}
-
-function resolveInitialAaMode(): 'Blur' | 'Coverage' {
-  if (typeof window === 'undefined') return 'Blur';
 
   const stored = window.localStorage.getItem(SLICING_AA_MODE_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_AA_MODE_STORAGE_KEY);
-  if (stored === 'Blur' || stored === 'Coverage') {
+  if (stored === 'Off' || stored === 'Blur' || stored === '3DAA') {
     return stored;
   }
+  // Migrate legacy values: old 'Blur' mode → 'Blur', old 'Coverage' mode → 'Off'.
+  if (stored === 'Coverage') return 'Off';
 
-  return 'Blur';
+  return 'Off';
 }
 
 function resolveInitialBlurBrushRadiusPx(): number {
@@ -338,8 +327,7 @@ export function SlicingPanel({
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
-  const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
-  const [antiAliasingMode, setAntiAliasingMode] = useState<'Blur' | 'Coverage'>(resolveInitialAaMode);
+  const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
   const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
@@ -462,7 +450,7 @@ export function SlicingPanel({
   );
   // Respect printer-profile capability: explicit `false` means AA must be disabled.
   const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
-  const minimumAaControlsDisabled = !antiAliasingAvailable;
+
   const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter) && !isRemoteNetworkUnavailable;
   const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter)
     && isRemoteNetworkUnavailable
@@ -632,7 +620,12 @@ export function SlicingPanel({
     return formatClockFromSeconds(totalSec);
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
-  const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
+  const effectiveAntiAliasingLevel =
+    !antiAliasingAvailable || aaMode === 'Off' ? 'Off' as const : '4x' as const;
+  const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Coverage' =
+    !antiAliasingAvailable || aaMode === 'Off' ? 'Coverage' :
+    aaMode === '3DAA' ? '3DAA' :
+    'Blur';
 
   const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
@@ -730,19 +723,15 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (!antiAliasingAvailable) {
-      if (antiAliasingLevel !== 'Off') {
-        setAntiAliasingLevel('Off');
-      }
-      if (!enableMinimumAaAlphaOverride) {
-        setEnableMinimumAaAlphaOverride(true);
-      }
+      if (aaMode !== 'Off') setAaMode('Off');
+      if (!enableMinimumAaAlphaOverride) setEnableMinimumAaAlphaOverride(true);
       return;
     }
 
     if (!hasProfileMinimumAaAlpha && !enableMinimumAaAlphaOverride) {
       setEnableMinimumAaAlphaOverride(true);
     }
-  }, [antiAliasingAvailable, antiAliasingLevel, enableMinimumAaAlphaOverride, hasProfileMinimumAaAlpha]);
+  }, [antiAliasingAvailable, aaMode, enableMinimumAaAlphaOverride, hasProfileMinimumAaAlpha]);
 
   // When the profile gains a min-AA-alpha field (e.g. printer profile switch), default back to profile mode.
   const prevHasProfileMinimumAaAlphaRef = useRef(hasProfileMinimumAaAlpha);
@@ -757,16 +746,9 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, antiAliasingLevel);
-    // Backward compatibility for same-session reads from existing logic paths.
-    window.sessionStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, antiAliasingLevel);
-  }, [antiAliasingLevel]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, antiAliasingMode);
-    window.sessionStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, antiAliasingMode);
-  }, [antiAliasingMode]);
+    window.localStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, aaMode);
+    window.sessionStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, aaMode);
+  }, [aaMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1030,7 +1012,7 @@ export function SlicingPanel({
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
-        antiAliasingMode,
+        antiAliasingMode: effectiveAntiAliasingMode,
         blurBrushRadiusPx,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
@@ -1499,116 +1481,27 @@ export function SlicingPanel({
             <div className="space-y-1">
               {antiAliasingAvailable ? (
                 <>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {antiAliasingMode === 'Blur' ? 'Blur Width' : 'Anti-Aliasing'}
-                  </div>
-
-                  {antiAliasingMode === 'Blur' ? (
-                    <div className="grid grid-cols-4 gap-1">
-                      {([1, 2, 4, 8] as const).map((radius) => {
-                        const active = blurBrushRadiusPx === radius;
-                        return (
-                          <button
-                            key={radius}
-                            type="button"
-                            disabled={!antiAliasingAvailable}
-                            aria-disabled={!antiAliasingAvailable}
-                            className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                            style={!antiAliasingAvailable
-                              ? {
-                                  borderColor: 'var(--border-subtle)',
-                                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                                  color: 'color-mix(in srgb, var(--text-muted), black 18%)',
-                                  cursor: 'not-allowed',
-                                  opacity: 0.68,
-                                }
-                              : active
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                            onClick={() => setBlurBrushRadiusPx(radius)}
-                          >
-                            {`${radius}px`}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-5 gap-1">
-                      {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
-                        const active = antiAliasingLevel === level;
-                        return (
-                          <button
-                            key={level}
-                            type="button"
-                            disabled={!antiAliasingAvailable}
-                            aria-disabled={!antiAliasingAvailable}
-                            className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                            style={!antiAliasingAvailable
-                              ? {
-                                  borderColor: 'var(--border-subtle)',
-                                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                                  color: 'color-mix(in srgb, var(--text-muted), black 18%)',
-                                  cursor: 'not-allowed',
-                                  opacity: 0.68,
-                                }
-                              : active
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                            onClick={() => setAntiAliasingLevel(level)}
-                          >
-                            {level}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-1">
-                    {(['Blur', 'Coverage'] as const).map((mode) => {
-                      const active = antiAliasingMode === mode;
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(['Off', 'Blur', '3DAA'] as const).map((mode) => {
+                      const active = aaMode === mode;
                       return (
                         <button
                           key={mode}
                           type="button"
-                          disabled={!antiAliasingAvailable}
-                          aria-disabled={!antiAliasingAvailable}
                           className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                          style={!antiAliasingAvailable
+                          style={active
                             ? {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-                                color: 'color-mix(in srgb, var(--text-muted), black 18%)',
-                                cursor: 'not-allowed',
-                                opacity: 0.68,
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
                               }
-                            : active
-                              ? {
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                  color: 'var(--text-strong)',
-                                }
-                              : {
-                                  borderColor: 'var(--border-subtle)',
-                                  background: 'var(--surface-0)',
-                                  color: 'var(--text-muted)',
-                                }}
-                          onClick={() => setAntiAliasingMode(mode)}
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-0)',
+                                color: 'var(--text-muted)',
+                              }}
+                          onClick={() => setAaMode(mode)}
                         >
                           {mode}
                         </button>
@@ -1616,86 +1509,95 @@ export function SlicingPanel({
                     })}
                   </div>
 
-                  <div className="space-y-1">
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Grey Level</div>
-                    {hasProfileMinimumAaAlpha && (
-                      <div className="grid grid-cols-2 gap-1">
-                        <button
-                          type="button"
-                          disabled={minimumAaControlsDisabled}
-                          aria-disabled={minimumAaControlsDisabled}
-                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                          style={(!enableMinimumAaAlphaOverride && !minimumAaControlsDisabled)
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                color: 'var(--text-strong)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: minimumAaControlsDisabled
-                                  ? 'color-mix(in srgb, var(--surface-0), black 8%)'
-                                  : 'var(--surface-0)',
-                                color: minimumAaControlsDisabled
-                                  ? 'color-mix(in srgb, var(--text-muted), black 18%)'
-                                  : 'var(--text-muted)',
-                                cursor: minimumAaControlsDisabled ? 'not-allowed' : 'pointer',
-                                opacity: minimumAaControlsDisabled ? 0.68 : 1,
-                              }}
-                          onClick={() => {
-                            if (minimumAaControlsDisabled) return;
-                            setEnableMinimumAaAlphaOverride(false);
-                          }}
-                        >
-                          {`Profile (${profileMinimumAaAlphaPercent}%)`}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={minimumAaControlsDisabled}
-                          aria-disabled={minimumAaControlsDisabled}
-                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                          style={(enableMinimumAaAlphaOverride && !minimumAaControlsDisabled)
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                color: 'var(--text-strong)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: minimumAaControlsDisabled
-                                  ? 'color-mix(in srgb, var(--surface-0), black 8%)'
-                                  : 'var(--surface-0)',
-                                color: minimumAaControlsDisabled
-                                  ? 'color-mix(in srgb, var(--text-muted), black 18%)'
-                                  : 'var(--text-muted)',
-                                cursor: minimumAaControlsDisabled ? 'not-allowed' : 'pointer',
-                                opacity: minimumAaControlsDisabled ? 0.68 : 1,
-                              }}
-                          onClick={() => {
-                            if (minimumAaControlsDisabled) return;
-                            setEnableMinimumAaAlphaOverride(true);
-                          }}
-                        >
-                          Override
-                        </button>
+                  {aaMode !== 'Off' && (
+                    <>
+                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Blur Width</div>
+                      <div className="grid grid-cols-4 gap-1">
+                        {([1, 2, 4, 8] as const).map((radius) => {
+                          const active = blurBrushRadiusPx === radius;
+                          return (
+                            <button
+                              key={radius}
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={active
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setBlurBrushRadiusPx(radius)}
+                            >
+                              {`${radius}px`}
+                            </button>
+                          );
+                        })}
                       </div>
-                    )}
-                    {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
-                      <ScrollableNumberField
-                        className="mt-1"
-                        value={minimumAaAlphaPercent}
-                        onChange={setClampedMinimumAaAlphaPercent}
-                        min={0}
-                        max={100}
-                        step={1}
-                        unit="%"
-                        disabled={minimumAaControlsDisabled}
-                        ariaLabel="Minimum alpha percent override"
-                        decreaseTitle="Decrease minimum alpha"
-                        increaseTitle="Increase minimum alpha"
-                      />
-                    )}
-                  </div>
+
+                      <div className="space-y-1">
+                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Grey Level</div>
+                        {hasProfileMinimumAaAlpha && (
+                          <div className="grid grid-cols-2 gap-1">
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={!enableMinimumAaAlphaOverride
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setEnableMinimumAaAlphaOverride(false)}
+                            >
+                              {`Profile (${profileMinimumAaAlphaPercent}%)`}
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={enableMinimumAaAlphaOverride
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setEnableMinimumAaAlphaOverride(true)}
+                            >
+                              Override
+                            </button>
+                          </div>
+                        )}
+                        {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
+                          <ScrollableNumberField
+                            className="mt-1"
+                            value={minimumAaAlphaPercent}
+                            onChange={setClampedMinimumAaAlphaPercent}
+                            min={0}
+                            max={100}
+                            step={1}
+                            unit="%"
+                            ariaLabel="Minimum alpha percent override"
+                            decreaseTitle="Decrease minimum alpha"
+                            increaseTitle="Increase minimum alpha"
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
                 </>
               ) : (
                 <div
