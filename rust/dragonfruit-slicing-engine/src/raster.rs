@@ -210,13 +210,14 @@ fn build_row_spans_nonzero(
     spans
 }
 
-fn build_segments_for_layer(
+fn build_segments_for_layer_into(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
     z_mm: f32,
-) -> Vec<Segment> {
-    let mut segments = Vec::with_capacity(layer_indices.len());
+    segments: &mut Vec<Segment>,
+) {
+    segments.clear();
 
     for tri_idx in layer_indices {
         let tri = triangles[*tri_idx];
@@ -300,7 +301,16 @@ fn build_segments_for_layer(
             wind,
         });
     }
+}
 
+fn build_segments_for_layer(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    z_mm: f32,
+) -> Vec<Segment> {
+    let mut segments = Vec::with_capacity(layer_indices.len());
+    build_segments_for_layer_into(job, triangles, layer_indices, z_mm, &mut segments);
     segments
 }
 
@@ -871,6 +881,7 @@ fn build_scanline_segment_index(
     segments: &[Segment],
     height: usize,
     aa_steps: usize,
+    subrow_phase: f32,
 ) -> Option<ScanlineSegmentIndex> {
     let sub_height = height * aa_steps;
     let mut starts = vec![Vec::<usize>::new(); sub_height];
@@ -881,8 +892,8 @@ fn build_scanline_segment_index(
     let f_steps = aa_steps as f32;
 
     for (idx, seg) in segments.iter().enumerate() {
-        let start = (seg.y_min * f_steps - 0.5).ceil() as i32;
-        let end = (seg.y_max * f_steps - 0.5).ceil() as i32;
+        let start = (seg.y_min * f_steps - subrow_phase).ceil() as i32;
+        let end = (seg.y_max * f_steps - subrow_phase).ceil() as i32;
 
         let clamped_start = start.clamp(0, sub_height as i32) as usize;
         let clamped_end = end.clamp(0, sub_height as i32) as usize;
@@ -906,7 +917,7 @@ fn build_scanline_segment_index(
         if starts[y].is_empty() {
             continue;
         }
-        let y_sample = (y as f32 + 0.5) / f_steps;
+        let y_sample = (y as f32 + subrow_phase) / f_steps;
         for seg_idx in &starts[y] {
             let seg = &segments[*seg_idx];
             let x = seg.x1 + (y_sample - seg.y1) * seg.dx_dy;
@@ -980,7 +991,8 @@ pub fn rasterize_layer_with_stats(
         return (mask, stats);
     }
 
-    let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps) else {
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps, 0.5)
+    else {
         return (mask, stats);
     };
     let scanline_starts = scanline_index.starts;
@@ -1363,7 +1375,11 @@ fn rasterize_layer_3daa(
     let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
         * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
 
-    // Accumulates XY-normalised pixel values (0–255) across all Z slices.
+    // Accumulates raw analytic-X coverage across all Z slices.
+    //
+    // Each Z slice contributes a single midpoint-Y sample per physical row.
+    // Per-pixel range: [0, 255] per Z slice → [0, 255 * z_steps] total.
+    // Well within u32 for any practical z_steps.
     let mut z_accum = vec![0u32; width * height];
     // Global model bounds unioned across all Z slices (for ROI clamping).
     let mut global_min_x = i32::MAX;
@@ -1377,16 +1393,26 @@ fn rasterize_layer_3daa(
     let mut row_accum = vec![0u32; width];
     let mut row_delta = vec![0i32; width + 1];
 
+    let mut segments = Vec::with_capacity(layer_indices.len());
+
     for z_k in 0..z_steps {
         let z_frac = (z_k as f32 + 0.5) / z_steps as f32;
         let z_mm = (layer_index as f32 + z_frac) * job.layer_height_mm;
 
-        let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
+        build_segments_for_layer_into(job, triangles, layer_indices, z_mm, &mut segments);
         if segments.is_empty() {
             continue;
         }
 
-        let Some(scanline_index) = build_scanline_segment_index(&segments, height, z_steps) else {
+        // Single midpoint-Y sample per physical row.
+        //
+        // 3DAA's extra quality comes entirely from Z supersampling — sampling the
+        // geometry at z_steps different heights within a voxel. Each Z sample
+        // contributes one scanline pass (with analytic sub-pixel X coverage) per
+        // physical row. This is exactly equivalent to 2D SSAA × z_steps Z slices,
+        // and is N² → N faster than also Y-supersampling within each Z slice
+        // (which a straight line's midpoint sample already exactly represents).
+        let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
             continue;
         };
         let y_start = scanline_index.y_start;
@@ -1401,98 +1427,82 @@ fn rasterize_layer_3daa(
         let mut min_y = i32::MAX;
         let mut max_x = i32::MIN;
         let mut max_y = i32::MIN;
-        let mut current_physical_y = y_start / z_steps;
-
-        // Flush the accumulated XY-SSAA row into z_accum.
-        macro_rules! flush_row {
-            ($phy_y:expr) => {{
-                let phy_y: usize = $phy_y;
-                if phy_y < height {
-                    let r_start = phy_y * width;
-                    let mut coverage = 0i32;
-                    for x in 0..width {
-                        coverage += row_delta[x];
-                        let acc = if coverage > 0 {
-                            row_accum[x].saturating_add(coverage as u32)
-                        } else {
-                            row_accum[x]
-                        };
-                        if acc > 0 {
-                            let v = (acc / z_steps as u32).min(255) as u8;
-                            z_accum[r_start + x] += v as u32;
-                        }
-                        row_accum[x] = 0;
-                        row_delta[x] = 0;
-                    }
-                    row_delta[width] = 0;
-                }
-            }};
-        }
 
         for y in y_start..y_end_exclusive {
-            let physical_y = y / z_steps;
-
-            if physical_y != current_physical_y {
-                flush_row!(current_physical_y);
-                current_physical_y = physical_y;
-            }
-
+            // y is already a physical row index (aa_steps=1).
             active_edges.retain(|edge| edge.end_exclusive > y);
             if let Some(starting) = scanline_starts.get(y) {
                 if !starting.is_empty() {
                     merge_active_edges_sorted(&mut active_edges, starting, &mut merge_scratch);
                 }
             }
-            if active_edges.is_empty() {
-                continue;
-            }
 
-            // Always sub-pixel in 3DAA (binary_fill = false).
-            let spans = build_row_spans_nonzero(&active_edges, width, false);
-            for span in spans {
-                let left_i = span.a.floor() as i32;
-                let right_i = span.b.ceil() as i32 - 1;
+            if !active_edges.is_empty() {
+                // Always sub-pixel in 3DAA (binary_fill = false).
+                let spans = build_row_spans_nonzero(&active_edges, width, false);
+                for span in spans {
+                    let left_i = span.a.floor() as i32;
+                    let right_i = span.b.ceil() as i32 - 1;
 
-                if left_i <= right_i {
-                    if left_i == right_i {
-                        if left_i >= 0 && left_i < width as i32 {
-                            let cov = (span.b - span.a).clamp(0.0, 1.0) * 255.0;
-                            row_accum[left_i as usize] += cov as u32;
-                        }
-                    } else {
-                        let left_cov = ((left_i as f32 + 1.0) - span.a).clamp(0.0, 1.0) * 255.0;
-                        let right_cov = (span.b - right_i as f32).clamp(0.0, 1.0) * 255.0;
+                    if left_i <= right_i {
+                        if left_i == right_i {
+                            if left_i >= 0 && left_i < width as i32 {
+                                let cov = (span.b - span.a).clamp(0.0, 1.0) * 255.0;
+                                row_accum[left_i as usize] += cov as u32;
+                            }
+                        } else {
+                            let left_cov = ((left_i as f32 + 1.0) - span.a).clamp(0.0, 1.0) * 255.0;
+                            let right_cov = (span.b - right_i as f32).clamp(0.0, 1.0) * 255.0;
 
-                        if left_i >= 0 && left_i < width as i32 {
-                            row_accum[left_i as usize] += left_cov as u32;
-                        }
+                            if left_i >= 0 && left_i < width as i32 {
+                                row_accum[left_i as usize] += left_cov as u32;
+                            }
 
-                        let interior_start = (left_i + 1).max(0) as usize;
-                        let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
-                        if interior_end >= interior_start {
-                            row_delta[interior_start] += 255;
-                            row_delta[interior_end + 1] -= 255;
-                        }
+                            let interior_start = (left_i + 1).max(0) as usize;
+                            let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
+                            if interior_end >= interior_start {
+                                row_delta[interior_start] += 255;
+                                row_delta[interior_end + 1] -= 255;
+                            }
 
-                        if right_i >= 0 && right_i < width as i32 {
-                            row_accum[right_i as usize] += right_cov as u32;
+                            if right_i >= 0 && right_i < width as i32 {
+                                row_accum[right_i as usize] += right_cov as u32;
+                            }
                         }
                     }
+
+                    min_x = min_x.min(span.start as i32);
+                    max_x = max_x.max(span.end as i32);
+                    min_y = min_y.min(y as i32);
+                    max_y = max_y.max(y as i32);
                 }
 
-                min_x = min_x.min(span.start as i32);
-                max_x = max_x.max(span.end as i32);
-                min_y = min_y.min(physical_y as i32);
-                max_y = max_y.max(physical_y as i32);
+                for edge in &mut active_edges {
+                    edge.x += edge.dx_dy;
+                }
+                restore_active_edges_sorted(&mut active_edges);
             }
 
-            for edge in &mut active_edges {
-                edge.x += edge.dx_dy;
+            // Flush this row immediately into z_accum (single Y sample per row).
+            if y < height {
+                let r_start = y * width;
+                let mut coverage = 0i32;
+                for x in 0..width {
+                    coverage += row_delta[x];
+                    let acc = if coverage > 0 {
+                        row_accum[x].saturating_add(coverage as u32)
+                    } else {
+                        row_accum[x]
+                    };
+                    if acc > 0 {
+                        z_accum[r_start + x] += acc;
+                    }
+                    row_accum[x] = 0;
+                    row_delta[x] = 0;
+                }
+                row_delta[width] = 0;
             }
-            restore_active_edges_sorted(&mut active_edges);
         }
-
-        flush_row!(current_physical_y);
 
         global_min_x = global_min_x.min(min_x);
         global_min_y = global_min_y.min(min_y);
@@ -1505,9 +1515,11 @@ fn rasterize_layer_3daa(
         return (mask, stats);
     }
 
-    // Normalise the Z accumulator into the final grayscale mask.
+    // Normalise: each Z slice contributed one analytic-X sample (0..=255).
+    // Summed over z_steps slices, divide by z_steps (with rounding).
+    let norm = z_steps as u32;
     for (px, acc) in mask.iter_mut().zip(z_accum.iter()) {
-        *px = (*acc / z_steps as u32).min(255) as u8;
+        *px = ((*acc + norm / 2) / norm).min(255) as u8;
     }
 
     let min_x = global_min_x;
@@ -1728,7 +1740,8 @@ pub fn rasterize_layer_rle(
         0
     };
 
-    let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps) else {
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps, 0.5)
+    else {
         emit_zero_rows(&mut rle, height, width);
         return (rle.finish(), stats);
     };
