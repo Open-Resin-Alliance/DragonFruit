@@ -744,10 +744,10 @@ fn apply_edge_box_blur_to_mask_in_roi(
         return;
     }
 
-    // Separable 2-D box blur on a binary (0 / non-zero) mask.
+    // Separable 2-D box blur on an 8-bit mask.
     //
     // The algorithm uses a single forward pass with a flat ring-buffer that
-    // holds at most (2*radius+1) rows of pre-computed horizontal counts.
+    // holds at most (2*radius+1) rows of pre-computed horizontal sums.
     // This avoids all per-row heap allocations (the old VecDeque<Vec<u16>>
     // approach allocated one Vec per row, ~height allocations per layer).
     //
@@ -758,8 +758,8 @@ fn apply_edge_box_blur_to_mask_in_roi(
     let roi_h = roi_max_y - roi_min_y + 1;
 
     // ring[slot * width .. (slot+1) * width] stores the horizontal sliding-
-    // window count for each column in one source row.  Values fit in u16
-    // (max = 2*radius+1, which for radius=8 is 17).
+    // window sum for each column in one source row. Values fit in u16 for
+    // our supported radii (worst case: 255 * (2r+1) where r<=32 => 16_575).
     let ring_cap = 2 * radius + 1;
     let mut ring = vec![0u16; ring_cap * roi_w];
     // col_sums[x] = sum of ring[*][x] for all currently live rows.
@@ -795,24 +795,24 @@ fn apply_edge_box_blur_to_mask_in_roi(
             let src_row_start = src_y * width + roi_min_x;
             let src = &mask[src_row_start..src_row_start + roi_w];
 
-            // Horizontal sliding-window count:
-            //   ring[slot][x] = number of set pixels in src[x-r .. x+r]
+            // Horizontal sliding-window sum:
+            //   ring[slot][x] = sum of pixel values in src[x-r .. x+r]
             // Simultaneously accumulate into col_sums so we skip a second pass.
             let mut sum = 0u32;
             let init_end = radius.min(roi_w - 1);
             for &b in &src[0..=init_end] {
-                sum += (b != 0) as u32;
+                sum += b as u32;
             }
             for ix in 0..roi_w {
                 ring[slot_start + ix] = sum as u16;
                 col_sums[ix] += sum;
                 // Slide window right
                 if ix >= radius {
-                    sum -= (src[ix - radius] != 0) as u32;
+                    sum -= src[ix - radius] as u32;
                 }
                 let r1 = ix + radius + 1;
                 if r1 < roi_w {
-                    sum += (src[r1] != 0) as u32;
+                    sum += src[r1] as u32;
                 }
             }
             ring_len += 1;
@@ -824,7 +824,7 @@ fn apply_edge_box_blur_to_mask_in_roi(
             let row_out = &mut out[out_row * roi_w..(out_row + 1) * roi_w];
             for ix in 0..roi_w {
                 let denom = (h_denom[ix] * v_denom[out_row]).max(1);
-                let raw = (col_sums[ix] * 255 + denom / 2) / denom;
+                let raw = (col_sums[ix] + denom / 2) / denom;
                 let mut val = raw.min(255) as u8;
                 // Zero out pixels below the min-alpha floor rather than clamping
                 // them up, which would create a flat "shelf" of uniform alpha
@@ -964,11 +964,8 @@ pub fn rasterize_layer_with_stats(
         0
     };
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
-    let aa_steps = if blur_mode {
-        1usize
-    } else {
-        (aa_level_steps as usize).max(1)
-    };
+    // SSAA applies in all AA modes (coverage + blur) as preparation for 3DAA.
+    let aa_steps = (aa_level_steps as usize).max(1);
     let aa_enabled = aa_steps > 1;
     let min_aa_alpha_u8 = if aa_enabled || blur_radius > 0 {
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8
@@ -1989,6 +1986,35 @@ mod tests {
         assert!(
             runs.iter().any(|run| run.value == 255),
             "blur mode should preserve fully solid interior runs"
+        );
+    }
+
+    #[test]
+    fn blur_mode_with_ssaa_still_produces_grayscale_edges() {
+        let mut job = job_for_single_layer();
+        job.blur_brush_radius_px = 2;
+        job.anti_aliasing_mode = "Blur".to_string();
+        job.anti_aliasing_level = "4x".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0, true);
+
+        assert!(
+            stats.total_solid_pixels > 0,
+            "blur+SSAA mode should rasterize solid pixels"
+        );
+        assert!(
+            mask.iter().any(|&px| px > 0 && px < 255),
+            "blur+SSAA mode should produce grayscale edge pixels"
+        );
+        assert!(
+            mask.iter().any(|&px| px == 255),
+            "blur+SSAA mode should preserve fully solid interior pixels"
         );
     }
 }
