@@ -17,6 +17,14 @@ fn default_anti_aliasing_level() -> String {
     "Off".to_string()
 }
 
+fn default_blur_brush_radius_px() -> u32 {
+    1
+}
+
+fn default_anti_aliasing_mode() -> String {
+    "Blur".to_string()
+}
+
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
@@ -70,6 +78,12 @@ pub struct SliceJobV3 {
     /// Raster anti-aliasing quality hint (`Off`, `2x`, `4x`, `8x`).
     #[serde(default = "default_anti_aliasing_level")]
     pub anti_aliasing_level: String,
+    /// Anti-aliasing mode hint (`Blur`, `Coverage`).
+    #[serde(default = "default_anti_aliasing_mode")]
+    pub anti_aliasing_mode: String,
+    /// Blur brush radius in pixels for the blur AA mode.
+    #[serde(default = "default_blur_brush_radius_px")]
+    pub blur_brush_radius_px: u32,
     /// Whether AA should apply to support geometry (reserved for future split masks).
     #[serde(default)]
     pub aa_on_supports: bool,

@@ -716,6 +716,159 @@ fn aa_subpixel_steps(level: &str) -> u8 {
     }
 }
 
+#[inline]
+fn blur_radius_px(radius_px: u32) -> usize {
+    radius_px.max(1) as usize
+}
+
+fn apply_edge_box_blur_to_mask_in_roi(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+) {
+    if radius == 0
+        || width == 0
+        || height == 0
+        || mask.is_empty()
+        || roi_min_x > roi_max_x
+        || roi_min_y > roi_max_y
+        || roi_max_x >= width
+        || roi_max_y >= height
+    {
+        return;
+    }
+
+    // Separable 2-D box blur on a binary (0 / non-zero) mask.
+    //
+    // The algorithm uses a single forward pass with a flat ring-buffer that
+    // holds at most (2*radius+1) rows of pre-computed horizontal counts.
+    // This avoids all per-row heap allocations (the old VecDeque<Vec<u16>>
+    // approach allocated one Vec per row, ~height allocations per layer).
+    //
+    // Complexity: O(ROI_W × ROI_H) time regardless of radius.
+    // Extra allocations: 3 fixed-size Vecs — ring, col_sums, out.
+
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+
+    // ring[slot * width .. (slot+1) * width] stores the horizontal sliding-
+    // window count for each column in one source row.  Values fit in u16
+    // (max = 2*radius+1, which for radius=8 is 17).
+    let ring_cap = 2 * radius + 1;
+    let mut ring = vec![0u16; ring_cap * roi_w];
+    // col_sums[x] = sum of ring[*][x] for all currently live rows.
+    let mut col_sums = vec![0u32; roi_w];
+    let mut ring_head = 0usize; // slot index of the oldest live row
+    let mut ring_len = 0usize; // number of rows currently live in the ring
+
+    // Pre-compute denominator terms in global-image coordinates so ROI borders
+    // behave like implicit zeros (not image edges).
+    let h_denom: Vec<u32> = (0..roi_w)
+        .map(|ix| {
+            let x = roi_min_x + ix;
+            (1 + radius.min(x) + radius.min(width - 1 - x)) as u32
+        })
+        .collect();
+    let v_denom: Vec<u32> = (0..roi_h)
+        .map(|iy| {
+            let y = roi_min_y + iy;
+            (1 + radius.min(y) + radius.min(height - 1 - y)) as u32
+        })
+        .collect();
+
+    let mut out = vec![0u8; roi_w * roi_h];
+
+    // Drive add_row from 0 to height+radius-1 (inclusive).
+    //   output row = add_row - radius   (when in [0, height))
+    for add_row in 0..roi_h + radius {
+        // ── Add horizontal-blurred counts for mask row `add_row` ──────────
+        if add_row < roi_h {
+            let new_slot = (ring_head + ring_len) % ring_cap;
+            let slot_start = new_slot * roi_w;
+            let src_y = roi_min_y + add_row;
+            let src_row_start = src_y * width + roi_min_x;
+            let src = &mask[src_row_start..src_row_start + roi_w];
+
+            // Horizontal sliding-window count:
+            //   ring[slot][x] = number of set pixels in src[x-r .. x+r]
+            // Simultaneously accumulate into col_sums so we skip a second pass.
+            let mut sum = 0u32;
+            let init_end = radius.min(roi_w - 1);
+            for &b in &src[0..=init_end] {
+                sum += (b != 0) as u32;
+            }
+            for ix in 0..roi_w {
+                ring[slot_start + ix] = sum as u16;
+                col_sums[ix] += sum;
+                // Slide window right
+                if ix >= radius {
+                    sum -= (src[ix - radius] != 0) as u32;
+                }
+                let r1 = ix + radius + 1;
+                if r1 < roi_w {
+                    sum += (src[r1] != 0) as u32;
+                }
+            }
+            ring_len += 1;
+        }
+
+        // ── Emit output row = add_row - radius ────────────────────────────
+        if add_row >= radius {
+            let out_row = add_row - radius;
+            let row_out = &mut out[out_row * roi_w..(out_row + 1) * roi_w];
+            for ix in 0..roi_w {
+                let denom = (h_denom[ix] * v_denom[out_row]).max(1);
+                let raw = (col_sums[ix] * 255 + denom / 2) / denom;
+                let mut val = raw.min(255) as u8;
+                // Zero out pixels below the min-alpha floor rather than clamping
+                // them up, which would create a flat "shelf" of uniform alpha
+                // around the model edge. The radius expansion at the call site
+                // ensures pixels within the user's target distance naturally
+                // exceed the floor; anything below is outside that zone → 0.
+                if val < min_alpha_u8 {
+                    val = 0;
+                }
+                row_out[ix] = val;
+            }
+
+            // ── Evict the row that just left the vertical window ──────────
+            if out_row >= radius {
+                let evict_start = ring_head * roi_w;
+                for ix in 0..roi_w {
+                    col_sums[ix] -= ring[evict_start + ix] as u32;
+                }
+                ring_head = (ring_head + 1) % ring_cap;
+                ring_len -= 1;
+            }
+        }
+    }
+
+    for iy in 0..roi_h {
+        let dst_y = roi_min_y + iy;
+        let dst_start = dst_y * width + roi_min_x;
+        let src_start = iy * roi_w;
+        mask[dst_start..dst_start + roi_w].copy_from_slice(&out[src_start..src_start + roi_w]);
+    }
+}
+
+fn encode_mask_to_rle(mask: &[u8], width: usize, height: usize) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, RleAccum};
+
+    let mut rle = RleAccum::new();
+    for row_index in 0..height {
+        let row_start = row_index * width;
+        let row = &mask[row_start..row_start + width];
+        emit_row(&mut rle, row);
+    }
+    rle.finish()
+}
+
 fn build_scanline_segment_index(
     segments: &[Segment],
     height: usize,
@@ -804,10 +957,20 @@ pub fn rasterize_layer_with_stats(
         return (mask, stats);
     }
 
+    let blur_mode = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur");
+    let blur_radius = if blur_mode {
+        blur_radius_px(job.blur_brush_radius_px)
+    } else {
+        0
+    };
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
-    let aa_steps = (aa_level_steps as usize).max(1);
+    let aa_steps = if blur_mode {
+        1usize
+    } else {
+        (aa_level_steps as usize).max(1)
+    };
     let aa_enabled = aa_steps > 1;
-    let min_aa_alpha_u8 = if aa_enabled {
+    let min_aa_alpha_u8 = if aa_enabled || blur_radius > 0 {
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8
     } else {
         0
@@ -982,6 +1145,104 @@ pub fn rasterize_layer_with_stats(
         restore_active_edges_sorted(&mut active_edges);
     }
 
+    if blur_radius > 0 && stats.total_solid_pixels > 0 {
+        // When a minimum AA alpha floor is set, the box blur's natural gradient
+        // only exceeds that floor within a fraction of the user's requested
+        // radius (e.g. 35% floor → only ~1px of visible AA for a 2px radius).
+        // Expand the internal radius so the outermost pixel at `blur_radius`
+        // naturally reaches min_alpha for a flat model edge:
+        //   value(d=blur_radius) = (r_eff - blur_radius + 1) / (2*r_eff + 1)
+        //   Solve for r_eff ≥ (blur_radius - 1 + α) / (1 - 2α),  α = min_alpha
+        let effective_radius = if min_aa_alpha_u8 > 0 {
+            let alpha = min_aa_alpha_u8 as f32 / 255.0;
+            if alpha < 0.5 {
+                let r = ((blur_radius as f32 - 1.0 + alpha) / (1.0 - 2.0 * alpha)).ceil() as usize;
+                // Cap at 4× user radius to prevent runaway expansion near α=0.5
+                r.max(blur_radius).min(blur_radius * 4)
+            } else {
+                blur_radius
+            }
+        } else {
+            blur_radius
+        };
+
+        let r = effective_radius as i32;
+        let roi_min_x = min_x.saturating_sub(r).max(0) as usize;
+        let roi_max_x = (max_x.saturating_add(r)).min(width as i32 - 1) as usize;
+        let roi_min_y = min_y.saturating_sub(r).max(0) as usize;
+        let roi_max_y = (max_y.saturating_add(r)).min(height as i32 - 1) as usize;
+
+        apply_edge_box_blur_to_mask_in_roi(
+            &mut mask,
+            width,
+            height,
+            effective_radius,
+            min_aa_alpha_u8,
+            roi_min_x,
+            roi_max_x,
+            roi_min_y,
+            roi_max_y,
+        );
+
+        let mut total_solid_pixels = 0u32;
+        let mut blur_min_x = i32::MAX;
+        let mut blur_min_y = i32::MAX;
+        let mut blur_max_x = i32::MIN;
+        let mut blur_max_y = i32::MIN;
+
+        for y in roi_min_y..=roi_max_y {
+            let row_start = y * width;
+            for x in roi_min_x..=roi_max_x {
+                if mask[row_start + x] == 0 {
+                    continue;
+                }
+
+                total_solid_pixels = total_solid_pixels.saturating_add(1);
+                blur_min_x = blur_min_x.min(x as i32);
+                blur_min_y = blur_min_y.min(y as i32);
+                blur_max_x = blur_max_x.max(x as i32);
+                blur_max_y = blur_max_y.max(y as i32);
+            }
+        }
+
+        if total_solid_pixels > 0 {
+            stats.total_solid_pixels = total_solid_pixels;
+            stats.min_x = blur_min_x;
+            stats.min_y = blur_min_y;
+            stats.max_x = blur_max_x;
+            stats.max_y = blur_max_y;
+
+            if compute_area_stats {
+                let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                    compute_component_area_stats_8_connected(
+                        &mask,
+                        width,
+                        height,
+                        blur_min_x as usize,
+                        blur_max_x as usize,
+                        blur_min_y as usize,
+                        blur_max_y as usize,
+                        pixel_area_mm2,
+                    );
+
+                stats.total_solid_pixels = total_pixels;
+                let total_area = (total_pixels as f64) * pixel_area_mm2;
+                stats.total_solid_area_mm2 = total_area;
+                stats.largest_area_mm2 = largest_area_mm2;
+                stats.smallest_area_mm2 = smallest_area_mm2;
+                stats.area_count = area_count;
+            } else {
+                let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+                stats.total_solid_area_mm2 = total_area;
+                stats.largest_area_mm2 = total_area;
+                stats.smallest_area_mm2 = total_area;
+                stats.area_count = 1;
+            }
+        }
+
+        return (mask, stats);
+    }
+
     if aa_enabled && current_physical_y < height {
         let r_start = current_physical_y * width;
         if r_start < mask.len() {
@@ -1128,6 +1389,24 @@ pub fn rasterize_layer_rle(
     if segments.is_empty() {
         emit_zero_rows(&mut rle, height, width);
         return (rle.finish(), stats);
+    }
+
+    let blur_mode = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur");
+    let blur_radius = if blur_mode {
+        blur_radius_px(job.blur_brush_radius_px)
+    } else {
+        0
+    };
+    if blur_radius > 0 {
+        let (mask, stats) = rasterize_layer_with_stats(
+            job,
+            triangles,
+            layer_indices,
+            layer_index,
+            compute_area_stats,
+        );
+        let runs = encode_mask_to_rle(&mask, width, height);
+        return (runs, stats);
     }
 
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
@@ -1457,6 +1736,8 @@ mod tests {
             png_compression_strategy: "fastest".to_string(),
             container_compression_level: 0,
             anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 1,
             aa_on_supports: false,
             minimum_aa_alpha_percent: 35.0,
             mirror_x: false,
@@ -1652,6 +1933,62 @@ mod tests {
             (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
                 < 1e-6,
             "total area should equal the sum of component areas in AA RLE path"
+        );
+    }
+
+    #[test]
+    fn blur_mode_produces_grayscale_edge_pixels_in_mask_path() {
+        let mut job = job_for_single_layer();
+        job.blur_brush_radius_px = 2;
+        job.anti_aliasing_mode = "Blur".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0, true);
+
+        assert!(
+            stats.total_solid_pixels > 0,
+            "blur mode should still rasterize solid pixels"
+        );
+        assert!(
+            mask.iter().any(|&px| px > 0 && px < 255),
+            "blur mode should create grayscale edge pixels"
+        );
+        assert!(
+            mask.iter().any(|&px| px == 255),
+            "blur mode should preserve fully solid interior pixels"
+        );
+    }
+
+    #[test]
+    fn blur_mode_produces_grayscale_edge_pixels_in_rle_path() {
+        let mut job = job_for_single_layer();
+        job.blur_brush_radius_px = 2;
+        job.anti_aliasing_mode = "Blur".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (runs, stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+
+        assert!(
+            stats.total_solid_pixels > 0,
+            "blur mode should still rasterize solid pixels"
+        );
+        assert!(
+            runs.iter().any(|run| run.value > 0 && run.value < 255),
+            "blur mode should produce grayscale RLE runs"
+        );
+        assert!(
+            runs.iter().any(|run| run.value == 255),
+            "blur mode should preserve fully solid interior runs"
         );
     }
 }
