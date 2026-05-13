@@ -19,6 +19,8 @@ export type NativeSolidSliceJobEnvelope = {
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
   antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+  antiAliasingMode: 'Blur' | 'Coverage';
+  blurBrushRadiusPx: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
   mirrorX: boolean;
@@ -55,6 +57,8 @@ type NativeSolidSlicePayload = {
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
+  anti_aliasing_mode: 'Blur' | 'Coverage';
+  blur_brush_radius_px: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
@@ -91,6 +95,8 @@ type NativeSolidSliceMetadataPayload = {
   x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
+  anti_aliasing_mode: 'Blur' | 'Coverage';
+  blur_brush_radius_px: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
@@ -172,6 +178,8 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     png_compression_strategy: job.pngCompressionStrategy,
     bvh_acceleration_enabled: job.bvhAccelerationEnabled,
     anti_aliasing_level: job.antiAliasingLevel,
+    anti_aliasing_mode: job.antiAliasingMode,
+    blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
@@ -211,6 +219,8 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     x_packing_mode: job.xPackingMode,
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
+    anti_aliasing_mode: job.antiAliasingMode,
+    blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,

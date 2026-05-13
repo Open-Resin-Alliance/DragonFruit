@@ -5,6 +5,14 @@ mod network;
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
+
+fn default_blur_brush_radius_px() -> u32 {
+    1
+}
+
+fn default_anti_aliasing_mode() -> String {
+    "Blur".to_string()
+}
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -307,6 +315,10 @@ struct SliceJobMetadata {
     x_packing_mode: Option<String>,
     png_compression_strategy: String,
     anti_aliasing_level: String,
+    #[serde(default = "default_anti_aliasing_mode")]
+    anti_aliasing_mode: String,
+    #[serde(default = "default_blur_brush_radius_px")]
+    blur_brush_radius_px: u32,
     aa_on_supports: bool,
     #[serde(default = "default_minimum_aa_alpha_percent")]
     minimum_aa_alpha_percent: f32,
@@ -1217,6 +1229,8 @@ async fn slice_solid_native_to_temp_path(
             x_packing_mode: meta.x_packing_mode.unwrap_or_else(|| "none".to_string()),
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
+            anti_aliasing_mode: meta.anti_aliasing_mode,
+            blur_brush_radius_px: meta.blur_brush_radius_px,
             aa_on_supports: meta.aa_on_supports,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,

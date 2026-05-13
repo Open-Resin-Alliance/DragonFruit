@@ -162,6 +162,8 @@ export type SliceExportOrchestratorOptions = {
   filenameBase: string;
   outputPath?: string | null;
   antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
+  antiAliasingMode?: 'Blur' | 'Coverage';
+  blurBrushRadiusPx?: number;
   minimumAaAlphaPercentOverride?: number;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
@@ -234,6 +236,8 @@ export type SliceExportResult = {
       containerCompressionLevel: number;
       bvhAccelerationEnabled: boolean;
       antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+      antiAliasingMode: 'Blur' | 'Coverage';
+      blurBrushRadiusPx: number;
       aaOnSupports: boolean;
       minimumAaAlphaPercent: number;
       modelTriangleCount: number;
@@ -642,6 +646,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     pngCompressionStrategy: resolvedPngStrategy,
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
+    antiAliasingMode: options.antiAliasingMode ?? 'Blur',
+    blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
     aaOnSupports: true,
     minimumAaAlphaPercent: Math.max(
       0,
@@ -679,6 +685,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   logDebug('Native slicing starting…');
   logDebug('Native slicing AA settings', {
     antiAliasingLevel: nativeJob.antiAliasingLevel,
+    antiAliasingMode: nativeJob.antiAliasingMode,
+    blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
   });
 
   let progressTotal = solidMesh.totalLayers;
@@ -759,6 +767,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         containerCompressionLevel: nativeJob.containerCompressionLevel,
         bvhAccelerationEnabled: nativeJob.bvhAccelerationEnabled,
         antiAliasingLevel: nativeJob.antiAliasingLevel,
+        antiAliasingMode: nativeJob.antiAliasingMode,
+        blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
         aaOnSupports: nativeJob.aaOnSupports,
         minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
         modelTriangleCount: nativeJob.modelTriangleCount,
