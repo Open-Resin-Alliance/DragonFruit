@@ -279,6 +279,9 @@ fn rasterize_vertical_aa_streaming_v3(
         layer_index: u32,
         mask: Vec<u8>,
         topology: Vec<u8>,
+        topology_non_empty: bool,
+        model_non_empty: bool,
+        backward_applied: bool,
         support_mask: Option<Vec<u8>>,
         apply_model_aa: bool,
         backward_contrib: Option<Vec<u8>>,
@@ -322,13 +325,19 @@ fn rasterize_vertical_aa_streaming_v3(
         if topology_mask.len() != pixels_per_layer {
             topology_mask.resize(pixels_per_layer, 0);
         }
+        let mut model_non_empty = false;
+        let mut topology_non_empty = false;
         if apply_model_aa {
             for (dst, src) in topology_mask.iter_mut().zip(raw_mask.iter()) {
-                *dst = if *src > TOPOLOGY_ALPHA_THRESHOLD {
-                    255
+                if *src > 0 {
+                    model_non_empty = true;
+                }
+                if *src > TOPOLOGY_ALPHA_THRESHOLD {
+                    *dst = 255;
+                    topology_non_empty = true;
                 } else {
-                    0
-                };
+                    *dst = 0;
+                }
             }
         } else {
             topology_mask.fill(0);
@@ -336,8 +345,11 @@ fn rasterize_vertical_aa_streaming_v3(
 
         let base_mask_for_debug = (debug_color_overlay && apply_model_aa).then(|| raw_mask.clone());
 
+        let priors_have_topology = pending_layers.iter().any(|layer| layer.topology_non_empty);
+        let backward_applied = apply_model_aa && (model_non_empty || priors_have_topology);
+
         // --- Backward z-blend for the current layer (look-behind window). ---
-        if apply_model_aa {
+        if backward_applied {
             let priors_start = pending_layers.len().saturating_sub(look_back);
             let priors: Vec<&[u8]> = pending_layers
                 .iter()
@@ -354,16 +366,20 @@ fn rasterize_vertical_aa_streaming_v3(
             );
         }
 
-        let backward_contrib = if let Some(base_mask) = base_mask_for_debug.as_ref() {
-            let mut diff = vec![0u8; pixels_per_layer];
-            for ((dst, after), before) in diff
-                .iter_mut()
-                .zip(raw_mask.iter())
-                .zip(base_mask.iter())
-            {
-                *dst = after.saturating_sub(*before);
+        let backward_contrib = if backward_applied {
+            if let Some(base_mask) = base_mask_for_debug.as_ref() {
+                let mut diff = vec![0u8; pixels_per_layer];
+                for ((dst, after), before) in diff
+                    .iter_mut()
+                    .zip(raw_mask.iter())
+                    .zip(base_mask.iter())
+                {
+                    *dst = after.saturating_sub(*before);
+                }
+                Some(diff)
+            } else {
+                None
             }
-            Some(diff)
         } else {
             None
         };
@@ -373,6 +389,9 @@ fn rasterize_vertical_aa_streaming_v3(
             layer_index,
             mask: raw_mask,
             topology: topology_mask,
+            topology_non_empty,
+            model_non_empty,
+            backward_applied,
             support_mask: support_mask_for_layer,
             apply_model_aa,
             backward_contrib,
@@ -387,14 +406,17 @@ fn rasterize_vertical_aa_streaming_v3(
                 .map(|future| future.topology.as_slice())
                 .collect();
 
-            let mut forward_contrib = if debug_color_overlay && layer.apply_model_aa {
+            let futures_have_topology = pending_layers.iter().any(|future| future.topology_non_empty);
+            let forward_applied = layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
+
+            let mut forward_contrib = if debug_color_overlay && forward_applied {
                 Some(vec![0u8; pixels_per_layer])
             } else {
                 None
             };
 
             let effective_look_back = futures.len();
-            if layer.apply_model_aa && effective_look_back > 0 {
+            if forward_applied && effective_look_back > 0 {
                 let before_forward = if debug_color_overlay {
                     Some(layer.mask.clone())
                 } else {
@@ -426,7 +448,9 @@ fn rasterize_vertical_aa_streaming_v3(
             }
 
             // XY smoothing runs after both vertical blend directions.
-            if layer.apply_model_aa {
+            let should_blur_model =
+                layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
+            if should_blur_model {
                 apply_blur_postprocess_inplace(
                     &mut layer.mask,
                     width,
@@ -537,14 +561,17 @@ fn rasterize_vertical_aa_streaming_v3(
             .map(|future| future.topology.as_slice())
             .collect();
 
-        let mut forward_contrib = if debug_color_overlay && layer.apply_model_aa {
+        let futures_have_topology = pending_layers.iter().any(|future| future.topology_non_empty);
+        let forward_applied = layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
+
+        let mut forward_contrib = if debug_color_overlay && forward_applied {
             Some(vec![0u8; pixels_per_layer])
         } else {
             None
         };
 
         let effective_look_back = futures.len();
-        if layer.apply_model_aa && effective_look_back > 0 {
+        if forward_applied && effective_look_back > 0 {
             let before_forward = if debug_color_overlay {
                 Some(layer.mask.clone())
             } else {
@@ -575,7 +602,9 @@ fn rasterize_vertical_aa_streaming_v3(
             }
         }
 
-        if layer.apply_model_aa {
+        let should_blur_model =
+            layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
+        if should_blur_model {
             apply_blur_postprocess_inplace(
                 &mut layer.mask,
                 width,
