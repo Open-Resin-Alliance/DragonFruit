@@ -11,6 +11,7 @@ import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
+import { resolveTwigDiameterAtSegmentT } from '../Twig/twigTaper';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
@@ -73,6 +74,7 @@ export function LeafPlacementController() {
                 includeTrunks: true,
                 includeBranches: true,
                 includeBraces: true,
+                includeTwigs: true,
             }),
             ...buildKickstandPathSnapTargets(kickstandState),
         ];
@@ -81,12 +83,25 @@ export function LeafPlacementController() {
         supportState.trunks,
         supportState.branches,
         supportState.braces,
+        supportState.twigs,
         kickstandState.kickstands,
     ]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
     }, [allTargets]);
+
+    // Reverse lookup: twig segment id → owning twig. Used to resolve a Leaf's
+    // base diameter against the twig's continuous taper as the knot slides.
+    const twigBySegmentId = useMemo(() => {
+        const map = new Map<string, typeof supportState.twigs[string]>();
+        for (const twig of Object.values(supportState.twigs)) {
+            for (const seg of twig.segments) {
+                map.set(seg.id, twig);
+            }
+        }
+        return map;
+    }, [supportState.twigs]);
 
     const getTarget = useCallback((id: string): SnapTarget | null => {
         return targetById.get(id) ?? null;
@@ -219,6 +234,14 @@ export function LeafPlacementController() {
                 }
             }
 
+            // If snapped to a twig segment, resolve the twig's continuous
+            // disk-A→disk-B taper at this exact slide position.
+            const snappedTwig = twigBySegmentId.get(resolvedSnap.targetId);
+            if (snappedTwig) {
+                const twigDia = resolveTwigDiameterAtSegmentT(snappedTwig, resolvedSnap.targetId, resolvedSnap.t);
+                if (twigDia !== null) hostDiameterMm = twigDia;
+            }
+
             leafPlacementStore.setSnapTarget({
                 targetId: resolvedSnap.targetId,
                 snappedPos: resolvedSnap.snappedPos,
@@ -266,6 +289,12 @@ export function LeafPlacementController() {
                             );
                             hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, projected.t);
                         }
+                    }
+
+                    const hoveredTwig = twigBySegmentId.get(segmentId);
+                    if (hoveredTwig) {
+                        const twigDia = resolveTwigDiameterAtSegmentT(hoveredTwig, segmentId, projected.t);
+                        if (twigDia !== null) hostDiameterMm = twigDia;
                     }
 
                     leafPlacementStore.setSnapTarget({

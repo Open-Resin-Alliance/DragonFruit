@@ -251,15 +251,16 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   effectiveTwig.segments.forEach((seg) => {
     let startPoint: THREE.Vector3;
     let endPoint: THREE.Vector3;
-    let diameterStart = seg.diameter;
-    let diameterEnd = seg.diameter;
+    // Shaft tapers between the two contact disks. Joints bulge slightly at
+    // each end (their own diameter, sized from the disks in twigBuilder).
+    let diameterStart = effectiveTwig.contactDiskA.contactDiameterMm;
+    let diameterEnd = effectiveTwig.contactDiskB.contactDiameterMm;
 
     if (seg.bottomJoint) {
       startPoint = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
     } else {
       const diskATipCenter = getDiskTipCenter(effectiveTwig.contactDiskA);
       startPoint = new THREE.Vector3(diskATipCenter.x, diskATipCenter.y, diskATipCenter.z);
-      diameterStart = effectiveTwig.contactDiskA.contactDiameterMm;
     }
 
     if (seg.topJoint) {
@@ -267,7 +268,6 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     } else {
       const diskBTipCenter = getDiskTipCenter(effectiveTwig.contactDiskB);
       endPoint = new THREE.Vector3(diskBTipCenter.x, diskBTipCenter.y, diskBTipCenter.z);
-      diameterEnd = effectiveTwig.contactDiskB.contactDiameterMm;
     }
 
     const startPosVec = { x: startPoint.x, y: startPoint.y, z: startPoint.z };
