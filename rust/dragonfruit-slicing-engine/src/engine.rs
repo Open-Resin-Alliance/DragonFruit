@@ -8,7 +8,7 @@ use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
-use crate::raster::{apply_blur_postprocess_inplace, encode_mask_to_rle};
+use crate::raster::{apply_blur_postprocess_inplace, encode_mask_to_rle, rasterize_layer};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
@@ -106,6 +106,77 @@ fn apply_min_alpha_floor(mask: &mut [u8], min_aa_alpha_u8: u8) {
     }
 }
 
+struct SupportMaskContext {
+    support_job: SliceJobV3,
+    triangles: Vec<crate::geometry::Triangle>,
+    layer_index: crate::index::LayerIndex,
+    model_triangle_count: usize,
+    support_candidates: Vec<usize>,
+}
+
+impl SupportMaskContext {
+    fn from_job(job: &SliceJobV3) -> Option<Self> {
+        if job.aa_on_supports {
+            return None;
+        }
+
+        let total_triangles = job.triangles_xyz.len() / 9;
+        let model_triangle_count = (job.model_triangle_count as usize).min(total_triangles);
+        if model_triangle_count == 0 || model_triangle_count >= total_triangles {
+            return None;
+        }
+
+        let mut support_job = job.clone();
+        support_job.anti_aliasing_level = "Off".to_string();
+        support_job.anti_aliasing_mode = "Coverage".to_string();
+        support_job.blur_brush_radius_px = 0;
+        support_job.minimum_aa_alpha_percent = 0.0;
+        support_job.aa_on_supports = true;
+        support_job.model_triangle_count = 0;
+
+        let mut triangles = parse_triangles(&support_job.triangles_xyz);
+        project_triangles_inplace(&mut triangles, &support_job);
+        let layer_index = build_layer_index(&triangles, support_job.total_layers, support_job.layer_height_mm);
+
+        Some(Self {
+            support_job,
+            triangles,
+            layer_index,
+            model_triangle_count,
+            support_candidates: Vec::new(),
+        })
+    }
+
+    fn rasterize_support_mask(&mut self, layer: u32) -> Option<Vec<u8>> {
+        self.support_candidates.clear();
+        for &candidate in self.layer_index.candidates_for_layer(layer) {
+            if candidate >= self.model_triangle_count {
+                self.support_candidates.push(candidate);
+            }
+        }
+
+        if self.support_candidates.is_empty() {
+            return None;
+        }
+
+        Some(rasterize_layer(
+            &self.support_job,
+            &self.triangles,
+            &self.support_candidates,
+            layer,
+        ))
+    }
+}
+
+#[inline]
+fn merge_support_mask_inplace(dst: &mut [u8], support: &[u8]) {
+    for (d, s) in dst.iter_mut().zip(support.iter()) {
+        if *s > *d {
+            *d = *s;
+        }
+    }
+}
+
 fn rasterize_vertical_aa_streaming_v3(
     job: &SliceJobV3,
     raster_job: &SliceJobV3,
@@ -144,13 +215,15 @@ fn rasterize_vertical_aa_streaming_v3(
         .then(|| Vec::with_capacity(job.total_layers as usize));
     let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
+    let mut support_mask_context = SupportMaskContext::from_job(raster_job);
+
     // One-layer pending buffer for symmetric forward-compensation blending.
     // Each fully processed mask is held back by one layer so that the next
     // layer’s binary topology can be used to apply a symmetric pre-appearing-
     // pixel gradient before emission.  This prevents net dimensional overgrowth:
     // growing and shrinking edges receive matching gradients so the total
     // integrated exposure dose is the same on both sides of a Z-transition.
-    let mut pending: Option<(u32, Vec<u8>)> = None;
+    let mut pending: Option<(u32, Vec<u8>, Option<Vec<u8>>)> = None;
 
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
@@ -162,6 +235,20 @@ fn rasterize_vertical_aa_streaming_v3(
             return Err(SlicerV3Error::MissingRenderedLayerPayload(
                 "Vertical AA raw mask size mismatch while streaming".to_string(),
             ));
+        }
+
+        let support_mask_for_layer = support_mask_context
+            .as_mut()
+            .and_then(|ctx| ctx.rasterize_support_mask(layer_index));
+
+        // Remove support/raft pixels from the AA processing path.
+        // They are merged back after model-only z-blend + blur.
+        if let Some(ref support_mask) = support_mask_for_layer {
+            for (px, s) in raw_mask.iter_mut().zip(support_mask.iter()) {
+                if *s > 0 {
+                    *px = 0;
+                }
+            }
         }
 
         // Topology mask: binary occupancy for z-blending and forward compensation.
@@ -189,7 +276,7 @@ fn rasterize_vertical_aa_streaming_v3(
         // Pixels absent from the pending topology but present in the current
         // topology are “pre-appearing”: they receive a gradient symmetric to
         // the backward receding gradient, preventing net dimensional overgrowth.
-        if let Some((pending_idx, mut pending_mask)) = pending.take() {
+        if let Some((pending_idx, mut pending_mask, pending_support_mask)) = pending.take() {
             if let Some(pending_topo) = prior_topology_ring.back() {
                 workspace.blend_layer_forward_inplace(
                     &mut pending_mask,
@@ -202,6 +289,11 @@ fn rasterize_vertical_aa_streaming_v3(
                     Some(&lut),
                 );
             }
+
+            if let Some(support_mask) = pending_support_mask.as_ref() {
+                merge_support_mask_inplace(&mut pending_mask, support_mask);
+            }
+
             // PNG is encoded here so it reflects both backward + forward blending.
             if let Some(ref mut out_pngs) = png_layers {
                 let png = encode_grayscale_png(
@@ -242,7 +334,7 @@ fn rasterize_vertical_aa_streaming_v3(
 
         // Defer emission: store as pending so that the next iteration can apply
         // forward compensation before the mask is sent to the encoder.
-        pending = Some((layer_index, raw_mask));
+        pending = Some((layer_index, raw_mask, support_mask_for_layer));
 
         Ok(())
     };
@@ -260,7 +352,11 @@ fn rasterize_vertical_aa_streaming_v3(
     // Flush the last pending layer.  No future topology is available at the end
     // of the slice, so forward blending is skipped; backward blending has already
     // been applied inside the closure above.
-    if let Some((last_idx, last_mask)) = pending.take() {
+    if let Some((last_idx, mut last_mask, last_support_mask)) = pending.take() {
+        if let Some(support_mask) = last_support_mask.as_ref() {
+            merge_support_mask_inplace(&mut last_mask, support_mask);
+        }
+
         if let Some(ref mut out_pngs) = png_layers {
             let png = encode_grayscale_png(
                 width as u32,

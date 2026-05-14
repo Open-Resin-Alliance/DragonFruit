@@ -739,6 +739,118 @@ fn blur_radius_px(radius_px: u32) -> usize {
     radius_px.max(1) as usize
 }
 
+#[inline]
+fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
+    if job.aa_on_supports {
+        return false;
+    }
+
+    let model_triangle_count = job.model_triangle_count as usize;
+    if model_triangle_count == 0 || model_triangle_count >= triangle_count {
+        return false;
+    }
+
+    let aa_steps = (aa_subpixel_steps(job.anti_aliasing_level.trim()) as usize).max(1);
+    let blur_mode = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur");
+    let blur_radius = if blur_mode {
+        blur_radius_px(job.blur_brush_radius_px)
+    } else {
+        0
+    };
+
+    aa_steps > 1 || blur_radius > 0
+}
+
+#[inline]
+fn split_layer_candidates_by_geometry(
+    layer_indices: &[usize],
+    model_triangle_count: usize,
+    model_out: &mut Vec<usize>,
+    support_out: &mut Vec<usize>,
+) {
+    model_out.clear();
+    support_out.clear();
+
+    for &idx in layer_indices {
+        if idx < model_triangle_count {
+            model_out.push(idx);
+        } else {
+            support_out.push(idx);
+        }
+    }
+}
+
+fn recompute_layer_stats_from_mask(
+    mask: &[u8],
+    width: usize,
+    height: usize,
+    pixel_area_mm2: f64,
+    compute_area_stats: bool,
+) -> LayerAreaStatsV3 {
+    let mut stats = LayerAreaStatsV3::default();
+
+    if width == 0 || height == 0 || mask.is_empty() {
+        return stats;
+    }
+
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 0..width {
+            if mask[row_start + x] == 0 {
+                continue;
+            }
+
+            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(1);
+            min_x = min_x.min(x as i32);
+            min_y = min_y.min(y as i32);
+            max_x = max_x.max(x as i32);
+            max_y = max_y.max(y as i32);
+        }
+    }
+
+    if stats.total_solid_pixels == 0 {
+        return stats;
+    }
+
+    stats.min_x = min_x;
+    stats.min_y = min_y;
+    stats.max_x = max_x;
+    stats.max_y = max_y;
+
+    if compute_area_stats {
+        let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+            compute_component_area_stats_8_connected(
+                mask,
+                width,
+                height,
+                min_x as usize,
+                max_x as usize,
+                min_y as usize,
+                max_y as usize,
+                pixel_area_mm2,
+            );
+
+        stats.total_solid_pixels = total_pixels;
+        stats.total_solid_area_mm2 = (total_pixels as f64) * pixel_area_mm2;
+        stats.largest_area_mm2 = largest_area_mm2;
+        stats.smallest_area_mm2 = smallest_area_mm2;
+        stats.area_count = area_count;
+    } else {
+        let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+        stats.total_solid_area_mm2 = total_area;
+        stats.largest_area_mm2 = total_area;
+        stats.smallest_area_mm2 = total_area;
+        stats.area_count = 1;
+    }
+
+    stats
+}
+
 fn apply_edge_box_blur_to_mask_in_roi(
     mask: &mut [u8],
     width: usize,
@@ -1040,7 +1152,7 @@ fn build_scanline_segment_index(
 }
 
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`).
-pub fn rasterize_layer_with_stats(
+fn rasterize_layer_with_stats_impl(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
@@ -1432,6 +1544,85 @@ pub fn rasterize_layer_with_stats(
     (mask, stats)
 }
 
+/// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`), optionally
+/// bypassing AA for support/raft geometry when model/support split metadata is
+/// provided in `job.model_triangle_count`.
+pub fn rasterize_layer_with_stats(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    layer_index: u32,
+    compute_area_stats: bool,
+) -> (Vec<u8>, LayerAreaStatsV3) {
+    if !supports_should_bypass_aa(job, triangles.len()) {
+        return rasterize_layer_with_stats_impl(
+            job,
+            triangles,
+            layer_indices,
+            layer_index,
+            compute_area_stats,
+        );
+    }
+
+    let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+    let mut model_layer_indices = Vec::with_capacity(layer_indices.len());
+    let mut support_layer_indices = Vec::with_capacity(layer_indices.len());
+    split_layer_candidates_by_geometry(
+        layer_indices,
+        model_triangle_count,
+        &mut model_layer_indices,
+        &mut support_layer_indices,
+    );
+
+    if support_layer_indices.is_empty() {
+        return rasterize_layer_with_stats_impl(
+            job,
+            triangles,
+            &model_layer_indices,
+            layer_index,
+            compute_area_stats,
+        );
+    }
+
+    let (mut model_mask, _model_stats) =
+        rasterize_layer_with_stats_impl(job, triangles, &model_layer_indices, layer_index, false);
+
+    let mut support_job = job.clone();
+    support_job.anti_aliasing_level = "Off".to_string();
+    support_job.anti_aliasing_mode = "Coverage".to_string();
+    support_job.blur_brush_radius_px = 0;
+    support_job.minimum_aa_alpha_percent = 0.0;
+    support_job.aa_on_supports = true;
+    support_job.model_triangle_count = 0;
+
+    let (support_mask, _support_stats) = rasterize_layer_with_stats_impl(
+        &support_job,
+        triangles,
+        &support_layer_indices,
+        layer_index,
+        false,
+    );
+
+    for (dst, src) in model_mask.iter_mut().zip(support_mask.iter()) {
+        if *src > *dst {
+            *dst = *src;
+        }
+    }
+
+    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+
+    let stats = recompute_layer_stats_from_mask(
+        &model_mask,
+        job.effective_render_width_px() as usize,
+        job.source_height_px as usize,
+        pixel_area_mm2,
+        compute_area_stats,
+    );
+
+    (model_mask, stats)
+}
+
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`).
 pub fn rasterize_layer(
     job: &SliceJobV3,
@@ -1467,6 +1658,18 @@ pub fn rasterize_layer_rle(
     if layer_indices.is_empty() || width == 0 || height == 0 {
         emit_zero_rows(&mut rle, height, width);
         return (rle.finish(), stats);
+    }
+
+    if supports_should_bypass_aa(job, triangles.len()) {
+        let (mask, stats) = rasterize_layer_with_stats(
+            job,
+            triangles,
+            layer_indices,
+            layer_index,
+            compute_area_stats,
+        );
+        let runs = encode_mask_to_rle(&mask, width, height);
+        return (runs, stats);
     }
 
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
@@ -1833,6 +2036,7 @@ mod tests {
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 1,
             aa_on_supports: false,
+            model_triangle_count: 0,
             minimum_aa_alpha_percent: 35.0,
             mirror_x: false,
             mirror_y: false,

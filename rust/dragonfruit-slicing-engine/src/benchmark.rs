@@ -148,6 +148,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         anti_aliasing_mode: cfg.anti_aliasing_mode,
         blur_brush_radius_px: cfg.blur_brush_radius_px,
         aa_on_supports: false,
+        model_triangle_count: (triangles.len() / 9) as u32,
         minimum_aa_alpha_percent: cfg.minimum_aa_alpha_percent,
         mirror_x: false,
         mirror_y: false,

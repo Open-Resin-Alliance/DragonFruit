@@ -45,6 +45,10 @@ fn default_z_blend_fade_px() -> u32 {
     20
 }
 
+fn default_model_triangle_count() -> u32 {
+    0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -95,6 +99,12 @@ pub struct SliceJobV3 {
     /// Whether AA should apply to support geometry (reserved for future split masks).
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// Number of model triangles at the front of `triangles_xyz`.
+    ///
+    /// Triangles after this index are treated as support/raft geometry.
+    /// `0` means "unspecified" (no geometry split metadata).
+    #[serde(default = "default_model_triangle_count")]
+    pub model_triangle_count: u32,
     /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
     #[serde(default = "default_minimum_aa_alpha_percent")]
     pub minimum_aa_alpha_percent: f32,
