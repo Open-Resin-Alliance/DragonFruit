@@ -73,6 +73,56 @@ impl ZBlendWorkspace {
             &mut self.queue,
         );
     }
+
+    /// Apply forward (lookahead) Z-blend compensation to a processed mask.
+    ///
+    /// For each "pre-appearing" pixel — one absent from `topology` (this layer)
+    /// but present in at least one of `futures` (upcoming layers) — computes a
+    /// Manhattan-distance BFS from the topology boundary outward and applies a
+    /// depth-scaled alpha gradient that is symmetric to the backward receding
+    /// gradient produced by [`blend_layer_inplace`].
+    ///
+    /// **Why this prevents dimensional overgrowth:** without forward compensation
+    /// only shrinking edges receive a gradient (backward receding), biasing the
+    /// total exposure dose toward over-curing at feature endings.  By giving
+    /// growing edges an identical pre-appearing gradient, both transitions are
+    /// treated symmetrically and the net Z-dimensional footprint is neutral.
+    ///
+    /// `look_back` should be the same value used for backward blending so the
+    /// peak alpha formula is identical in both directions:
+    /// `peak = 255 × look_back / (look_back + 1)` for the nearest layer.
+    pub fn blend_layer_forward_inplace(
+        &mut self,
+        mask: &mut [u8],
+        topology: &[u8],
+        futures: &[&[u8]],
+        look_back: usize,
+        width: usize,
+        height: usize,
+        fade_px: u32,
+        lut: Option<&[u8; 256]>,
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+        z_blend_forward_inplace(
+            mask,
+            topology,
+            futures,
+            look_back,
+            width,
+            height,
+            fade_px,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +351,169 @@ fn z_blend_layer_inplace(
                 // Max-merge: never reduce existing values.
                 if v > current[idx] {
                     current[idx] = v;
+                }
+            }
+        }
+    }
+}
+
+/// Forward EDT Z-blend: bleed pre-appearing pixels (not in `topology` but
+/// present in at least one of `futures`) into `mask` using a symmetric
+/// depth-scaled gradient.
+///
+/// Mirrors `z_blend_layer_inplace` but operates on growing edges instead of
+/// shrinking ones.  The `look_back` denominator is shared so that peak alphas
+/// are identical for the nearest layer in each direction.
+fn z_blend_forward_inplace(
+    mask: &mut [u8],
+    topology: &[u8],
+    futures: &[&[u8]],
+    look_back: usize,
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    in_forward: &mut [u8],
+    dist: &mut [u16],
+    queue: &mut VecDeque<usize>,
+) {
+    if futures.is_empty() || fade_px == 0 || look_back == 0 {
+        return;
+    }
+    let n = width * height;
+    const TOPO_THRESHOLD: u8 = 127;
+
+    // Build forward depth map: in_forward[idx] = d → pixel first appears
+    // d layers ahead (d=1 = next layer = most-recent future, d=2 = further …).
+    // Iterating from most-recent future to furthest means the FIRST write wins,
+    // recording the minimum (nearest) future depth.  Only pixels absent from
+    // the current topology can be pre-appearing.
+    in_forward[..n].fill(0);
+    for (depth_idx, future) in futures.iter().enumerate() {
+        let depth_val = (depth_idx + 1) as u8;
+        for (p, q) in in_forward[..n].iter_mut().zip(future[..n].iter()) {
+            if *q > TOPO_THRESHOLD && *p == 0 {
+                *p = depth_val;
+            }
+        }
+    }
+
+    // ROI scan: locate pre-appearing pixels (not in topology, in some future).
+    let mut appearing_any = false;
+    let mut app_min_x = width;
+    let mut app_max_x = 0usize;
+    let mut app_min_y = height;
+    let mut app_max_y = 0usize;
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 0..width {
+            let idx = row_start + x;
+            if in_forward[idx] > 0 && topology[idx] <= TOPO_THRESHOLD {
+                appearing_any = true;
+                app_min_x = app_min_x.min(x);
+                app_max_x = app_max_x.max(x);
+                app_min_y = app_min_y.min(y);
+                app_max_y = app_max_y.max(y);
+            }
+        }
+    }
+    if !appearing_any {
+        return;
+    }
+
+    let seed_min_x = app_min_x.saturating_sub(1);
+    let seed_min_y = app_min_y.saturating_sub(1);
+    let seed_max_x = (app_max_x + 1).min(width - 1);
+    let seed_max_y = (app_max_y + 1).min(height - 1);
+
+    // Reset dist in the working ROI.
+    for y in app_min_y..=app_max_y {
+        let row = y * width;
+        for x in app_min_x..=app_max_x {
+            dist[row + x] = u16::MAX;
+        }
+    }
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            dist[row + x] = u16::MAX;
+        }
+    }
+    queue.clear();
+
+    // Seed: topology boundary pixels that border at least one non-topology pixel.
+    for y in seed_min_y..=seed_max_y {
+        for x in seed_min_x..=seed_max_x {
+            let idx = y * width + x;
+            if topology[idx] <= TOPO_THRESHOLD {
+                continue;
+            }
+            if has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD) {
+                dist[idx] = 0;
+                queue.push_back(idx);
+            }
+        }
+    }
+
+    // BFS into pre-appearing pixels.
+    while let Some(idx) = queue.pop_front() {
+        let next_d = dist[idx].saturating_add(1);
+        if (next_d as u32) > fade_px {
+            continue;
+        }
+        let y = idx / width;
+        let x = idx % width;
+
+        macro_rules! try_neighbor {
+            ($nidx:expr) => {
+                let nidx = $nidx;
+                if topology[nidx] <= TOPO_THRESHOLD && in_forward[nidx] > 0 && dist[nidx] > next_d {
+                    dist[nidx] = next_d;
+                    queue.push_back(nidx);
+                }
+            };
+        }
+
+        if x > app_min_x {
+            try_neighbor!(idx - 1);
+        }
+        if x < app_max_x {
+            try_neighbor!(idx + 1);
+        }
+        if y > app_min_y {
+            try_neighbor!(idx - width);
+        }
+        if y < app_max_y {
+            try_neighbor!(idx + width);
+        }
+    }
+
+    // Convert distances → gradient, apply LUT, max-merge into mask.
+    // Peak alpha uses look_back as the denominator (same as backward) so that
+    // the nearest future layer (depth=1) gives exactly the same peak as the
+    // nearest prior layer (depth=1).
+    let fade_denom = (fade_px + 1) as f32;
+    let denominator = (look_back + 1) as f32;
+    for y in app_min_y..=app_max_y {
+        let row_start = y * width;
+        for x in app_min_x..=app_max_x {
+            let idx = row_start + x;
+            if topology[idx] <= TOPO_THRESHOLD
+                && in_forward[idx] > 0
+                && (dist[idx] as u32) <= fade_px
+            {
+                let depth = in_forward[idx] as usize;
+                let num = (look_back + 1).saturating_sub(depth) as f32;
+                let peak_alpha = (255.0 * num / denominator).round() as u8;
+                let t = 1.0 - (dist[idx] as f32 / fade_denom);
+                let raw = (t * peak_alpha as f32 + 0.5) as u8;
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
+                if v > mask[idx] {
+                    mask[idx] = v;
                 }
             }
         }

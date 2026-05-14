@@ -144,6 +144,14 @@ fn rasterize_vertical_aa_streaming_v3(
         .then(|| Vec::with_capacity(job.total_layers as usize));
     let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
+    // One-layer pending buffer for symmetric forward-compensation blending.
+    // Each fully processed mask is held back by one layer so that the next
+    // layer’s binary topology can be used to apply a symmetric pre-appearing-
+    // pixel gradient before emission.  This prevents net dimensional overgrowth:
+    // growing and shrinking edges receive matching gradients so the total
+    // integrated exposure dose is the same on both sides of a Z-transition.
+    let mut pending: Option<(u32, Vec<u8>)> = None;
+
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
      -> Result<(), SlicerV3Error> {
@@ -156,8 +164,7 @@ fn rasterize_vertical_aa_streaming_v3(
             ));
         }
 
-        // Vertical2 topology uses occupancy-only masks so inter-layer z-blend is
-        // stable and independent from XY fringe intensity.
+        // Topology mask: binary occupancy for z-blending and forward compensation.
         let mut topology_mask = topology_reuse_pool
             .pop()
             .unwrap_or_else(|| vec![0u8; pixels_per_layer]);
@@ -172,6 +179,48 @@ fn rasterize_vertical_aa_streaming_v3(
             };
         }
 
+        // --- Flush pending layer with forward (lookahead) compensation. ---
+        //
+        // `prior_topology_ring.back()` at this point is the pending layer’s own
+        // binary topology (pushed at the end of the previous iteration, before
+        // the current layer’s topology is pushed).  The current `topology_mask`
+        // is the “future” from the pending layer’s perspective.
+        //
+        // Pixels absent from the pending topology but present in the current
+        // topology are “pre-appearing”: they receive a gradient symmetric to
+        // the backward receding gradient, preventing net dimensional overgrowth.
+        if let Some((pending_idx, mut pending_mask)) = pending.take() {
+            if let Some(pending_topo) = prior_topology_ring.back() {
+                workspace.blend_layer_forward_inplace(
+                    &mut pending_mask,
+                    pending_topo.as_slice(),
+                    &[topology_mask.as_slice()],
+                    look_back,
+                    width,
+                    height,
+                    fade_px,
+                    Some(&lut),
+                );
+            }
+            // PNG is encoded here so it reflects both backward + forward blending.
+            if let Some(ref mut out_pngs) = png_layers {
+                let png = encode_grayscale_png(
+                    width as u32,
+                    height as u32,
+                    &pending_mask,
+                    &raster_job.png_compression_strategy,
+                    false,
+                )?;
+                out_pngs.push(png);
+            }
+            if let Some(ref mut emit) = on_processed_mask {
+                emit(pending_idx, pending_mask)?;
+            } else if let Some(ref mut out_masks) = raw_mask_layers {
+                out_masks.push(pending_mask);
+            }
+        }
+
+        // --- Backward z-blend (prior layers) + XY blur for the current layer. ---
         let priors: Vec<&[u8]> = prior_topology_ring
             .iter()
             .map(|layer| layer.as_slice())
@@ -184,17 +233,6 @@ fn rasterize_vertical_aa_streaming_v3(
             apply_min_alpha_floor(&mut raw_mask, min_aa_alpha_u8);
         }
 
-        if let Some(ref mut out_pngs) = png_layers {
-            let png = encode_grayscale_png(
-                width as u32,
-                height as u32,
-                &raw_mask,
-                &raster_job.png_compression_strategy,
-                false,
-            )?;
-            out_pngs.push(png);
-        }
-
         if prior_topology_ring.len() == look_back {
             if let Some(oldest) = prior_topology_ring.pop_front() {
                 topology_reuse_pool.push(oldest);
@@ -202,12 +240,9 @@ fn rasterize_vertical_aa_streaming_v3(
         }
         prior_topology_ring.push_back(topology_mask);
 
-        // Streaming callback takes priority over in-memory collection.
-        if let Some(ref mut emit) = on_processed_mask {
-            emit(layer_index, raw_mask)?;
-        } else if let Some(ref mut out_masks) = raw_mask_layers {
-            out_masks.push(raw_mask);
-        }
+        // Defer emission: store as pending so that the next iteration can apply
+        // forward compensation before the mask is sent to the encoder.
+        pending = Some((layer_index, raw_mask));
 
         Ok(())
     };
@@ -221,6 +256,27 @@ fn rasterize_vertical_aa_streaming_v3(
         on_progress,
         cancel_flag,
     )?;
+
+    // Flush the last pending layer.  No future topology is available at the end
+    // of the slice, so forward blending is skipped; backward blending has already
+    // been applied inside the closure above.
+    if let Some((last_idx, last_mask)) = pending.take() {
+        if let Some(ref mut out_pngs) = png_layers {
+            let png = encode_grayscale_png(
+                width as u32,
+                height as u32,
+                &last_mask,
+                &raster_job.png_compression_strategy,
+                false,
+            )?;
+            out_pngs.push(png);
+        }
+        if let Some(ref mut emit) = on_processed_mask {
+            emit(last_idx, last_mask)?;
+        } else if let Some(ref mut out_masks) = raw_mask_layers {
+            out_masks.push(last_mask);
+        }
+    }
 
     Ok((
         RenderedLayersV3 {
