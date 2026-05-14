@@ -22,6 +22,63 @@
 
 use std::collections::VecDeque;
 
+/// Reusable working buffers for single-layer 3DAA z-blending.
+///
+/// This enables streaming operation (bounded memory) by blending each layer
+/// against a look-back ring of prior layers without materializing all layers.
+pub struct ZBlendWorkspace {
+    in_prior: Vec<u8>,
+    dist: Vec<u32>,
+    gradient: Vec<u8>,
+    queue: VecDeque<usize>,
+}
+
+impl ZBlendWorkspace {
+    pub fn new(width: usize, height: usize) -> Self {
+        let n = width.saturating_mul(height);
+        Self {
+            in_prior: vec![0u8; n],
+            dist: vec![u32::MAX; n],
+            gradient: vec![0u8; n],
+            queue: VecDeque::with_capacity(n / 8),
+        }
+    }
+
+    pub fn blend_layer_inplace(
+        &mut self,
+        current: &mut [u8],
+        priors: &[&[u8]],
+        width: usize,
+        height: usize,
+        fade_px: u32,
+        lut: Option<&[u8; 256]>,
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u32::MAX);
+        }
+        if self.gradient.len() != n {
+            self.gradient.resize(n, 0);
+        }
+
+        z_blend_layer_inplace(
+            current,
+            priors,
+            width,
+            height,
+            fade_px,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.gradient,
+            &mut self.queue,
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -44,13 +101,7 @@ pub fn z_blend_all_layers(
         return;
     }
 
-    let n = width * height;
-
-    // Pre-allocated working buffers, reused across all layers.
-    let mut in_prior = vec![0u8; n];
-    let mut dist = vec![u32::MAX; n];
-    let mut gradient = vec![0u8; n];
-    let mut queue: VecDeque<usize> = VecDeque::with_capacity(n / 8);
+    let mut workspace = ZBlendWorkspace::new(width, height);
 
     // Layer 0 has no prior layers; start from layer 1.
     for i in 1..total {
@@ -59,18 +110,11 @@ pub fn z_blend_all_layers(
         let (priors_slice, rest) = masks.split_at_mut(i);
         let current = &mut rest[0];
 
-        z_blend_layer_inplace(
-            current,
-            &priors_slice[start..],
-            width,
-            height,
-            fade_px,
-            lut,
-            &mut in_prior,
-            &mut dist,
-            &mut gradient,
-            &mut queue,
-        );
+        let priors: Vec<&[u8]> = priors_slice[start..]
+            .iter()
+            .map(|layer| layer.as_slice())
+            .collect();
+        workspace.blend_layer_inplace(current, &priors, width, height, fade_px, lut);
     }
 }
 
@@ -80,7 +124,7 @@ pub fn z_blend_all_layers(
 
 fn z_blend_layer_inplace(
     current: &mut [u8],
-    priors: &[Vec<u8>],
+    priors: &[&[u8]],
     width: usize,
     height: usize,
     fade_px: u32,
@@ -91,7 +135,11 @@ fn z_blend_layer_inplace(
     queue: &mut VecDeque<usize>,
 ) {
     let n = width * height;
-    const THRESHOLD: u8 = 127;
+    // Treat any non-zero alpha as occupied. 3DAA runs on top of Blur AA masks,
+    // so using a hard mid-gray threshold (e.g. 127) effectively binarizes the
+    // input and discards soft edge coverage, which can make output resemble
+    // legacy coverage AA rather than true blur-based blending.
+    const THRESHOLD: u8 = 0;
 
     // -- Step 1: build combined prior-presence map (OR of all prior layers). --
     in_prior[..n].fill(0);
@@ -172,7 +220,11 @@ fn z_blend_layer_inplace(
             // Linear gradient: 255 at dist=0 (edge), ~1 at dist=fade_px.
             let t = 1.0 - (dist[idx] as f32 / fade_denom);
             let raw = (t * 255.0 + 0.5) as u8;
-            let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+            let v = if let Some(lut) = lut {
+                lut[raw as usize]
+            } else {
+                raw
+            };
             // Max-merge: never reduce existing values.
             if v > current[idx] {
                 current[idx] = v;
@@ -263,13 +315,22 @@ mod tests {
 
         let layer = &masks[1];
         // Receding pixels get gradient lifted
-        assert!(layer[0] > 0, "pixel 0 should have gradient > 0, got {}", layer[0]);
-        assert!(layer[1] > 0, "pixel 1 should have gradient > 0, got {}", layer[1]);
+        assert!(
+            layer[0] > 0,
+            "pixel 0 should have gradient > 0, got {}",
+            layer[0]
+        );
+        assert!(
+            layer[1] > 0,
+            "pixel 1 should have gradient > 0, got {}",
+            layer[1]
+        );
         // Pixel closer to the edge should have higher gradient
         assert!(
             layer[1] > layer[0],
             "pixel closer to current edge (idx 1) should have higher gradient; got {} vs {}",
-            layer[1], layer[0]
+            layer[1],
+            layer[0]
         );
         // Solid pixels in current layer are untouched
         assert_eq!(layer[2], 255);
@@ -348,11 +409,54 @@ mod tests {
         let layer = &masks[1];
         // Pixels 2, 3, 4 are within fade_px=3 of the current edge (at index 5)
         // Pixel 1 is 4 steps away → should be 0
-        assert_eq!(layer[0], 0, "pixel 0 (dist=5) should be 0, got {}", layer[0]);
-        assert_eq!(layer[1], 0, "pixel 1 (dist=4) should be 0, got {}", layer[1]);
-        assert!(layer[2] > 0, "pixel 2 (dist=3) should have gradient, got {}", layer[2]);
-        assert!(layer[3] > layer[2], "pixel 3 (dist=2) closer → higher, got {} vs {}", layer[3], layer[2]);
-        assert!(layer[4] > layer[3], "pixel 4 (dist=1) closest → highest, got {} vs {}", layer[4], layer[3]);
+        assert_eq!(
+            layer[0], 0,
+            "pixel 0 (dist=5) should be 0, got {}",
+            layer[0]
+        );
+        assert_eq!(
+            layer[1], 0,
+            "pixel 1 (dist=4) should be 0, got {}",
+            layer[1]
+        );
+        assert!(
+            layer[2] > 0,
+            "pixel 2 (dist=3) should have gradient, got {}",
+            layer[2]
+        );
+        assert!(
+            layer[3] > layer[2],
+            "pixel 3 (dist=2) closer → higher, got {} vs {}",
+            layer[3],
+            layer[2]
+        );
+        assert!(
+            layer[4] > layer[3],
+            "pixel 4 (dist=1) closest → highest, got {} vs {}",
+            layer[4],
+            layer[3]
+        );
+    }
+
+    /// Low-alpha Blur edge pixels must still count as occupied for 3DAA
+    /// topology/edge detection. If they are treated as empty (old thresholded
+    /// behaviour), 3DAA effectively re-binarizes the mask and produces legacy
+    /// AA-like edges.
+    #[test]
+    fn z_blend_treats_nonzero_alpha_as_occupied() {
+        let width = 4;
+        let height = 1;
+
+        // Prior has a pixel where current only has low-alpha blur coverage.
+        let prior = vec![0u8, 255, 255, 255];
+        let current = vec![0u8, 40, 255, 255];
+        let mut masks = vec![prior, current.clone()];
+
+        z_blend_all_layers(&mut masks, width, height, 1, 3, None);
+
+        // Pixel 1 (alpha=40) is part of the current layer and should not be
+        // treated as receding; it must remain unchanged.
+        assert_eq!(masks[1][1], 40);
     }
 
     /// Default LUT is monotonically non-decreasing.

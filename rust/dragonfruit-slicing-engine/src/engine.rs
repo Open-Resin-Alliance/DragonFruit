@@ -13,6 +13,7 @@ use crate::types::{
     SliceProgressPhaseV3, SliceProgressUpdateV3,
 };
 use crate::z_blend;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -83,6 +84,105 @@ fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {
         ));
     }
     Ok(())
+}
+
+#[inline]
+fn apply_min_alpha_floor(mask: &mut [u8], min_aa_alpha_u8: u8) {
+    if min_aa_alpha_u8 == 0 {
+        return;
+    }
+    for px in mask.iter_mut() {
+        if *px < min_aa_alpha_u8 {
+            *px = 0;
+        }
+    }
+}
+
+fn rasterize_3daa_streaming_v3(
+    job: &SliceJobV3,
+    raster_job: &SliceJobV3,
+    requires_area_stats: bool,
+    collect_png_layers: bool,
+    collect_raw_mask_layers: bool,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    let width = raster_job.effective_render_width_px() as usize;
+    let height = raster_job.source_height_px as usize;
+    let pixels_per_layer = width.saturating_mul(height);
+    let look_back = (job.z_blend_look_back as usize).max(1);
+    let fade_px = job.z_blend_fade_px.max(1);
+    let lut = z_blend::default_z_blend_lut();
+    let min_aa_alpha_u8 =
+        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+
+    let mut prior_ring: VecDeque<Vec<u8>> = VecDeque::with_capacity(look_back);
+    let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
+    let mut png_layers: Option<Vec<Vec<u8>>> =
+        collect_png_layers.then(|| Vec::with_capacity(job.total_layers as usize));
+    let mut raw_mask_layers: Option<Vec<Vec<u8>>> =
+        collect_raw_mask_layers.then(|| Vec::with_capacity(job.total_layers as usize));
+
+    let mut on_raw_mask_layer = |layer_index: u32,
+                                 mut raw_mask: Vec<u8>|
+     -> Result<(), SlicerV3Error> {
+        let _ = layer_index;
+        if raw_mask.is_empty() {
+            raw_mask = vec![0u8; pixels_per_layer];
+        }
+        if raw_mask.len() != pixels_per_layer {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "3DAA raw mask size mismatch while streaming".to_string(),
+            ));
+        }
+
+        let priors: Vec<&[u8]> = prior_ring.iter().map(|layer| layer.as_slice()).collect();
+        workspace.blend_layer_inplace(&mut raw_mask, &priors, width, height, fade_px, Some(&lut));
+        apply_min_alpha_floor(&mut raw_mask, min_aa_alpha_u8);
+
+        if let Some(ref mut out_pngs) = png_layers {
+            let png = encode_grayscale_png(
+                width as u32,
+                height as u32,
+                &raw_mask,
+                &raster_job.png_compression_strategy,
+                false,
+            )?;
+            out_pngs.push(png);
+        }
+
+        if prior_ring.len() == look_back {
+            prior_ring.pop_front();
+        }
+
+        if let Some(ref mut out_masks) = raw_mask_layers {
+            prior_ring.push_back(raw_mask.clone());
+            out_masks.push(raw_mask);
+        } else {
+            prior_ring.push_back(raw_mask);
+        }
+
+        Ok(())
+    };
+
+    let (_rendered, layer_area_stats, perf) = slice_and_rasterize_v3(
+        raster_job,
+        requires_area_stats,
+        false,
+        false,
+        Some(&mut on_raw_mask_layer),
+        on_progress,
+        cancel_flag,
+    )?;
+
+    Ok((
+        RenderedLayersV3 {
+            png_layers,
+            raw_mask_layers,
+        },
+        layer_area_stats,
+        perf,
+    ))
 }
 
 /// Clean-room V3 entry point with full pipeline:
@@ -249,53 +349,39 @@ pub fn slice_with_progress_v3(
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
         j.anti_aliasing_mode = "Blur".to_string();
+        // 3DAA uses the blur rasterization as a pure gradient-generating pass
+        // that feeds the EDT inter-layer blending step. The normal min-alpha
+        // threshold (which guards against under-curing in standalone Blur AA)
+        // must be disabled here so the full gradient reaches the EDT processor
+        // rather than being pre-thresholded into a near-binary fringe.
+        j.minimum_aa_alpha_percent = 0.0;
         Some(j)
     } else {
         None
     };
     let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
 
-    let (mut rendered_layers, layer_area_stats, mut perf) = slice_and_rasterize_v3(
-        raster_job,
-        requires_area_stats,
-        // 3DAA defers PNG encoding to after the EDT pass; only collect raw masks now.
-        if is_3daa { false } else { requires_png_layers },
-        requires_raw_mask_layers || is_3daa,
-        None,
-        on_progress.clone(),
-        cancel_flag,
-    )?;
-
-    // Apply EDT inter-layer Z-blending post-process when in 3DAA mode.
-    if is_3daa {
-        if let Some(ref mut masks) = rendered_layers.raw_mask_layers {
-            let width = raster_job.effective_render_width_px() as usize;
-            let height = raster_job.source_height_px as usize;
-            let look_back = (job.z_blend_look_back as usize).max(1);
-            let fade_px = job.z_blend_fade_px.max(1);
-            let lut = z_blend::default_z_blend_lut();
-            z_blend::z_blend_all_layers(masks, width, height, look_back, fade_px, Some(&lut));
-
-            // Re-encode modified masks to PNG for the encoder.
-            let mut pngs: Vec<Vec<u8>> = Vec::with_capacity(masks.len());
-            for mask in masks.iter() {
-                let png = encode_grayscale_png(
-                    width as u32,
-                    height as u32,
-                    mask,
-                    &raster_job.png_compression_strategy,
-                    false,
-                )?;
-                pngs.push(png);
-            }
-            rendered_layers.png_layers = Some(pngs);
-
-            // Free raw mask memory unless the encoder explicitly needs it.
-            if !requires_raw_mask_layers {
-                rendered_layers.raw_mask_layers = None;
-            }
-        }
-    }
+    let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
+        rasterize_3daa_streaming_v3(
+            job,
+            raster_job,
+            requires_area_stats,
+            requires_png_layers,
+            requires_raw_mask_layers,
+            on_progress.clone(),
+            cancel_flag,
+        )?
+    } else {
+        slice_and_rasterize_v3(
+            raster_job,
+            requires_area_stats,
+            requires_png_layers,
+            requires_raw_mask_layers,
+            None,
+            on_progress.clone(),
+            cancel_flag,
+        )?
+    };
 
     let encode_units = encoder
         .estimate_encode_progress_units(&rendered_layers)
@@ -534,8 +620,12 @@ pub fn slice_with_progress_v3_to_path(
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
 
+    // 3DAA mode needs full raw masks for all layers so the EDT inter-layer
+    // blend pass can run before final container encoding.
+    let is_3daa = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("3daa");
+
     // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
-    if !requires_png_layers {
+    if !is_3daa && !requires_png_layers {
         if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
@@ -608,7 +698,7 @@ pub fn slice_with_progress_v3_to_path(
         }
     }
 
-    if !requires_png_layers && requires_raw_mask_layers {
+    if !is_3daa && !requires_png_layers && requires_raw_mask_layers {
         if let Some(mut stream_encoder) = encoder.create_raw_mask_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
@@ -666,15 +756,42 @@ pub fn slice_with_progress_v3_to_path(
     }
 
     let total_start = std::time::Instant::now();
-    let (rendered_layers, layer_area_stats, mut perf) = slice_and_rasterize_v3(
-        job,
-        requires_area_stats,
-        requires_png_layers,
-        requires_raw_mask_layers,
-        None,
-        on_progress.clone(),
-        cancel_flag,
-    )?;
+
+    // For 3DAA mode: rasterize with Blur AA, collect raw masks, apply EDT
+    // inter-layer blending, then encode final output.
+    let raster_job_owned: Option<SliceJobV3> = if is_3daa {
+        let mut j = job.clone();
+        j.anti_aliasing_mode = "Blur".to_string();
+        // Disable internal min-alpha threshold during the blur base pass so
+        // full gradients reach EDT. We re-apply the user threshold after EDT.
+        j.minimum_aa_alpha_percent = 0.0;
+        Some(j)
+    } else {
+        None
+    };
+    let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
+
+    let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
+        rasterize_3daa_streaming_v3(
+            job,
+            raster_job,
+            requires_area_stats,
+            requires_png_layers,
+            requires_raw_mask_layers,
+            on_progress.clone(),
+            cancel_flag,
+        )?
+    } else {
+        slice_and_rasterize_v3(
+            raster_job,
+            requires_area_stats,
+            requires_png_layers,
+            requires_raw_mask_layers,
+            None,
+            on_progress.clone(),
+            cancel_flag,
+        )?
+    };
 
     let encode_units = encoder
         .estimate_encode_progress_units(&rendered_layers)
