@@ -29,6 +29,7 @@ export type NativeSolidSliceJobEnvelope = {
   mirrorY: boolean;
   zBlendLookBack?: number;
   zBlendFadePx?: number;
+  zBlendDebugColorOverlay?: boolean;
   modelTriangleCount: number;
   containerCompressionLevel?: number;
   buildWidthMm: number;
@@ -69,6 +70,7 @@ type NativeSolidSlicePayload = {
   mirror_y: boolean;
   z_blend_look_back?: number;
   z_blend_fade_px?: number;
+  z_blend_debug_color_overlay?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
@@ -109,6 +111,7 @@ type NativeSolidSliceMetadataPayload = {
   mirror_y: boolean;
   z_blend_look_back?: number;
   z_blend_fade_px?: number;
+  z_blend_debug_color_overlay?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
@@ -195,6 +198,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     mirror_y: job.mirrorY,
     z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
     z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
+    z_blend_debug_color_overlay: job.zBlendDebugColorOverlay === true,
     model_triangle_count: job.modelTriangleCount,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
@@ -238,6 +242,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     mirror_y: job.mirrorY,
     z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
     z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
+    z_blend_debug_color_overlay: job.zBlendDebugColorOverlay === true,
     model_triangle_count: Math.max(0, Math.floor(job.modelTriangleCount ?? 0)),
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,

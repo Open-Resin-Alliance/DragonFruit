@@ -21,6 +21,10 @@ fn default_z_blend_look_back() -> u32 {
 fn default_z_blend_fade_px() -> u32 {
     20
 }
+
+fn default_z_blend_debug_color_overlay() -> bool {
+    false
+}
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -338,6 +342,8 @@ struct SliceJobMetadata {
     z_blend_look_back: u32,
     #[serde(default = "default_z_blend_fade_px")]
     z_blend_fade_px: u32,
+    #[serde(default = "default_z_blend_debug_color_overlay")]
+    z_blend_debug_color_overlay: bool,
     #[serde(default)]
     model_triangle_count: u32,
     container_compression_level: u8,
@@ -1252,6 +1258,7 @@ async fn slice_solid_native_to_temp_path(
             mirror_y: meta.mirror_y,
             z_blend_look_back: meta.z_blend_look_back,
             z_blend_fade_px: meta.z_blend_fade_px,
+            z_blend_debug_color_overlay: meta.z_blend_debug_color_overlay,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,
             build_depth_mm: meta.build_depth_mm,

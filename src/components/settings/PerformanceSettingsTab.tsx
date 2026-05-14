@@ -406,6 +406,37 @@ export function PerformanceSettingsTab({
               {settings.aaOnSupportsExperimental ? 'On' : 'Off'}
             </button>
           </div>
+
+          <div className="mt-3 border-t pt-3" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  3DAA Debug Color Overlay
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  Visual debug mode: look-behind blend = green, look-ahead blend = red. Intended for diagnostics only.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => patch({ zBlendDebugColorOverlay: !settings.zBlendDebugColorOverlay })}
+                className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={settings.zBlendDebugColorOverlay
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                {settings.zBlendDebugColorOverlay ? 'On' : 'Off'}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 

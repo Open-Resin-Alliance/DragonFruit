@@ -1,6 +1,6 @@
 //! V3 engine orchestration and validation layer.
 
-use crate::encode::encode_grayscale_png;
+use crate::encode::{encode_grayscale_png, encode_rgb_png_8bit};
 use crate::encoders::registry::{
     find_encoder, find_encoder_by_hint_or_source, supported_output_formats,
 };
@@ -200,10 +200,10 @@ fn rasterize_vertical_aa_streaming_v3(
     let lut = z_blend::default_z_blend_lut();
     let min_aa_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let debug_color_overlay = job.z_blend_debug_color_overlay && collect_png_layers;
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
-    let mut prior_topology_ring: VecDeque<Vec<u8>> = VecDeque::with_capacity(look_back);
-    let mut topology_reuse_pool: Vec<Vec<u8>> = Vec::with_capacity(look_back);
+    let mut topology_reuse_pool: Vec<Vec<u8>> = Vec::with_capacity(look_back + 1);
     let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
     let mut png_layers: Option<Vec<Vec<u8>>> =
         collect_png_layers.then(|| Vec::with_capacity(job.total_layers as usize));
@@ -217,13 +217,20 @@ fn rasterize_vertical_aa_streaming_v3(
 
     let mut support_mask_context = SupportMaskContext::from_job(raster_job);
 
-    // One-layer pending buffer for symmetric forward-compensation blending.
-    // Each fully processed mask is held back by one layer so that the next
-    // layer’s binary topology can be used to apply a symmetric pre-appearing-
-    // pixel gradient before emission.  This prevents net dimensional overgrowth:
-    // growing and shrinking edges receive matching gradients so the total
-    // integrated exposure dose is the same on both sides of a Z-transition.
-    let mut pending: Option<(u32, Vec<u8>, Option<Vec<u8>>)> = None;
+    // Pending queue for symmetric forward-compensation blending.
+    //
+    // Each layer is held until up to `look_back` future topologies are available.
+    // At emission time we apply forward blend first (lookahead window), then XY
+    // blur, then support merge. This keeps forward and backward Z blending
+    // symmetric and ensures both happen before blur.
+    struct PendingLayer {
+        layer_index: u32,
+        mask: Vec<u8>,
+        topology: Vec<u8>,
+        support_mask: Option<Vec<u8>>,
+        backward_contrib: Option<Vec<u8>>,
+    }
+    let mut pending_layers: VecDeque<PendingLayer> = VecDeque::with_capacity(look_back + 1);
 
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
@@ -266,75 +273,173 @@ fn rasterize_vertical_aa_streaming_v3(
             };
         }
 
-        // --- Flush pending layer with forward (lookahead) compensation. ---
-        //
-        // `prior_topology_ring.back()` at this point is the pending layer’s own
-        // binary topology (pushed at the end of the previous iteration, before
-        // the current layer’s topology is pushed).  The current `topology_mask`
-        // is the “future” from the pending layer’s perspective.
-        //
-        // Pixels absent from the pending topology but present in the current
-        // topology are “pre-appearing”: they receive a gradient symmetric to
-        // the backward receding gradient, preventing net dimensional overgrowth.
-        if let Some((pending_idx, mut pending_mask, pending_support_mask)) = pending.take() {
-            if let Some(pending_topo) = prior_topology_ring.back() {
+        let base_mask_for_debug = debug_color_overlay.then(|| raw_mask.clone());
+
+        // --- Backward z-blend for the current layer (look-behind window). ---
+        let priors_start = pending_layers.len().saturating_sub(look_back);
+        let priors: Vec<&[u8]> = pending_layers
+            .iter()
+            .skip(priors_start)
+            .map(|layer| layer.topology.as_slice())
+            .collect();
+        workspace.blend_layer_inplace(&mut raw_mask, &priors, width, height, fade_px, Some(&lut));
+
+        let backward_contrib = if let Some(base_mask) = base_mask_for_debug.as_ref() {
+            let mut diff = vec![0u8; pixels_per_layer];
+            for ((dst, after), before) in diff
+                .iter_mut()
+                .zip(raw_mask.iter())
+                .zip(base_mask.iter())
+            {
+                *dst = after.saturating_sub(*before);
+            }
+            Some(diff)
+        } else {
+            None
+        };
+
+        // Defer emission so we can apply a full lookahead window before blur.
+        pending_layers.push_back(PendingLayer {
+            layer_index,
+            mask: raw_mask,
+            topology: topology_mask,
+            support_mask: support_mask_for_layer,
+            backward_contrib,
+        });
+
+        // Flush once the oldest pending layer has a full future window.
+        if pending_layers.len() > look_back {
+            let mut layer = pending_layers.pop_front().expect("pending layer exists");
+            let futures: Vec<&[u8]> = pending_layers
+                .iter()
+                .take(look_back)
+                .map(|future| future.topology.as_slice())
+                .collect();
+
+            let mut forward_contrib = if debug_color_overlay {
+                Some(vec![0u8; pixels_per_layer])
+            } else {
+                None
+            };
+
+            let effective_look_back = futures.len();
+            if effective_look_back > 0 {
+                let before_forward = if debug_color_overlay {
+                    Some(layer.mask.clone())
+                } else {
+                    None
+                };
+
                 workspace.blend_layer_forward_inplace(
-                    &mut pending_mask,
-                    pending_topo.as_slice(),
-                    &[topology_mask.as_slice()],
-                    look_back,
+                    &mut layer.mask,
+                    layer.topology.as_slice(),
+                    &futures,
+                    effective_look_back,
                     width,
                     height,
                     fade_px,
                     Some(&lut),
                 );
+
+                if let (Some(before), Some(ref mut forward)) =
+                    (before_forward.as_ref(), forward_contrib.as_mut())
+                {
+                    for ((dst, after), prev) in forward
+                        .iter_mut()
+                        .zip(layer.mask.iter())
+                        .zip(before.iter())
+                    {
+                        *dst = after.saturating_sub(*prev);
+                    }
+                }
             }
 
-            if let Some(support_mask) = pending_support_mask.as_ref() {
-                merge_support_mask_inplace(&mut pending_mask, support_mask);
+            // XY smoothing runs after both vertical blend directions.
+            apply_blur_postprocess_inplace(
+                &mut layer.mask,
+                width,
+                height,
+                blur_radius,
+                min_aa_alpha_u8,
+            );
+            if blur_radius == 0 {
+                apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
             }
 
-            // PNG is encoded here so it reflects both backward + forward blending.
+            if let Some(ref mut backward) = layer.backward_contrib {
+                apply_blur_postprocess_inplace(
+                    backward,
+                    width,
+                    height,
+                    blur_radius,
+                    min_aa_alpha_u8,
+                );
+                if blur_radius == 0 {
+                    apply_min_alpha_floor(backward, min_aa_alpha_u8);
+                }
+            }
+            if let Some(ref mut forward) = forward_contrib {
+                apply_blur_postprocess_inplace(
+                    forward,
+                    width,
+                    height,
+                    blur_radius,
+                    min_aa_alpha_u8,
+                );
+                if blur_radius == 0 {
+                    apply_min_alpha_floor(forward, min_aa_alpha_u8);
+                }
+            }
+
+            if let Some(support_mask) = layer.support_mask.as_ref() {
+                merge_support_mask_inplace(&mut layer.mask, support_mask);
+            }
+
             if let Some(ref mut out_pngs) = png_layers {
-                let png = encode_grayscale_png(
-                    width as u32,
-                    height as u32,
-                    &pending_mask,
-                    &raster_job.png_compression_strategy,
-                    false,
-                )?;
+                let png = if debug_color_overlay {
+                    if let (Some(backward), Some(forward)) =
+                        (layer.backward_contrib.as_ref(), forward_contrib.as_ref())
+                    {
+                        let mut rgb = vec![0u8; pixels_per_layer * 3];
+                        for i in 0..pixels_per_layer {
+                            rgb[i * 3] = forward[i]; // Red = look-ahead
+                            rgb[i * 3 + 1] = backward[i]; // Green = look-behind
+                            rgb[i * 3 + 2] = 0;
+                        }
+                        encode_rgb_png_8bit(
+                            width as u32,
+                            height as u32,
+                            &rgb,
+                            &raster_job.png_compression_strategy,
+                        )?
+                    } else {
+                        encode_grayscale_png(
+                            width as u32,
+                            height as u32,
+                            &layer.mask,
+                            &raster_job.png_compression_strategy,
+                            false,
+                        )?
+                    }
+                } else {
+                    encode_grayscale_png(
+                        width as u32,
+                        height as u32,
+                        &layer.mask,
+                        &raster_job.png_compression_strategy,
+                        false,
+                    )?
+                };
                 out_pngs.push(png);
             }
             if let Some(ref mut emit) = on_processed_mask {
-                emit(pending_idx, pending_mask)?;
+                emit(layer.layer_index, layer.mask)?;
             } else if let Some(ref mut out_masks) = raw_mask_layers {
-                out_masks.push(pending_mask);
+                out_masks.push(layer.mask);
             }
+
+            topology_reuse_pool.push(layer.topology);
         }
-
-        // --- Backward z-blend (prior layers) + XY blur for the current layer. ---
-        let priors: Vec<&[u8]> = prior_topology_ring
-            .iter()
-            .map(|layer| layer.as_slice())
-            .collect();
-        workspace.blend_layer_inplace(&mut raw_mask, &priors, width, height, fade_px, Some(&lut));
-
-        // XY smoothing runs after vertical blend (Z-first, then blur).
-        apply_blur_postprocess_inplace(&mut raw_mask, width, height, blur_radius, min_aa_alpha_u8);
-        if blur_radius == 0 {
-            apply_min_alpha_floor(&mut raw_mask, min_aa_alpha_u8);
-        }
-
-        if prior_topology_ring.len() == look_back {
-            if let Some(oldest) = prior_topology_ring.pop_front() {
-                topology_reuse_pool.push(oldest);
-            }
-        }
-        prior_topology_ring.push_back(topology_mask);
-
-        // Defer emission: store as pending so that the next iteration can apply
-        // forward compensation before the mask is sent to the encoder.
-        pending = Some((layer_index, raw_mask, support_mask_for_layer));
 
         Ok(())
     };
@@ -349,29 +454,136 @@ fn rasterize_vertical_aa_streaming_v3(
         cancel_flag,
     )?;
 
-    // Flush the last pending layer.  No future topology is available at the end
-    // of the slice, so forward blending is skipped; backward blending has already
-    // been applied inside the closure above.
-    if let Some((last_idx, mut last_mask, last_support_mask)) = pending.take() {
-        if let Some(support_mask) = last_support_mask.as_ref() {
-            merge_support_mask_inplace(&mut last_mask, support_mask);
+    // Flush tail layers with the remaining (short) future window.
+    while let Some(mut layer) = pending_layers.pop_front() {
+        let futures: Vec<&[u8]> = pending_layers
+            .iter()
+            .take(look_back)
+            .map(|future| future.topology.as_slice())
+            .collect();
+
+        let mut forward_contrib = if debug_color_overlay {
+            Some(vec![0u8; pixels_per_layer])
+        } else {
+            None
+        };
+
+        let effective_look_back = futures.len();
+        if effective_look_back > 0 {
+            let before_forward = if debug_color_overlay {
+                Some(layer.mask.clone())
+            } else {
+                None
+            };
+
+            workspace.blend_layer_forward_inplace(
+                &mut layer.mask,
+                layer.topology.as_slice(),
+                &futures,
+                effective_look_back,
+                width,
+                height,
+                fade_px,
+                Some(&lut),
+            );
+
+            if let (Some(before), Some(ref mut forward)) =
+                (before_forward.as_ref(), forward_contrib.as_mut())
+            {
+                for ((dst, after), prev) in forward
+                    .iter_mut()
+                    .zip(layer.mask.iter())
+                    .zip(before.iter())
+                {
+                    *dst = after.saturating_sub(*prev);
+                }
+            }
+        }
+
+        apply_blur_postprocess_inplace(
+            &mut layer.mask,
+            width,
+            height,
+            blur_radius,
+            min_aa_alpha_u8,
+        );
+        if blur_radius == 0 {
+            apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+        }
+
+        if let Some(ref mut backward) = layer.backward_contrib {
+            apply_blur_postprocess_inplace(
+                backward,
+                width,
+                height,
+                blur_radius,
+                min_aa_alpha_u8,
+            );
+            if blur_radius == 0 {
+                apply_min_alpha_floor(backward, min_aa_alpha_u8);
+            }
+        }
+        if let Some(ref mut forward) = forward_contrib {
+            apply_blur_postprocess_inplace(
+                forward,
+                width,
+                height,
+                blur_radius,
+                min_aa_alpha_u8,
+            );
+            if blur_radius == 0 {
+                apply_min_alpha_floor(forward, min_aa_alpha_u8);
+            }
+        }
+
+        if let Some(support_mask) = layer.support_mask.as_ref() {
+            merge_support_mask_inplace(&mut layer.mask, support_mask);
         }
 
         if let Some(ref mut out_pngs) = png_layers {
-            let png = encode_grayscale_png(
-                width as u32,
-                height as u32,
-                &last_mask,
-                &raster_job.png_compression_strategy,
-                false,
-            )?;
+            let png = if debug_color_overlay {
+                if let (Some(backward), Some(forward)) =
+                    (layer.backward_contrib.as_ref(), forward_contrib.as_ref())
+                {
+                    let mut rgb = vec![0u8; pixels_per_layer * 3];
+                    for i in 0..pixels_per_layer {
+                        rgb[i * 3] = forward[i];
+                        rgb[i * 3 + 1] = backward[i];
+                        rgb[i * 3 + 2] = 0;
+                    }
+                    encode_rgb_png_8bit(
+                        width as u32,
+                        height as u32,
+                        &rgb,
+                        &raster_job.png_compression_strategy,
+                    )?
+                } else {
+                    encode_grayscale_png(
+                        width as u32,
+                        height as u32,
+                        &layer.mask,
+                        &raster_job.png_compression_strategy,
+                        false,
+                    )?
+                }
+            } else {
+                encode_grayscale_png(
+                    width as u32,
+                    height as u32,
+                    &layer.mask,
+                    &raster_job.png_compression_strategy,
+                    false,
+                )?
+            };
             out_pngs.push(png);
         }
         if let Some(ref mut emit) = on_processed_mask {
-            emit(last_idx, last_mask)?;
+            emit(layer.layer_index, layer.mask)?;
         } else if let Some(ref mut out_masks) = raw_mask_layers {
-            out_masks.push(last_mask);
+            out_masks.push(layer.mask);
         }
+
+        topology_reuse_pool.push(layer.topology);
     }
 
     Ok((

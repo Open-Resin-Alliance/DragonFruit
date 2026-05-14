@@ -28,6 +28,7 @@ import {
 import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
+import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
@@ -1317,6 +1318,7 @@ export function SlicingPanel({
       }
 
       const result = await runSliceExportOrchestrator({
+        zBlendDebugColorOverlay: getSavedSlicingPerformanceSettings().zBlendDebugColorOverlay,
         models: visibleModels,
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,

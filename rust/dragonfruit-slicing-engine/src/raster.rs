@@ -2042,6 +2042,7 @@ mod tests {
             mirror_y: false,
             z_blend_look_back: 2,
             z_blend_fade_px: 20,
+            z_blend_debug_color_overlay: false,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),

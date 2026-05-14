@@ -45,6 +45,10 @@ fn default_z_blend_fade_px() -> u32 {
     20
 }
 
+fn default_z_blend_debug_color_overlay() -> bool {
+    false
+}
+
 fn default_model_triangle_count() -> u32 {
     0
 }
@@ -122,6 +126,15 @@ pub struct SliceJobV3 {
     /// The gradient reaches 0 at this many pixels from the current layer's edge.
     #[serde(default = "default_z_blend_fade_px")]
     pub z_blend_fade_px: u32,
+    /// Debug-only visualization mode for 3DAA blending.
+    ///
+    /// When enabled, generated PNG layer previews color-code blend direction:
+    /// - Green = look-behind contribution
+    /// - Red = look-ahead contribution
+    ///
+    /// Intended for diagnostics only.
+    #[serde(default = "default_z_blend_debug_color_overlay")]
+    pub z_blend_debug_color_overlay: bool,
     /// Flat triangle buffer (`x,y,z` * 3 vertices per triangle).
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.
