@@ -179,6 +179,7 @@ const SLICING_3DAA_LOOK_BACK_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBack';
 const SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBackCustomEnabled';
 const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
 const SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePxCustomEnabled';
+const SLICING_3DAA_FADE_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaFadeMode';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
@@ -191,15 +192,26 @@ const AA_STRENGTH_MAX_STEPS = 64;
 const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
 const BLUR_WIDTH_MIN_PX = 1;
 const BLUR_WIDTH_MAX_PX = 64;
-const LOOK_BACK_PRESETS = [2, 3, 4, 5] as const;
+const LOOK_BACK_PRESETS = [2, 4, 6, 8] as const;
 const LOOK_BACK_MIN_LAYERS = 1;
 const LOOK_BACK_MAX_LAYERS = 16;
-const FADE_DISTANCE_PRESETS = [5, 10, 20, 40] as const;
 const FADE_DISTANCE_MIN_PX = 1;
 const FADE_DISTANCE_MAX_PX = 256;
 
 function isPresetValue(presets: readonly number[], value: number): boolean {
   return presets.some((preset) => preset === value);
+}
+
+function deriveFadeDistancePresets(basePx: number): number[] {
+  const base = Math.max(
+    FADE_DISTANCE_MIN_PX,
+    Math.min(FADE_DISTANCE_MAX_PX, Math.round(basePx)),
+  );
+  // Logical scaling: keep fade tied to Blend Window size so users don't have
+  // to mentally retune two disconnected knobs.
+  const candidates = [base, base * 2, base * 3, base * 4]
+    .map((px) => Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, px)));
+  return Array.from(new Set(candidates));
 }
 
 function resolveInitialCustomOptionEnabled(storageKey: string, fallback = false): boolean {
@@ -401,13 +413,20 @@ function resolveInitialZBlendLookBack(): number {
 }
 
 function resolveInitialZBlendFadePx(): number {
-  if (typeof window === 'undefined') return 20;
+  if (typeof window === 'undefined') return 8;
   const stored = window.localStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY);
-  if (stored == null || stored.trim().length === 0) return 20;
+  if (stored == null || stored.trim().length === 0) return 8;
   const parsed = Math.round(Number(stored));
-  if (!Number.isFinite(parsed)) return 20;
+  if (!Number.isFinite(parsed)) return 8;
   return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, parsed));
+}
+
+function resolveInitialZBlendFadeMode(): 'auto' | 'manual' {
+  if (typeof window === 'undefined') return 'auto';
+  const stored = window.localStorage.getItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY);
+  return stored === 'manual' ? 'manual' : 'auto';
 }
 
 export function SlicingPanel({
@@ -485,11 +504,14 @@ export function SlicingPanel({
     );
   });
   const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
+  const [zBlendFadeMode, setZBlendFadeMode] = useState<'auto' | 'manual'>(resolveInitialZBlendFadeMode);
   const [useCustomZBlendFadePx, setUseCustomZBlendFadePx] = useState<boolean>(() => {
     const initial = resolveInitialZBlendFadePx();
+    const initialLookBack = resolveInitialZBlendLookBack();
+    const initialPresets = deriveFadeDistancePresets(Math.max(2, initialLookBack * 2));
     return resolveInitialCustomOptionEnabled(
       SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY,
-      !isPresetValue(FADE_DISTANCE_PRESETS, initial),
+      !isPresetValue(initialPresets, initial),
     );
   });
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
@@ -783,6 +805,51 @@ export function SlicingPanel({
     return formatClockFromSeconds(totalSec);
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
+  const autoZBlendFadePx = useMemo(() => {
+    const lookBack = Math.max(
+      LOOK_BACK_MIN_LAYERS,
+      Math.min(LOOK_BACK_MAX_LAYERS, Math.round(zBlendLookBack)),
+    );
+
+    const layerHeightMm = Number(effectiveLayerHeightMm);
+    const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
+
+    const resX = Number(activePrinterProfile?.display?.resolutionX);
+    const resY = Number(activePrinterProfile?.display?.resolutionY);
+    const buildW = Number(activePrinterProfile?.buildVolumeMm?.width);
+    const buildD = Number(activePrinterProfile?.buildVolumeMm?.depth);
+
+    const pitchCandidates: number[] = [];
+    if (Number.isFinite(resX) && Number.isFinite(buildW) && resX > 0 && buildW > 0) {
+      pitchCandidates.push(buildW / resX);
+    }
+    if (Number.isFinite(resY) && Number.isFinite(buildD) && resY > 0 && buildD > 0) {
+      pitchCandidates.push(buildD / resY);
+    }
+
+    const pixelPitchMm = pitchCandidates.length > 0
+      ? Math.min(...pitchCandidates)
+      : 0.05;
+
+    const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
+    const base = Math.max(2, Math.ceil(lookBack * pxPerLayer));
+    return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
+  }, [
+    activePrinterProfile?.buildVolumeMm?.depth,
+    activePrinterProfile?.buildVolumeMm?.width,
+    activePrinterProfile?.display?.resolutionX,
+    activePrinterProfile?.display?.resolutionY,
+    effectiveLayerHeightMm,
+    zBlendLookBack,
+  ]);
+
+  const fadeDistancePresets = useMemo(
+    () => deriveFadeDistancePresets(autoZBlendFadePx),
+    [autoZBlendFadePx],
+  );
+
+  const effectiveZBlendFadePx = zBlendFadeMode === 'auto' ? autoZBlendFadePx : zBlendFadePx;
+
   const effectiveAntiAliasingLevel =
     !antiAliasingAvailable || aaMode === 'Off' ? 'Off' as const : aaLevel;
   const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage' =
@@ -877,9 +944,19 @@ export function SlicingPanel({
   }, []);
 
   const setClampedZBlendFadePx = useCallback((value: number) => {
-    const next = Number.isFinite(value) ? value : 20;
+    const next = Number.isFinite(value) ? value : 8;
     setZBlendFadePx(Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, Math.round(next))));
   }, []);
+
+  useEffect(() => {
+    if (zBlendFadeMode !== 'manual') return;
+    if (useCustomZBlendFadePx) return;
+    if (isPresetValue(fadeDistancePresets, zBlendFadePx)) return;
+    const fallback = fadeDistancePresets[Math.min(1, fadeDistancePresets.length - 1)]
+      ?? fadeDistancePresets[0]
+      ?? 8;
+    setClampedZBlendFadePx(fallback);
+  }, [fadeDistancePresets, setClampedZBlendFadePx, useCustomZBlendFadePx, zBlendFadeMode, zBlendFadePx]);
 
   const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
     if (typeof window === 'undefined') return;
@@ -984,6 +1061,12 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY, serialized);
   }, [useCustomZBlendFadePx]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY, zBlendFadeMode);
+    window.sessionStorage.setItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY, zBlendFadeMode);
+  }, [zBlendFadeMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1243,7 +1326,7 @@ export function SlicingPanel({
         antiAliasingMode: effectiveAntiAliasingMode,
         blurBrushRadiusPx,
         zBlendLookBack: aaMode === '3DAA' ? zBlendLookBack : undefined,
-        zBlendFadePx: aaMode === '3DAA' ? zBlendFadePx : undefined,
+        zBlendFadePx: aaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
           : profileMinimumAaAlphaPercent,
@@ -1946,41 +2029,14 @@ export function SlicingPanel({
                           )}
 
                           <SettingLabelWithHelp
-                            label="Fade Distance"
-                            help="Maximum blend distance for receding edges. Larger distances keep the gradient visible farther from the edge."
+                            label="Compensation Reach"
+                            help="How far Z-compensation reaches from edges in XY. Auto derives this from layer height, pixel pitch, and Blend Window; Manual lets you override it."
                           />
-                          <div className="grid grid-cols-5 gap-1">
-                            {FADE_DISTANCE_PRESETS.map((px) => {
-                              const active = !useCustomZBlendFadePx && zBlendFadePx === px;
-                              return (
-                                <button
-                                  key={px}
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={active
-                                    ? {
-                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                        color: 'var(--text-strong)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  onClick={() => {
-                                    setUseCustomZBlendFadePx(false);
-                                    setClampedZBlendFadePx(px);
-                                  }}
-                                >
-                                  {`${px}px`}
-                                </button>
-                              );
-                            })}
+                          <div className="grid grid-cols-2 gap-1">
                             <button
                               type="button"
                               className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={useCustomZBlendFadePx
+                              style={zBlendFadeMode === 'auto'
                                 ? {
                                     borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
                                     background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
@@ -1991,24 +2047,97 @@ export function SlicingPanel({
                                     background: 'var(--surface-0)',
                                     color: 'var(--text-muted)',
                                   }}
-                              onClick={() => setUseCustomZBlendFadePx(true)}
+                              onClick={() => setZBlendFadeMode('auto')}
                             >
-                              Custom
+                              {`Auto - ${effectiveZBlendFadePx}px`}
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={zBlendFadeMode === 'manual'
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setZBlendFadeMode('manual')}
+                            >
+                              Manual
                             </button>
                           </div>
-                          {useCustomZBlendFadePx && (
-                            <ScrollableNumberField
-                              className="mt-1"
-                              value={zBlendFadePx}
-                              onChange={setClampedZBlendFadePx}
-                              min={FADE_DISTANCE_MIN_PX}
-                              max={FADE_DISTANCE_MAX_PX}
-                              step={1}
-                              unit="px"
-                              ariaLabel="Custom fade distance in pixels"
-                              decreaseTitle="Decrease fade distance"
-                              increaseTitle="Increase fade distance"
-                            />
+                          {zBlendFadeMode === 'auto' ? null : (
+                            <>
+                              <SettingLabelWithHelp
+                                label="Fade Distance"
+                                help="Manual XY reach override for Z-compensation."
+                              />
+                              <div className="grid grid-cols-5 gap-1">
+                                {fadeDistancePresets.map((px) => {
+                                  const active = !useCustomZBlendFadePx && zBlendFadePx === px;
+                                  return (
+                                    <button
+                                      key={px}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                            color: 'var(--text-strong)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => {
+                                        setUseCustomZBlendFadePx(false);
+                                        setClampedZBlendFadePx(px);
+                                      }}
+                                    >
+                                      {`${px}px`}
+                                    </button>
+                                  );
+                                })}
+                                <button
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={useCustomZBlendFadePx
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setUseCustomZBlendFadePx(true)}
+                                >
+                                  Custom
+                                </button>
+                              </div>
+                              {useCustomZBlendFadePx && (
+                                <ScrollableNumberField
+                                  className="mt-1"
+                                  value={zBlendFadePx}
+                                  onChange={setClampedZBlendFadePx}
+                                  min={FADE_DISTANCE_MIN_PX}
+                                  max={FADE_DISTANCE_MAX_PX}
+                                  step={1}
+                                  unit="px"
+                                  ariaLabel="Custom fade distance in pixels"
+                                  decreaseTitle="Decrease fade distance"
+                                  increaseTitle="Increase fade distance"
+                                />
+                              )}
+                            </>
                           )}
                         </>
                       )}
