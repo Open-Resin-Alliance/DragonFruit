@@ -140,12 +140,22 @@ fn z_blend_layer_inplace(
     // geometric classification in the EDT pass.
     const TOPO_THRESHOLD: u8 = 127;
 
-    // -- Step 1: build combined prior-presence map (OR of all prior layers). --
+    // -- Step 1: build Z-depth map for prior-layer pixels. --
+    //
+    // in_prior[idx] = 0  → pixel not in any prior layer
+    // in_prior[idx] = d  → pixel last present d layers ago
+    //                       (d=1 = most-recent prior N-1, d=2 = N-2, …)
+    //
+    // Iterating priors from most-recent to oldest means the FIRST write wins,
+    // so in_prior always records the minimum (most-recent) depth.  Depth is used
+    // in Step 3 to scale the receding gradient peak: a pixel that was solid just
+    // one layer ago blends in close to 255; one from two layers ago is dimmer.
     in_prior[..n].fill(0);
-    for prior in priors {
+    for (depth_idx, prior) in priors.iter().rev().enumerate() {
+        let depth_val = (depth_idx + 1) as u8; // 1 = most-recent, 2 = older …
         for (p, q) in in_prior[..n].iter_mut().zip(prior[..n].iter()) {
-            if *q > TOPO_THRESHOLD {
-                *p = 1;
+            if *q > TOPO_THRESHOLD && *p == 0 {
+                *p = depth_val;
             }
         }
     }
@@ -257,10 +267,32 @@ fn z_blend_layer_inplace(
         for x in rec_min_x..=rec_max_x {
             let idx = row_start + x;
             // Only receding pixels get a gradient.
-            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && (dist[idx] as u32) <= fade_px {
-                // Linear gradient: 255 at dist=0 (edge), ~1 at dist=fade_px.
+            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && (dist[idx] as u32) <= fade_px
+            {
+                // Scale the gradient peak by Z-depth so prior layers bleed into
+                // the current layer at proportionally lower alpha:
+                //
+                //   peak = 255 × (look_back + 1 − depth) / (look_back + 1)
+                //
+                // depth=1 (most-recent prior N-1): peak = look_back/(look_back+1) × 255
+                // depth=2 (one layer older N-2):   peak = (look_back-1)/(look_back+1) × 255
+                // …
+                //
+                // The current layer always stays at full 255 and is never reduced
+                // here; only the receding zone outside the current boundary is
+                // affected.  Within that zone the XY distance further attenuates:
+                // alpha = peak × (1 − dist/fade_px), giving a smooth 2D gradient
+                // that also encodes the Z-layer history.
+                let look_back = priors.len();
+                let depth = in_prior[idx] as usize;
+                let peak_alpha = if look_back > 0 && depth <= look_back {
+                    let num = (look_back + 1).saturating_sub(depth) as f32;
+                    (255.0 * num / (look_back + 1) as f32).round() as u8
+                } else {
+                    255
+                };
                 let t = 1.0 - (dist[idx] as f32 / fade_denom);
-                let raw = (t * 255.0 + 0.5) as u8;
+                let raw = (t * peak_alpha as f32 + 0.5) as u8;
                 let v = if let Some(lut) = lut {
                     lut[raw as usize]
                 } else {
