@@ -8,6 +8,7 @@ use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
+use crate::raster::apply_blur_postprocess_inplace;
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
@@ -87,6 +88,13 @@ fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {
 }
 
 #[inline]
+fn is_vertical_aa_mode(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("3daa")
+        || mode.trim().eq_ignore_ascii_case("vertical")
+        || mode.trim().eq_ignore_ascii_case("vertical2")
+}
+
+#[inline]
 fn apply_min_alpha_floor(mask: &mut [u8], min_aa_alpha_u8: u8) {
     if min_aa_alpha_u8 == 0 {
         return;
@@ -98,7 +106,7 @@ fn apply_min_alpha_floor(mask: &mut [u8], min_aa_alpha_u8: u8) {
     }
 }
 
-fn rasterize_3daa_streaming_v3(
+fn rasterize_vertical_aa_streaming_v3(
     job: &SliceJobV3,
     raster_job: &SliceJobV3,
     requires_area_stats: bool,
@@ -112,11 +120,13 @@ fn rasterize_3daa_streaming_v3(
     let pixels_per_layer = width.saturating_mul(height);
     let look_back = (job.z_blend_look_back as usize).max(1);
     let fade_px = job.z_blend_fade_px.max(1);
+    let blur_radius = job.blur_brush_radius_px as usize;
     let lut = z_blend::default_z_blend_lut();
     let min_aa_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
-    let mut prior_ring: VecDeque<Vec<u8>> = VecDeque::with_capacity(look_back);
+    let mut prior_topology_ring: VecDeque<Vec<u8>> = VecDeque::with_capacity(look_back);
     let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
     let mut png_layers: Option<Vec<Vec<u8>>> =
         collect_png_layers.then(|| Vec::with_capacity(job.total_layers as usize));
@@ -132,13 +142,32 @@ fn rasterize_3daa_streaming_v3(
         }
         if raw_mask.len() != pixels_per_layer {
             return Err(SlicerV3Error::MissingRenderedLayerPayload(
-                "3DAA raw mask size mismatch while streaming".to_string(),
+                "Vertical AA raw mask size mismatch while streaming".to_string(),
             ));
         }
 
-        let priors: Vec<&[u8]> = prior_ring.iter().map(|layer| layer.as_slice()).collect();
+        // Vertical2 topology uses occupancy-only masks so inter-layer z-blend is
+        // stable and independent from XY fringe intensity.
+        let mut topology_mask = raw_mask.clone();
+        for px in topology_mask.iter_mut() {
+            *px = if *px > TOPOLOGY_ALPHA_THRESHOLD {
+                255
+            } else {
+                0
+            };
+        }
+
+        let priors: Vec<&[u8]> = prior_topology_ring
+            .iter()
+            .map(|layer| layer.as_slice())
+            .collect();
         workspace.blend_layer_inplace(&mut raw_mask, &priors, width, height, fade_px, Some(&lut));
-        apply_min_alpha_floor(&mut raw_mask, min_aa_alpha_u8);
+
+        // XY smoothing runs after vertical blend (Z-first, then blur).
+        apply_blur_postprocess_inplace(&mut raw_mask, width, height, blur_radius, min_aa_alpha_u8);
+        if blur_radius == 0 {
+            apply_min_alpha_floor(&mut raw_mask, min_aa_alpha_u8);
+        }
 
         if let Some(ref mut out_pngs) = png_layers {
             let png = encode_grayscale_png(
@@ -151,15 +180,13 @@ fn rasterize_3daa_streaming_v3(
             out_pngs.push(png);
         }
 
-        if prior_ring.len() == look_back {
-            prior_ring.pop_front();
+        if prior_topology_ring.len() == look_back {
+            prior_topology_ring.pop_front();
         }
+        prior_topology_ring.push_back(topology_mask);
 
         if let Some(ref mut out_masks) = raw_mask_layers {
-            prior_ring.push_back(raw_mask.clone());
             out_masks.push(raw_mask);
-        } else {
-            prior_ring.push_back(raw_mask);
         }
 
         Ok(())
@@ -207,7 +234,7 @@ pub fn slice_with_progress_v3(
     // requires full-pixel buffers for all layers before the blending pass can
     // run. Skip the streaming early-returns so we always reach the full-pixel
     // collection path below.
-    let is_3daa = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("3daa");
+    let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
 
     // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
     if !is_3daa && !requires_png_layers {
@@ -343,17 +370,14 @@ pub fn slice_with_progress_v3(
 
     let total_start = std::time::Instant::now();
 
-    // For 3DAA mode: rasterize with Blur AA, collect raw masks, apply EDT
-    // inter-layer blending, then re-encode the modified masks to PNGs before
-    // handing off to the encoder.
+    // Vertical2 mode: rasterize in coverage/off topology mode, apply EDT
+    // inter-layer blending first, then post-process with XY blur AA.
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
-        j.anti_aliasing_mode = "Blur".to_string();
-        // 3DAA uses the blur rasterization as a pure gradient-generating pass
-        // that feeds the EDT inter-layer blending step. The normal min-alpha
-        // threshold (which guards against under-curing in standalone Blur AA)
-        // must be disabled here so the full gradient reaches the EDT processor
-        // rather than being pre-thresholded into a near-binary fringe.
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.anti_aliasing_level = "Off".to_string();
+        // Vertical2 applies XY blur after Z blending, so topology rasterization
+        // itself stays binary and threshold-free.
         j.minimum_aa_alpha_percent = 0.0;
         Some(j)
     } else {
@@ -362,7 +386,7 @@ pub fn slice_with_progress_v3(
     let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
 
     let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
-        rasterize_3daa_streaming_v3(
+        rasterize_vertical_aa_streaming_v3(
             job,
             raster_job,
             requires_area_stats,
@@ -622,7 +646,7 @@ pub fn slice_with_progress_v3_to_path(
 
     // 3DAA mode needs full raw masks for all layers so the EDT inter-layer
     // blend pass can run before final container encoding.
-    let is_3daa = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("3daa");
+    let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
 
     // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
     if !is_3daa && !requires_png_layers {
@@ -757,13 +781,14 @@ pub fn slice_with_progress_v3_to_path(
 
     let total_start = std::time::Instant::now();
 
-    // For 3DAA mode: rasterize with Blur AA, collect raw masks, apply EDT
-    // inter-layer blending, then encode final output.
+    // Vertical2 mode: rasterize in coverage/off topology mode, apply EDT
+    // inter-layer blending first, then post-process with XY blur AA.
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
-        j.anti_aliasing_mode = "Blur".to_string();
-        // Disable internal min-alpha threshold during the blur base pass so
-        // full gradients reach EDT. We re-apply the user threshold after EDT.
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.anti_aliasing_level = "Off".to_string();
+        // Vertical2 applies XY blur after Z blending, so topology rasterization
+        // itself stays binary and threshold-free.
         j.minimum_aa_alpha_percent = 0.0;
         Some(j)
     } else {
@@ -772,7 +797,7 @@ pub fn slice_with_progress_v3_to_path(
     let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
 
     let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
-        rasterize_3daa_streaming_v3(
+        rasterize_vertical_aa_streaming_v3(
             job,
             raster_job,
             requires_area_stats,

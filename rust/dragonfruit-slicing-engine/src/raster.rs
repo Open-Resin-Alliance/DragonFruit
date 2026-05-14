@@ -866,6 +866,60 @@ fn apply_edge_box_blur_to_mask_in_roi(
     }
 }
 
+pub(crate) fn apply_blur_postprocess_inplace(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+) {
+    if radius == 0 || width == 0 || height == 0 || mask.is_empty() {
+        return;
+    }
+
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut any_non_zero = false;
+
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 0..width {
+            if mask[row_start + x] == 0 {
+                continue;
+            }
+            any_non_zero = true;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+    }
+
+    if !any_non_zero {
+        return;
+    }
+
+    let r = radius as i32;
+    let roi_min_x = (min_x as i32).saturating_sub(r).max(0) as usize;
+    let roi_max_x = ((max_x as i32).saturating_add(r)).min(width as i32 - 1) as usize;
+    let roi_min_y = (min_y as i32).saturating_sub(r).max(0) as usize;
+    let roi_max_y = ((max_y as i32).saturating_add(r)).min(height as i32 - 1) as usize;
+
+    apply_edge_box_blur_to_mask_in_roi(
+        mask,
+        width,
+        height,
+        radius,
+        min_alpha_u8,
+        roi_min_x,
+        roi_max_x,
+        roi_min_y,
+        roi_max_y,
+    );
+}
+
 fn encode_mask_to_rle(mask: &[u8], width: usize, height: usize) -> Vec<crate::rle::RleRun> {
     use crate::rle::{emit_row, RleAccum};
 
