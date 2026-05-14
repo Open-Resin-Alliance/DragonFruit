@@ -29,7 +29,6 @@ use std::collections::VecDeque;
 pub struct ZBlendWorkspace {
     in_prior: Vec<u8>,
     dist: Vec<u32>,
-    gradient: Vec<u8>,
     queue: VecDeque<usize>,
 }
 
@@ -39,7 +38,6 @@ impl ZBlendWorkspace {
         Self {
             in_prior: vec![0u8; n],
             dist: vec![u32::MAX; n],
-            gradient: vec![0u8; n],
             queue: VecDeque::with_capacity(n / 8),
         }
     }
@@ -60,9 +58,6 @@ impl ZBlendWorkspace {
         if self.dist.len() != n {
             self.dist.resize(n, u32::MAX);
         }
-        if self.gradient.len() != n {
-            self.gradient.resize(n, 0);
-        }
 
         z_blend_layer_inplace(
             current,
@@ -73,7 +68,6 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
-            &mut self.gradient,
             &mut self.queue,
         );
     }
@@ -131,44 +125,84 @@ fn z_blend_layer_inplace(
     lut: Option<&[u8; 256]>,
     in_prior: &mut [u8],
     dist: &mut [u32],
-    gradient: &mut [u8],
     queue: &mut VecDeque<usize>,
 ) {
     let n = width * height;
-    // Treat any non-zero alpha as occupied. 3DAA runs on top of Blur AA masks,
-    // so using a hard mid-gray threshold (e.g. 127) effectively binarizes the
-    // input and discards soft edge coverage, which can make output resemble
-    // legacy coverage AA rather than true blur-based blending.
-    const THRESHOLD: u8 = 0;
+    // Topology threshold used ONLY for occupancy/boundary detection.
+    //
+    // Using non-zero alpha here makes blur fringes count as "solid", which can
+    // create detached ghost shells and non-physical re-brightening when older,
+    // wider layers leak into later layers through look-back blending.
+    //
+    // Keep the output mask itself full-grayscale; this threshold is only for
+    // geometric classification in the EDT pass.
+    const TOPO_THRESHOLD: u8 = 127;
 
     // -- Step 1: build combined prior-presence map (OR of all prior layers). --
     in_prior[..n].fill(0);
     for prior in priors {
         for (p, q) in in_prior[..n].iter_mut().zip(prior[..n].iter()) {
-            if *q > THRESHOLD {
+            if *q > TOPO_THRESHOLD {
                 *p = 1;
             }
         }
     }
 
-    // Quick early-out: if no prior pixel was ever set, nothing to blend.
-    if !in_prior[..n].iter().any(|&v| v > 0) {
+    // Quick early-out: if no receding pixels exist (prior occupied, current empty),
+    // there is nothing to blend for this layer.
+    let mut receding_any = false;
+    let mut rec_min_x = width;
+    let mut rec_max_x = 0usize;
+    let mut rec_min_y = height;
+    let mut rec_max_y = 0usize;
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 0..width {
+            let idx = row_start + x;
+            if in_prior[idx] > 0 && current[idx] <= TOPO_THRESHOLD {
+                receding_any = true;
+                rec_min_x = rec_min_x.min(x);
+                rec_max_x = rec_max_x.max(x);
+                rec_min_y = rec_min_y.min(y);
+                rec_max_y = rec_max_y.max(y);
+            }
+        }
+    }
+    if !receding_any {
         return;
     }
 
+    // Seed scan needs one-pixel expansion around receding zone to find current
+    // boundary pixels adjacent to receding pixels.
+    let seed_min_x = rec_min_x.saturating_sub(1);
+    let seed_min_y = rec_min_y.saturating_sub(1);
+    let seed_max_x = (rec_max_x + 1).min(width - 1);
+    let seed_max_y = (rec_max_y + 1).min(height - 1);
+
     // -- Step 2: BFS from current-layer boundary into receding area. --
-    dist[..n].fill(u32::MAX);
+    for y in rec_min_y..=rec_max_y {
+        let row_start = y * width;
+        for x in rec_min_x..=rec_max_x {
+            dist[row_start + x] = u32::MAX;
+        }
+    }
+    for y in seed_min_y..=seed_max_y {
+        let row_start = y * width;
+        for x in seed_min_x..=seed_max_x {
+            dist[row_start + x] = u32::MAX;
+        }
+    }
     queue.clear();
 
     // Seed: current-layer pixels that border at least one non-current pixel.
     // These are distance=0 from the boundary edge.
-    for y in 0..height {
-        for x in 0..width {
+    for y in seed_min_y..=seed_max_y {
+        for x in seed_min_x..=seed_max_x {
             let idx = y * width + x;
-            if current[idx] <= THRESHOLD {
+            if current[idx] <= TOPO_THRESHOLD {
                 continue; // not in current layer
             }
-            if has_non_current_4neighbor(current, x, y, width, height, THRESHOLD) {
+            if has_non_current_4neighbor(current, x, y, width, height, TOPO_THRESHOLD) {
                 dist[idx] = 0;
                 queue.push_back(idx);
             }
@@ -189,23 +223,23 @@ fn z_blend_layer_inplace(
                 let nidx = $nidx;
                 // Only enter pixels that are receding (in prior, not in current)
                 // and that haven't been reached with a shorter distance yet.
-                if current[nidx] <= THRESHOLD && in_prior[nidx] > 0 && dist[nidx] > next_d {
+                if current[nidx] <= TOPO_THRESHOLD && in_prior[nidx] > 0 && dist[nidx] > next_d {
                     dist[nidx] = next_d;
                     queue.push_back(nidx);
                 }
             };
         }
 
-        if x > 0 {
+        if x > rec_min_x {
             try_neighbor!(idx - 1);
         }
-        if x + 1 < width {
+        if x < rec_max_x {
             try_neighbor!(idx + 1);
         }
-        if y > 0 {
+        if y > rec_min_y {
             try_neighbor!(idx - width);
         }
-        if y + 1 < height {
+        if y < rec_max_y {
             try_neighbor!(idx + width);
         }
     }
@@ -214,26 +248,27 @@ fn z_blend_layer_inplace(
     // Use fade_px+1 as divisor so the pixel AT fade_px distance still gets a
     // small but non-zero gradient value (inclusive boundary).
     let fade_denom = (fade_px + 1) as f32;
-    for idx in 0..n {
-        // Only receding pixels get a gradient.
-        if current[idx] <= THRESHOLD && in_prior[idx] > 0 && dist[idx] <= fade_px {
-            // Linear gradient: 255 at dist=0 (edge), ~1 at dist=fade_px.
-            let t = 1.0 - (dist[idx] as f32 / fade_denom);
-            let raw = (t * 255.0 + 0.5) as u8;
-            let v = if let Some(lut) = lut {
-                lut[raw as usize]
-            } else {
-                raw
-            };
-            // Max-merge: never reduce existing values.
-            if v > current[idx] {
-                current[idx] = v;
+    for y in rec_min_y..=rec_max_y {
+        let row_start = y * width;
+        for x in rec_min_x..=rec_max_x {
+            let idx = row_start + x;
+            // Only receding pixels get a gradient.
+            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && dist[idx] <= fade_px {
+                // Linear gradient: 255 at dist=0 (edge), ~1 at dist=fade_px.
+                let t = 1.0 - (dist[idx] as f32 / fade_denom);
+                let raw = (t * 255.0 + 0.5) as u8;
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
+                // Max-merge: never reduce existing values.
+                if v > current[idx] {
+                    current[idx] = v;
+                }
             }
         }
     }
-    // Clear gradient buffer for next call (dist/in_prior are reset at the
-    // start of each call, but gradient is written directly without reset).
-    gradient[..n].fill(0); // keep the buffer zeroed for next layer
 }
 
 /// Returns true if the pixel at (x, y) has at least one 4-connected neighbour
@@ -438,12 +473,10 @@ mod tests {
         );
     }
 
-    /// Low-alpha Blur edge pixels must still count as occupied for 3DAA
-    /// topology/edge detection. If they are treated as empty (old thresholded
-    /// behaviour), 3DAA effectively re-binarizes the mask and produces legacy
-    /// AA-like edges.
+    /// Low-alpha blur fringe should not define 3DAA topology. Treating it as
+    /// occupied can generate detached ghost shells from old wider layers.
     #[test]
-    fn z_blend_treats_nonzero_alpha_as_occupied() {
+    fn z_blend_ignores_low_alpha_for_topology() {
         let width = 4;
         let height = 1;
 
@@ -454,8 +487,30 @@ mod tests {
 
         z_blend_all_layers(&mut masks, width, height, 1, 3, None);
 
-        // Pixel 1 (alpha=40) is part of the current layer and should not be
-        // treated as receding; it must remain unchanged.
+        // Pixel 1 is below topology threshold, so it remains receding and can
+        // be raised by z-blend relative to the low-alpha fringe value.
+        assert!(masks[1][1] >= 40);
+
+        // Current fully-solid pixels remain intact.
+        assert_eq!(masks[1][2], 255);
+        assert_eq!(masks[1][3], 255);
+
+        // Pixels well outside fade remain untouched.
+        assert_eq!(masks[1][0], 0);
+    }
+
+    /// Existing low-alpha fringe should be preserved when no receding
+    /// topology exists.
+    #[test]
+    fn z_blend_preserves_low_alpha_when_layers_match() {
+        let width = 4;
+        let height = 1;
+        let prior = vec![0u8, 40, 255, 255];
+        let current = vec![0u8, 40, 255, 255];
+        let mut masks = vec![prior, current.clone()];
+
+        z_blend_all_layers(&mut masks, width, height, 1, 3, None);
+
         assert_eq!(masks[1][1], 40);
     }
 

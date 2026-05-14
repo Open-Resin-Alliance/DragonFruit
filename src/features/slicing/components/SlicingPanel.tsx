@@ -644,9 +644,9 @@ export function SlicingPanel({
 
   const effectiveAntiAliasingLevel =
     !antiAliasingAvailable || aaMode === 'Off' ? 'Off' as const : '4x' as const;
-  const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Coverage' =
+  const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage' =
     !antiAliasingAvailable || aaMode === 'Off' ? 'Coverage' :
-    aaMode === '3DAA' ? '3DAA' :
+    aaMode === '3DAA' ? 'Vertical2' :
     'Blur';
 
   const minimumAaProfileSupport = useMemo(() => {
