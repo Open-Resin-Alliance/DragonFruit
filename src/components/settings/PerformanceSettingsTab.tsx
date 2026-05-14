@@ -349,6 +349,66 @@ export function PerformanceSettingsTab({
         </div>
       </section>
 
+      {/* Experimental Slicing Toggles */}
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <Sparkles className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Experimental
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Advanced slicing toggles that are not recommended for most prints.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                AA on Supports
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Off by default. Keeps support/raft geometry crisp and avoids unnecessary anti-aliased halos.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patch({ aaOnSupportsExperimental: !settings.aaOnSupportsExperimental })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={settings.aaOnSupportsExperimental
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {settings.aaOnSupportsExperimental ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Temp File Cleanup Section */}
       <section
         className="rounded-lg border p-3"

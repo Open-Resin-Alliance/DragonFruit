@@ -338,6 +338,8 @@ struct SliceJobMetadata {
     z_blend_look_back: u32,
     #[serde(default = "default_z_blend_fade_px")]
     z_blend_fade_px: u32,
+    #[serde(default)]
+    model_triangle_count: u32,
     container_compression_level: u8,
     build_width_mm: f32,
     build_depth_mm: f32,
@@ -1244,6 +1246,7 @@ async fn slice_solid_native_to_temp_path(
             anti_aliasing_mode: meta.anti_aliasing_mode,
             blur_brush_radius_px: meta.blur_brush_radius_px,
             aa_on_supports: meta.aa_on_supports,
+            model_triangle_count: meta.model_triangle_count,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,

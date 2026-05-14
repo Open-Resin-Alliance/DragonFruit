@@ -1103,6 +1103,7 @@ fn cmd_slice_run(
         anti_aliasing_mode: "Blur".to_string(),
         blur_brush_radius_px: 1,
         aa_on_supports: false,
+        model_triangle_count: (flat.len() / 9) as u32,
         mirror_x,
         mirror_y,
         triangles_xyz: flat,

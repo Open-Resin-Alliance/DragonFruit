@@ -109,6 +109,7 @@ type NativeSolidSliceMetadataPayload = {
   mirror_y: boolean;
   z_blend_look_back?: number;
   z_blend_fade_px?: number;
+  model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -237,6 +238,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     mirror_y: job.mirrorY,
     z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
     z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
+    model_triangle_count: Math.max(0, Math.floor(job.modelTriangleCount ?? 0)),
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,

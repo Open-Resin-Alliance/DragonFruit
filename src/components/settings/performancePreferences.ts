@@ -3,6 +3,7 @@ export type PngCompressionStrategy = 'auto' | 'fastest' | 'balanced' | 'smallest
 export type SlicingPerformanceSettings = {
   pngCompressionStrategy: PngCompressionStrategy;
   bvhAccelerationEnabled: boolean;
+  aaOnSupportsExperimental: boolean;
 };
 
 export const SLICING_PERFORMANCE_SETTINGS_STORAGE_KEY = 'app-slicing-performance-settings';
@@ -11,6 +12,7 @@ const SLICING_PERFORMANCE_SETTINGS_EVENT = 'app-slicing-performance-settings-cha
 export const DEFAULT_SLICING_PERFORMANCE_SETTINGS: SlicingPerformanceSettings = {
   pngCompressionStrategy: 'auto',
   bvhAccelerationEnabled: true,
+  aaOnSupportsExperimental: false,
 };
 
 export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerformanceSettings {
@@ -28,10 +30,12 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
       : 'auto';
 
   const bvhAccelerationEnabled = candidate.bvhAccelerationEnabled !== false;
+  const aaOnSupportsExperimental = candidate.aaOnSupportsExperimental === true;
 
   return {
     pngCompressionStrategy,
     bvhAccelerationEnabled,
+    aaOnSupportsExperimental,
   };
 }
 

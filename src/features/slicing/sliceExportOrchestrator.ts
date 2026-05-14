@@ -2,7 +2,7 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
-import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
+import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
   isNativeSlicerAvailable,
   sliceSolidAndEncodeWithNativeSlicerToTempPath,
@@ -624,6 +624,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
   options.onProgress?.(0, solidMesh.totalLayers, 'Staging');
 
+  const perfSettings = getSavedSlicingPerformanceSettings();
+
   const resolvedPngStrategy = resolvePngCompressionStrategy(
     solidMesh.pngCompressionStrategy,
     options.antiAliasingLevel ?? 'Off',
@@ -653,7 +655,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
     zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
     zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
-    aaOnSupports: true,
+    aaOnSupports: perfSettings.aaOnSupportsExperimental === true,
     minimumAaAlphaPercent: Math.max(
       0,
       Math.min(
