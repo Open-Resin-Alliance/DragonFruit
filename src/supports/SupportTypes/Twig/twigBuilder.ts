@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { ContactDisk, Joint, Segment, Twig, Vec3 } from '../../types';
 import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/types';
-import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getSettings } from '../../Settings';
+import { twigDiskJointStandoff } from './twigJointStandoff';
 // DEBUG: temporary per-twig disk B diameter override. Remove with src/supports/__debug__/.
 import { getTwigDiskBOverrideMm } from '../../__debug__/twigDiameterOverride';
 
@@ -74,8 +74,20 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     _axisA.normalize();
     _axisB.copy(_axisA).multiplyScalar(-1);
 
-    const diskThicknessA = calculateDiskThickness(aNormal, { x: _axisA.x, y: _axisA.y, z: _axisA.z }, diskProfile);
-    const diskThicknessB = calculateDiskThickness(bNormal, { x: _axisB.x, y: _axisB.y, z: _axisB.z }, diskProfile);
+    // Joint stand-off scales with joint diameter so a large disk-end joint
+    // never punches through the model.
+    const diskThicknessA = twigDiskJointStandoff({
+        surfaceNormal: aNormal,
+        coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
+        profile: diskProfile,
+        jointDiameterMm: jointDiameterA,
+    });
+    const diskThicknessB = twigDiskJointStandoff({
+        surfaceNormal: bNormal,
+        coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
+        profile: diskProfile,
+        jointDiameterMm: jointDiameterB,
+    });
 
     // Shaft connects to the center of the disk tip sphere at each end.
     const jointPosA: Vec3 = {
@@ -115,7 +127,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         surfaceNormal: aNormal,
         profile: diskProfile,
         contactDiameterMm: diskAContactDiameter,
-        diskLengthOverride: undefined,
+        diskLengthOverride: diskThicknessA,
         coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
     };
 
@@ -125,7 +137,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         surfaceNormal: bNormal,
         profile: diskProfile,
         contactDiameterMm: diskBContactDiameter,
-        diskLengthOverride: undefined,
+        diskLengthOverride: diskThicknessB,
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
     };
 

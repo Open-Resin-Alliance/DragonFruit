@@ -15,6 +15,7 @@ import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { getSnapshot, updateTwig } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { twigDiskJointStandoff } from './twigJointStandoff';
 
 interface TwigRendererProps {
   twig: Twig;
@@ -98,89 +99,107 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     point: { x: number; y: number; z: number },
     surfaceNormal: { x: number; y: number; z: number },
   ) => {
-    const firstSegment = sourceTwig.segments[0];
-    const lastSegment = sourceTwig.segments[sourceTwig.segments.length - 1];
+    // Rule: the dragged disk's face stays glued to the model surface. Its
+    // joint moves WITH the disk along the new surface normal. The other
+    // disk/joint stay put. The shaft naturally re-angles between the two
+    // joints. The disks' coneAxis points along the shaft.
 
-    const socketA = firstSegment?.bottomJoint?.pos ?? getDiskTipCenter(sourceTwig.contactDiskA);
-    const socketB = lastSegment?.topJoint?.pos ?? getDiskTipCenter(sourceTwig.contactDiskB);
+    const normal = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
+    if (normal.lengthSq() < 0.000001) {
+      // Fallback to existing normal if the drag hit didn't supply one.
+      const fallback = diskKey === 'contactDiskA'
+        ? sourceTwig.contactDiskA.surfaceNormal
+        : sourceTwig.contactDiskB.surfaceNormal;
+      normal.set(fallback.x, fallback.y, fallback.z);
+    }
+    if (normal.lengthSq() < 0.000001) normal.set(0, 0, 1);
+    normal.normalize();
 
-    const recomputeDiskForFixedSocket = (
-      disk: ContactDisk,
-      desiredSocket: { x: number; y: number; z: number },
-      axisHint: THREE.Vector3,
-    ): ContactDisk => {
-      const contactPos = new THREE.Vector3(point.x, point.y, point.z);
-      const desiredSocketVec = new THREE.Vector3(desiredSocket.x, desiredSocket.y, desiredSocket.z);
-      const toSocket = desiredSocketVec.clone().sub(contactPos);
+    const movedDisk = diskKey === 'contactDiskA' ? sourceTwig.contactDiskA : sourceTwig.contactDiskB;
+    // Stand-off scales with joint diameter so a large disk-end joint stays
+    // off the model. coneAxis temporarily approximated by the normal; we'll
+    // set the real coneAxis below once both joint positions are known.
+    const firstSegInput = sourceTwig.segments[0];
+    const lastSegInput = sourceTwig.segments[sourceTwig.segments.length - 1];
+    const movedJointDiameter = (diskKey === 'contactDiskA'
+      ? firstSegInput?.bottomJoint?.diameter
+      : lastSegInput?.topJoint?.diameter
+    ) ?? movedDisk.contactDiameterMm;
+    const thickness = twigDiskJointStandoff({
+      surfaceNormal: { x: normal.x, y: normal.y, z: normal.z },
+      coneAxis: { x: normal.x, y: normal.y, z: normal.z },
+      profile: movedDisk.profile,
+      jointDiameterMm: movedJointDiameter,
+    });
 
-      let normal = toSocket.clone();
-      if (normal.lengthSq() < 0.000001) {
-        normal.set(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
-      }
-      if (normal.lengthSq() < 0.000001) {
-        normal.set(disk.surfaceNormal.x, disk.surfaceNormal.y, disk.surfaceNormal.z);
-      }
-      if (normal.lengthSq() < 0.000001) {
-        normal.set(0, 0, 1);
-      }
-      normal.normalize();
-
-      let axis = axisHint.clone();
-      if (axis.lengthSq() < 0.000001) {
-        axis.set(disk.coneAxis.x, disk.coneAxis.y, disk.coneAxis.z);
-      }
-      if (axis.lengthSq() < 0.000001) {
-        axis.copy(normal);
-      }
-      axis.normalize();
-
-      const thickness = Math.max(0.001, toSocket.length());
-
-      return {
-        ...disk,
-        pos: { x: point.x, y: point.y, z: point.z },
-        surfaceNormal: { x: normal.x, y: normal.y, z: normal.z },
-        coneAxis: { x: axis.x, y: axis.y, z: axis.z },
-        diskLengthOverride: thickness,
-      };
+    const newJointPos = {
+      x: point.x + normal.x * thickness,
+      y: point.y + normal.y * thickness,
+      z: point.z + normal.z * thickness,
     };
 
-    let nextDiskA = sourceTwig.contactDiskA;
-    let nextDiskB = sourceTwig.contactDiskB;
+    // Build updated segments: move the disk-end joint to newJointPos; leave
+    // mid-shaft joints and the other disk's joint untouched.
+    const firstSegmentIndex = 0;
+    const lastSegmentIndex = sourceTwig.segments.length - 1;
+    const nextSegments = sourceTwig.segments.map((seg, idx) => {
+      if (diskKey === 'contactDiskA' && idx === firstSegmentIndex && seg.bottomJoint) {
+        return { ...seg, bottomJoint: { ...seg.bottomJoint, pos: newJointPos } };
+      }
+      if (diskKey === 'contactDiskB' && idx === lastSegmentIndex && seg.topJoint) {
+        return { ...seg, topJoint: { ...seg.topJoint, pos: newJointPos } };
+      }
+      return seg;
+    });
 
-    if (diskKey === 'contactDiskA') {
-      const axisHint = new THREE.Vector3(socketB.x - socketA.x, socketB.y - socketA.y, socketB.z - socketA.z);
-      nextDiskA = recomputeDiskForFixedSocket(sourceTwig.contactDiskA, socketA, axisHint);
-    } else {
-      const axisHint = new THREE.Vector3(socketA.x - socketB.x, socketA.y - socketB.y, socketA.z - socketB.z);
-      nextDiskB = recomputeDiskForFixedSocket(sourceTwig.contactDiskB, socketB, axisHint);
-    }
+    // Resolve the two end-joint positions after the move so we can set
+    // coneAxis on both disks (shaft direction).
+    const firstSeg = nextSegments[firstSegmentIndex];
+    const lastSeg = nextSegments[lastSegmentIndex];
+    const jointAPos = firstSeg?.bottomJoint?.pos ?? newJointPos;
+    const jointBPos = lastSeg?.topJoint?.pos ?? newJointPos;
 
-    let socketAxis = new THREE.Vector3(socketB.x - socketA.x, socketB.y - socketA.y, socketB.z - socketA.z);
-    if (socketAxis.lengthSq() < 0.000001) {
-      socketAxis.set(nextDiskA.coneAxis.x, nextDiskA.coneAxis.y, nextDiskA.coneAxis.z);
-    }
-    if (socketAxis.lengthSq() < 0.000001) {
-      socketAxis.set(0, 0, 1);
-    }
-    socketAxis.normalize();
+    const shaftAxis = new THREE.Vector3(
+      jointBPos.x - jointAPos.x,
+      jointBPos.y - jointAPos.y,
+      jointBPos.z - jointAPos.z,
+    );
+    if (shaftAxis.lengthSq() < 0.000001) shaftAxis.copy(normal);
+    shaftAxis.normalize();
 
-    nextDiskA = {
-      ...nextDiskA,
-      coneAxis: { x: socketAxis.x, y: socketAxis.y, z: socketAxis.z },
-    };
-    nextDiskB = {
-      ...nextDiskB,
-      coneAxis: { x: -socketAxis.x, y: -socketAxis.y, z: -socketAxis.z },
-    };
+    const nextDiskA: ContactDisk = diskKey === 'contactDiskA'
+      ? {
+          ...sourceTwig.contactDiskA,
+          pos: { x: point.x, y: point.y, z: point.z },
+          surfaceNormal: { x: normal.x, y: normal.y, z: normal.z },
+          coneAxis: { x: shaftAxis.x, y: shaftAxis.y, z: shaftAxis.z },
+          diskLengthOverride: thickness,
+        }
+      : {
+          ...sourceTwig.contactDiskA,
+          coneAxis: { x: shaftAxis.x, y: shaftAxis.y, z: shaftAxis.z },
+        };
+
+    const nextDiskB: ContactDisk = diskKey === 'contactDiskB'
+      ? {
+          ...sourceTwig.contactDiskB,
+          pos: { x: point.x, y: point.y, z: point.z },
+          surfaceNormal: { x: normal.x, y: normal.y, z: normal.z },
+          coneAxis: { x: -shaftAxis.x, y: -shaftAxis.y, z: -shaftAxis.z },
+          diskLengthOverride: thickness,
+        }
+      : {
+          ...sourceTwig.contactDiskB,
+          coneAxis: { x: -shaftAxis.x, y: -shaftAxis.y, z: -shaftAxis.z },
+        };
 
     return {
       ...sourceTwig,
       contactDiskA: nextDiskA,
       contactDiskB: nextDiskB,
-      segments: sourceTwig.segments,
+      segments: nextSegments,
     };
-  }, [getDiskTipCenter]);
+  }, []);
 
   const startDiskDrag = React.useCallback((diskKey: 'contactDiskA' | 'contactDiskB', initialEvent?: any) => {
     if (!isSelected) return;
@@ -385,18 +404,33 @@ export const TwigRenderer = React.memo(function TwigRenderer({
         {diskB}
       </group>
 
-      {isSelected && joints.map((joint) => (
-        <JointRenderer
-          key={`joint-${joint.id}`}
-          joint={joint}
-          color={visuals.color}
-          emissive={visuals.emissive}
-          emissiveIntensity={visuals.emissiveIntensity}
-          selectedColor={visuals.selectedColor}
-          isInteractable={isInteractable}
-          isParentSelected={isSelected}
-        />
-      ))}
+      {isSelected && joints.map((joint) => {
+        // Disk-end joints are visually part of their disk: clicks/drags
+        // route to the disk, and the joint highlights with the disk.
+        const firstSeg = effectiveTwig.segments[0];
+        const lastSeg = effectiveTwig.segments[effectiveTwig.segments.length - 1];
+        const isDiskAEndJoint = firstSeg?.bottomJoint?.id === joint.id;
+        const isDiskBEndJoint = lastSeg?.topJoint?.id === joint.id;
+        const attachedToDiskId = isDiskAEndJoint
+          ? effectiveTwig.contactDiskA.id
+          : isDiskBEndJoint
+            ? effectiveTwig.contactDiskB.id
+            : undefined;
+
+        return (
+          <JointRenderer
+            key={`joint-${joint.id}`}
+            joint={joint}
+            color={visuals.color}
+            emissive={visuals.emissive}
+            emissiveIntensity={visuals.emissiveIntensity}
+            selectedColor={visuals.selectedColor}
+            isInteractable={isInteractable}
+            isParentSelected={isSelected}
+            attachedToDiskId={attachedToDiskId}
+          />
+        );
+      })}
     </group>
   );
 });
