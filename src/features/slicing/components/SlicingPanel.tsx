@@ -191,7 +191,7 @@ const AA_STRENGTH_MAX_STEPS = 64;
 const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
 const BLUR_WIDTH_MIN_PX = 1;
 const BLUR_WIDTH_MAX_PX = 64;
-const LOOK_BACK_PRESETS = [1, 2, 3, 4] as const;
+const LOOK_BACK_PRESETS = [2, 3, 4, 5] as const;
 const LOOK_BACK_MIN_LAYERS = 1;
 const LOOK_BACK_MAX_LAYERS = 16;
 const FADE_DISTANCE_PRESETS = [5, 10, 20, 40] as const;
@@ -1880,8 +1880,8 @@ export function SlicingPanel({
                       {aaMode === '3DAA' && (
                         <>
                           <SettingLabelWithHelp
-                            label="Look-Back Layers"
-                            help="How many previous layers are used for Z blending. Higher values can reduce stepping but may blur very thin layer transitions."
+                            label="Blend Window"
+                            help="How many nearby layers contribute to Z blending. Higher values can reduce stepping but may blur very thin layer transitions."
                           />
                           <div className="grid grid-cols-5 gap-1">
                             {LOOK_BACK_PRESETS.map((n) => {
@@ -1939,9 +1939,9 @@ export function SlicingPanel({
                               max={LOOK_BACK_MAX_LAYERS}
                               step={1}
                               unit="lyr"
-                              ariaLabel="Custom look back layer count"
-                              decreaseTitle="Decrease look back"
-                              increaseTitle="Increase look back"
+                              ariaLabel="Custom blend window layer count"
+                              decreaseTitle="Decrease blend window"
+                              increaseTitle="Increase blend window"
                             />
                           )}
 
