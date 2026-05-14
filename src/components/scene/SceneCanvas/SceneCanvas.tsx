@@ -19,6 +19,8 @@ import { MeshClassificationRenderer } from '@/components/scene/MeshClassificatio
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { PickingDebugOverlay } from '@/components/picking';
+// DEBUG: temporary twig disk B diameter override — see src/supports/__debug__/
+import { TwigDebugOverrideCard } from '@/supports/__debug__/TwigDebugOverrideCard';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -6283,6 +6285,10 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
+
+      {/* DEBUG: temporary twig disk B diameter override — remove with __debug__ folder */}
+      <TwigDebugOverrideCard />
+
 
       {showCrossSectionCapDebugPanel && (
         <div
