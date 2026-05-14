@@ -37,6 +37,14 @@ fn default_x_packing_mode() -> String {
     "none".to_string()
 }
 
+fn default_z_blend_look_back() -> u32 {
+    2
+}
+
+fn default_z_blend_fade_px() -> u32 {
+    20
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -96,6 +104,14 @@ pub struct SliceJobV3 {
     /// Mirror output image across Y axis.
     #[serde(default = "default_false")]
     pub mirror_y: bool,
+    /// Number of prior layers to compare against for 3DAA inter-layer blending.
+    /// Higher values smooth shallower surface angles but cost more memory.
+    #[serde(default = "default_z_blend_look_back")]
+    pub z_blend_look_back: u32,
+    /// Fade-out distance in pixels for the 3DAA inter-layer gradient.
+    /// The gradient reaches 0 at this many pixels from the current layer's edge.
+    #[serde(default = "default_z_blend_fade_px")]
+    pub z_blend_fade_px: u32,
     /// Flat triangle buffer (`x,y,z` * 3 vertices per triangle).
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.

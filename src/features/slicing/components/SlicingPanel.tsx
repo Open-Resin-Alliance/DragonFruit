@@ -171,6 +171,8 @@ const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
+const SLICING_3DAA_LOOK_BACK_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBack';
+const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
@@ -278,6 +280,24 @@ function resolveInitialMinimumAaAlphaOverrideEnabled(): boolean {
   return false;
 }
 
+function resolveInitialZBlendLookBack(): number {
+  if (typeof window === 'undefined') return 2;
+  const stored = window.localStorage.getItem(SLICING_3DAA_LOOK_BACK_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_3DAA_LOOK_BACK_STORAGE_KEY);
+  if (stored == null || stored.trim().length === 0) return 2;
+  const parsed = Math.round(Number(stored));
+  return [1, 2, 3, 4].includes(parsed) ? parsed : 2;
+}
+
+function resolveInitialZBlendFadePx(): number {
+  if (typeof window === 'undefined') return 20;
+  const stored = window.localStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY);
+  if (stored == null || stored.trim().length === 0) return 20;
+  const parsed = Math.round(Number(stored));
+  return [5, 10, 20, 40].includes(parsed) ? parsed : 20;
+}
+
 export function SlicingPanel({
   models,
   activeModel,
@@ -329,6 +349,8 @@ export function SlicingPanel({
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
   const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
+  const [zBlendLookBack, setZBlendLookBack] = useState<number>(resolveInitialZBlendLookBack);
+  const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
   const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
@@ -759,6 +781,18 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_3DAA_LOOK_BACK_STORAGE_KEY, String(zBlendLookBack));
+    window.sessionStorage.setItem(SLICING_3DAA_LOOK_BACK_STORAGE_KEY, String(zBlendLookBack));
+  }, [zBlendLookBack]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_3DAA_FADE_PX_STORAGE_KEY, String(zBlendFadePx));
+    window.sessionStorage.setItem(SLICING_3DAA_FADE_PX_STORAGE_KEY, String(zBlendFadePx));
+  }, [zBlendFadePx]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     const serialized = String(Math.max(0, Math.min(100, Math.round(minimumAaAlphaPercent))));
     window.localStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
@@ -1014,6 +1048,8 @@ export function SlicingPanel({
         antiAliasingLevel: effectiveAntiAliasingLevel,
         antiAliasingMode: effectiveAntiAliasingMode,
         blurBrushRadiusPx,
+        zBlendLookBack: aaMode === '3DAA' ? zBlendLookBack : undefined,
+        zBlendFadePx: aaMode === '3DAA' ? zBlendFadePx : undefined,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
           : profileMinimumAaAlphaPercent,
@@ -1538,6 +1574,66 @@ export function SlicingPanel({
                           );
                         })}
                       </div>
+
+                      {aaMode === '3DAA' && (
+                        <>
+                          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Look Back (layers)</div>
+                          <div className="grid grid-cols-4 gap-1">
+                            {([1, 2, 3, 4] as const).map((n) => {
+                              const active = zBlendLookBack === n;
+                              return (
+                                <button
+                                  key={n}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setZBlendLookBack(n)}
+                                >
+                                  {n}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Fade Distance (px)</div>
+                          <div className="grid grid-cols-4 gap-1">
+                            {([5, 10, 20, 40] as const).map((px) => {
+                              const active = zBlendFadePx === px;
+                              return (
+                                <button
+                                  key={px}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setZBlendFadePx(px)}
+                                >
+                                  {`${px}px`}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
 
                       <div className="space-y-1">
                         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Grey Level</div>

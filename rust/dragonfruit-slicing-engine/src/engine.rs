@@ -1,5 +1,6 @@
 //! V3 engine orchestration and validation layer.
 
+use crate::encode::encode_grayscale_png;
 use crate::encoders::registry::{
     find_encoder, find_encoder_by_hint_or_source, supported_output_formats,
 };
@@ -11,6 +12,7 @@ use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
 };
+use crate::z_blend;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -101,8 +103,14 @@ pub fn slice_with_progress_v3(
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
 
+    // 3DAA mode uses a pure 2D post-process (EDT inter-layer blending) that
+    // requires full-pixel buffers for all layers before the blending pass can
+    // run. Skip the streaming early-returns so we always reach the full-pixel
+    // collection path below.
+    let is_3daa = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("3daa");
+
     // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
-    if !requires_png_layers {
+    if !is_3daa && !requires_png_layers {
         if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
@@ -176,7 +184,7 @@ pub fn slice_with_progress_v3(
         }
     }
 
-    if !requires_png_layers && requires_raw_mask_layers {
+    if !is_3daa && !requires_png_layers && requires_raw_mask_layers {
         if let Some(mut stream_encoder) = encoder.create_raw_mask_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
@@ -234,15 +242,60 @@ pub fn slice_with_progress_v3(
     }
 
     let total_start = std::time::Instant::now();
-    let (rendered_layers, layer_area_stats, mut perf) = slice_and_rasterize_v3(
-        job,
+
+    // For 3DAA mode: rasterize with Blur AA, collect raw masks, apply EDT
+    // inter-layer blending, then re-encode the modified masks to PNGs before
+    // handing off to the encoder.
+    let raster_job_owned: Option<SliceJobV3> = if is_3daa {
+        let mut j = job.clone();
+        j.anti_aliasing_mode = "Blur".to_string();
+        Some(j)
+    } else {
+        None
+    };
+    let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
+
+    let (mut rendered_layers, layer_area_stats, mut perf) = slice_and_rasterize_v3(
+        raster_job,
         requires_area_stats,
-        requires_png_layers,
-        requires_raw_mask_layers,
+        // 3DAA defers PNG encoding to after the EDT pass; only collect raw masks now.
+        if is_3daa { false } else { requires_png_layers },
+        requires_raw_mask_layers || is_3daa,
         None,
         on_progress.clone(),
         cancel_flag,
     )?;
+
+    // Apply EDT inter-layer Z-blending post-process when in 3DAA mode.
+    if is_3daa {
+        if let Some(ref mut masks) = rendered_layers.raw_mask_layers {
+            let width = raster_job.effective_render_width_px() as usize;
+            let height = raster_job.source_height_px as usize;
+            let look_back = (job.z_blend_look_back as usize).max(1);
+            let fade_px = job.z_blend_fade_px.max(1);
+            let lut = z_blend::default_z_blend_lut();
+            z_blend::z_blend_all_layers(masks, width, height, look_back, fade_px, Some(&lut));
+
+            // Re-encode modified masks to PNG for the encoder.
+            let mut pngs: Vec<Vec<u8>> = Vec::with_capacity(masks.len());
+            for mask in masks.iter() {
+                let png = encode_grayscale_png(
+                    width as u32,
+                    height as u32,
+                    mask,
+                    &raster_job.png_compression_strategy,
+                    false,
+                )?;
+                pngs.push(png);
+            }
+            rendered_layers.png_layers = Some(pngs);
+
+            // Free raw mask memory unless the encoder explicitly needs it.
+            if !requires_raw_mask_layers {
+                rendered_layers.raw_mask_layers = None;
+            }
+        }
+    }
 
     let encode_units = encoder
         .estimate_encode_progress_units(&rendered_layers)
