@@ -177,6 +177,52 @@ fn merge_support_mask_inplace(dst: &mut [u8], support: &[u8]) {
     }
 }
 
+/// Returns an inclusive `(first_layer, last_layer)` window where model geometry
+/// can exist, based on model-triangle Z extents.
+///
+/// When model/support split metadata is unavailable, returns `None` and callers
+/// should keep 3DAA enabled for all layers.
+fn resolve_model_active_layer_window(job: &SliceJobV3) -> Option<(u32, u32)> {
+    let total_triangles = job.triangles_xyz.len() / 9;
+    let model_triangles = (job.model_triangle_count as usize).min(total_triangles);
+
+    // No split metadata (or model-only mesh): fall back to full-range processing.
+    if model_triangles == 0 || model_triangles >= total_triangles {
+        return None;
+    }
+
+    let mut min_z = f32::INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+
+    for tri in 0..model_triangles {
+        let base = tri * 9;
+        let z0 = job.triangles_xyz[base + 2];
+        let z1 = job.triangles_xyz[base + 5];
+        let z2 = job.triangles_xyz[base + 8];
+        for z in [z0, z1, z2] {
+            if z.is_finite() {
+                min_z = min_z.min(z);
+                max_z = max_z.max(z);
+            }
+        }
+    }
+
+    if !min_z.is_finite() || !max_z.is_finite() || max_z < 0.0 {
+        return None;
+    }
+
+    let layer_h = job.layer_height_mm.max(f32::EPSILON);
+    let max_layer = job.total_layers.saturating_sub(1) as i64;
+    let first = ((min_z / layer_h).floor() as i64).clamp(0, max_layer) as u32;
+    let last = ((max_z / layer_h).ceil() as i64).clamp(0, max_layer) as u32;
+
+    if first > last {
+        None
+    } else {
+        Some((first, last))
+    }
+}
+
 fn rasterize_vertical_aa_streaming_v3(
     job: &SliceJobV3,
     raster_job: &SliceJobV3,
@@ -221,6 +267,7 @@ fn rasterize_vertical_aa_streaming_v3(
     let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
     let mut support_mask_context = SupportMaskContext::from_job(raster_job);
+    let model_active_layer_window = resolve_model_active_layer_window(raster_job);
 
     // Pending queue for symmetric forward-compensation blending.
     //
@@ -233,6 +280,7 @@ fn rasterize_vertical_aa_streaming_v3(
         mask: Vec<u8>,
         topology: Vec<u8>,
         support_mask: Option<Vec<u8>>,
+        apply_model_aa: bool,
         backward_contrib: Option<Vec<u8>>,
     }
     let mut pending_layers: VecDeque<PendingLayer> = VecDeque::with_capacity(look_back + 1);
@@ -264,37 +312,47 @@ fn rasterize_vertical_aa_streaming_v3(
         }
 
         // Topology mask: binary occupancy for z-blending and forward compensation.
+        let apply_model_aa = model_active_layer_window
+            .map(|(first, last)| layer_index >= first && layer_index <= last)
+            .unwrap_or(true);
+
         let mut topology_mask = topology_reuse_pool
             .pop()
             .unwrap_or_else(|| vec![0u8; pixels_per_layer]);
         if topology_mask.len() != pixels_per_layer {
             topology_mask.resize(pixels_per_layer, 0);
         }
-        for (dst, src) in topology_mask.iter_mut().zip(raw_mask.iter()) {
-            *dst = if *src > TOPOLOGY_ALPHA_THRESHOLD {
-                255
-            } else {
-                0
-            };
+        if apply_model_aa {
+            for (dst, src) in topology_mask.iter_mut().zip(raw_mask.iter()) {
+                *dst = if *src > TOPOLOGY_ALPHA_THRESHOLD {
+                    255
+                } else {
+                    0
+                };
+            }
+        } else {
+            topology_mask.fill(0);
         }
 
-        let base_mask_for_debug = debug_color_overlay.then(|| raw_mask.clone());
+        let base_mask_for_debug = (debug_color_overlay && apply_model_aa).then(|| raw_mask.clone());
 
         // --- Backward z-blend for the current layer (look-behind window). ---
-        let priors_start = pending_layers.len().saturating_sub(look_back);
-        let priors: Vec<&[u8]> = pending_layers
-            .iter()
-            .skip(priors_start)
-            .map(|layer| layer.topology.as_slice())
-            .collect();
-        workspace.blend_layer_inplace(
-            &mut raw_mask,
-            &priors,
-            width,
-            height,
-            fade_px,
-            Some(&lut),
-        );
+        if apply_model_aa {
+            let priors_start = pending_layers.len().saturating_sub(look_back);
+            let priors: Vec<&[u8]> = pending_layers
+                .iter()
+                .skip(priors_start)
+                .map(|layer| layer.topology.as_slice())
+                .collect();
+            workspace.blend_layer_inplace(
+                &mut raw_mask,
+                &priors,
+                width,
+                height,
+                fade_px,
+                Some(&lut),
+            );
+        }
 
         let backward_contrib = if let Some(base_mask) = base_mask_for_debug.as_ref() {
             let mut diff = vec![0u8; pixels_per_layer];
@@ -316,6 +374,7 @@ fn rasterize_vertical_aa_streaming_v3(
             mask: raw_mask,
             topology: topology_mask,
             support_mask: support_mask_for_layer,
+            apply_model_aa,
             backward_contrib,
         });
 
@@ -328,14 +387,14 @@ fn rasterize_vertical_aa_streaming_v3(
                 .map(|future| future.topology.as_slice())
                 .collect();
 
-            let mut forward_contrib = if debug_color_overlay {
+            let mut forward_contrib = if debug_color_overlay && layer.apply_model_aa {
                 Some(vec![0u8; pixels_per_layer])
             } else {
                 None
             };
 
             let effective_look_back = futures.len();
-            if effective_look_back > 0 {
+            if layer.apply_model_aa && effective_look_back > 0 {
                 let before_forward = if debug_color_overlay {
                     Some(layer.mask.clone())
                 } else {
@@ -367,15 +426,17 @@ fn rasterize_vertical_aa_streaming_v3(
             }
 
             // XY smoothing runs after both vertical blend directions.
-            apply_blur_postprocess_inplace(
-                &mut layer.mask,
-                width,
-                height,
-                blur_radius,
-                min_aa_alpha_u8,
-            );
-            if blur_radius == 0 {
-                apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+            if layer.apply_model_aa {
+                apply_blur_postprocess_inplace(
+                    &mut layer.mask,
+                    width,
+                    height,
+                    blur_radius,
+                    min_aa_alpha_u8,
+                );
+                if blur_radius == 0 {
+                    apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+                }
             }
 
             if let Some(ref mut backward) = layer.backward_contrib {
@@ -476,14 +537,14 @@ fn rasterize_vertical_aa_streaming_v3(
             .map(|future| future.topology.as_slice())
             .collect();
 
-        let mut forward_contrib = if debug_color_overlay {
+        let mut forward_contrib = if debug_color_overlay && layer.apply_model_aa {
             Some(vec![0u8; pixels_per_layer])
         } else {
             None
         };
 
         let effective_look_back = futures.len();
-        if effective_look_back > 0 {
+        if layer.apply_model_aa && effective_look_back > 0 {
             let before_forward = if debug_color_overlay {
                 Some(layer.mask.clone())
             } else {
@@ -514,15 +575,17 @@ fn rasterize_vertical_aa_streaming_v3(
             }
         }
 
-        apply_blur_postprocess_inplace(
-            &mut layer.mask,
-            width,
-            height,
-            blur_radius,
-            min_aa_alpha_u8,
-        );
-        if blur_radius == 0 {
-            apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+        if layer.apply_model_aa {
+            apply_blur_postprocess_inplace(
+                &mut layer.mask,
+                width,
+                height,
+                blur_radius,
+                min_aa_alpha_u8,
+            );
+            if blur_radius == 0 {
+                apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+            }
         }
 
         if let Some(ref mut backward) = layer.backward_contrib {
