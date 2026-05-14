@@ -14059,7 +14059,6 @@ export default function Home() {
   React.useEffect(() => {
     const wasActive = mirrorPrevToolActiveRef.current;
     mirrorPrevToolActiveRef.current = mirrorToolActive;
-    console.log('[Mirror] useEffect check - wasActive:', wasActive, 'mirrorToolActive:', mirrorToolActive);
     if (wasActive && !mirrorToolActive) {
       console.log('[Mirror] Calling flushPendingBake from useEffect');
       flushPendingBake();
