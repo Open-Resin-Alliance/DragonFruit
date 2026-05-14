@@ -205,6 +205,11 @@ fn rasterize_vertical_aa_streaming_v3(
 
     let mut topology_reuse_pool: Vec<Vec<u8>> = Vec::with_capacity(look_back + 1);
     let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
+    let mut debug_rgb_buffer: Vec<u8> = if debug_color_overlay {
+        vec![0u8; pixels_per_layer * 3]
+    } else {
+        Vec::new()
+    };
     let mut png_layers: Option<Vec<Vec<u8>>> =
         collect_png_layers.then(|| Vec::with_capacity(job.total_layers as usize));
     // When on_processed_mask is provided it owns the processed masks (streaming
@@ -282,7 +287,14 @@ fn rasterize_vertical_aa_streaming_v3(
             .skip(priors_start)
             .map(|layer| layer.topology.as_slice())
             .collect();
-        workspace.blend_layer_inplace(&mut raw_mask, &priors, width, height, fade_px, Some(&lut));
+        workspace.blend_layer_inplace(
+            &mut raw_mask,
+            &priors,
+            width,
+            height,
+            fade_px,
+            Some(&lut),
+        );
 
         let backward_contrib = if let Some(base_mask) = base_mask_for_debug.as_ref() {
             let mut diff = vec![0u8; pixels_per_layer];
@@ -400,16 +412,18 @@ fn rasterize_vertical_aa_streaming_v3(
                     if let (Some(backward), Some(forward)) =
                         (layer.backward_contrib.as_ref(), forward_contrib.as_ref())
                     {
-                        let mut rgb = vec![0u8; pixels_per_layer * 3];
+                        if debug_rgb_buffer.len() != pixels_per_layer * 3 {
+                            debug_rgb_buffer.resize(pixels_per_layer * 3, 0);
+                        }
                         for i in 0..pixels_per_layer {
-                            rgb[i * 3] = forward[i]; // Red = look-ahead
-                            rgb[i * 3 + 1] = backward[i]; // Green = look-behind
-                            rgb[i * 3 + 2] = 0;
+                            debug_rgb_buffer[i * 3] = forward[i]; // Red = look-ahead
+                            debug_rgb_buffer[i * 3 + 1] = backward[i]; // Green = look-behind
+                            debug_rgb_buffer[i * 3 + 2] = 0;
                         }
                         encode_rgb_png_8bit(
                             width as u32,
                             height as u32,
-                            &rgb,
+                            &debug_rgb_buffer,
                             &raster_job.png_compression_strategy,
                         )?
                     } else {
@@ -545,16 +559,18 @@ fn rasterize_vertical_aa_streaming_v3(
                 if let (Some(backward), Some(forward)) =
                     (layer.backward_contrib.as_ref(), forward_contrib.as_ref())
                 {
-                    let mut rgb = vec![0u8; pixels_per_layer * 3];
+                    if debug_rgb_buffer.len() != pixels_per_layer * 3 {
+                        debug_rgb_buffer.resize(pixels_per_layer * 3, 0);
+                    }
                     for i in 0..pixels_per_layer {
-                        rgb[i * 3] = forward[i];
-                        rgb[i * 3 + 1] = backward[i];
-                        rgb[i * 3 + 2] = 0;
+                        debug_rgb_buffer[i * 3] = forward[i];
+                        debug_rgb_buffer[i * 3 + 1] = backward[i];
+                        debug_rgb_buffer[i * 3 + 2] = 0;
                     }
                     encode_rgb_png_8bit(
                         width as u32,
                         height as u32,
-                        &rgb,
+                        &debug_rgb_buffer,
                         &raster_job.png_compression_strategy,
                     )?
                 } else {

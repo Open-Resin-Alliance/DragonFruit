@@ -833,7 +833,8 @@ export function SlicingPanel({
       : 0.05;
 
     const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
-    const base = Math.max(2, Math.ceil(lookBack * pxPerLayer));
+    const AUTO_FADE_GAIN = 1.75;
+    const base = Math.max(4, Math.ceil(lookBack * pxPerLayer * AUTO_FADE_GAIN));
     return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
   }, [
     activePrinterProfile?.buildVolumeMm?.depth,
