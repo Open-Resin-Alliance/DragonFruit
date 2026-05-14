@@ -867,7 +867,7 @@ fn apply_edge_box_blur_to_mask_in_roi(
 }
 
 fn encode_mask_to_rle(mask: &[u8], width: usize, height: usize) -> Vec<crate::rle::RleRun> {
-    use crate::rle::{RleAccum, emit_row};
+    use crate::rle::{emit_row, RleAccum};
 
     let mut rle = RleAccum::new();
     for row_index in 0..height {
@@ -989,20 +989,6 @@ pub fn rasterize_layer_with_stats(
 
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
     let aa_steps = (aa_level_steps as usize).max(1);
-    // True 3DAA: sample multiple Z positions per layer AND multiple Y sub-rows.
-    // Only dispatched when the mode is explicitly "3daa"; "blur" with aa_steps > 1
-    // stays in the single-Z 2D-SSAA path below.
-    let is_3daa = aa_steps > 1 && job.anti_aliasing_mode.trim().eq_ignore_ascii_case("3daa");
-    if is_3daa {
-        return rasterize_layer_3daa(
-            job,
-            triangles,
-            layer_indices,
-            layer_index,
-            compute_area_stats,
-            aa_steps,
-        );
-    }
 
     // 2D SSAA + optional blur path (single Z slice, aa_steps Y sub-rows, analytic X).
     let blur_mode = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur");
@@ -1377,337 +1363,6 @@ pub fn rasterize_layer_with_stats(
     (mask, stats)
 }
 
-/// True 3-dimensional anti-aliasing: supersamples each layer in all three axes.
-///
-/// - **X**: analytic sub-pixel edge coverage (exact, no oversampling needed)
-/// - **Y**: `z_steps` sub-row samples per physical pixel row
-/// - **Z**: `z_steps` cross-section samples per layer
-///
-/// The `z_steps` parameter matches the user's AA level (e.g. 4× → z_steps=4),
-/// giving equal quality in all spatial dimensions.  The Z-averaged result is
-/// optionally post-processed with blur.
-fn rasterize_layer_3daa(
-    job: &SliceJobV3,
-    triangles: &[Triangle],
-    layer_indices: &[usize],
-    layer_index: u32,
-    compute_area_stats: bool,
-    z_steps: usize,
-) -> (Vec<u8>, LayerAreaStatsV3) {
-    let width = job.effective_render_width_px() as usize;
-    let height = job.source_height_px as usize;
-    let mut mask = crate::pipeline::get_recycled_mask(width * height);
-    let mut stats = LayerAreaStatsV3::default();
-
-    // 3DAA is always blur-based; also accept legacy "blur" if somehow routed here.
-    let mode = job.anti_aliasing_mode.trim();
-    let blur_mode = mode.eq_ignore_ascii_case("3daa") || mode.eq_ignore_ascii_case("blur");
-    let blur_radius = if blur_mode {
-        blur_radius_px(job.blur_brush_radius_px)
-    } else {
-        0
-    };
-    let min_aa_alpha_u8 =
-        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
-    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
-        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
-
-    // Accumulates raw analytic-X coverage across all Z slices.
-    //
-    // Each Z slice contributes a single midpoint-Y sample per physical row.
-    // Per-pixel range: [0, 255] per Z slice → [0, 255 * z_steps] total.
-    // Well within u32 for any practical z_steps.
-    let mut z_accum = vec![0u32; width * height];
-    // Global model bounds unioned across all Z slices (for ROI clamping).
-    let mut global_min_x = i32::MAX;
-    let mut global_min_y = i32::MAX;
-    let mut global_max_x = i32::MIN;
-    let mut global_max_y = i32::MIN;
-
-    // Scratch buffers reused across Z iterations to reduce allocations.
-    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(256);
-    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(256);
-    let mut row_accum = vec![0u32; width];
-    let mut row_delta = vec![0i32; width + 1];
-
-    let mut segments = Vec::with_capacity(layer_indices.len());
-
-    for z_k in 0..z_steps {
-        let z_frac = (z_k as f32 + 0.5) / z_steps as f32;
-        let z_mm = (layer_index as f32 + z_frac) * job.layer_height_mm;
-
-        build_segments_for_layer_into(job, triangles, layer_indices, z_mm, &mut segments);
-        if segments.is_empty() {
-            continue;
-        }
-
-        // Single midpoint-Y sample per physical row.
-        //
-        // 3DAA's extra quality comes entirely from Z supersampling — sampling the
-        // geometry at z_steps different heights within a voxel. Each Z sample
-        // contributes one scanline pass (with analytic sub-pixel X coverage) per
-        // physical row. This is exactly equivalent to 2D SSAA × z_steps Z slices,
-        // and is N² → N faster than also Y-supersampling within each Z slice
-        // (which a straight line's midpoint sample already exactly represents).
-        let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
-            continue;
-        };
-        let y_start = scanline_index.y_start;
-        let y_end_exclusive = scanline_index.y_end_exclusive;
-        let scanline_starts = scanline_index.starts;
-        let scanline_row_offsets = scanline_index.row_offsets;
-
-        active_edges.clear();
-        row_accum.fill(0);
-        row_delta.fill(0);
-
-        let mut min_x = i32::MAX;
-        let mut min_y = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut max_y = i32::MIN;
-
-        for y in y_start..y_end_exclusive {
-            // y is already a physical row index (aa_steps=1).
-            active_edges.retain(|edge| edge.end_exclusive > y);
-            let row_start = scanline_row_offsets[y];
-            let row_end = scanline_row_offsets[y + 1];
-            if row_start != row_end {
-                merge_active_edges_sorted(
-                    &mut active_edges,
-                    &scanline_starts[row_start..row_end],
-                    &mut merge_scratch,
-                );
-            }
-
-            if !active_edges.is_empty() {
-                // Always sub-pixel in 3DAA (binary_fill = false).
-                let spans = build_row_spans_nonzero(&active_edges, width, false);
-                for span in spans {
-                    let left_i = span.a.floor() as i32;
-                    let right_i = span.b.ceil() as i32 - 1;
-
-                    if left_i <= right_i {
-                        if left_i == right_i {
-                            if left_i >= 0 && left_i < width as i32 {
-                                let cov = (span.b - span.a).clamp(0.0, 1.0) * 255.0;
-                                row_accum[left_i as usize] += cov as u32;
-                            }
-                        } else {
-                            let left_cov = ((left_i as f32 + 1.0) - span.a).clamp(0.0, 1.0) * 255.0;
-                            let right_cov = (span.b - right_i as f32).clamp(0.0, 1.0) * 255.0;
-
-                            if left_i >= 0 && left_i < width as i32 {
-                                row_accum[left_i as usize] += left_cov as u32;
-                            }
-
-                            let interior_start = (left_i + 1).max(0) as usize;
-                            let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
-                            if interior_end >= interior_start {
-                                row_delta[interior_start] += 255;
-                                row_delta[interior_end + 1] -= 255;
-                            }
-
-                            if right_i >= 0 && right_i < width as i32 {
-                                row_accum[right_i as usize] += right_cov as u32;
-                            }
-                        }
-                    }
-
-                    min_x = min_x.min(span.start as i32);
-                    max_x = max_x.max(span.end as i32);
-                    min_y = min_y.min(y as i32);
-                    max_y = max_y.max(y as i32);
-                }
-
-                for edge in &mut active_edges {
-                    edge.x += edge.dx_dy;
-                }
-                restore_active_edges_sorted(&mut active_edges);
-            }
-
-            // Flush this row immediately into z_accum (single Y sample per row).
-            if y < height {
-                let r_start = y * width;
-                let mut coverage = 0i32;
-                for x in 0..width {
-                    coverage += row_delta[x];
-                    let acc = if coverage > 0 {
-                        row_accum[x].saturating_add(coverage as u32)
-                    } else {
-                        row_accum[x]
-                    };
-                    if acc > 0 {
-                        z_accum[r_start + x] += acc;
-                    }
-                    row_accum[x] = 0;
-                    row_delta[x] = 0;
-                }
-                row_delta[width] = 0;
-            }
-        }
-
-        global_min_x = global_min_x.min(min_x);
-        global_min_y = global_min_y.min(min_y);
-        global_max_x = global_max_x.max(max_x);
-        global_max_y = global_max_y.max(max_y);
-    }
-
-    // If no Z slice had any geometry, return an empty result.
-    if global_min_x > global_max_x {
-        return (mask, stats);
-    }
-
-    // Normalise: each Z slice contributed one analytic-X sample (0..=255).
-    // Summed over z_steps slices, divide by z_steps (with rounding).
-    let norm = z_steps as u32;
-    for (px, acc) in mask.iter_mut().zip(z_accum.iter()) {
-        *px = ((*acc + norm / 2) / norm).min(255) as u8;
-    }
-
-    let min_x = global_min_x;
-    let min_y = global_min_y;
-    let max_x = global_max_x;
-    let max_y = global_max_y;
-
-    // Coverage mode: apply min-alpha floor after Z-averaging.
-    // Blur mode's floor is handled inside apply_edge_box_blur_to_mask_in_roi.
-    if min_aa_alpha_u8 > 0 && blur_radius == 0 {
-        for y in min_y.max(0) as usize..=max_y.min(height as i32 - 1) as usize {
-            for x in min_x.max(0) as usize..=max_x.min(width as i32 - 1) as usize {
-                let px = &mut mask[y * width + x];
-                if *px > 0 && *px < min_aa_alpha_u8 {
-                    *px = min_aa_alpha_u8;
-                }
-            }
-        }
-    }
-
-    // Apply blur post-process on the Z-averaged mask.
-    if blur_radius > 0 {
-        let effective_radius = blur_radius;
-
-        let r = effective_radius as i32;
-        let roi_min_x = min_x.saturating_sub(r).max(0) as usize;
-        let roi_max_x = (max_x.saturating_add(r)).min(width as i32 - 1) as usize;
-        let roi_min_y = min_y.saturating_sub(r).max(0) as usize;
-        let roi_max_y = (max_y.saturating_add(r)).min(height as i32 - 1) as usize;
-
-        apply_edge_box_blur_to_mask_in_roi(
-            &mut mask,
-            width,
-            height,
-            effective_radius,
-            min_aa_alpha_u8,
-            roi_min_x,
-            roi_max_x,
-            roi_min_y,
-            roi_max_y,
-        );
-
-        let mut total_solid_pixels = 0u32;
-        let mut blur_min_x = i32::MAX;
-        let mut blur_min_y = i32::MAX;
-        let mut blur_max_x = i32::MIN;
-        let mut blur_max_y = i32::MIN;
-
-        for y in roi_min_y..=roi_max_y {
-            let row_start = y * width;
-            for x in roi_min_x..=roi_max_x {
-                if mask[row_start + x] == 0 {
-                    continue;
-                }
-                total_solid_pixels = total_solid_pixels.saturating_add(1);
-                blur_min_x = blur_min_x.min(x as i32);
-                blur_min_y = blur_min_y.min(y as i32);
-                blur_max_x = blur_max_x.max(x as i32);
-                blur_max_y = blur_max_y.max(y as i32);
-            }
-        }
-
-        if total_solid_pixels > 0 {
-            stats.total_solid_pixels = total_solid_pixels;
-            stats.min_x = blur_min_x;
-            stats.min_y = blur_min_y;
-            stats.max_x = blur_max_x;
-            stats.max_y = blur_max_y;
-
-            if compute_area_stats {
-                let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-                    compute_component_area_stats_8_connected(
-                        &mask,
-                        width,
-                        height,
-                        blur_min_x as usize,
-                        blur_max_x as usize,
-                        blur_min_y as usize,
-                        blur_max_y as usize,
-                        pixel_area_mm2,
-                    );
-                stats.total_solid_pixels = total_pixels;
-                let total_area = total_pixels as f64 * pixel_area_mm2;
-                stats.total_solid_area_mm2 = total_area;
-                stats.largest_area_mm2 = largest_area_mm2;
-                stats.smallest_area_mm2 = smallest_area_mm2;
-                stats.area_count = area_count;
-            } else {
-                let total_area = stats.total_solid_pixels as f64 * pixel_area_mm2;
-                stats.total_solid_area_mm2 = total_area;
-                stats.largest_area_mm2 = total_area;
-                stats.smallest_area_mm2 = total_area;
-                stats.area_count = 1;
-            }
-        }
-
-        return (mask, stats);
-    }
-
-    // Coverage mode: compute stats from the final Z-averaged mask.
-    let mut total_solid_pixels = 0u32;
-    for y in min_y.max(0) as usize..=max_y.min(height as i32 - 1) as usize {
-        for x in min_x.max(0) as usize..=max_x.min(width as i32 - 1) as usize {
-            if mask[y * width + x] > 0 {
-                total_solid_pixels += 1;
-            }
-        }
-    }
-
-    if total_solid_pixels > 0 {
-        stats.total_solid_pixels = total_solid_pixels;
-        stats.min_x = min_x;
-        stats.min_y = min_y;
-        stats.max_x = max_x;
-        stats.max_y = max_y;
-
-        if compute_area_stats {
-            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-                compute_component_area_stats_8_connected(
-                    &mask,
-                    width,
-                    height,
-                    min_x.max(0) as usize,
-                    max_x.min(width as i32 - 1) as usize,
-                    min_y.max(0) as usize,
-                    max_y.min(height as i32 - 1) as usize,
-                    pixel_area_mm2,
-                );
-            stats.total_solid_pixels = total_pixels;
-            let total_area = total_pixels as f64 * pixel_area_mm2;
-            stats.total_solid_area_mm2 = total_area;
-            stats.largest_area_mm2 = largest_area_mm2;
-            stats.smallest_area_mm2 = smallest_area_mm2;
-            stats.area_count = area_count;
-        } else {
-            let total_area = total_solid_pixels as f64 * pixel_area_mm2;
-            stats.total_solid_area_mm2 = total_area;
-            stats.largest_area_mm2 = total_area;
-            stats.smallest_area_mm2 = total_area;
-            stats.area_count = 1;
-        }
-    }
-
-    (mask, stats)
-}
-
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`).
 pub fn rasterize_layer(
     job: &SliceJobV3,
@@ -1733,7 +1388,7 @@ pub fn rasterize_layer_rle(
     layer_index: u32,
     compute_area_stats: bool,
 ) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
-    use crate::rle::{RleAccum, emit_row, emit_zero_rows};
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
     let width = job.effective_render_width_px() as usize;
     let height = job.source_height_px as usize;
@@ -1748,13 +1403,13 @@ pub fn rasterize_layer_rle(
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
     let aa_steps = (aa_level_steps as usize).max(1);
     let rle_mode = job.anti_aliasing_mode.trim();
-    let blur_mode = rle_mode.eq_ignore_ascii_case("blur") || rle_mode.eq_ignore_ascii_case("3daa");
+    let blur_mode = rle_mode.eq_ignore_ascii_case("blur");
     let blur_radius = if blur_mode {
         blur_radius_px(job.blur_brush_radius_px)
     } else {
         0
     };
-    // 3DAA, 2D-blur-SSAA, and coverage-SSAA (aa_steps > 1) all require the full mask path.
+    // 2D-blur-SSAA and coverage-SSAA (aa_steps > 1) require the full mask path.
     if blur_radius > 0 || aa_steps > 1 {
         let (mask, stats) = rasterize_layer_with_stats(
             job,
@@ -2112,6 +1767,8 @@ mod tests {
             minimum_aa_alpha_percent: 35.0,
             mirror_x: false,
             mirror_y: false,
+            z_blend_look_back: 2,
+            z_blend_fade_px: 20,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),

@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod raster;
 pub mod rle;
 pub mod types;
+pub mod z_blend;
 
 pub use engine::{slice_with_progress_v3, SlicerV3Error};
 pub use metrics::SlicingPerfV3;

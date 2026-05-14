@@ -13,6 +13,14 @@ fn default_blur_brush_radius_px() -> u32 {
 fn default_anti_aliasing_mode() -> String {
     "Blur".to_string()
 }
+
+fn default_z_blend_look_back() -> u32 {
+    2
+}
+
+fn default_z_blend_fade_px() -> u32 {
+    20
+}
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -326,6 +334,10 @@ struct SliceJobMetadata {
     mirror_x: bool,
     #[serde(default)]
     mirror_y: bool,
+    #[serde(default = "default_z_blend_look_back")]
+    z_blend_look_back: u32,
+    #[serde(default = "default_z_blend_fade_px")]
+    z_blend_fade_px: u32,
     container_compression_level: u8,
     build_width_mm: f32,
     build_depth_mm: f32,
@@ -1235,6 +1247,8 @@ async fn slice_solid_native_to_temp_path(
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
+            z_blend_look_back: meta.z_blend_look_back,
+            z_blend_fade_px: meta.z_blend_fade_px,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,
             build_depth_mm: meta.build_depth_mm,
