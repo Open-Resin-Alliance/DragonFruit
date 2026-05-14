@@ -164,6 +164,8 @@ export type SliceExportOrchestratorOptions = {
   antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
   antiAliasingMode?: 'Blur' | '3DAA' | 'Coverage';
   blurBrushRadiusPx?: number;
+  zBlendLookBack?: number;
+  zBlendFadePx?: number;
   minimumAaAlphaPercentOverride?: number;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
@@ -652,6 +654,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     antiAliasingMode: options.antiAliasingMode ?? 'Blur',
     blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
+    zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
+    zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
     aaOnSupports: true,
     minimumAaAlphaPercent: Math.max(
       0,

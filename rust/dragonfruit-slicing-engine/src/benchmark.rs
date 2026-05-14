@@ -4,7 +4,7 @@
 //! and returns coarse stage timing/throughput metrics.
 
 use crate::encoders::registry::supported_output_formats;
-use crate::engine::{SlicerV3Error, slice_with_progress_v3};
+use crate::engine::{slice_with_progress_v3, SlicerV3Error};
 use crate::types::SliceJobV3;
 
 #[derive(Debug, Clone)]
@@ -151,6 +151,8 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         minimum_aa_alpha_percent: cfg.minimum_aa_alpha_percent,
         mirror_x: false,
         mirror_y: false,
+        z_blend_look_back: 2,
+        z_blend_fade_px: 20,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
         x_packing_mode: "none".to_string(),

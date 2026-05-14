@@ -25,6 +25,8 @@ export type NativeSolidSliceJobEnvelope = {
   minimumAaAlphaPercent: number;
   mirrorX: boolean;
   mirrorY: boolean;
+  zBlendLookBack?: number;
+  zBlendFadePx?: number;
   modelTriangleCount: number;
   containerCompressionLevel?: number;
   buildWidthMm: number;
@@ -63,6 +65,8 @@ type NativeSolidSlicePayload = {
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
+  z_blend_look_back?: number;
+  z_blend_fade_px?: number;
   model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
@@ -101,6 +105,8 @@ type NativeSolidSliceMetadataPayload = {
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
+  z_blend_look_back?: number;
+  z_blend_fade_px?: number;
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -184,6 +190,8 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
+    z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
+    z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
     model_triangle_count: job.modelTriangleCount,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
@@ -225,6 +233,8 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
+    z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
+    z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
