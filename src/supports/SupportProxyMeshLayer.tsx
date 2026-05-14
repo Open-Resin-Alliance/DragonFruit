@@ -489,6 +489,15 @@ export function SupportProxyMeshLayer({
         pushCone(toProxyConeFromTwigDisk(twig.contactDiskB, twig.id, twig.modelId));
       }
 
+      // Twig shaft proxy must cover the visible (possibly tapered) rod so
+      // clicks anywhere along it select the twig. Instanced proxy is uniform,
+      // so we size it to the wider end of the disk-A→disk-B taper.
+      const twigShaftPickDiameter = Math.max(
+        twig.segments[0]?.diameter ?? 0,
+        twig.contactDiskA.contactDiameterMm,
+        twig.contactDiskB.contactDiameterMm,
+      );
+
       for (const segment of twig.segments) {
         if (includeDetailedPrimitives && segment.bottomJoint) {
           pushJoint({
@@ -509,7 +518,7 @@ export function SupportProxyMeshLayer({
           modelId: twig.modelId,
           start,
           end,
-          diameter: segment.diameter,
+          diameter: twigShaftPickDiameter,
         });
 
         if (includeDetailedPrimitives && segment.topJoint) {

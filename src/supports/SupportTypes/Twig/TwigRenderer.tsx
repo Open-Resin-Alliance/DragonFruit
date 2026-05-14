@@ -254,6 +254,15 @@ export const TwigRenderer = React.memo(function TwigRenderer({
 
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
+  // Invisible pick-only cylinders for tapered shafts when the twig is not
+  // selected. Inside pickRef so clicks register as twig hits; not visible.
+  const taperedPickShafts: Array<{
+    id: string;
+    start: THREE.Vector3;
+    end: THREE.Vector3;
+    radiusStart: number;
+    radiusEnd: number;
+  }> = [];
 
   const joints = useMemo(() => {
     const map = new Map<string, { id: string; pos: { x: number; y: number; z: number }; diameter: number }>();
@@ -295,6 +304,23 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     const isSegSelected = selectedId === seg.id;
 
     const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier' && Math.abs(diameterStart - diameterEnd) < 1e-6;
+
+    // Tapered + unselected: ShaftRenderer omits its pick mesh, so add an
+    // invisible pick-only cylinder inside pickRef matching the visible rod.
+    if (
+      !canBatchShaft
+      && !isSelected
+      && seg.type !== 'bezier'
+      && Math.abs(diameterStart - diameterEnd) >= 1e-6
+    ) {
+      taperedPickShafts.push({
+        id: seg.id,
+        start: startPoint.clone(),
+        end: endPoint.clone(),
+        radiusStart: diameterStart / 2,
+        radiusEnd: diameterEnd / 2,
+      });
+    }
 
     if (canBatchShaft) {
       batchedStraightShafts.push({
@@ -400,6 +426,31 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
         />
         {shafts}
+        {taperedPickShafts.map((pick) => {
+          const startVec = pick.start;
+          const endVec = pick.end;
+          const length = startVec.distanceTo(endVec);
+          if (length < 0.001) return null;
+          const midpoint = new THREE.Vector3()
+            .addVectors(startVec, endVec)
+            .multiplyScalar(0.5);
+          const direction = new THREE.Vector3()
+            .subVectors(endVec, startVec)
+            .normalize();
+          const up = new THREE.Vector3(0, 1, 0);
+          const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+          return (
+            <mesh
+              key={`taper-pick-${pick.id}`}
+              position={[midpoint.x, midpoint.y, midpoint.z]}
+              quaternion={quaternion}
+              userData={{ supportPrimitiveType: 'shaft', segmentId: pick.id }}
+            >
+              <cylinderGeometry args={[pick.radiusEnd, pick.radiusStart, length, 16]} />
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+            </mesh>
+          );
+        })}
         {diskA}
         {diskB}
       </group>
