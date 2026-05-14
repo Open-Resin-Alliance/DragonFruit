@@ -6,6 +6,7 @@ import type { PngCompressionStrategy } from '@/components/settings/performancePr
 import {
   isNativeSlicerAvailable,
   sliceSolidAndEncodeWithNativeSlicerToTempPath,
+  type AntiAliasingLevel,
   type NativeSlicerPerfMetrics,
   type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
@@ -14,7 +15,7 @@ import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/plugi
 
 function resolvePngCompressionStrategy(
   mode: PngCompressionStrategy,
-  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x',
+  antiAliasingLevel: AntiAliasingLevel,
   outputUsesPngLayers: boolean,
 ): 'fastest' | 'balanced' | 'smallest' | 'optimal' {
   if (!outputUsesPngLayers) {
@@ -161,7 +162,7 @@ export type SliceExportOrchestratorOptions = {
   materialProfile: MaterialProfile;
   filenameBase: string;
   outputPath?: string | null;
-  antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
+  antiAliasingLevel?: AntiAliasingLevel;
   antiAliasingMode?: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blurBrushRadiusPx?: number;
   zBlendLookBack?: number;
@@ -237,7 +238,7 @@ export type SliceExportResult = {
       pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
       containerCompressionLevel: number;
       bvhAccelerationEnabled: boolean;
-      antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+      antiAliasingLevel: AntiAliasingLevel;
       antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
       blurBrushRadiusPx: number;
       aaOnSupports: boolean;

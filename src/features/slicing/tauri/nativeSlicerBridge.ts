@@ -6,6 +6,8 @@ type TauriEventModule = {
   listen: <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
 };
 
+export type AntiAliasingLevel = 'Off' | `${number}x`;
+
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
   formatVersion?: string | null;
@@ -18,7 +20,7 @@ export type NativeSolidSliceJobEnvelope = {
   computeBackend?: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
-  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+  antiAliasingLevel: AntiAliasingLevel;
   antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blurBrushRadiusPx: number;
   aaOnSupports: boolean;
@@ -58,7 +60,7 @@ type NativeSolidSlicePayload = {
   compute_backend: 'auto' | 'cpu' | 'gpu';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
-  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
+  anti_aliasing_level: AntiAliasingLevel;
   anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blur_brush_radius_px: number;
   aa_on_supports: boolean;
@@ -98,7 +100,7 @@ type NativeSolidSliceMetadataPayload = {
   height_px: number;
   x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
-  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
+  anti_aliasing_level: AntiAliasingLevel;
   anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blur_brush_radius_px: number;
   aa_on_supports: boolean;

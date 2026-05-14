@@ -716,13 +716,22 @@ fn compute_component_area_stats_from_rle_8_connected(
 }
 
 fn aa_subpixel_steps(level: &str) -> u8 {
-    match level {
-        "2x" => 2,
-        "4x" => 4,
-        "8x" => 8,
-        "16x" => 16,
-        _ => 0,
+    let normalized = level.trim().to_ascii_lowercase();
+    if normalized == "off" {
+        return 0;
     }
+
+    // Accept any "<n>x" AA level (e.g. 2x, 4x, 6x, 12x, 32x).
+    // Clamp to a sane upper bound so pathological values don't explode
+    // supersampling cost unexpectedly.
+    if let Some(raw_steps) = normalized.strip_suffix('x') {
+        if let Ok(parsed) = raw_steps.parse::<u16>() {
+            let clamped = parsed.clamp(1, 64);
+            return clamped as u8;
+        }
+    }
+
+    0
 }
 
 #[inline]

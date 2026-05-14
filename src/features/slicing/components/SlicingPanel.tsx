@@ -169,6 +169,8 @@ function formatElapsedClock(ms: number): string {
 }
 
 const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
+const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
+const SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.aaLevelCustomEnabled';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
 const SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusCustomEnabled';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
@@ -183,6 +185,9 @@ const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
 const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
 const REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM = 0.01;
 const MICRONS_PER_MM = 1000;
+const AA_STRENGTH_PRESETS = [2, 4, 8, 16] as const;
+const AA_STRENGTH_MIN_STEPS = 2;
+const AA_STRENGTH_MAX_STEPS = 64;
 const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
 const BLUR_WIDTH_MIN_PX = 1;
 const BLUR_WIDTH_MAX_PX = 64;
@@ -318,6 +323,38 @@ function resolveInitialAaMode(): 'Off' | 'Blur' | '3DAA' {
   return 'Off';
 }
 
+type AaStrengthLevel = `${number}x`;
+
+function parseAaLevelSteps(level: string | null | undefined): number | null {
+  const trimmed = (level ?? '').trim().toLowerCase();
+  if (!trimmed.endsWith('x')) return null;
+  const parsed = Number(trimmed.slice(0, -1));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(parsed);
+}
+
+function clampAaLevelSteps(value: number): number {
+  const next = Number.isFinite(value) ? value : 4;
+  return Math.max(AA_STRENGTH_MIN_STEPS, Math.min(AA_STRENGTH_MAX_STEPS, Math.round(next)));
+}
+
+function formatAaLevel(steps: number): AaStrengthLevel {
+  return `${clampAaLevelSteps(steps)}x` as AaStrengthLevel;
+}
+
+function resolveInitialAaLevel(): AaStrengthLevel {
+  if (typeof window === 'undefined') return formatAaLevel(4);
+
+  const stored = window.localStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY);
+  const parsedSteps = parseAaLevelSteps(stored);
+  if (parsedSteps != null) {
+    return formatAaLevel(parsedSteps);
+  }
+  // Legacy/off values fall back to historical default.
+  return formatAaLevel(4);
+}
+
 function resolveInitialBlurBrushRadiusPx(): number {
   if (typeof window === 'undefined') return 1;
 
@@ -423,6 +460,14 @@ export function SlicingPanel({
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
+  const [aaLevel, setAaLevel] = useState<AaStrengthLevel>(resolveInitialAaLevel);
+  const [useCustomAaLevel, setUseCustomAaLevel] = useState<boolean>(() => {
+    const initialSteps = parseAaLevelSteps(resolveInitialAaLevel()) ?? 4;
+    return resolveInitialCustomOptionEnabled(
+      SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY,
+      !isPresetValue(AA_STRENGTH_PRESETS, initialSteps),
+    );
+  });
   const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
   const [useCustomBlurBrushRadius, setUseCustomBlurBrushRadius] = useState<boolean>(() => {
     const initial = resolveInitialBlurBrushRadiusPx();
@@ -739,7 +784,7 @@ export function SlicingPanel({
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
   const effectiveAntiAliasingLevel =
-    !antiAliasingAvailable || aaMode === 'Off' ? 'Off' as const : '4x' as const;
+    !antiAliasingAvailable || aaMode === 'Off' ? 'Off' as const : aaLevel;
   const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage' =
     !antiAliasingAvailable || aaMode === 'Off' ? 'Coverage' :
     aaMode === '3DAA' ? 'Vertical2' :
@@ -817,6 +862,10 @@ export function SlicingPanel({
     setMinimumAaAlphaPercent(Math.max(0, Math.min(100, Math.round(next))));
   }, []);
 
+  const setClampedAaLevelSteps = useCallback((value: number) => {
+    setAaLevel(formatAaLevel(value));
+  }, []);
+
   const setClampedBlurBrushRadiusPx = useCallback((value: number) => {
     const next = Number.isFinite(value) ? value : 1;
     setBlurBrushRadiusPx(Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, Math.round(next))));
@@ -882,6 +931,19 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, aaMode);
     window.sessionStorage.setItem(SLICING_AA_MODE_STORAGE_KEY, aaMode);
   }, [aaMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, aaLevel);
+    window.sessionStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, aaLevel);
+  }, [aaLevel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(useCustomAaLevel);
+    window.localStorage.setItem(SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+  }, [useCustomAaLevel]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1683,8 +1745,75 @@ export function SlicingPanel({
                   {aaMode !== 'Off' && (
                     <>
                       <SettingLabelWithHelp
+                        label="AA Strength"
+                        help="Controls supersampling level before blur/Z-blending. Higher levels preserve finer edge detail but cost more slicing time."
+                      />
+                      <div className="grid grid-cols-5 gap-1">
+                        {AA_STRENGTH_PRESETS.map((steps) => {
+                          const level = formatAaLevel(steps);
+                          const active = !useCustomAaLevel && aaLevel === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={active
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => {
+                                setUseCustomAaLevel(false);
+                                setAaLevel(level);
+                              }}
+                            >
+                              {level}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          style={useCustomAaLevel
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-0)',
+                                color: 'var(--text-muted)',
+                              }}
+                          onClick={() => setUseCustomAaLevel(true)}
+                        >
+                          Custom
+                        </button>
+                      </div>
+                      {useCustomAaLevel && (
+                        <ScrollableNumberField
+                          className="mt-1"
+                          value={parseAaLevelSteps(aaLevel) ?? 4}
+                          onChange={setClampedAaLevelSteps}
+                          min={AA_STRENGTH_MIN_STEPS}
+                          max={AA_STRENGTH_MAX_STEPS}
+                          step={1}
+                          unit="x"
+                          ariaLabel="Custom AA strength"
+                          decreaseTitle="Decrease AA strength"
+                          increaseTitle="Increase AA strength"
+                        />
+                      )}
+
+                      <SettingLabelWithHelp
                         label="Blur Width"
-                        help="Controls the edge blur radius in pixels. Higher values create smoother transitions but can soften fine details."
+                        help="Controls edge blur width in pixels. Higher values create smoother transitions but can soften fine details."
                       />
                       <div className="grid grid-cols-5 gap-1">
                         {BLUR_WIDTH_PRESETS.map((radius) => {
