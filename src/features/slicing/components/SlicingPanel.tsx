@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
+import { ChevronDown, CircleHelp, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
+import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
@@ -169,16 +170,88 @@ function formatElapsedClock(ms: number): string {
 
 const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
+const SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusCustomEnabled';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 const SLICING_3DAA_LOOK_BACK_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBack';
+const SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBackCustomEnabled';
 const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
+const SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePxCustomEnabled';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
 const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
 const REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM = 0.01;
 const MICRONS_PER_MM = 1000;
+const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
+const BLUR_WIDTH_MIN_PX = 1;
+const BLUR_WIDTH_MAX_PX = 64;
+const LOOK_BACK_PRESETS = [1, 2, 3, 4] as const;
+const LOOK_BACK_MIN_LAYERS = 1;
+const LOOK_BACK_MAX_LAYERS = 16;
+const FADE_DISTANCE_PRESETS = [5, 10, 20, 40] as const;
+const FADE_DISTANCE_MIN_PX = 1;
+const FADE_DISTANCE_MAX_PX = 256;
+
+function isPresetValue(presets: readonly number[], value: number): boolean {
+  return presets.some((preset) => preset === value);
+}
+
+function resolveInitialCustomOptionEnabled(storageKey: string, fallback = false): boolean {
+  if (typeof window === 'undefined') return fallback;
+  const stored = window.localStorage.getItem(storageKey)
+    ?? window.sessionStorage.getItem(storageKey);
+  if (stored === 'true') return true;
+  if (stored === 'false') return false;
+  return fallback;
+}
+
+function SettingLabelWithHelp({
+  label,
+  help,
+}: {
+  label: string;
+  help: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+      <span>{label}</span>
+      <span
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded border cursor-help relative"
+        style={{
+          borderColor: 'var(--border-subtle)',
+          background: 'var(--surface-0)',
+          color: 'var(--text-muted)',
+        }}
+        tabIndex={0}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
+        aria-label={`${label}. ${help}`}
+      >
+        <CircleHelp className="h-2.5 w-2.5" />
+        <MouseTooltip visible={hovered} offset={{ x: 0, y: 28 }} className="left-1/2 -translate-x-1/2">
+          <div
+            className="rounded px-2 py-1.5 text-[11px] leading-tight font-medium shadow-lg"
+            style={{
+              background: 'rgba(24, 24, 24, 0.98)',
+              color: 'var(--text-strong, #e0e0e0)',
+              border: '1px solid var(--accent, #baf72e)',
+              maxWidth: 260,
+              whiteSpace: 'normal',
+              textAlign: 'left',
+              boxShadow: '0 6px 32px 0 rgba(0,0,0,0.44), 0 1.5px 8px 0 rgba(0,0,0,0.28)',
+            }}
+          >
+            {help}
+          </div>
+        </MouseTooltip>
+      </span>
+    </div>
+  );
+}
 
 function readSliceIntentByPrinterProfile(): Record<string, SliceIntent> {
   if (typeof window === 'undefined') return {};
@@ -255,7 +328,7 @@ function resolveInitialBlurBrushRadiusPx(): number {
   const parsed = Number(stored);
   if (!Number.isFinite(parsed)) return 1;
   const rounded = Math.round(parsed);
-  return [1, 2, 4, 8].includes(rounded) ? rounded : 1;
+  return Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, rounded));
 }
 
 function resolveInitialMinimumAaAlphaPercent(): number {
@@ -286,7 +359,8 @@ function resolveInitialZBlendLookBack(): number {
     ?? window.sessionStorage.getItem(SLICING_3DAA_LOOK_BACK_STORAGE_KEY);
   if (stored == null || stored.trim().length === 0) return 2;
   const parsed = Math.round(Number(stored));
-  return [1, 2, 3, 4].includes(parsed) ? parsed : 2;
+  if (!Number.isFinite(parsed)) return 2;
+  return Math.max(LOOK_BACK_MIN_LAYERS, Math.min(LOOK_BACK_MAX_LAYERS, parsed));
 }
 
 function resolveInitialZBlendFadePx(): number {
@@ -295,7 +369,8 @@ function resolveInitialZBlendFadePx(): number {
     ?? window.sessionStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY);
   if (stored == null || stored.trim().length === 0) return 20;
   const parsed = Math.round(Number(stored));
-  return [5, 10, 20, 40].includes(parsed) ? parsed : 20;
+  if (!Number.isFinite(parsed)) return 20;
+  return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, parsed));
 }
 
 export function SlicingPanel({
@@ -349,8 +424,29 @@ export function SlicingPanel({
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
   const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
+  const [useCustomBlurBrushRadius, setUseCustomBlurBrushRadius] = useState<boolean>(() => {
+    const initial = resolveInitialBlurBrushRadiusPx();
+    return resolveInitialCustomOptionEnabled(
+      SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY,
+      !isPresetValue(BLUR_WIDTH_PRESETS, initial),
+    );
+  });
   const [zBlendLookBack, setZBlendLookBack] = useState<number>(resolveInitialZBlendLookBack);
+  const [useCustomZBlendLookBack, setUseCustomZBlendLookBack] = useState<boolean>(() => {
+    const initial = resolveInitialZBlendLookBack();
+    return resolveInitialCustomOptionEnabled(
+      SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY,
+      !isPresetValue(LOOK_BACK_PRESETS, initial),
+    );
+  });
   const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
+  const [useCustomZBlendFadePx, setUseCustomZBlendFadePx] = useState<boolean>(() => {
+    const initial = resolveInitialZBlendFadePx();
+    return resolveInitialCustomOptionEnabled(
+      SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY,
+      !isPresetValue(FADE_DISTANCE_PRESETS, initial),
+    );
+  });
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
   const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
@@ -721,6 +817,21 @@ export function SlicingPanel({
     setMinimumAaAlphaPercent(Math.max(0, Math.min(100, Math.round(next))));
   }, []);
 
+  const setClampedBlurBrushRadiusPx = useCallback((value: number) => {
+    const next = Number.isFinite(value) ? value : 1;
+    setBlurBrushRadiusPx(Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, Math.round(next))));
+  }, []);
+
+  const setClampedZBlendLookBack = useCallback((value: number) => {
+    const next = Number.isFinite(value) ? value : 2;
+    setZBlendLookBack(Math.max(LOOK_BACK_MIN_LAYERS, Math.min(LOOK_BACK_MAX_LAYERS, Math.round(next))));
+  }, []);
+
+  const setClampedZBlendFadePx = useCallback((value: number) => {
+    const next = Number.isFinite(value) ? value : 20;
+    setZBlendFadePx(Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, Math.round(next))));
+  }, []);
+
   const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
     if (typeof window === 'undefined') return;
 
@@ -774,10 +885,17 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const serialized = String(Math.max(1, Math.round(blurBrushRadiusPx)));
+    const serialized = String(Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, Math.round(blurBrushRadiusPx))));
     window.localStorage.setItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY, serialized);
   }, [blurBrushRadiusPx]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(useCustomBlurBrushRadius);
+    window.localStorage.setItem(SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+  }, [useCustomBlurBrushRadius]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -787,9 +905,23 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    const serialized = String(useCustomZBlendLookBack);
+    window.localStorage.setItem(SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+  }, [useCustomZBlendLookBack]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     window.localStorage.setItem(SLICING_3DAA_FADE_PX_STORAGE_KEY, String(zBlendFadePx));
     window.sessionStorage.setItem(SLICING_3DAA_FADE_PX_STORAGE_KEY, String(zBlendFadePx));
   }, [zBlendFadePx]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(useCustomZBlendFadePx);
+    window.localStorage.setItem(SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+  }, [useCustomZBlendFadePx]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1517,7 +1649,10 @@ export function SlicingPanel({
             <div className="space-y-1">
               {antiAliasingAvailable ? (
                 <>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
+                  <SettingLabelWithHelp
+                    label="Anti-Aliasing Mode"
+                    help="Off disables AA. Blur smooths horizontal edges. 3DAA applies Blur and Z-axis blending between nearby layers."
+                  />
                   <div className="grid grid-cols-3 gap-1">
                     {(['Off', 'Blur', '3DAA'] as const).map((mode) => {
                       const active = aaMode === mode;
@@ -1547,10 +1682,13 @@ export function SlicingPanel({
 
                   {aaMode !== 'Off' && (
                     <>
-                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Blur Width</div>
-                      <div className="grid grid-cols-4 gap-1">
-                        {([1, 2, 4, 8] as const).map((radius) => {
-                          const active = blurBrushRadiusPx === radius;
+                      <SettingLabelWithHelp
+                        label="Blur Width"
+                        help="Controls the edge blur radius in pixels. Higher values create smoother transitions but can soften fine details."
+                      />
+                      <div className="grid grid-cols-5 gap-1">
+                        {BLUR_WIDTH_PRESETS.map((radius) => {
+                          const active = !useCustomBlurBrushRadius && blurBrushRadiusPx === radius;
                           return (
                             <button
                               key={radius}
@@ -1567,20 +1705,58 @@ export function SlicingPanel({
                                     background: 'var(--surface-0)',
                                     color: 'var(--text-muted)',
                                   }}
-                              onClick={() => setBlurBrushRadiusPx(radius)}
+                              onClick={() => {
+                                setUseCustomBlurBrushRadius(false);
+                                setClampedBlurBrushRadiusPx(radius);
+                              }}
                             >
                               {`${radius}px`}
                             </button>
                           );
                         })}
+                        <button
+                          type="button"
+                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          style={useCustomBlurBrushRadius
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-0)',
+                                color: 'var(--text-muted)',
+                              }}
+                          onClick={() => setUseCustomBlurBrushRadius(true)}
+                        >
+                          Custom
+                        </button>
                       </div>
+                      {useCustomBlurBrushRadius && (
+                        <ScrollableNumberField
+                          className="mt-1"
+                          value={blurBrushRadiusPx}
+                          onChange={setClampedBlurBrushRadiusPx}
+                          min={BLUR_WIDTH_MIN_PX}
+                          max={BLUR_WIDTH_MAX_PX}
+                          step={1}
+                          unit="px"
+                          ariaLabel="Custom blur width in pixels"
+                          decreaseTitle="Decrease blur width"
+                          increaseTitle="Increase blur width"
+                        />
+                      )}
 
                       {aaMode === '3DAA' && (
                         <>
-                          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Look Back (layers)</div>
-                          <div className="grid grid-cols-4 gap-1">
-                            {([1, 2, 3, 4] as const).map((n) => {
-                              const active = zBlendLookBack === n;
+                          <SettingLabelWithHelp
+                            label="Look-Back Layers"
+                            help="How many previous layers are used for Z blending. Higher values can reduce stepping but may blur very thin layer transitions."
+                          />
+                          <div className="grid grid-cols-5 gap-1">
+                            {LOOK_BACK_PRESETS.map((n) => {
+                              const active = !useCustomZBlendLookBack && zBlendLookBack === n;
                               return (
                                 <button
                                   key={n}
@@ -1597,18 +1773,56 @@ export function SlicingPanel({
                                         background: 'var(--surface-0)',
                                         color: 'var(--text-muted)',
                                       }}
-                                  onClick={() => setZBlendLookBack(n)}
+                                  onClick={() => {
+                                    setUseCustomZBlendLookBack(false);
+                                    setClampedZBlendLookBack(n);
+                                  }}
                                 >
                                   {n}
                                 </button>
                               );
                             })}
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={useCustomZBlendLookBack
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setUseCustomZBlendLookBack(true)}
+                            >
+                              Custom
+                            </button>
                           </div>
+                          {useCustomZBlendLookBack && (
+                            <ScrollableNumberField
+                              className="mt-1"
+                              value={zBlendLookBack}
+                              onChange={setClampedZBlendLookBack}
+                              min={LOOK_BACK_MIN_LAYERS}
+                              max={LOOK_BACK_MAX_LAYERS}
+                              step={1}
+                              unit="lyr"
+                              ariaLabel="Custom look back layer count"
+                              decreaseTitle="Decrease look back"
+                              increaseTitle="Increase look back"
+                            />
+                          )}
 
-                          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Fade Distance (px)</div>
-                          <div className="grid grid-cols-4 gap-1">
-                            {([5, 10, 20, 40] as const).map((px) => {
-                              const active = zBlendFadePx === px;
+                          <SettingLabelWithHelp
+                            label="Fade Distance"
+                            help="Maximum blend distance for receding edges. Larger distances keep the gradient visible farther from the edge."
+                          />
+                          <div className="grid grid-cols-5 gap-1">
+                            {FADE_DISTANCE_PRESETS.map((px) => {
+                              const active = !useCustomZBlendFadePx && zBlendFadePx === px;
                               return (
                                 <button
                                   key={px}
@@ -1625,18 +1839,56 @@ export function SlicingPanel({
                                         background: 'var(--surface-0)',
                                         color: 'var(--text-muted)',
                                       }}
-                                  onClick={() => setZBlendFadePx(px)}
+                                  onClick={() => {
+                                    setUseCustomZBlendFadePx(false);
+                                    setClampedZBlendFadePx(px);
+                                  }}
                                 >
                                   {`${px}px`}
                                 </button>
                               );
                             })}
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={useCustomZBlendFadePx
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setUseCustomZBlendFadePx(true)}
+                            >
+                              Custom
+                            </button>
                           </div>
+                          {useCustomZBlendFadePx && (
+                            <ScrollableNumberField
+                              className="mt-1"
+                              value={zBlendFadePx}
+                              onChange={setClampedZBlendFadePx}
+                              min={FADE_DISTANCE_MIN_PX}
+                              max={FADE_DISTANCE_MAX_PX}
+                              step={1}
+                              unit="px"
+                              ariaLabel="Custom fade distance in pixels"
+                              decreaseTitle="Decrease fade distance"
+                              increaseTitle="Increase fade distance"
+                            />
+                          )}
                         </>
                       )}
 
                       <div className="space-y-1">
-                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Grey Level</div>
+                        <SettingLabelWithHelp
+                          label="Minimum Grey Level"
+                          help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
+                        />
                         {hasProfileMinimumAaAlpha && (
                           <div className="grid grid-cols-2 gap-1">
                             <button

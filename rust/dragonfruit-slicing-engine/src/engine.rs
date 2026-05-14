@@ -8,7 +8,7 @@ use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
-use crate::raster::apply_blur_postprocess_inplace;
+use crate::raster::{apply_blur_postprocess_inplace, encode_mask_to_rle};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
@@ -112,6 +112,11 @@ fn rasterize_vertical_aa_streaming_v3(
     requires_area_stats: bool,
     collect_png_layers: bool,
     collect_raw_mask_layers: bool,
+    // Optional per-layer callback receiving the fully processed (z-blended +
+    // blurred) mask. When provided, the mask is forwarded here instead of being
+    // appended to `raw_mask_layers`. Use this for streaming RLE or raw-mask
+    // output without accumulating all layers in memory.
+    on_processed_mask: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -127,16 +132,21 @@ fn rasterize_vertical_aa_streaming_v3(
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
     let mut prior_topology_ring: VecDeque<Vec<u8>> = VecDeque::with_capacity(look_back);
+    let mut topology_reuse_pool: Vec<Vec<u8>> = Vec::with_capacity(look_back);
     let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
     let mut png_layers: Option<Vec<Vec<u8>>> =
         collect_png_layers.then(|| Vec::with_capacity(job.total_layers as usize));
-    let mut raw_mask_layers: Option<Vec<Vec<u8>>> =
-        collect_raw_mask_layers.then(|| Vec::with_capacity(job.total_layers as usize));
+    // When on_processed_mask is provided it owns the processed masks (streaming
+    // to an RLE / raw-mask encoder); fall back to in-memory collection only
+    // when the caller explicitly requests it AND no streaming callback exists.
+    let use_callback = on_processed_mask.is_some();
+    let mut raw_mask_layers: Option<Vec<Vec<u8>>> = (collect_raw_mask_layers && !use_callback)
+        .then(|| Vec::with_capacity(job.total_layers as usize));
+    let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
      -> Result<(), SlicerV3Error> {
-        let _ = layer_index;
         if raw_mask.is_empty() {
             raw_mask = vec![0u8; pixels_per_layer];
         }
@@ -148,9 +158,14 @@ fn rasterize_vertical_aa_streaming_v3(
 
         // Vertical2 topology uses occupancy-only masks so inter-layer z-blend is
         // stable and independent from XY fringe intensity.
-        let mut topology_mask = raw_mask.clone();
-        for px in topology_mask.iter_mut() {
-            *px = if *px > TOPOLOGY_ALPHA_THRESHOLD {
+        let mut topology_mask = topology_reuse_pool
+            .pop()
+            .unwrap_or_else(|| vec![0u8; pixels_per_layer]);
+        if topology_mask.len() != pixels_per_layer {
+            topology_mask.resize(pixels_per_layer, 0);
+        }
+        for (dst, src) in topology_mask.iter_mut().zip(raw_mask.iter()) {
+            *dst = if *src > TOPOLOGY_ALPHA_THRESHOLD {
                 255
             } else {
                 0
@@ -181,11 +196,16 @@ fn rasterize_vertical_aa_streaming_v3(
         }
 
         if prior_topology_ring.len() == look_back {
-            prior_topology_ring.pop_front();
+            if let Some(oldest) = prior_topology_ring.pop_front() {
+                topology_reuse_pool.push(oldest);
+            }
         }
         prior_topology_ring.push_back(topology_mask);
 
-        if let Some(ref mut out_masks) = raw_mask_layers {
+        // Streaming callback takes priority over in-memory collection.
+        if let Some(ref mut emit) = on_processed_mask {
+            emit(layer_index, raw_mask)?;
+        } else if let Some(ref mut out_masks) = raw_mask_layers {
             out_masks.push(raw_mask);
         }
 
@@ -230,14 +250,25 @@ pub fn slice_with_progress_v3(
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
 
-    // 3DAA mode uses a pure 2D post-process (EDT inter-layer blending) that
-    // requires full-pixel buffers for all layers before the blending pass can
-    // run. Skip the streaming early-returns so we always reach the full-pixel
-    // collection path below.
     let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
 
-    // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
-    if !is_3daa && !requires_png_layers {
+    // Pre-compute binary-topology raster job for Vertical2.  Doing this before
+    // the RLE guard means the streaming path can reuse it without duplication.
+    let raster_job_owned: Option<SliceJobV3> = if is_3daa {
+        let mut j = job.clone();
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.anti_aliasing_level = "Off".to_string();
+        j.minimum_aa_alpha_percent = 0.0;
+        Some(j)
+    } else {
+        None
+    };
+    let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
+
+    // RLE streaming path — no full-image pixel buffer.
+    // Vertical2/3DAA can also stream to RLE by z-blending each layer
+    // individually and encoding the result before moving on.
+    if !requires_png_layers {
         if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
@@ -255,9 +286,27 @@ pub fn slice_with_progress_v3(
             });
 
             // Parallel-encode path: rasterize + encode PNG in rayon workers.
-            let (_rendered_layers, layer_area_stats, mut perf) = if let Some(encode_fn) =
-                rle_enc.parallel_encode_fn()
-            {
+            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
+                // Vertical2 streaming: z-blend + XY blur per layer, then
+                // immediately encode to RLE.  This avoids materializing all
+                // layers in memory simultaneously.
+                let width = raster_job.effective_render_width_px() as usize;
+                let height = raster_job.source_height_px as usize;
+                let mut on_mask = |idx: u32, mask: Vec<u8>| -> Result<(), SlicerV3Error> {
+                    let runs = encode_mask_to_rle(&mask, width, height);
+                    rle_enc.consume_rle_layer(idx, runs)
+                };
+                rasterize_vertical_aa_streaming_v3(
+                    job,
+                    raster_job,
+                    requires_area_stats,
+                    false,
+                    false,
+                    Some(&mut on_mask as &mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>),
+                    slicing_progress,
+                    cancel_flag,
+                )?
+            } else if let Some(encode_fn) = rle_enc.parallel_encode_fn() {
                 let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
                     rle_enc.store_encoded_layer(idx, bytes);
                     Ok(())
@@ -370,21 +419,7 @@ pub fn slice_with_progress_v3(
 
     let total_start = std::time::Instant::now();
 
-    // Vertical2 mode: rasterize in coverage/off topology mode, apply EDT
-    // inter-layer blending first, then post-process with XY blur AA.
-    let raster_job_owned: Option<SliceJobV3> = if is_3daa {
-        let mut j = job.clone();
-        j.anti_aliasing_mode = "Coverage".to_string();
-        j.anti_aliasing_level = "Off".to_string();
-        // Vertical2 applies XY blur after Z blending, so topology rasterization
-        // itself stays binary and threshold-free.
-        j.minimum_aa_alpha_percent = 0.0;
-        Some(j)
-    } else {
-        None
-    };
-    let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
-
+    // raster_job_owned / raster_job were computed before the RLE guard above.
     let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
         rasterize_vertical_aa_streaming_v3(
             job,
@@ -392,6 +427,7 @@ pub fn slice_with_progress_v3(
             requires_area_stats,
             requires_png_layers,
             requires_raw_mask_layers,
+            None, // on_processed_mask — full-buffer path collects into rendered_layers
             on_progress.clone(),
             cancel_flag,
         )?
@@ -648,8 +684,21 @@ pub fn slice_with_progress_v3_to_path(
     // blend pass can run before final container encoding.
     let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
 
+    // Pre-compute binary-topology raster job for Vertical2 (needed by both
+    // the streaming RLE path and the full-buffer fallback path below).
+    let raster_job_owned: Option<SliceJobV3> = if is_3daa {
+        let mut j = job.clone();
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.anti_aliasing_level = "Off".to_string();
+        j.minimum_aa_alpha_percent = 0.0;
+        Some(j)
+    } else {
+        None
+    };
+    let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
+
     // RLE path: no full-image pixel buffer — fastest for formats like CTBv5.
-    if !is_3daa && !requires_png_layers {
+    if !requires_png_layers {
         if let Some(mut rle_enc) = encoder.create_rle_stream_encoder(job)? {
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
@@ -666,9 +715,26 @@ pub fn slice_with_progress_v3_to_path(
                 }) as ProgressCallbackV3
             });
 
-            let (_rendered_layers, layer_area_stats, mut perf) = if let Some(encode_fn) =
-                rle_enc.parallel_encode_fn()
-            {
+            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
+                // Vertical2 streaming: z-blend + XY blur per layer, then
+                // immediately encode to RLE.
+                let width = raster_job.effective_render_width_px() as usize;
+                let height = raster_job.source_height_px as usize;
+                let mut on_mask = |idx: u32, mask: Vec<u8>| -> Result<(), SlicerV3Error> {
+                    let runs = encode_mask_to_rle(&mask, width, height);
+                    rle_enc.consume_rle_layer(idx, runs)
+                };
+                rasterize_vertical_aa_streaming_v3(
+                    job,
+                    raster_job,
+                    requires_area_stats,
+                    false,
+                    false,
+                    Some(&mut on_mask as &mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>),
+                    slicing_progress,
+                    cancel_flag,
+                )?
+            } else if let Some(encode_fn) = rle_enc.parallel_encode_fn() {
                 let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
                     rle_enc.store_encoded_layer(idx, bytes);
                     Ok(())
@@ -781,21 +847,7 @@ pub fn slice_with_progress_v3_to_path(
 
     let total_start = std::time::Instant::now();
 
-    // Vertical2 mode: rasterize in coverage/off topology mode, apply EDT
-    // inter-layer blending first, then post-process with XY blur AA.
-    let raster_job_owned: Option<SliceJobV3> = if is_3daa {
-        let mut j = job.clone();
-        j.anti_aliasing_mode = "Coverage".to_string();
-        j.anti_aliasing_level = "Off".to_string();
-        // Vertical2 applies XY blur after Z blending, so topology rasterization
-        // itself stays binary and threshold-free.
-        j.minimum_aa_alpha_percent = 0.0;
-        Some(j)
-    } else {
-        None
-    };
-    let raster_job: &SliceJobV3 = raster_job_owned.as_ref().unwrap_or(job);
-
+    // raster_job_owned / raster_job were computed before the RLE guard above.
     let (rendered_layers, layer_area_stats, mut perf) = if is_3daa {
         rasterize_vertical_aa_streaming_v3(
             job,
@@ -803,6 +855,7 @@ pub fn slice_with_progress_v3_to_path(
             requires_area_stats,
             requires_png_layers,
             requires_raw_mask_layers,
+            None, // on_processed_mask — full-buffer path collects into rendered_layers
             on_progress.clone(),
             cancel_flag,
         )?

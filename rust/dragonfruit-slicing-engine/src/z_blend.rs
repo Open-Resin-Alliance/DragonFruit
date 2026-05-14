@@ -28,7 +28,9 @@ use std::collections::VecDeque;
 /// against a look-back ring of prior layers without materializing all layers.
 pub struct ZBlendWorkspace {
     in_prior: Vec<u8>,
-    dist: Vec<u32>,
+    /// BFS distance map. u16 is sufficient since fade_px is always well under
+    /// 65535 in practice; halving the element size saves ~112 MB at 7680².
+    dist: Vec<u16>,
     queue: VecDeque<usize>,
 }
 
@@ -37,7 +39,7 @@ impl ZBlendWorkspace {
         let n = width.saturating_mul(height);
         Self {
             in_prior: vec![0u8; n],
-            dist: vec![u32::MAX; n],
+            dist: vec![u16::MAX; n],
             queue: VecDeque::with_capacity(n / 8),
         }
     }
@@ -56,7 +58,7 @@ impl ZBlendWorkspace {
             self.in_prior.resize(n, 0);
         }
         if self.dist.len() != n {
-            self.dist.resize(n, u32::MAX);
+            self.dist.resize(n, u16::MAX);
         }
 
         z_blend_layer_inplace(
@@ -124,7 +126,7 @@ fn z_blend_layer_inplace(
     fade_px: u32,
     lut: Option<&[u8; 256]>,
     in_prior: &mut [u8],
-    dist: &mut [u32],
+    dist: &mut [u16],
     queue: &mut VecDeque<usize>,
 ) {
     let n = width * height;
@@ -183,13 +185,13 @@ fn z_blend_layer_inplace(
     for y in rec_min_y..=rec_max_y {
         let row_start = y * width;
         for x in rec_min_x..=rec_max_x {
-            dist[row_start + x] = u32::MAX;
+            dist[row_start + x] = u16::MAX;
         }
     }
     for y in seed_min_y..=seed_max_y {
         let row_start = y * width;
         for x in seed_min_x..=seed_max_x {
-            dist[row_start + x] = u32::MAX;
+            dist[row_start + x] = u16::MAX;
         }
     }
     queue.clear();
@@ -211,8 +213,10 @@ fn z_blend_layer_inplace(
 
     // BFS: spread distance outward into receding pixels (in_prior=1, not in current).
     while let Some(idx) = queue.pop_front() {
-        let next_d = dist[idx] + 1;
-        if next_d > fade_px {
+        // saturating_add guards against the theoretical u16::MAX wrap; in
+        // practice fade_px is always << 65535 so this never saturates.
+        let next_d = dist[idx].saturating_add(1);
+        if (next_d as u32) > fade_px {
             continue;
         }
         let y = idx / width;
@@ -253,7 +257,7 @@ fn z_blend_layer_inplace(
         for x in rec_min_x..=rec_max_x {
             let idx = row_start + x;
             // Only receding pixels get a gradient.
-            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && dist[idx] <= fade_px {
+            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && (dist[idx] as u32) <= fade_px {
                 // Linear gradient: 255 at dist=0 (edge), ~1 at dist=fade_px.
                 let t = 1.0 - (dist[idx] as f32 / fade_denom);
                 let raw = (t * 255.0 + 0.5) as u8;

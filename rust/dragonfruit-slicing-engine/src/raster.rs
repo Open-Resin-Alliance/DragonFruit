@@ -791,12 +791,16 @@ fn apply_edge_box_blur_to_mask_in_roi(
         })
         .collect();
 
-    let mut out = vec![0u8; roi_w * roi_h];
-
-    // Drive add_row from 0 to height+radius-1 (inclusive).
-    //   output row = add_row - radius   (when in [0, height))
+    // Drive add_row from 0 to roi_h+radius-1 (inclusive).
+    //   output row = add_row - radius   (when in [0, roi_h))
+    //
+    // In-place write strategy: the output row (add_row - radius) is always
+    // strictly above the source row (add_row) in the image, so by the time we
+    // write a blurred row we have already read it into the ring — no aliasing.
     for add_row in 0..roi_h + radius {
-        // ── Add horizontal-blurred counts for mask row `add_row` ──────────
+        // ── Phase 1: accumulate horizontal sums for source row `add_row` ──
+        // The immutable borrow of `mask` ends at the closing brace, before the
+        // mutable borrow in Phase 2 begins — NLL guarantees no overlap.
         if add_row < roi_h {
             let new_slot = (ring_head + ring_len) % ring_cap;
             let slot_start = new_slot * roi_w;
@@ -825,12 +829,16 @@ fn apply_edge_box_blur_to_mask_in_roi(
                 }
             }
             ring_len += 1;
-        }
+        } // immutable borrow of `mask` dropped here
 
-        // ── Emit output row = add_row - radius ────────────────────────────
+        // ── Phase 2: emit blurred output row directly into mask ───────────
+        // out_row = add_row - radius is always < add_row (radius ≥ 1), so we
+        // write to a row we have already finished reading. Safe in-place.
         if add_row >= radius {
             let out_row = add_row - radius;
-            let row_out = &mut out[out_row * roi_w..(out_row + 1) * roi_w];
+            let dst_y = roi_min_y + out_row;
+            let dst_row_start = dst_y * width + roi_min_x;
+            let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
             for ix in 0..roi_w {
                 let denom = (h_denom[ix] * v_denom[out_row]).max(1);
                 let raw = (col_sums[ix] + denom / 2) / denom;
@@ -857,13 +865,7 @@ fn apply_edge_box_blur_to_mask_in_roi(
             }
         }
     }
-
-    for iy in 0..roi_h {
-        let dst_y = roi_min_y + iy;
-        let dst_start = dst_y * width + roi_min_x;
-        let src_start = iy * roi_w;
-        mask[dst_start..dst_start + roi_w].copy_from_slice(&out[src_start..src_start + roi_w]);
-    }
+    // No copy-back needed: blurred values were written directly into `mask`.
 }
 
 pub(crate) fn apply_blur_postprocess_inplace(
@@ -920,7 +922,11 @@ pub(crate) fn apply_blur_postprocess_inplace(
     );
 }
 
-fn encode_mask_to_rle(mask: &[u8], width: usize, height: usize) -> Vec<crate::rle::RleRun> {
+pub(crate) fn encode_mask_to_rle(
+    mask: &[u8],
+    width: usize,
+    height: usize,
+) -> Vec<crate::rle::RleRun> {
     use crate::rle::{emit_row, RleAccum};
 
     let mut rle = RleAccum::new();
