@@ -4,7 +4,7 @@
 //! and returns coarse stage timing/throughput metrics.
 
 use crate::encoders::registry::supported_output_formats;
-use crate::engine::{slice_with_progress_v3, SlicerV3Error};
+use crate::engine::{SlicerV3Error, slice_with_progress_v3};
 use crate::types::SliceJobV3;
 
 #[derive(Debug, Clone)]
@@ -18,6 +18,10 @@ pub struct BenchmarkConfigV3 {
     pub build_depth_mm: f32,
     pub layer_height_mm: f32,
     pub cube_count: u32,
+    pub anti_aliasing_level: String,
+    pub anti_aliasing_mode: String,
+    pub blur_brush_radius_px: u32,
+    pub minimum_aa_alpha_percent: f32,
 }
 
 impl Default for BenchmarkConfigV3 {
@@ -32,6 +36,10 @@ impl Default for BenchmarkConfigV3 {
             build_depth_mm: 122.904,
             layer_height_mm: 0.05,
             cube_count: 400,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 1,
+            minimum_aa_alpha_percent: 35.0,
         }
     }
 }
@@ -136,11 +144,11 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         export_thumbnail_png_base64: None,
         png_compression_strategy: "fastest".to_string(),
         container_compression_level: 2,
-        anti_aliasing_level: "Off".to_string(),
-        anti_aliasing_mode: "Blur".to_string(),
-        blur_brush_radius_px: 1,
+        anti_aliasing_level: cfg.anti_aliasing_level,
+        anti_aliasing_mode: cfg.anti_aliasing_mode,
+        blur_brush_radius_px: cfg.blur_brush_radius_px,
         aa_on_supports: false,
-        minimum_aa_alpha_percent: 35.0,
+        minimum_aa_alpha_percent: cfg.minimum_aa_alpha_percent,
         mirror_x: false,
         mirror_y: false,
         triangles_xyz: triangles,
