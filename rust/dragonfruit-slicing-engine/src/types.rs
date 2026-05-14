@@ -83,7 +83,7 @@ pub struct SliceJobV3 {
     /// ZIP deflate level for metadata entries.
     #[serde(default = "default_container_compression_level")]
     pub container_compression_level: u8,
-    /// Raster anti-aliasing quality hint (`Off`, `2x`, `4x`, `8x`).
+    /// Raster anti-aliasing quality hint (`Off` or `<n>x`, e.g. `2x`, `4x`, `8x`, `16x`).
     #[serde(default = "default_anti_aliasing_level")]
     pub anti_aliasing_level: String,
     /// Anti-aliasing mode hint (`Blur`, `Coverage`).

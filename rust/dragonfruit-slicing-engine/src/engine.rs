@@ -308,12 +308,14 @@ pub fn slice_with_progress_v3(
 
     let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
 
-    // Pre-compute binary-topology raster job for Vertical2.  Doing this before
-    // the RLE guard means the streaming path can reuse it without duplication.
+    // Pre-compute Coverage raster job for Vertical2. Doing this before the RLE
+    // guard means the streaming path can reuse it without duplication.
+    //
+    // Keep the caller-selected AA level intact so "AA Strength" remains
+    // meaningful in 3DAA mode (Coverage supersampling first, then Z-blend/blur).
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
         j.anti_aliasing_mode = "Coverage".to_string();
-        j.anti_aliasing_level = "Off".to_string();
         j.minimum_aa_alpha_percent = 0.0;
         Some(j)
     } else {
@@ -740,12 +742,14 @@ pub fn slice_with_progress_v3_to_path(
     // blend pass can run before final container encoding.
     let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
 
-    // Pre-compute binary-topology raster job for Vertical2 (needed by both
-    // the streaming RLE path and the full-buffer fallback path below).
+    // Pre-compute Coverage raster job for Vertical2 (needed by both the
+    // streaming RLE path and the full-buffer fallback path below).
+    //
+    // Keep the caller-selected AA level intact so "AA Strength" remains
+    // meaningful in 3DAA mode (Coverage supersampling first, then Z-blend/blur).
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
         j.anti_aliasing_mode = "Coverage".to_string();
-        j.anti_aliasing_level = "Off".to_string();
         j.minimum_aa_alpha_percent = 0.0;
         Some(j)
     } else {
