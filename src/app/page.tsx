@@ -4264,11 +4264,6 @@ export default function Home() {
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
   );
-  const canRetrySendToPrinter = Boolean(
-    printingUploadDialogStage === 'failed'
-    && !printingSendBusy
-    && canSendToPrinter,
-  );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
   const canSliceAndUpload = Boolean(
     activeNetworkUiAdapter
@@ -14578,7 +14573,6 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
-              sendCanRetry={canRetrySendToPrinter}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
               onOpenSendTargetPicker={() => {
@@ -14588,7 +14582,6 @@ export default function Home() {
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
               onCancelSendToPrinter={handleCancelSendToPrinter}
-              onRetrySendToPrinter={handleSendToPrinter}
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
@@ -16609,6 +16602,17 @@ export default function Home() {
                     disabled={printingSendBusy || printingPrintNowBusy}
                   >
                     Close
+                  </button>
+                )}
+
+                {printingUploadDialogStage === 'failed' && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    onClick={() => { void handleSendToPrinter(); }}
+                    disabled={printingSendBusy || printingPrintNowBusy || !canSendToPrinter}
+                  >
+                    Retry Upload
                   </button>
                 )}
 
