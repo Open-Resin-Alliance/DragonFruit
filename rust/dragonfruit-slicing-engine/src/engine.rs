@@ -23,6 +23,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use thiserror::Error;
 
+#[cfg(target_arch = "x86")]
+use std::arch::x86::{__m128i, _mm_loadu_si128, _mm_max_epu8, _mm_storeu_si128};
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{__m128i, _mm_loadu_si128, _mm_max_epu8, _mm_storeu_si128};
+
 #[derive(Debug, Error)]
 pub enum SlicerV3Error {
     #[error("cancelled")]
@@ -173,9 +178,56 @@ impl SupportMaskContext {
 
 #[inline]
 fn merge_support_mask_inplace(dst: &mut [u8], support: &[u8]) {
-    for (d, s) in dst.iter_mut().zip(support.iter()) {
+    u8_max_inplace(dst, support);
+}
+
+#[inline]
+fn u8_max_inplace(dst: &mut [u8], src: &[u8]) {
+    let len = dst.len().min(src.len());
+    if len == 0 {
+        return;
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("sse2") {
+            // SAFETY: SSE2 is runtime-detected above. Pointers are valid for
+            // `len` bytes, and we use unaligned load/store intrinsics.
+            unsafe {
+                u8_max_inplace_sse2(&mut dst[..len], &src[..len]);
+            }
+            return;
+        }
+    }
+
+    for (d, s) in dst.iter_mut().zip(src.iter()).take(len) {
         if *s > *d {
             *d = *s;
+        }
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
+unsafe fn u8_max_inplace_sse2(dst: &mut [u8], src: &[u8]) {
+    let len = dst.len().min(src.len());
+    let mut i = 0usize;
+
+    while i + 16 <= len {
+        // SAFETY: i..i+16 is in-bounds due to loop condition.
+        let a = unsafe { _mm_loadu_si128(dst.as_ptr().add(i) as *const __m128i) };
+        // SAFETY: i..i+16 is in-bounds due to loop condition.
+        let b = unsafe { _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i) };
+        let m = _mm_max_epu8(a, b);
+        // SAFETY: i..i+16 is in-bounds due to loop condition.
+        unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, m) };
+        i += 16;
+    }
+
+    for j in i..len {
+        let s = src[j];
+        if s > dst[j] {
+            dst[j] = s;
         }
     }
 }
