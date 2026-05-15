@@ -167,6 +167,8 @@ export type SliceExportOrchestratorOptions = {
   blurBrushRadiusPx?: number;
   zBlendLookBack?: number;
   zBlendFadePx?: number;
+  zBlendAutoFade?: boolean;
+  zBlendMinimumAlphaPercent?: number;
   minimumAaAlphaPercentOverride?: number;
   zBlendDebugColorOverlay?: boolean;
   outputMode?: 'download' | 'return';
@@ -656,6 +658,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
     zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
     zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
+    zBlendAutoFade: options.zBlendAutoFade !== false,
+    zBlendMinimumAlphaPercent: Math.max(0, Math.min(100, options.zBlendMinimumAlphaPercent ?? 0)),
     aaOnSupports: perfSettings.aaOnSupportsExperimental === true,
     minimumAaAlphaPercent: Math.max(
       0,

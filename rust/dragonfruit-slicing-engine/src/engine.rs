@@ -449,6 +449,7 @@ fn process_pending_layer_post(
     fade_px: u32,
     blur_radius: usize,
     min_aa_alpha_u8: u8,
+    z_blend_min_alpha_u8: u8,
     debug_color_overlay: bool,
     lut: &[u8; 256],
     workspace: &mut z_blend::ZBlendWorkspace,
@@ -575,6 +576,8 @@ fn process_pending_layer_post(
         if let Some((min_x, max_x, min_y, max_y)) =
             expand_bounds(model_blur_seed_bounds, blur_pad, width, height)
         {
+            // Run the blur without an inline min-alpha floor so we can apply
+            // separate floors for topology pixels vs z-blend pixels below.
             apply_blur_postprocess_inplace_with_roi(
                 &mut layer.mask,
                 width,
@@ -584,19 +587,58 @@ fn process_pending_layer_post(
                 min_y,
                 max_y,
                 blur_radius,
-                min_aa_alpha_u8,
+                0,
             );
         } else {
-            apply_blur_postprocess_inplace(
-                &mut layer.mask,
-                width,
-                height,
-                blur_radius,
-                min_aa_alpha_u8,
-            );
+            apply_blur_postprocess_inplace(&mut layer.mask, width, height, blur_radius, 0);
+        }
+        // Apply topology-gated minimum alpha floors after blur:
+        //
+        // Pixels inside the current layer's binary footprint (topology) received
+        // their value from XY rasterization ± blur.  These are true XY AA pixels
+        // and should be lifted to `min_aa_alpha_u8` so they cure reliably.
+        //
+        // Pixels outside the topology received their value exclusively from the
+        // z-blend gradient.  Lifting them with the same floor as XY AA pixels
+        // causes dimensional overgrowth (the "wide flat top" artefact) because
+        // even faint gradient tails 100+ px from the edge get lifted to the cure
+        // threshold.  The separate `z_blend_min_alpha_u8` (default 0) lets the
+        // gradient taper naturally.
+        const TOPO_THRESHOLD: u8 = 127;
+        if min_aa_alpha_u8 > 0 || z_blend_min_alpha_u8 > 0 {
+            let topology = layer.topology.as_slice();
+            for (idx, px) in layer.mask.iter_mut().enumerate() {
+                if *px == 0 {
+                    continue;
+                }
+                let floor = if topology[idx] > TOPO_THRESHOLD {
+                    min_aa_alpha_u8
+                } else {
+                    z_blend_min_alpha_u8
+                };
+                if *px < floor {
+                    *px = floor;
+                }
+            }
         }
         if blur_radius == 0 {
-            apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+            // No blur ran; still need to apply XY AA floor to topology pixels
+            // and z-blend floor to gradient pixels.
+            const TOPO_THRESHOLD2: u8 = 127;
+            let topology = layer.topology.as_slice();
+            for (idx, px) in layer.mask.iter_mut().enumerate() {
+                if *px == 0 {
+                    continue;
+                }
+                let floor = if topology[idx] > TOPO_THRESHOLD2 {
+                    min_aa_alpha_u8
+                } else {
+                    z_blend_min_alpha_u8
+                };
+                if *px < floor {
+                    *px = floor;
+                }
+            }
         }
         post_blur_ns = post_blur_ns
             .saturating_add(blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
@@ -775,11 +817,19 @@ fn rasterize_vertical_aa_streaming_v3(
         None
     };
     let look_back = (job.z_blend_look_back as usize).max(1);
-    let fade_px = job.z_blend_fade_px.max(1);
+    // Use the physics-calibrated fade distance when auto-fade is enabled.
+    // See `SliceJobV3::effective_z_blend_fade_px` for the derivation.
+    let fade_px = job.effective_z_blend_fade_px();
     let blur_radius = job.blur_brush_radius_px as usize;
     let lut = z_blend::default_z_blend_lut();
     let min_aa_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    // Separate minimum alpha for z-blend gradient pixels.  These live outside
+    // the current layer's binary footprint and must be allowed to taper to 0;
+    // lifting them with the same floor as XY AA pixels causes dimensional
+    // overgrowth and the "wide flat top" stair-step artefact.
+    let z_blend_min_alpha_u8 =
+        ((job.z_blend_minimum_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
     let debug_color_overlay = job.z_blend_debug_color_overlay && collect_png_layers;
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
@@ -859,6 +909,7 @@ fn rasterize_vertical_aa_streaming_v3(
                         fade_px,
                         blur_radius,
                         min_aa_alpha_u8,
+                        z_blend_min_alpha_u8,
                         debug_color_overlay,
                         &lut,
                         &mut workspace,
@@ -1293,6 +1344,7 @@ fn rasterize_vertical_aa_streaming_v3(
                     fade_px,
                     blur_radius,
                     min_aa_alpha_u8,
+                    z_blend_min_alpha_u8,
                     debug_color_overlay,
                     &lut,
                     &mut workspace,
@@ -1414,6 +1466,7 @@ fn rasterize_vertical_aa_streaming_v3(
                 fade_px,
                 blur_radius,
                 min_aa_alpha_u8,
+                z_blend_min_alpha_u8,
                 debug_color_overlay,
                 &lut,
                 &mut workspace,

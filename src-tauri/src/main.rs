@@ -342,6 +342,10 @@ struct SliceJobMetadata {
     z_blend_look_back: u32,
     #[serde(default = "default_z_blend_fade_px")]
     z_blend_fade_px: u32,
+    #[serde(default)]
+    z_blend_auto_fade: bool,
+    #[serde(default)]
+    z_blend_minimum_alpha_percent: f32,
     #[serde(default = "default_z_blend_debug_color_overlay")]
     z_blend_debug_color_overlay: bool,
     #[serde(default)]
@@ -1271,6 +1275,8 @@ async fn slice_solid_native_to_temp_path(
             mirror_y: meta.mirror_y,
             z_blend_look_back: meta.z_blend_look_back,
             z_blend_fade_px: meta.z_blend_fade_px,
+            z_blend_auto_fade: meta.z_blend_auto_fade,
+            z_blend_minimum_alpha_percent: meta.z_blend_minimum_alpha_percent,
             z_blend_debug_color_overlay: meta.z_blend_debug_color_overlay,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,

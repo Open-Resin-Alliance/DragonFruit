@@ -1330,6 +1330,8 @@ export function SlicingPanel({
         blurBrushRadiusPx,
         zBlendLookBack: aaMode === '3DAA' ? zBlendLookBack : undefined,
         zBlendFadePx: aaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
+        zBlendAutoFade: aaMode === '3DAA' ? (zBlendFadeMode === 'auto') : undefined,
+        zBlendMinimumAlphaPercent: aaMode === '3DAA' ? 0 : undefined,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
           : profileMinimumAaAlphaPercent,
