@@ -18,6 +18,7 @@ use crate::types::{
 };
 use crate::z_blend;
 use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -319,6 +320,28 @@ fn resolve_model_active_layer_window(job: &SliceJobV3) -> Option<(u32, u32)> {
     }
 }
 
+#[inline]
+fn choose_3daa_post_threads() -> usize {
+    let hw = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    std::env::var("DF_3DAA_POST_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= 1)
+        .unwrap_or(hw)
+        .clamp(1, hw)
+}
+
+#[inline]
+fn choose_3daa_post_buffer_depth() -> usize {
+    std::env::var("DF_3DAA_POST_BUFFER_DEPTH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.min(8))
+        .unwrap_or(0)
+}
+
 fn rasterize_vertical_aa_streaming_v3(
     job: &SliceJobV3,
     raster_job: &SliceJobV3,
@@ -340,6 +363,13 @@ fn rasterize_vertical_aa_streaming_v3(
     // can under-utilize CPU when run on a single thread.
     const PARALLEL_SWEEP_PIXEL_THRESHOLD: usize = 8_000_000;
     let use_parallel_sweeps = pixels_per_layer >= PARALLEL_SWEEP_PIXEL_THRESHOLD;
+    let post_threads = choose_3daa_post_threads();
+    let post_buffer_depth = choose_3daa_post_buffer_depth();
+    let post_sweep_pool = if use_parallel_sweeps {
+        ThreadPoolBuilder::new().num_threads(post_threads).build().ok()
+    } else {
+        None
+    };
     let look_back = (job.z_blend_look_back as usize).max(1);
     let fade_px = job.z_blend_fade_px.max(1);
     let blur_radius = job.blur_brush_radius_px as usize;
@@ -415,16 +445,31 @@ fn rasterize_vertical_aa_streaming_v3(
         // They are merged back after model-only z-blend + blur.
         if let Some(ref support_mask) = support_mask_for_layer {
             if use_parallel_sweeps {
-                raw_mask
-                    .par_chunks_mut(width)
-                    .zip(support_mask.par_chunks(width))
-                    .for_each(|(raw_row, support_row)| {
-                        for (px, s) in raw_row.iter_mut().zip(support_row.iter()) {
-                            if *s > 0 {
-                                *px = 0;
-                            }
-                        }
+                if let Some(pool) = post_sweep_pool.as_ref() {
+                    pool.install(|| {
+                        raw_mask
+                            .par_chunks_mut(width)
+                            .zip(support_mask.par_chunks(width))
+                            .for_each(|(raw_row, support_row)| {
+                                for (px, s) in raw_row.iter_mut().zip(support_row.iter()) {
+                                    if *s > 0 {
+                                        *px = 0;
+                                    }
+                                }
+                            });
                     });
+                } else {
+                    raw_mask
+                        .par_chunks_mut(width)
+                        .zip(support_mask.par_chunks(width))
+                        .for_each(|(raw_row, support_row)| {
+                            for (px, s) in raw_row.iter_mut().zip(support_row.iter()) {
+                                if *s > 0 {
+                                    *px = 0;
+                                }
+                            }
+                        });
+                }
             } else {
                 for (px, s) in raw_mask.iter_mut().zip(support_mask.iter()) {
                     if *s > 0 {
@@ -499,34 +544,69 @@ fn rasterize_vertical_aa_streaming_v3(
             }
 
             if use_parallel_sweeps {
-                let sweep = raw_mask
-                    .par_chunks(width)
-                    .zip(topology_mask.par_chunks_mut(width))
-                    .enumerate()
-                    .map(|(y, (raw_row, topo_row))| {
-                        let mut local = TopologySweepStats::empty(width, height);
-                        for (x, (&src, dst)) in raw_row.iter().zip(topo_row.iter_mut()).enumerate()
-                        {
-                            if src > 0 {
-                                local.model_non_empty = true;
-                            }
-                            if src > TOPOLOGY_ALPHA_THRESHOLD {
-                                *dst = 255;
-                                local.topology_non_empty = true;
-                                local.min_x = local.min_x.min(x);
-                                local.max_x = local.max_x.max(x);
-                                local.min_y = local.min_y.min(y);
-                                local.max_y = local.max_y.max(y);
-                            } else {
-                                *dst = 0;
-                            }
-                        }
-                        local
+                let sweep = if let Some(pool) = post_sweep_pool.as_ref() {
+                    pool.install(|| {
+                        raw_mask
+                            .par_chunks(width)
+                            .zip(topology_mask.par_chunks_mut(width))
+                            .enumerate()
+                            .map(|(y, (raw_row, topo_row))| {
+                                let mut local = TopologySweepStats::empty(width, height);
+                                for (x, (&src, dst)) in
+                                    raw_row.iter().zip(topo_row.iter_mut()).enumerate()
+                                {
+                                    if src > 0 {
+                                        local.model_non_empty = true;
+                                    }
+                                    if src > TOPOLOGY_ALPHA_THRESHOLD {
+                                        *dst = 255;
+                                        local.topology_non_empty = true;
+                                        local.min_x = local.min_x.min(x);
+                                        local.max_x = local.max_x.max(x);
+                                        local.min_y = local.min_y.min(y);
+                                        local.max_y = local.max_y.max(y);
+                                    } else {
+                                        *dst = 0;
+                                    }
+                                }
+                                local
+                            })
+                            .reduce(
+                                || TopologySweepStats::empty(width, height),
+                                |a, b| a.merge(b, width, height),
+                            )
                     })
-                    .reduce(
-                        || TopologySweepStats::empty(width, height),
-                        |a, b| a.merge(b, width, height),
-                    );
+                } else {
+                    raw_mask
+                        .par_chunks(width)
+                        .zip(topology_mask.par_chunks_mut(width))
+                        .enumerate()
+                        .map(|(y, (raw_row, topo_row))| {
+                            let mut local = TopologySweepStats::empty(width, height);
+                            for (x, (&src, dst)) in
+                                raw_row.iter().zip(topo_row.iter_mut()).enumerate()
+                            {
+                                if src > 0 {
+                                    local.model_non_empty = true;
+                                }
+                                if src > TOPOLOGY_ALPHA_THRESHOLD {
+                                    *dst = 255;
+                                    local.topology_non_empty = true;
+                                    local.min_x = local.min_x.min(x);
+                                    local.max_x = local.max_x.max(x);
+                                    local.min_y = local.min_y.min(y);
+                                    local.max_y = local.max_y.max(y);
+                                } else {
+                                    *dst = 0;
+                                }
+                            }
+                            local
+                        })
+                        .reduce(
+                            || TopologySweepStats::empty(width, height),
+                            |a, b| a.merge(b, width, height),
+                        )
+                };
 
                 model_non_empty = sweep.model_non_empty;
                 topology_non_empty = sweep.topology_non_empty;
@@ -648,8 +728,9 @@ fn rasterize_vertical_aa_streaming_v3(
             backward_contrib,
         });
 
-        // Flush once the oldest pending layer has a full future window.
-        if pending_layers.len() > look_back {
+        // Flush once the oldest pending layer has a full future window plus
+        // optional extra buffering depth for post-stage scheduling experiments.
+        if pending_layers.len() > look_back + post_buffer_depth {
             let mut layer = pending_layers.pop_front().expect("pending layer exists");
             let futures: Vec<&[u8]> = pending_layers
                 .iter()

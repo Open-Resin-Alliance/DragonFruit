@@ -330,6 +330,8 @@ export function SliceMetricsDebugModal({
                   <RuntimeStat label="Rayon pool threads" value={runtime ? String(runtime.poolThreads) : '—'} />
                   <RuntimeStat label="Max concurrent workers" value={runtime ? String(runtime.maxConcurrent) : '—'} />
                   <RuntimeStat label="Bounded queue buffer" value={runtime ? String(runtime.queueBuffer) : '—'} />
+                  <RuntimeStat label="3DAA post threads" value={runtime?.daaPostThreads != null ? String(runtime.daaPostThreads) : '—'} />
+                  <RuntimeStat label="3DAA post buffer" value={runtime?.daaPostBufferDepth != null ? String(runtime.daaPostBufferDepth) : '—'} />
                   <RuntimeStat label="Build profile" value={runtime?.buildProfile ?? '—'} />
                   <RuntimeStat label="Metadata parse" value={formatNs(runtime?.metadataParseNs)} />
                   <RuntimeStat label="Mesh decode" value={formatNs(runtime?.meshDecodeNs)} />
