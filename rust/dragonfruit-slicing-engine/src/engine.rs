@@ -16,7 +16,7 @@ use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
 };
-use crate::z_blend;
+use crate::{cross_blend, z_blend};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::collections::{BTreeMap, VecDeque};
@@ -423,7 +423,7 @@ struct PostWorkerTask {
     future_topologies: Vec<Vec<u8>>,
     future_bounds: Vec<TopologyBounds>,
     futures_have_topology: bool,
-    cross_blend_cfg: Option<z_blend::CrossBlendConfig>,
+    cross_blend_cfg: Option<cross_blend::CrossBlendKernelConfig>,
 }
 
 struct PostProcessedLayer {
@@ -452,8 +452,8 @@ fn process_pending_layer_post(
     debug_color_overlay: bool,
     lut: &[u8; 256],
     workspace: &mut z_blend::ZBlendWorkspace,
-    cross_blend_cfg: Option<&z_blend::CrossBlendConfig>,
-    cross_blend_ws: &mut z_blend::CrossBlendWorkspace,
+    cross_blend_cfg: Option<&cross_blend::CrossBlendKernelConfig>,
+    cross_blend_ws: &mut cross_blend::CrossBlendWorkspace,
 ) -> PostProcessedLayer {
     let pixels_per_layer = width.saturating_mul(height);
 
@@ -527,14 +527,32 @@ fn process_pending_layer_post(
 
     if let Some(cfg) = cross_blend_cfg {
         let cross_start = std::time::Instant::now();
-        let stats = z_blend::cross_blend_layer_inplace(
-            &mut layer.mask,
-            layer.topology.as_slice(),
-            prior_topologies,
-            future_topologies,
-            width,
-            height,
-            cfg,
+        let mut neighbors: Vec<cross_blend::CrossBlendNeighbor<'_>> =
+            Vec::with_capacity(prior_topologies.len() + future_topologies.len());
+        for (depth, prior) in prior_topologies.iter().enumerate() {
+            neighbors.push(cross_blend::CrossBlendNeighbor {
+                z_offset: -((depth + 1) as i32),
+                // Topology-magnitude occupancy field for volumetric support.
+                mask: prior,
+                topology: prior,
+            });
+        }
+        for (depth, future) in future_topologies.iter().enumerate() {
+            neighbors.push(cross_blend::CrossBlendNeighbor {
+                z_offset: (depth + 1) as i32,
+                mask: future,
+                topology: future,
+            });
+        }
+        let stats = cross_blend::cross_blend_layer_inplace(
+            cross_blend::CrossBlendLayerInputs {
+                center_mask: &mut layer.mask,
+                center_topology: layer.topology.as_slice(),
+                neighbors: &neighbors,
+                width,
+                height,
+            },
+            *cfg,
             cross_blend_ws,
         );
         cross_blend_ns = cross_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -733,11 +751,14 @@ fn rasterize_vertical_aa_streaming_v3(
     const PARALLEL_SWEEP_PIXEL_THRESHOLD: usize = 8_000_000;
     let use_parallel_sweeps = pixels_per_layer >= PARALLEL_SWEEP_PIXEL_THRESHOLD;
     let cross_blend_cfg = if is_cross_blend_mode(&job.anti_aliasing_mode) {
-        Some(z_blend::CrossBlendConfig {
+        Some(cross_blend::CrossBlendKernelConfig {
             window_layers: (job.z_blend_look_back as usize).max(1),
-            fade_px: job.z_blend_fade_px.max(1),
-            temporal_power: 1.0,
+            z_decay: 0.75,
+            xy_radius_px: (job.z_blend_fade_px.max(1).min(4)) as usize,
+            xy_decay: 1.0,
+            topo_threshold: TOPOLOGY_ALPHA_THRESHOLD,
             strength: 1.0,
+            max_alpha: 255,
         })
     } else {
         None
@@ -818,7 +839,7 @@ fn rasterize_vertical_aa_streaming_v3(
             std::thread::spawn(move || {
                 let lut = z_blend::default_z_blend_lut();
                 let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
-                let mut cross_blend_ws = z_blend::CrossBlendWorkspace::new(width, height);
+                let mut cross_blend_ws = cross_blend::CrossBlendWorkspace::new(width, height);
                 while let Ok(task) = task_rx.recv() {
                     let prior_slices: Vec<&[u8]> =
                         task.prior_topologies.iter().map(|v| v.as_slice()).collect();
@@ -857,7 +878,7 @@ fn rasterize_vertical_aa_streaming_v3(
         post_worker_rx = Some(done_rx);
     }
 
-    let mut cross_blend_ws = z_blend::CrossBlendWorkspace::new(width, height);
+    let mut cross_blend_ws = cross_blend::CrossBlendWorkspace::new(width, height);
 
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
