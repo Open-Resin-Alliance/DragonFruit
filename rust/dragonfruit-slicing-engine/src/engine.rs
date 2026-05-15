@@ -8,7 +8,10 @@ use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
-use crate::raster::{apply_blur_postprocess_inplace, encode_mask_to_rle, rasterize_layer};
+use crate::raster::{
+    apply_blur_postprocess_inplace, apply_blur_postprocess_inplace_with_roi, encode_mask_to_rle,
+    rasterize_layer,
+};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
     SliceProgressPhaseV3, SliceProgressUpdateV3,
@@ -177,6 +180,42 @@ fn merge_support_mask_inplace(dst: &mut [u8], support: &[u8]) {
     }
 }
 
+#[inline]
+fn merge_bounds(
+    a: Option<(usize, usize, usize, usize)>,
+    b: Option<(usize, usize, usize, usize)>,
+) -> Option<(usize, usize, usize, usize)> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(v), None) | (None, Some(v)) => Some(v),
+        (Some((aminx, amaxx, aminy, amaxy)), Some((bminx, bmaxx, bminy, bmaxy))) => Some((
+            aminx.min(bminx),
+            amaxx.max(bmaxx),
+            aminy.min(bminy),
+            amaxy.max(bmaxy),
+        )),
+    }
+}
+
+#[inline]
+fn expand_bounds(
+    bounds: Option<(usize, usize, usize, usize)>,
+    pad: usize,
+    width: usize,
+    height: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    let (min_x, max_x, min_y, max_y) = bounds?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((
+        min_x.saturating_sub(pad),
+        (max_x + pad).min(width - 1),
+        min_y.saturating_sub(pad),
+        (max_y + pad).min(height - 1),
+    ))
+}
+
 /// Returns an inclusive `(first_layer, last_layer)` window where model geometry
 /// can exist, based on model-triangle Z extents.
 ///
@@ -279,9 +318,11 @@ fn rasterize_vertical_aa_streaming_v3(
         layer_index: u32,
         mask: Vec<u8>,
         topology: Vec<u8>,
+        topology_bounds: Option<(usize, usize, usize, usize)>,
         topology_non_empty: bool,
         model_non_empty: bool,
         backward_applied: bool,
+        backward_seed_bounds: Option<(usize, usize, usize, usize)>,
         support_mask: Option<Vec<u8>>,
         apply_model_aa: bool,
         backward_contrib: Option<Vec<u8>>,
@@ -327,26 +368,53 @@ fn rasterize_vertical_aa_streaming_v3(
         }
         let mut model_non_empty = false;
         let mut topology_non_empty = false;
+        let mut topo_min_x = width;
+        let mut topo_max_x = 0usize;
+        let mut topo_min_y = height;
+        let mut topo_max_y = 0usize;
         if apply_model_aa {
-            for (dst, src) in topology_mask.iter_mut().zip(raw_mask.iter()) {
-                if *src > 0 {
-                    model_non_empty = true;
-                }
-                if *src > TOPOLOGY_ALPHA_THRESHOLD {
-                    *dst = 255;
-                    topology_non_empty = true;
-                } else {
-                    *dst = 0;
+            for y in 0..height {
+                let row = y * width;
+                for x in 0..width {
+                    let idx = row + x;
+                    let src = raw_mask[idx];
+                    let dst = &mut topology_mask[idx];
+                    if src > 0 {
+                        model_non_empty = true;
+                    }
+                    if src > TOPOLOGY_ALPHA_THRESHOLD {
+                        *dst = 255;
+                        topology_non_empty = true;
+                        topo_min_x = topo_min_x.min(x);
+                        topo_max_x = topo_max_x.max(x);
+                        topo_min_y = topo_min_y.min(y);
+                        topo_max_y = topo_max_y.max(y);
+                    } else {
+                        *dst = 0;
+                    }
                 }
             }
         } else {
             topology_mask.fill(0);
         }
 
+        let topology_bounds = if topology_non_empty {
+            Some((topo_min_x, topo_max_x, topo_min_y, topo_max_y))
+        } else {
+            None
+        };
+
         let base_mask_for_debug = (debug_color_overlay && apply_model_aa).then(|| raw_mask.clone());
 
         let priors_have_topology = pending_layers.iter().any(|layer| layer.topology_non_empty);
         let backward_applied = apply_model_aa && (model_non_empty || priors_have_topology);
+        let mut backward_seed_bounds = topology_bounds;
+        if backward_applied {
+            let priors_start = pending_layers.len().saturating_sub(look_back);
+            for prior in pending_layers.iter().skip(priors_start) {
+                backward_seed_bounds = merge_bounds(backward_seed_bounds, prior.topology_bounds);
+            }
+        }
 
         // --- Backward z-blend for the current layer (look-behind window). ---
         if backward_applied {
@@ -356,14 +424,29 @@ fn rasterize_vertical_aa_streaming_v3(
                 .skip(priors_start)
                 .map(|layer| layer.topology.as_slice())
                 .collect();
-            workspace.blend_layer_inplace(
-                &mut raw_mask,
-                &priors,
-                width,
-                height,
-                fade_px,
-                Some(&lut),
-            );
+            let blend_pad = fade_px as usize + 1;
+            if let Some((min_x, max_x, min_y, max_y)) =
+                expand_bounds(backward_seed_bounds, blend_pad, width, height)
+            {
+                workspace.blend_layer_inplace_with_roi(
+                    &mut raw_mask,
+                    &priors,
+                    width,
+                    height,
+                    fade_px,
+                    Some(&lut),
+                    (min_x, max_x, min_y, max_y),
+                );
+            } else {
+                workspace.blend_layer_inplace(
+                    &mut raw_mask,
+                    &priors,
+                    width,
+                    height,
+                    fade_px,
+                    Some(&lut),
+                );
+            }
         }
 
         let backward_contrib = if backward_applied {
@@ -389,9 +472,11 @@ fn rasterize_vertical_aa_streaming_v3(
             layer_index,
             mask: raw_mask,
             topology: topology_mask,
+            topology_bounds,
             topology_non_empty,
             model_non_empty,
             backward_applied,
+            backward_seed_bounds,
             support_mask: support_mask_for_layer,
             apply_model_aa,
             backward_contrib,
@@ -423,16 +508,37 @@ fn rasterize_vertical_aa_streaming_v3(
                     None
                 };
 
-                workspace.blend_layer_forward_inplace(
-                    &mut layer.mask,
-                    layer.topology.as_slice(),
-                    &futures,
-                    effective_look_back,
-                    width,
-                    height,
-                    fade_px,
-                    Some(&lut),
-                );
+                let mut forward_seed_bounds = layer.topology_bounds;
+                for future in pending_layers.iter().take(look_back) {
+                    forward_seed_bounds = merge_bounds(forward_seed_bounds, future.topology_bounds);
+                }
+                let blend_pad = fade_px as usize + 1;
+                if let Some((min_x, max_x, min_y, max_y)) =
+                    expand_bounds(forward_seed_bounds, blend_pad, width, height)
+                {
+                    workspace.blend_layer_forward_inplace_with_roi(
+                        &mut layer.mask,
+                        layer.topology.as_slice(),
+                        &futures,
+                        effective_look_back,
+                        width,
+                        height,
+                        fade_px,
+                        Some(&lut),
+                        (min_x, max_x, min_y, max_y),
+                    );
+                } else {
+                    workspace.blend_layer_forward_inplace(
+                        &mut layer.mask,
+                        layer.topology.as_slice(),
+                        &futures,
+                        effective_look_back,
+                        width,
+                        height,
+                        fade_px,
+                        Some(&lut),
+                    );
+                }
 
                 if let (Some(before), Some(ref mut forward)) =
                     (before_forward.as_ref(), forward_contrib.as_mut())
@@ -451,13 +557,37 @@ fn rasterize_vertical_aa_streaming_v3(
             let should_blur_model =
                 layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
             if should_blur_model {
-                apply_blur_postprocess_inplace(
-                    &mut layer.mask,
-                    width,
-                    height,
-                    blur_radius,
-                    min_aa_alpha_u8,
-                );
+                let mut model_blur_seed_bounds = layer.backward_seed_bounds;
+                if forward_applied {
+                    model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
+                    for future in pending_layers.iter().take(look_back) {
+                        model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, future.topology_bounds);
+                    }
+                }
+                let blur_pad = fade_px as usize + blur_radius;
+                if let Some((min_x, max_x, min_y, max_y)) =
+                    expand_bounds(model_blur_seed_bounds, blur_pad, width, height)
+                {
+                    apply_blur_postprocess_inplace_with_roi(
+                        &mut layer.mask,
+                        width,
+                        height,
+                        min_x,
+                        max_x,
+                        min_y,
+                        max_y,
+                        blur_radius,
+                        min_aa_alpha_u8,
+                    );
+                } else {
+                    apply_blur_postprocess_inplace(
+                        &mut layer.mask,
+                        width,
+                        height,
+                        blur_radius,
+                        min_aa_alpha_u8,
+                    );
+                }
                 if blur_radius == 0 {
                     apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
                 }
@@ -578,16 +708,37 @@ fn rasterize_vertical_aa_streaming_v3(
                 None
             };
 
-            workspace.blend_layer_forward_inplace(
-                &mut layer.mask,
-                layer.topology.as_slice(),
-                &futures,
-                effective_look_back,
-                width,
-                height,
-                fade_px,
-                Some(&lut),
-            );
+            let mut forward_seed_bounds = layer.topology_bounds;
+            for future in pending_layers.iter().take(look_back) {
+                forward_seed_bounds = merge_bounds(forward_seed_bounds, future.topology_bounds);
+            }
+            let blend_pad = fade_px as usize + 1;
+            if let Some((min_x, max_x, min_y, max_y)) =
+                expand_bounds(forward_seed_bounds, blend_pad, width, height)
+            {
+                workspace.blend_layer_forward_inplace_with_roi(
+                    &mut layer.mask,
+                    layer.topology.as_slice(),
+                    &futures,
+                    effective_look_back,
+                    width,
+                    height,
+                    fade_px,
+                    Some(&lut),
+                    (min_x, max_x, min_y, max_y),
+                );
+            } else {
+                workspace.blend_layer_forward_inplace(
+                    &mut layer.mask,
+                    layer.topology.as_slice(),
+                    &futures,
+                    effective_look_back,
+                    width,
+                    height,
+                    fade_px,
+                    Some(&lut),
+                );
+            }
 
             if let (Some(before), Some(ref mut forward)) =
                 (before_forward.as_ref(), forward_contrib.as_mut())
@@ -605,13 +756,37 @@ fn rasterize_vertical_aa_streaming_v3(
         let should_blur_model =
             layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
         if should_blur_model {
-            apply_blur_postprocess_inplace(
-                &mut layer.mask,
-                width,
-                height,
-                blur_radius,
-                min_aa_alpha_u8,
-            );
+            let mut model_blur_seed_bounds = layer.backward_seed_bounds;
+            if forward_applied {
+                model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
+                for future in pending_layers.iter().take(look_back) {
+                    model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, future.topology_bounds);
+                }
+            }
+            let blur_pad = fade_px as usize + blur_radius;
+            if let Some((min_x, max_x, min_y, max_y)) =
+                expand_bounds(model_blur_seed_bounds, blur_pad, width, height)
+            {
+                apply_blur_postprocess_inplace_with_roi(
+                    &mut layer.mask,
+                    width,
+                    height,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                    blur_radius,
+                    min_aa_alpha_u8,
+                );
+            } else {
+                apply_blur_postprocess_inplace(
+                    &mut layer.mask,
+                    width,
+                    height,
+                    blur_radius,
+                    min_aa_alpha_u8,
+                );
+            }
             if blur_radius == 0 {
                 apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
             }

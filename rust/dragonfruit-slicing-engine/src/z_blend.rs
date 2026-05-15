@@ -74,6 +74,38 @@ impl ZBlendWorkspace {
         );
     }
 
+    pub fn blend_layer_inplace_with_roi(
+        &mut self,
+        current: &mut [u8],
+        priors: &[&[u8]],
+        width: usize,
+        height: usize,
+        fade_px: u32,
+        lut: Option<&[u8; 256]>,
+        roi: (usize, usize, usize, usize),
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+
+        z_blend_layer_inplace_with_roi(
+            current,
+            priors,
+            width,
+            height,
+            fade_px,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+            roi,
+        );
+    }
+
     /// Apply forward (lookahead) Z-blend compensation to a processed mask.
     ///
     /// For each "pre-appearing" pixel — one absent from `topology` (this layer)
@@ -121,6 +153,41 @@ impl ZBlendWorkspace {
             &mut self.in_prior,
             &mut self.dist,
             &mut self.queue,
+        );
+    }
+
+    pub fn blend_layer_forward_inplace_with_roi(
+        &mut self,
+        mask: &mut [u8],
+        topology: &[u8],
+        futures: &[&[u8]],
+        look_back: usize,
+        width: usize,
+        height: usize,
+        fade_px: u32,
+        lut: Option<&[u8; 256]>,
+        roi: (usize, usize, usize, usize),
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+        z_blend_forward_inplace_with_roi(
+            mask,
+            topology,
+            futures,
+            look_back,
+            width,
+            height,
+            fade_px,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+            roi,
         );
     }
 }
@@ -179,7 +246,60 @@ fn z_blend_layer_inplace(
     dist: &mut [u16],
     queue: &mut VecDeque<usize>,
 ) {
-    let n = width * height;
+    if width == 0 || height == 0 {
+        return;
+    }
+    z_blend_layer_inplace_with_roi(
+        current,
+        priors,
+        width,
+        height,
+        fade_px,
+        lut,
+        in_prior,
+        dist,
+        queue,
+        (0, width - 1, 0, height - 1),
+    );
+}
+
+#[inline]
+fn normalize_roi(
+    width: usize,
+    height: usize,
+    roi: (usize, usize, usize, usize),
+) -> Option<(usize, usize, usize, usize)> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let (min_x, max_x, min_y, max_y) = roi;
+    if min_x >= width || min_y >= height {
+        return None;
+    }
+    let clamped_max_x = max_x.min(width - 1);
+    let clamped_max_y = max_y.min(height - 1);
+    if min_x > clamped_max_x || min_y > clamped_max_y {
+        return None;
+    }
+    Some((min_x, clamped_max_x, min_y, clamped_max_y))
+}
+
+fn z_blend_layer_inplace_with_roi(
+    current: &mut [u8],
+    priors: &[&[u8]],
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    in_prior: &mut [u8],
+    dist: &mut [u16],
+    queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
     // Topology threshold used ONLY for occupancy/boundary detection.
     //
     // Using non-zero alpha here makes blur fringes count as "solid", which can
@@ -200,12 +320,21 @@ fn z_blend_layer_inplace(
     // so in_prior always records the minimum (most-recent) depth.  Depth is used
     // in Step 3 to scale the receding gradient peak: a pixel that was solid just
     // one layer ago blends in close to 255; one from two layers ago is dimmer.
-    in_prior[..n].fill(0);
+    for y in roi_min_y..=roi_max_y {
+        let row = y * width;
+        for x in roi_min_x..=roi_max_x {
+            in_prior[row + x] = 0;
+        }
+    }
     for (depth_idx, prior) in priors.iter().rev().enumerate() {
         let depth_val = (depth_idx + 1) as u8; // 1 = most-recent, 2 = older …
-        for (p, q) in in_prior[..n].iter_mut().zip(prior[..n].iter()) {
-            if *q > TOPO_THRESHOLD && *p == 0 {
-                *p = depth_val;
+        for y in roi_min_y..=roi_max_y {
+            let row = y * width;
+            for x in roi_min_x..=roi_max_x {
+                let idx = row + x;
+                if prior[idx] > TOPO_THRESHOLD && in_prior[idx] == 0 {
+                    in_prior[idx] = depth_val;
+                }
             }
         }
     }
@@ -217,9 +346,9 @@ fn z_blend_layer_inplace(
     let mut rec_max_x = 0usize;
     let mut rec_min_y = height;
     let mut rec_max_y = 0usize;
-    for y in 0..height {
+    for y in roi_min_y..=roi_max_y {
         let row_start = y * width;
-        for x in 0..width {
+        for x in roi_min_x..=roi_max_x {
             let idx = row_start + x;
             if in_prior[idx] > 0 && current[idx] <= TOPO_THRESHOLD {
                 receding_any = true;
@@ -377,10 +506,46 @@ fn z_blend_forward_inplace(
     dist: &mut [u16],
     queue: &mut VecDeque<usize>,
 ) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    z_blend_forward_inplace_with_roi(
+        mask,
+        topology,
+        futures,
+        look_back,
+        width,
+        height,
+        fade_px,
+        lut,
+        in_forward,
+        dist,
+        queue,
+        (0, width - 1, 0, height - 1),
+    );
+}
+
+fn z_blend_forward_inplace_with_roi(
+    mask: &mut [u8],
+    topology: &[u8],
+    futures: &[&[u8]],
+    look_back: usize,
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    in_forward: &mut [u8],
+    dist: &mut [u16],
+    queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
     if futures.is_empty() || fade_px == 0 || look_back == 0 {
         return;
     }
-    let n = width * height;
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
     const TOPO_THRESHOLD: u8 = 127;
 
     // Build forward depth map: in_forward[idx] = d → pixel first appears
@@ -388,12 +553,21 @@ fn z_blend_forward_inplace(
     // Iterating from most-recent future to furthest means the FIRST write wins,
     // recording the minimum (nearest) future depth.  Only pixels absent from
     // the current topology can be pre-appearing.
-    in_forward[..n].fill(0);
+    for y in roi_min_y..=roi_max_y {
+        let row = y * width;
+        for x in roi_min_x..=roi_max_x {
+            in_forward[row + x] = 0;
+        }
+    }
     for (depth_idx, future) in futures.iter().enumerate() {
         let depth_val = (depth_idx + 1) as u8;
-        for (p, q) in in_forward[..n].iter_mut().zip(future[..n].iter()) {
-            if *q > TOPO_THRESHOLD && *p == 0 {
-                *p = depth_val;
+        for y in roi_min_y..=roi_max_y {
+            let row = y * width;
+            for x in roi_min_x..=roi_max_x {
+                let idx = row + x;
+                if future[idx] > TOPO_THRESHOLD && in_forward[idx] == 0 {
+                    in_forward[idx] = depth_val;
+                }
             }
         }
     }
@@ -404,9 +578,9 @@ fn z_blend_forward_inplace(
     let mut app_max_x = 0usize;
     let mut app_min_y = height;
     let mut app_max_y = 0usize;
-    for y in 0..height {
+    for y in roi_min_y..=roi_max_y {
         let row_start = y * width;
-        for x in 0..width {
+        for x in roi_min_x..=roi_max_x {
             let idx = row_start + x;
             if in_forward[idx] > 0 && topology[idx] <= TOPO_THRESHOLD {
                 appearing_any = true;

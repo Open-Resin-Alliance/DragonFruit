@@ -1030,6 +1030,42 @@ pub(crate) fn apply_blur_postprocess_inplace(
     let roi_min_y = (min_y as i32).saturating_sub(r).max(0) as usize;
     let roi_max_y = ((max_y as i32).saturating_add(r)).min(height as i32 - 1) as usize;
 
+    apply_blur_postprocess_inplace_with_roi(
+        mask,
+        width,
+        height,
+        roi_min_x,
+        roi_max_x,
+        roi_min_y,
+        roi_max_y,
+        radius,
+        min_alpha_u8,
+    );
+}
+
+pub(crate) fn apply_blur_postprocess_inplace_with_roi(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+) {
+    if radius == 0 || width == 0 || height == 0 || mask.is_empty() {
+        return;
+    }
+    if roi_min_x >= width || roi_min_y >= height {
+        return;
+    }
+    let clamped_max_x = roi_max_x.min(width - 1);
+    let clamped_max_y = roi_max_y.min(height - 1);
+    if roi_min_x > clamped_max_x || roi_min_y > clamped_max_y {
+        return;
+    }
+
     apply_edge_box_blur_to_mask_in_roi(
         mask,
         width,
@@ -1037,9 +1073,9 @@ pub(crate) fn apply_blur_postprocess_inplace(
         radius,
         min_alpha_u8,
         roi_min_x,
-        roi_max_x,
+        clamped_max_x,
         roi_min_y,
-        roi_max_y,
+        clamped_max_y,
     );
 }
 
