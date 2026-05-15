@@ -3,15 +3,14 @@ import { ContactDisk, Joint, Segment, Twig, Vec3 } from '../../types';
 import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getSettings } from '../../Settings';
 import { twigDiskJointStandoff } from './twigJointStandoff';
+import { twigJointDiameterForLocalDiameter } from './twigTaper';
 // DEBUG: temporary per-twig disk B diameter override. Remove with src/supports/__debug__/.
 import { getTwigDiskBOverrideMm } from '../../__debug__/twigDiameterOverride';
 
-// Twig-local sizing: a joint at a disk-end is sized 10% larger than its disk's
-// contact diameter, so the joint bulge stays visible across all disk sizes.
-// Other supports use the shared getJointDiameter() (fixed +0.1mm offset).
-const TWIG_JOINT_DISK_DIAMETER_MULTIPLIER = 1.10;
+// Twig-local sizing: a joint at a disk-end is 10% larger than that disk's
+// contact diameter. SSOT for the 10% rule lives in ./twigTaper.ts.
 function twigJointDiameterForDisk(diskContactDiameter: number): number {
-    return diskContactDiameter * TWIG_JOINT_DISK_DIAMETER_MULTIPLIER;
+    return twigJointDiameterForLocalDiameter(diskContactDiameter);
 }
 
 function uuid() {

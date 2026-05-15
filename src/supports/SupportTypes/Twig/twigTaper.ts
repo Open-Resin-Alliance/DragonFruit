@@ -6,6 +6,15 @@ import type { Twig } from '../../types';
 //
 // s = 0 at disk A's socket joint, s = 1 at disk B's socket joint.
 
+// Twig-local sizing: any joint/knot that sits on the twig is 10% larger than
+// the twig's local contact diameter. SSOT lives here so the renderer, builder,
+// and live knot-drag logic all agree.
+export const TWIG_JOINT_DISK_DIAMETER_MULTIPLIER = 1.10;
+
+export function twigJointDiameterForLocalDiameter(twigDiameterMm: number): number {
+    return twigDiameterMm * TWIG_JOINT_DISK_DIAMETER_MULTIPLIER;
+}
+
 interface TwigSegmentRange {
     segmentId: string;
     sStart: number;

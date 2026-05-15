@@ -11,7 +11,7 @@ import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { resolveTwigDiameterAtSegmentT } from '../Twig/twigTaper';
+import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
@@ -375,12 +375,20 @@ export function LeafPlacementController() {
             if (lastPreviewSignatureRef.current !== previewSignature) {
                 lastPreviewSignatureRef.current = previewSignature;
 
+                // On a twig, the parent knot is 10% larger than the local
+                // tapered diameter (matching the disk-end joint rule). On
+                // other hosts, the legacy +0.1mm offset is used.
+                const previewKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
+                const previewKnotDiameter = previewKnotIsOnTwig
+                    ? twigJointDiameterForLocalDiameter(resolvedHostDiameter)
+                    : resolvedHostDiameter + 0.1;
+
                 const parentKnot: Knot = {
                     id: 'preview-knot',
                     parentShaftId: segmentId,
                     t,
                     pos: knotPos,
-                    diameter: resolvedHostDiameter + 0.1,
+                    diameter: previewKnotDiameter,
                 };
 
                 const buildResult = buildLeafData({
@@ -439,12 +447,17 @@ export function LeafPlacementController() {
 
             if (!hostDiameterMm) return;
 
+            const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
+            const committedKnotDiameter = committedKnotIsOnTwig
+                ? twigJointDiameterForLocalDiameter(hostDiameterMm)
+                : hostDiameterMm + 0.1;
+
             const parentKnot: Knot = {
                 id: knotId,
                 parentShaftId: segmentId,
                 t: snapTarget.t,
                 pos: snapTarget.snappedPos,
-                diameter: hostDiameterMm + 0.1,
+                diameter: committedKnotDiameter,
             };
 
             const settings = getSettings();

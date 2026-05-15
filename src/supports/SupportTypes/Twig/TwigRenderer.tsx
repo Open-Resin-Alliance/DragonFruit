@@ -13,9 +13,10 @@ import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
-import { getSnapshot, updateTwig } from '../../state';
+import { getSnapshot, updateTwig, updateKnot, updateLeaf } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { twigDiskJointStandoff } from './twigJointStandoff';
+import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from './twigDragPreview';
 
 interface TwigRendererProps {
   twig: Twig;
@@ -214,18 +215,65 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       initialEvent,
       modelId: twig.modelId,
       onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
-        const latestTwig = getSnapshot().twigs[twig.id];
+        const snap = getSnapshot();
+        const latestTwig = snap.twigs[twig.id];
         if (!latestTwig) return;
-        liveDragTwigRef.current = recomputeTwigForMovedDisk(latestTwig, diskKey, point, surfaceNormal);
+        const nextTwig = recomputeTwigForMovedDisk(latestTwig, diskKey, point, surfaceNormal);
+        liveDragTwigRef.current = nextTwig;
+
+        // Find attached knots / leaves and emit a preview so SupportRenderer
+        // can show them following the twig's new geometry in real time.
+        const segmentIdSet = new Set<string>(nextTwig.segments.map(s => s.id));
+        const attachedKnots = Object.values(snap.knots).filter(k => segmentIdSet.has(k.parentShaftId));
+        const leavesByParentKnotId = new Map<string, typeof snap.leaves[string][]>();
+        for (const leaf of Object.values(snap.leaves)) {
+          const list = leavesByParentKnotId.get(leaf.parentKnotId);
+          if (list) list.push(leaf);
+          else leavesByParentKnotId.set(leaf.parentKnotId, [leaf]);
+        }
+        const { knotsById, leavesById } = computeTwigDragAttachmentUpdates(
+          nextTwig,
+          attachedKnots,
+          leavesByParentKnotId,
+        );
+        emitTwigDragPreview({
+          twigId: nextTwig.id,
+          twig: nextTwig,
+          knotsById,
+          leavesById,
+        });
+
         setDragTick((tick) => tick + 1);
       },
       onEnd: () => {
         if (liveDragTwigRef.current) {
-          updateTwig(liveDragTwigRef.current);
+          const nextTwig = liveDragTwigRef.current;
+          updateTwig(nextTwig);
+
+          // Persist attached knot/leaf updates so the on-screen preview
+          // becomes the committed state.
+          const snap = getSnapshot();
+          const segmentIdSet = new Set<string>(nextTwig.segments.map(s => s.id));
+          const attachedKnots = Object.values(snap.knots).filter(k => segmentIdSet.has(k.parentShaftId));
+          const leavesByParentKnotId = new Map<string, typeof snap.leaves[string][]>();
+          for (const leaf of Object.values(snap.leaves)) {
+            const list = leavesByParentKnotId.get(leaf.parentKnotId);
+            if (list) list.push(leaf);
+            else leavesByParentKnotId.set(leaf.parentKnotId, [leaf]);
+          }
+          const { knotsById, leavesById } = computeTwigDragAttachmentUpdates(
+            nextTwig,
+            attachedKnots,
+            leavesByParentKnotId,
+          );
+          for (const knot of Object.values(knotsById)) updateKnot(knot);
+          for (const leaf of Object.values(leavesById)) updateLeaf(leaf);
+
           if (beforeHistoryRef.current) {
             pushSupportEditHistory('Move twig tip', beforeHistoryRef.current, captureSupportEditSnapshot());
           }
         }
+        clearTwigDragPreview();
         liveDragTwigRef.current = null;
         dragSessionRef.current = null;
         beforeHistoryRef.current = null;

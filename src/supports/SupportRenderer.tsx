@@ -22,12 +22,14 @@ import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteracti
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
 import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
+import { useActiveTwigDragPreview } from './SupportTypes/Twig/twigDragPreview';
 import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectGhostedBraceIds, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf } from './types';
+import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf, type Twig } from './types';
+import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierToLineSegments, calculateAdaptiveBezierResolution } from './Curves/BezierUtils';
 import type { SupportData } from './rendering';
 import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
@@ -208,11 +210,13 @@ function tessellateBraceBezierToShafts(
 
 function recomputeLeafPreviewContactCone(
     leaf: Leaf,
-    previewKnotPos: { x: number; y: number; z: number },
+    previewKnot: Knot,
+    twigBySegmentId: Map<string, Twig>,
 ) {
     const cone = leaf.contactCone;
     if (!cone?.surfaceNormal) return leaf;
 
+    const previewKnotPos = previewKnot.pos;
     const tip = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
     const sn = new THREE.Vector3(cone.surfaceNormal.x, cone.surfaceNormal.y, cone.surfaceNormal.z);
     const knot = new THREE.Vector3(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
@@ -240,10 +244,25 @@ function recomputeLeafPreviewContactCone(
         }
     }
 
+    // If the parent knot sits on a tapered twig, the leaf's wide-end diameter
+    // (bodyDiameterMm) must live-track the twig's local diameter at the knot's
+    // current slide T. Otherwise the cone "neck" stays frozen at the placement
+    // diameter while the knot visibly grows/shrinks.
+    let nextBodyDiameterMm = cone.profile.bodyDiameterMm;
+    const hostTwig = previewKnot.parentShaftId ? twigBySegmentId.get(previewKnot.parentShaftId) : undefined;
+    if (hostTwig && previewKnot.t !== undefined) {
+        const localTwigDia = resolveTwigDiameterAtSegmentT(hostTwig, previewKnot.parentShaftId, previewKnot.t);
+        if (localTwigDia !== null) {
+            nextBodyDiameterMm = localTwigDia;
+        }
+    }
+
     const oldNormal = cone.normal;
     const oldLen = cone.profile.lengthMm;
+    const oldBodyDia = cone.profile.bodyDiameterMm;
     if (
         oldLen === finalLength
+        && oldBodyDia === nextBodyDiameterMm
         && oldNormal.x === axis.x
         && oldNormal.y === axis.y
         && oldNormal.z === axis.z
@@ -259,6 +278,7 @@ function recomputeLeafPreviewContactCone(
             profile: {
                 ...cone.profile,
                 lengthMm: finalLength,
+                bodyDiameterMm: nextBodyDiameterMm,
             },
         },
     };
@@ -629,6 +649,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportIds = supportSelectionAndHoverSuppressed ? EMPTY_SUPPORT_ID_LIST : marqueeHover.supportIds;
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
     const activeKnotDragPreview = useActiveKnotDragPreview();
+    const activeTwigDragPreview = useActiveTwigDragPreview();
     const supportRenderLookupInput = useMemo(() => ({
         state: {
             roots: state.roots,
@@ -666,6 +687,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const branchList = useMemo(() => Object.values(state.branches), [state.branches]);
     const leafList = useMemo(() => Object.values(state.leaves), [state.leaves]);
     const twigList = useMemo(() => Object.values(state.twigs), [state.twigs]);
+    // Reverse lookup: twig segment id → owning twig. Used during knot drag to
+    // resolve a Leaf's wide-end (bodyDiameterMm) against the twig taper so the
+    // cone visibly tapers with the knot. While a disk drag is in flight, the
+    // live (not-yet-committed) twig is substituted so taper math reflects the
+    // live geometry.
+    const twigBySegmentId = useMemo(() => {
+        const map = new Map<string, Twig>();
+        for (const twig of twigList) {
+            const liveTwig = activeTwigDragPreview && activeTwigDragPreview.twigId === twig.id
+                ? activeTwigDragPreview.twig
+                : twig;
+            for (const seg of liveTwig.segments) {
+                map.set(seg.id, liveTwig);
+            }
+        }
+        return map;
+    }, [twigList, activeTwigDragPreview]);
     const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
     const anchorList = useMemo(() => Object.values(state.anchors), [state.anchors]);
@@ -1609,16 +1647,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const previewSeedKnotOverrides = useMemo(() => {
         const knotPreview = activeKnotDragPreview?.knot;
-        if (!knotPreview) return basePreviewKnotOverrides;
-        if (basePreviewKnotOverrides[knotPreview.id] === knotPreview) return basePreviewKnotOverrides;
-        return {
-            ...basePreviewKnotOverrides,
-            [knotPreview.id]: knotPreview,
-        };
-    }, [basePreviewKnotOverrides, activeKnotDragPreview]);
+        const twigKnots = activeTwigDragPreview?.knotsById;
+        const hasTwigKnots = !!twigKnots && Object.keys(twigKnots).length > 0;
+
+        if (!knotPreview && !hasTwigKnots) return basePreviewKnotOverrides;
+
+        const merged = { ...basePreviewKnotOverrides };
+        if (hasTwigKnots) {
+            for (const id in twigKnots) merged[id] = twigKnots[id];
+        }
+        if (knotPreview) merged[knotPreview.id] = knotPreview;
+        return merged;
+    }, [basePreviewKnotOverrides, activeKnotDragPreview, activeTwigDragPreview]);
 
     const shouldCascadeDependentPreview = !freezeDependentPreviewDuringJointDrag
-        && (!!activeJointDragPreview?.support || !!activeKnotDragPreview?.knot);
+        && (!!activeJointDragPreview?.support || !!activeKnotDragPreview?.knot || !!activeTwigDragPreview);
 
     const previewKnotOverrides = useMemo(() => {
         return computeCascadedPreviewKnotOverrides({
@@ -1641,9 +1684,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             previewKnotOverrides,
             leafIdsByParentKnotId,
             leavesById: state.leaves,
-            recomputeLeafPreviewContactCone,
+            recomputeLeafPreviewContactCone: (leaf, previewKnot) =>
+                recomputeLeafPreviewContactCone(leaf, previewKnot, twigBySegmentId),
         });
-    }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves]);
+    }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves, twigBySegmentId]);
 
     const activePreviewTrunk = activeJointDragPreview?.kind === 'trunk'
         ? (activeJointDragPreview.support as (typeof state.trunks)[string])
