@@ -19,7 +19,7 @@ use crate::types::{
 use crate::z_blend;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -144,7 +144,11 @@ impl SupportMaskContext {
 
         let mut triangles = parse_triangles(&support_job.triangles_xyz);
         project_triangles_inplace(&mut triangles, &support_job);
-        let layer_index = build_layer_index(&triangles, support_job.total_layers, support_job.layer_height_mm);
+        let layer_index = build_layer_index(
+            &triangles,
+            support_job.total_layers,
+            support_job.layer_height_mm,
+        );
 
         Some(Self {
             support_job,
@@ -357,6 +361,11 @@ fn rasterize_vertical_aa_streaming_v3(
         .then(|| Vec::with_capacity(job.total_layers as usize));
     let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
+    let z_blend_backward_ns = AtomicU64::new(0);
+    let z_blend_forward_ns = AtomicU64::new(0);
+    let post_blur_ns = AtomicU64::new(0);
+    let support_merge_ns = AtomicU64::new(0);
+
     let mut support_mask_context = SupportMaskContext::from_job(raster_job);
     let model_active_layer_window = resolve_model_active_layer_window(raster_job);
 
@@ -470,6 +479,7 @@ fn rasterize_vertical_aa_streaming_v3(
 
         // --- Backward z-blend for the current layer (look-behind window). ---
         if backward_applied {
+            let blend_start = std::time::Instant::now();
             let priors_start = pending_layers.len().saturating_sub(look_back);
             let priors: Vec<&[u8]> = pending_layers
                 .iter()
@@ -499,15 +509,17 @@ fn rasterize_vertical_aa_streaming_v3(
                     Some(&lut),
                 );
             }
+            z_blend_backward_ns.fetch_add(
+                blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
         }
 
         let backward_contrib = if backward_applied {
             if let Some(base_mask) = base_mask_for_debug.as_ref() {
                 let mut diff = vec![0u8; pixels_per_layer];
-                for ((dst, after), before) in diff
-                    .iter_mut()
-                    .zip(raw_mask.iter())
-                    .zip(base_mask.iter())
+                for ((dst, after), before) in
+                    diff.iter_mut().zip(raw_mask.iter()).zip(base_mask.iter())
                 {
                     *dst = after.saturating_sub(*before);
                 }
@@ -543,8 +555,11 @@ fn rasterize_vertical_aa_streaming_v3(
                 .map(|future| future.topology.as_slice())
                 .collect();
 
-            let futures_have_topology = pending_layers.iter().any(|future| future.topology_non_empty);
-            let forward_applied = layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
+            let futures_have_topology = pending_layers
+                .iter()
+                .any(|future| future.topology_non_empty);
+            let forward_applied =
+                layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
 
             let mut forward_contrib = if debug_color_overlay && forward_applied {
                 Some(vec![0u8; pixels_per_layer])
@@ -554,6 +569,7 @@ fn rasterize_vertical_aa_streaming_v3(
 
             let effective_look_back = futures.len();
             if forward_applied && effective_look_back > 0 {
+                let blend_start = std::time::Instant::now();
                 let before_forward = if debug_color_overlay {
                     Some(layer.mask.clone())
                 } else {
@@ -591,14 +607,16 @@ fn rasterize_vertical_aa_streaming_v3(
                         Some(&lut),
                     );
                 }
+                z_blend_forward_ns.fetch_add(
+                    blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                    Ordering::Relaxed,
+                );
 
                 if let (Some(before), Some(ref mut forward)) =
                     (before_forward.as_ref(), forward_contrib.as_mut())
                 {
-                    for ((dst, after), prev) in forward
-                        .iter_mut()
-                        .zip(layer.mask.iter())
-                        .zip(before.iter())
+                    for ((dst, after), prev) in
+                        forward.iter_mut().zip(layer.mask.iter()).zip(before.iter())
                     {
                         *dst = after.saturating_sub(*prev);
                     }
@@ -606,14 +624,17 @@ fn rasterize_vertical_aa_streaming_v3(
             }
 
             // XY smoothing runs after both vertical blend directions.
-            let should_blur_model =
-                layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
+            let should_blur_model = layer.apply_model_aa
+                && (layer.model_non_empty || layer.backward_applied || forward_applied);
             if should_blur_model {
+                let blur_start = std::time::Instant::now();
                 let mut model_blur_seed_bounds = layer.backward_seed_bounds;
                 if forward_applied {
-                    model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
+                    model_blur_seed_bounds =
+                        merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
                     for future in pending_layers.iter().take(look_back) {
-                        model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, future.topology_bounds);
+                        model_blur_seed_bounds =
+                            merge_bounds(model_blur_seed_bounds, future.topology_bounds);
                     }
                 }
                 let blur_pad = fade_px as usize + blur_radius;
@@ -643,9 +664,14 @@ fn rasterize_vertical_aa_streaming_v3(
                 if blur_radius == 0 {
                     apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
                 }
+                post_blur_ns.fetch_add(
+                    blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                    Ordering::Relaxed,
+                );
             }
 
             if let Some(ref mut backward) = layer.backward_contrib {
+                let blur_start = std::time::Instant::now();
                 apply_blur_postprocess_inplace(
                     backward,
                     width,
@@ -656,8 +682,13 @@ fn rasterize_vertical_aa_streaming_v3(
                 if blur_radius == 0 {
                     apply_min_alpha_floor(backward, min_aa_alpha_u8);
                 }
+                post_blur_ns.fetch_add(
+                    blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                    Ordering::Relaxed,
+                );
             }
             if let Some(ref mut forward) = forward_contrib {
+                let blur_start = std::time::Instant::now();
                 apply_blur_postprocess_inplace(
                     forward,
                     width,
@@ -668,10 +699,19 @@ fn rasterize_vertical_aa_streaming_v3(
                 if blur_radius == 0 {
                     apply_min_alpha_floor(forward, min_aa_alpha_u8);
                 }
+                post_blur_ns.fetch_add(
+                    blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                    Ordering::Relaxed,
+                );
             }
 
             if let Some(support_mask) = layer.support_mask.as_ref() {
+                let merge_start = std::time::Instant::now();
                 merge_support_mask_inplace(&mut layer.mask, support_mask);
+                support_merge_ns.fetch_add(
+                    merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                    Ordering::Relaxed,
+                );
             }
 
             if let Some(ref mut out_pngs) = png_layers {
@@ -725,7 +765,7 @@ fn rasterize_vertical_aa_streaming_v3(
         Ok(())
     };
 
-    let (_rendered, layer_area_stats, perf) = slice_and_rasterize_v3(
+    let (_rendered, layer_area_stats, mut perf) = slice_and_rasterize_v3(
         raster_job,
         requires_area_stats,
         false,
@@ -735,6 +775,11 @@ fn rasterize_vertical_aa_streaming_v3(
         cancel_flag,
     )?;
 
+    perf.z_blend_backward_ns = z_blend_backward_ns.load(Ordering::Relaxed);
+    perf.z_blend_forward_ns = z_blend_forward_ns.load(Ordering::Relaxed);
+    perf.post_blur_ns = post_blur_ns.load(Ordering::Relaxed);
+    perf.support_merge_ns = support_merge_ns.load(Ordering::Relaxed);
+
     // Flush tail layers with the remaining (short) future window.
     while let Some(mut layer) = pending_layers.pop_front() {
         let futures: Vec<&[u8]> = pending_layers
@@ -743,8 +788,11 @@ fn rasterize_vertical_aa_streaming_v3(
             .map(|future| future.topology.as_slice())
             .collect();
 
-        let futures_have_topology = pending_layers.iter().any(|future| future.topology_non_empty);
-        let forward_applied = layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
+        let futures_have_topology = pending_layers
+            .iter()
+            .any(|future| future.topology_non_empty);
+        let forward_applied =
+            layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
 
         let mut forward_contrib = if debug_color_overlay && forward_applied {
             Some(vec![0u8; pixels_per_layer])
@@ -754,6 +802,7 @@ fn rasterize_vertical_aa_streaming_v3(
 
         let effective_look_back = futures.len();
         if forward_applied && effective_look_back > 0 {
+            let blend_start = std::time::Instant::now();
             let before_forward = if debug_color_overlay {
                 Some(layer.mask.clone())
             } else {
@@ -791,28 +840,33 @@ fn rasterize_vertical_aa_streaming_v3(
                     Some(&lut),
                 );
             }
+            z_blend_forward_ns.fetch_add(
+                blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
 
             if let (Some(before), Some(ref mut forward)) =
                 (before_forward.as_ref(), forward_contrib.as_mut())
             {
-                for ((dst, after), prev) in forward
-                    .iter_mut()
-                    .zip(layer.mask.iter())
-                    .zip(before.iter())
+                for ((dst, after), prev) in
+                    forward.iter_mut().zip(layer.mask.iter()).zip(before.iter())
                 {
                     *dst = after.saturating_sub(*prev);
                 }
             }
         }
 
-        let should_blur_model =
-            layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
+        let should_blur_model = layer.apply_model_aa
+            && (layer.model_non_empty || layer.backward_applied || forward_applied);
         if should_blur_model {
+            let blur_start = std::time::Instant::now();
             let mut model_blur_seed_bounds = layer.backward_seed_bounds;
             if forward_applied {
-                model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
+                model_blur_seed_bounds =
+                    merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
                 for future in pending_layers.iter().take(look_back) {
-                    model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, future.topology_bounds);
+                    model_blur_seed_bounds =
+                        merge_bounds(model_blur_seed_bounds, future.topology_bounds);
                 }
             }
             let blur_pad = fade_px as usize + blur_radius;
@@ -842,35 +896,42 @@ fn rasterize_vertical_aa_streaming_v3(
             if blur_radius == 0 {
                 apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
             }
+            post_blur_ns.fetch_add(
+                blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
         }
 
         if let Some(ref mut backward) = layer.backward_contrib {
-            apply_blur_postprocess_inplace(
-                backward,
-                width,
-                height,
-                blur_radius,
-                min_aa_alpha_u8,
-            );
+            let blur_start = std::time::Instant::now();
+            apply_blur_postprocess_inplace(backward, width, height, blur_radius, min_aa_alpha_u8);
             if blur_radius == 0 {
                 apply_min_alpha_floor(backward, min_aa_alpha_u8);
             }
+            post_blur_ns.fetch_add(
+                blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
         }
         if let Some(ref mut forward) = forward_contrib {
-            apply_blur_postprocess_inplace(
-                forward,
-                width,
-                height,
-                blur_radius,
-                min_aa_alpha_u8,
-            );
+            let blur_start = std::time::Instant::now();
+            apply_blur_postprocess_inplace(forward, width, height, blur_radius, min_aa_alpha_u8);
             if blur_radius == 0 {
                 apply_min_alpha_floor(forward, min_aa_alpha_u8);
             }
+            post_blur_ns.fetch_add(
+                blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
         }
 
         if let Some(support_mask) = layer.support_mask.as_ref() {
+            let merge_start = std::time::Instant::now();
             merge_support_mask_inplace(&mut layer.mask, support_mask);
+            support_merge_ns.fetch_add(
+                merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
         }
 
         if let Some(ref mut out_pngs) = png_layers {

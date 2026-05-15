@@ -312,6 +312,10 @@ export type NativeSlicerPerfMetrics = {
   renderNs: number;
   pngEncodeNs: number;
   archiveEncodeNs: number;
+  zBlendBackwardNs: number;
+  zBlendForwardNs: number;
+  postBlurNs: number;
+  supportMergeNs: number;
   layers: number;
 };
 
