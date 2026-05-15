@@ -326,6 +326,13 @@ fn z_blend_layer_inplace_with_roi(
             in_prior[row + x] = 0;
         }
     }
+
+    let mut receding_any = false;
+    let mut rec_min_x = width;
+    let mut rec_max_x = 0usize;
+    let mut rec_min_y = height;
+    let mut rec_max_y = 0usize;
+
     for (depth_idx, prior) in priors.iter().rev().enumerate() {
         let depth_val = (depth_idx + 1) as u8; // 1 = most-recent, 2 = older …
         for y in roi_min_y..=roi_max_y {
@@ -334,6 +341,13 @@ fn z_blend_layer_inplace_with_roi(
                 let idx = row + x;
                 if prior[idx] > TOPO_THRESHOLD && in_prior[idx] == 0 {
                     in_prior[idx] = depth_val;
+                    if current[idx] <= TOPO_THRESHOLD {
+                        receding_any = true;
+                        rec_min_x = rec_min_x.min(x);
+                        rec_max_x = rec_max_x.max(x);
+                        rec_min_y = rec_min_y.min(y);
+                        rec_max_y = rec_max_y.max(y);
+                    }
                 }
             }
         }
@@ -341,24 +355,6 @@ fn z_blend_layer_inplace_with_roi(
 
     // Quick early-out: if no receding pixels exist (prior occupied, current empty),
     // there is nothing to blend for this layer.
-    let mut receding_any = false;
-    let mut rec_min_x = width;
-    let mut rec_max_x = 0usize;
-    let mut rec_min_y = height;
-    let mut rec_max_y = 0usize;
-    for y in roi_min_y..=roi_max_y {
-        let row_start = y * width;
-        for x in roi_min_x..=roi_max_x {
-            let idx = row_start + x;
-            if in_prior[idx] > 0 && current[idx] <= TOPO_THRESHOLD {
-                receding_any = true;
-                rec_min_x = rec_min_x.min(x);
-                rec_max_x = rec_max_x.max(x);
-                rec_min_y = rec_min_y.min(y);
-                rec_max_y = rec_max_y.max(y);
-            }
-        }
-    }
     if !receding_any {
         return;
     }
@@ -559,6 +555,13 @@ fn z_blend_forward_inplace_with_roi(
             in_forward[row + x] = 0;
         }
     }
+
+    let mut appearing_any = false;
+    let mut app_min_x = width;
+    let mut app_max_x = 0usize;
+    let mut app_min_y = height;
+    let mut app_max_y = 0usize;
+
     for (depth_idx, future) in futures.iter().enumerate() {
         let depth_val = (depth_idx + 1) as u8;
         for y in roi_min_y..=roi_max_y {
@@ -567,30 +570,19 @@ fn z_blend_forward_inplace_with_roi(
                 let idx = row + x;
                 if future[idx] > TOPO_THRESHOLD && in_forward[idx] == 0 {
                     in_forward[idx] = depth_val;
+                    if topology[idx] <= TOPO_THRESHOLD {
+                        appearing_any = true;
+                        app_min_x = app_min_x.min(x);
+                        app_max_x = app_max_x.max(x);
+                        app_min_y = app_min_y.min(y);
+                        app_max_y = app_max_y.max(y);
+                    }
                 }
             }
         }
     }
 
-    // ROI scan: locate pre-appearing pixels (not in topology, in some future).
-    let mut appearing_any = false;
-    let mut app_min_x = width;
-    let mut app_max_x = 0usize;
-    let mut app_min_y = height;
-    let mut app_max_y = 0usize;
-    for y in roi_min_y..=roi_max_y {
-        let row_start = y * width;
-        for x in roi_min_x..=roi_max_x {
-            let idx = row_start + x;
-            if in_forward[idx] > 0 && topology[idx] <= TOPO_THRESHOLD {
-                appearing_any = true;
-                app_min_x = app_min_x.min(x);
-                app_max_x = app_max_x.max(x);
-                app_min_y = app_min_y.min(y);
-                app_max_y = app_max_y.max(y);
-            }
-        }
-    }
+    // Quick early-out: if no pre-appearing pixels exist, there's no forward blend.
     if !appearing_any {
         return;
     }
