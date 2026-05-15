@@ -16,6 +16,10 @@ pub struct SlicingPerfV3 {
     pub post_blur_ns: u64,
     /// CPU time spent merging support mask back into model mask.
     pub support_merge_ns: u64,
+    /// Effective 3DAA post-stage worker thread count selected by the engine.
+    pub daa_post_threads: u32,
+    /// Effective 3DAA post-stage overlap buffer depth selected by the engine.
+    pub daa_post_buffer_depth: u32,
     pub layers: u32,
 }
 

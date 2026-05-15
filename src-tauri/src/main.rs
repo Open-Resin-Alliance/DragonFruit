@@ -545,6 +545,8 @@ struct NativeSliceTempPathResult {
 
 fn v3_runtime_metrics(
     output_path: &std::path::Path,
+    daa_post_threads: u32,
+    daa_post_buffer_depth: u32,
     metadata_parse_ns: u64,
     mesh_decode_ns: u64,
     artifact_metadata_ns: u64,
@@ -561,17 +563,6 @@ fn v3_runtime_metrics(
         .unwrap_or(hw_threads)
         .clamp(1, hw_threads);
     let queue_buffer = (max_concurrent * 2).clamp(2, 16);
-    let daa_post_threads = std::env::var("DF_3DAA_POST_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v >= 1)
-        .unwrap_or(hw_threads)
-        .clamp(1, hw_threads);
-    let daa_post_buffer_depth = std::env::var("DF_3DAA_POST_BUFFER_DEPTH")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(8);
 
     let artifact_dir = output_path
         .parent()
@@ -590,8 +581,8 @@ fn v3_runtime_metrics(
         pool_threads: hw_threads as u32,
         max_concurrent: max_concurrent as u32,
         queue_buffer: queue_buffer as u32,
-        daa_post_threads: daa_post_threads as u32,
-        daa_post_buffer_depth: daa_post_buffer_depth as u32,
+        daa_post_threads,
+        daa_post_buffer_depth,
         build_profile,
         artifact_dir,
         mesh_stage_dir,
@@ -1343,6 +1334,8 @@ async fn slice_solid_native_to_temp_path(
             let wrapper_overhead_ns = wrapper_total_ns.saturating_sub(perf_raw.total_ns);
             let runtime = v3_runtime_metrics(
                 &path,
+                perf_raw.daa_post_threads,
+                perf_raw.daa_post_buffer_depth,
                 metadata_parse_ns,
                 mesh_decode_ns,
                 artifact_metadata_ns,

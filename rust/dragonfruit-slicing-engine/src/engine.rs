@@ -322,25 +322,72 @@ fn resolve_model_active_layer_window(job: &SliceJobV3) -> Option<(u32, u32)> {
 }
 
 #[inline]
-fn choose_3daa_post_threads() -> usize {
-    let hw = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    std::env::var("DF_3DAA_POST_THREADS")
+fn env_override_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v >= 1)
-        .unwrap_or(hw)
-        .clamp(1, hw)
 }
 
 #[inline]
-fn choose_3daa_post_buffer_depth() -> usize {
-    std::env::var("DF_3DAA_POST_BUFFER_DEPTH")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .map(|v| v.min(8))
-        .unwrap_or(0)
+fn choose_3daa_post_threads(width: usize, height: usize, total_layers: u32) -> usize {
+    let hw = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+
+    if let Some(override_threads) = env_override_usize("DF_3DAA_POST_THREADS") {
+        return override_threads.clamp(1, hw);
+    }
+
+    let layer_pixels = (width as u64).saturating_mul(height as u64);
+    let total_pixels = layer_pixels.saturating_mul(total_layers as u64);
+
+    let auto = if hw <= 4 || total_pixels < 300_000_000 {
+        1
+    } else if layer_pixels >= 8_000_000 || total_pixels >= 3_000_000_000 {
+        // Very large layers are memory-bandwidth heavy and benefit most from
+        // saturating host parallelism for topology/sweep work.
+        hw
+    } else if total_pixels < 1_000_000_000 {
+        (hw / 3).max(1)
+    } else if total_pixels < 3_000_000_000 {
+        (hw / 2).max(1)
+    } else {
+        (hw * 3 / 4).max(1)
+    };
+
+    auto.clamp(1, hw)
+}
+
+#[inline]
+fn choose_3daa_post_buffer_depth(
+    width: usize,
+    height: usize,
+    total_layers: u32,
+    post_threads: usize,
+) -> usize {
+    if let Some(override_depth) = env_override_usize("DF_3DAA_POST_BUFFER_DEPTH") {
+        return override_depth.min(8);
+    }
+
+    let hw = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let layer_pixels = (width as u64).saturating_mul(height as u64);
+    let total_pixels = layer_pixels.saturating_mul(total_layers as u64);
+
+    // Current overlap implementation clones future topology masks into worker tasks.
+    // For very large layers this can balloon memory and bandwidth cost, so we
+    // auto-disable overlap until shared-topology task transport lands.
+    if layer_pixels >= 6_000_000 || total_layers < 96 || post_threads <= 1 || hw < 6 {
+        return 0;
+    }
+
+    if total_pixels >= 3_000_000_000 {
+        4
+    } else {
+        2
+    }
 }
 
 type TopologyBounds = Option<(usize, usize, usize, usize)>;
@@ -630,8 +677,9 @@ fn rasterize_vertical_aa_streaming_v3(
     // can under-utilize CPU when run on a single thread.
     const PARALLEL_SWEEP_PIXEL_THRESHOLD: usize = 8_000_000;
     let use_parallel_sweeps = pixels_per_layer >= PARALLEL_SWEEP_PIXEL_THRESHOLD;
-    let post_threads = choose_3daa_post_threads();
-    let post_buffer_depth = choose_3daa_post_buffer_depth();
+    let post_threads = choose_3daa_post_threads(width, height, job.total_layers);
+    let post_buffer_depth =
+        choose_3daa_post_buffer_depth(width, height, job.total_layers, post_threads);
     let post_sweep_pool = if use_parallel_sweeps {
         ThreadPoolBuilder::new().num_threads(post_threads).build().ok()
     } else {
@@ -1272,6 +1320,8 @@ fn rasterize_vertical_aa_streaming_v3(
     perf.z_blend_forward_ns = z_blend_forward_ns.load(Ordering::Relaxed);
     perf.post_blur_ns = post_blur_ns.load(Ordering::Relaxed);
     perf.support_merge_ns = support_merge_ns.load(Ordering::Relaxed);
+    perf.daa_post_threads = post_threads as u32;
+    perf.daa_post_buffer_depth = post_buffer_depth as u32;
 
     Ok((
         RenderedLayersV3 {
