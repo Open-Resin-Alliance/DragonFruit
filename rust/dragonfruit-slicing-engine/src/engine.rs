@@ -21,8 +21,8 @@ use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -103,6 +103,16 @@ fn is_vertical_aa_mode(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("3daa")
         || mode.trim().eq_ignore_ascii_case("vertical")
         || mode.trim().eq_ignore_ascii_case("vertical2")
+        || mode.trim().eq_ignore_ascii_case("vertical3")
+        || mode.trim().eq_ignore_ascii_case("crossblend")
+        || mode.trim().eq_ignore_ascii_case("volumetric")
+}
+
+#[inline]
+fn is_cross_blend_mode(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("vertical3")
+        || mode.trim().eq_ignore_ascii_case("crossblend")
+        || mode.trim().eq_ignore_ascii_case("volumetric")
 }
 
 #[inline]
@@ -409,9 +419,11 @@ struct PendingLayer {
 struct PostWorkerTask {
     seq: u64,
     layer: PendingLayer,
+    prior_topologies: Vec<Vec<u8>>,
     future_topologies: Vec<Vec<u8>>,
     future_bounds: Vec<TopologyBounds>,
     futures_have_topology: bool,
+    cross_blend_cfg: Option<z_blend::CrossBlendConfig>,
 }
 
 struct PostProcessedLayer {
@@ -419,12 +431,16 @@ struct PostProcessedLayer {
     layer: PendingLayer,
     forward_contrib: Option<Vec<u8>>,
     z_blend_forward_ns: u64,
+    cross_blend_ns: u64,
+    cross_blend_touched_pixels: u64,
+    cross_blend_contributing_layers: u64,
     post_blur_ns: u64,
     support_merge_ns: u64,
 }
 
 fn process_pending_layer_post(
     mut layer: PendingLayer,
+    prior_topologies: &[&[u8]],
     future_topologies: &[&[u8]],
     future_bounds: &[TopologyBounds],
     futures_have_topology: bool,
@@ -436,6 +452,8 @@ fn process_pending_layer_post(
     debug_color_overlay: bool,
     lut: &[u8; 256],
     workspace: &mut z_blend::ZBlendWorkspace,
+    cross_blend_cfg: Option<&z_blend::CrossBlendConfig>,
+    cross_blend_ws: &mut z_blend::CrossBlendWorkspace,
 ) -> PostProcessedLayer {
     let pixels_per_layer = width.saturating_mul(height);
 
@@ -449,6 +467,9 @@ fn process_pending_layer_post(
 
     let effective_look_back = future_topologies.len();
     let mut z_blend_forward_ns = 0u64;
+    let mut cross_blend_ns = 0u64;
+    let mut cross_blend_touched_pixels = 0u64;
+    let mut cross_blend_contributing_layers = 0u64;
     let mut post_blur_ns = 0u64;
     let mut support_merge_ns = 0u64;
 
@@ -497,14 +518,32 @@ fn process_pending_layer_post(
         if let (Some(before), Some(ref mut forward)) =
             (before_forward.as_ref(), forward_contrib.as_mut())
         {
-            for ((dst, after), prev) in forward.iter_mut().zip(layer.mask.iter()).zip(before.iter()) {
+            for ((dst, after), prev) in forward.iter_mut().zip(layer.mask.iter()).zip(before.iter())
+            {
                 *dst = after.saturating_sub(*prev);
             }
         }
     }
 
-    let should_blur_model =
-        layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
+    if let Some(cfg) = cross_blend_cfg {
+        let cross_start = std::time::Instant::now();
+        let stats = z_blend::cross_blend_layer_inplace(
+            &mut layer.mask,
+            layer.topology.as_slice(),
+            prior_topologies,
+            future_topologies,
+            width,
+            height,
+            cfg,
+            cross_blend_ws,
+        );
+        cross_blend_ns = cross_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        cross_blend_touched_pixels = stats.touched_pixels as u64;
+        cross_blend_contributing_layers = stats.contributing_layers as u64;
+    }
+
+    let should_blur_model = layer.apply_model_aa
+        && (layer.model_non_empty || layer.backward_applied || forward_applied);
     if should_blur_model {
         let blur_start = std::time::Instant::now();
         let mut model_blur_seed_bounds = layer.backward_seed_bounds;
@@ -541,9 +580,8 @@ fn process_pending_layer_post(
         if blur_radius == 0 {
             apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
         }
-        post_blur_ns = post_blur_ns.saturating_add(
-            blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        );
+        post_blur_ns = post_blur_ns
+            .saturating_add(blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
 
     if let Some(ref mut backward) = layer.backward_contrib {
@@ -552,9 +590,8 @@ fn process_pending_layer_post(
         if blur_radius == 0 {
             apply_min_alpha_floor(backward, min_aa_alpha_u8);
         }
-        post_blur_ns = post_blur_ns.saturating_add(
-            blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        );
+        post_blur_ns = post_blur_ns
+            .saturating_add(blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
     if let Some(ref mut forward) = forward_contrib {
         let blur_start = std::time::Instant::now();
@@ -562,17 +599,15 @@ fn process_pending_layer_post(
         if blur_radius == 0 {
             apply_min_alpha_floor(forward, min_aa_alpha_u8);
         }
-        post_blur_ns = post_blur_ns.saturating_add(
-            blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        );
+        post_blur_ns = post_blur_ns
+            .saturating_add(blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
 
     if let Some(support_mask) = layer.support_mask.as_ref() {
         let merge_start = std::time::Instant::now();
         merge_support_mask_inplace(&mut layer.mask, support_mask);
-        support_merge_ns = support_merge_ns.saturating_add(
-            merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        );
+        support_merge_ns = support_merge_ns
+            .saturating_add(merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
 
     PostProcessedLayer {
@@ -580,6 +615,9 @@ fn process_pending_layer_post(
         layer,
         forward_contrib,
         z_blend_forward_ns,
+        cross_blend_ns,
+        cross_blend_touched_pixels,
+        cross_blend_contributing_layers,
         post_blur_ns,
         support_merge_ns,
     }
@@ -597,11 +635,21 @@ fn emit_post_processed_layer(
     on_processed_mask: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     raw_mask_layers: &mut Option<Vec<Vec<u8>>>,
     topology_reuse_pool: &mut Vec<Vec<u8>>,
+    emitted_topologies: &mut VecDeque<Vec<u8>>,
+    keep_emitted_topologies: bool,
+    look_back: usize,
     z_blend_forward_ns: &AtomicU64,
+    cross_blend_ns: &AtomicU64,
+    cross_blend_touched_pixels: &AtomicU64,
+    cross_blend_contributing_layers: &AtomicU64,
     post_blur_ns: &AtomicU64,
     support_merge_ns: &AtomicU64,
 ) -> Result<(), SlicerV3Error> {
     z_blend_forward_ns.fetch_add(processed.z_blend_forward_ns, Ordering::Relaxed);
+    cross_blend_ns.fetch_add(processed.cross_blend_ns, Ordering::Relaxed);
+    cross_blend_touched_pixels.fetch_add(processed.cross_blend_touched_pixels, Ordering::Relaxed);
+    cross_blend_contributing_layers
+        .fetch_add(processed.cross_blend_contributing_layers, Ordering::Relaxed);
     post_blur_ns.fetch_add(processed.post_blur_ns, Ordering::Relaxed);
     support_merge_ns.fetch_add(processed.support_merge_ns, Ordering::Relaxed);
 
@@ -652,6 +700,13 @@ fn emit_post_processed_layer(
         out_masks.push(processed.layer.mask);
     }
 
+    if keep_emitted_topologies {
+        emitted_topologies.push_back(processed.layer.topology.clone());
+        while emitted_topologies.len() > look_back {
+            emitted_topologies.pop_front();
+        }
+    }
+
     topology_reuse_pool.push(processed.layer.topology);
     Ok(())
 }
@@ -677,11 +732,24 @@ fn rasterize_vertical_aa_streaming_v3(
     // can under-utilize CPU when run on a single thread.
     const PARALLEL_SWEEP_PIXEL_THRESHOLD: usize = 8_000_000;
     let use_parallel_sweeps = pixels_per_layer >= PARALLEL_SWEEP_PIXEL_THRESHOLD;
+    let cross_blend_cfg = if is_cross_blend_mode(&job.anti_aliasing_mode) {
+        Some(z_blend::CrossBlendConfig {
+            window_layers: (job.z_blend_look_back as usize).max(1),
+            fade_px: job.z_blend_fade_px.max(1),
+            temporal_power: 1.0,
+            strength: 1.0,
+        })
+    } else {
+        None
+    };
     let post_threads = choose_3daa_post_threads(width, height, job.total_layers);
     let post_buffer_depth =
         choose_3daa_post_buffer_depth(width, height, job.total_layers, post_threads);
     let post_sweep_pool = if use_parallel_sweeps {
-        ThreadPoolBuilder::new().num_threads(post_threads).build().ok()
+        ThreadPoolBuilder::new()
+            .num_threads(post_threads)
+            .build()
+            .ok()
     } else {
         None
     };
@@ -713,6 +781,9 @@ fn rasterize_vertical_aa_streaming_v3(
 
     let z_blend_backward_ns = AtomicU64::new(0);
     let z_blend_forward_ns = AtomicU64::new(0);
+    let cross_blend_ns = AtomicU64::new(0);
+    let cross_blend_touched_pixels = AtomicU64::new(0);
+    let cross_blend_contributing_layers = AtomicU64::new(0);
     let post_blur_ns = AtomicU64::new(0);
     let support_merge_ns = AtomicU64::new(0);
 
@@ -726,6 +797,7 @@ fn rasterize_vertical_aa_streaming_v3(
     // blur, then support merge. This keeps forward and backward Z blending
     // symmetric and ensures both happen before blur.
     let mut pending_layers: VecDeque<PendingLayer> = VecDeque::with_capacity(look_back + 1);
+    let mut emitted_topologies: VecDeque<Vec<u8>> = VecDeque::with_capacity(look_back + 1);
 
     let overlap_enabled = post_buffer_depth > 0;
     let mut post_worker_txs: Vec<mpsc::SyncSender<PostWorkerTask>> = Vec::new();
@@ -746,11 +818,18 @@ fn rasterize_vertical_aa_streaming_v3(
             std::thread::spawn(move || {
                 let lut = z_blend::default_z_blend_lut();
                 let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
+                let mut cross_blend_ws = z_blend::CrossBlendWorkspace::new(width, height);
                 while let Ok(task) = task_rx.recv() {
-                    let future_slices: Vec<&[u8]> =
-                        task.future_topologies.iter().map(|v| v.as_slice()).collect();
+                    let prior_slices: Vec<&[u8]> =
+                        task.prior_topologies.iter().map(|v| v.as_slice()).collect();
+                    let future_slices: Vec<&[u8]> = task
+                        .future_topologies
+                        .iter()
+                        .map(|v| v.as_slice())
+                        .collect();
                     let mut out = process_pending_layer_post(
                         task.layer,
+                        &prior_slices,
                         &future_slices,
                         &task.future_bounds,
                         task.futures_have_topology,
@@ -762,6 +841,8 @@ fn rasterize_vertical_aa_streaming_v3(
                         debug_color_overlay,
                         &lut,
                         &mut workspace,
+                        task.cross_blend_cfg.as_ref(),
+                        &mut cross_blend_ws,
                     );
                     out.seq = task.seq;
                     if done_tx_worker.send(out).is_err() {
@@ -775,6 +856,8 @@ fn rasterize_vertical_aa_streaming_v3(
 
         post_worker_rx = Some(done_rx);
     }
+
+    let mut cross_blend_ws = z_blend::CrossBlendWorkspace::new(width, height);
 
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
@@ -1085,6 +1168,12 @@ fn rasterize_vertical_aa_streaming_v3(
             let layer = pending_layers.pop_front().expect("pending layer exists");
 
             if !post_worker_txs.is_empty() {
+                let prior_topologies: Vec<Vec<u8>> = emitted_topologies
+                    .iter()
+                    .rev()
+                    .take(look_back)
+                    .cloned()
+                    .collect();
                 let future_topologies: Vec<Vec<u8>> = pending_layers
                     .iter()
                     .take(look_back)
@@ -1107,17 +1196,19 @@ fn rasterize_vertical_aa_streaming_v3(
 
                 post_worker_txs[worker_idx]
                     .send(PostWorkerTask {
-                    seq,
-                    layer,
-                    future_topologies,
-                    future_bounds,
-                    futures_have_topology,
-                })
-                .map_err(|_| {
-                    SlicerV3Error::LayerPreview(
-                        "3DAA post worker task channel unexpectedly closed".to_string(),
-                    )
-                })?;
+                        seq,
+                        layer,
+                        prior_topologies,
+                        future_topologies,
+                        future_bounds,
+                        futures_have_topology,
+                        cross_blend_cfg,
+                    })
+                    .map_err(|_| {
+                        SlicerV3Error::LayerPreview(
+                            "3DAA post worker task channel unexpectedly closed".to_string(),
+                        )
+                    })?;
 
                 if let Some(rx) = post_worker_rx.as_ref() {
                     while let Ok(done) = rx.try_recv() {
@@ -1135,7 +1226,13 @@ fn rasterize_vertical_aa_streaming_v3(
                                 &mut on_processed_mask,
                                 &mut raw_mask_layers,
                                 &mut topology_reuse_pool,
+                                &mut emitted_topologies,
+                                cross_blend_cfg.is_some(),
+                                look_back,
                                 &z_blend_forward_ns,
+                                &cross_blend_ns,
+                                &cross_blend_touched_pixels,
+                                &cross_blend_contributing_layers,
                                 &post_blur_ns,
                                 &support_merge_ns,
                             )?;
@@ -1149,6 +1246,12 @@ fn rasterize_vertical_aa_streaming_v3(
                     .take(look_back)
                     .map(|future| future.topology.as_slice())
                     .collect();
+                let prior_topologies: Vec<&[u8]> = emitted_topologies
+                    .iter()
+                    .rev()
+                    .take(look_back)
+                    .map(|prior| prior.as_slice())
+                    .collect();
                 let future_bounds: Vec<TopologyBounds> = pending_layers
                     .iter()
                     .take(look_back)
@@ -1160,6 +1263,7 @@ fn rasterize_vertical_aa_streaming_v3(
                     .any(|future| future.topology_non_empty);
                 let processed = process_pending_layer_post(
                     layer,
+                    &prior_topologies,
                     &future_topologies,
                     &future_bounds,
                     futures_have_topology,
@@ -1171,6 +1275,8 @@ fn rasterize_vertical_aa_streaming_v3(
                     debug_color_overlay,
                     &lut,
                     &mut workspace,
+                    cross_blend_cfg.as_ref(),
+                    &mut cross_blend_ws,
                 );
                 emit_post_processed_layer(
                     processed,
@@ -1184,7 +1290,13 @@ fn rasterize_vertical_aa_streaming_v3(
                     &mut on_processed_mask,
                     &mut raw_mask_layers,
                     &mut topology_reuse_pool,
+                    &mut emitted_topologies,
+                    cross_blend_cfg.is_some(),
+                    look_back,
                     &z_blend_forward_ns,
+                    &cross_blend_ns,
+                    &cross_blend_touched_pixels,
+                    &cross_blend_contributing_layers,
                     &post_blur_ns,
                     &support_merge_ns,
                 )?;
@@ -1207,6 +1319,12 @@ fn rasterize_vertical_aa_streaming_v3(
     // Flush tail layers with the remaining (short) future window.
     while let Some(layer) = pending_layers.pop_front() {
         if !post_worker_txs.is_empty() {
+            let prior_topologies: Vec<Vec<u8>> = emitted_topologies
+                .iter()
+                .rev()
+                .take(look_back)
+                .cloned()
+                .collect();
             let future_topologies: Vec<Vec<u8>> = pending_layers
                 .iter()
                 .take(look_back)
@@ -1227,24 +1345,33 @@ fn rasterize_vertical_aa_streaming_v3(
             let seq = post_next_send_seq;
             post_next_send_seq = post_next_send_seq.wrapping_add(1);
 
-            post_worker_txs[worker_idx].send(PostWorkerTask {
-                seq,
-                layer,
-                future_topologies,
-                future_bounds,
-                futures_have_topology,
-            })
-            .map_err(|_| {
-                SlicerV3Error::LayerPreview(
-                    "3DAA post worker task channel unexpectedly closed during tail flush"
-                        .to_string(),
-                )
-            })?;
+            post_worker_txs[worker_idx]
+                .send(PostWorkerTask {
+                    seq,
+                    layer,
+                    prior_topologies,
+                    future_topologies,
+                    future_bounds,
+                    futures_have_topology,
+                    cross_blend_cfg,
+                })
+                .map_err(|_| {
+                    SlicerV3Error::LayerPreview(
+                        "3DAA post worker task channel unexpectedly closed during tail flush"
+                            .to_string(),
+                    )
+                })?;
         } else {
             let future_topologies: Vec<&[u8]> = pending_layers
                 .iter()
                 .take(look_back)
                 .map(|future| future.topology.as_slice())
+                .collect();
+            let prior_topologies: Vec<&[u8]> = emitted_topologies
+                .iter()
+                .rev()
+                .take(look_back)
+                .map(|prior| prior.as_slice())
                 .collect();
             let future_bounds: Vec<TopologyBounds> = pending_layers
                 .iter()
@@ -1257,6 +1384,7 @@ fn rasterize_vertical_aa_streaming_v3(
                 .any(|future| future.topology_non_empty);
             let processed = process_pending_layer_post(
                 layer,
+                &prior_topologies,
                 &future_topologies,
                 &future_bounds,
                 futures_have_topology,
@@ -1268,6 +1396,8 @@ fn rasterize_vertical_aa_streaming_v3(
                 debug_color_overlay,
                 &lut,
                 &mut workspace,
+                cross_blend_cfg.as_ref(),
+                &mut cross_blend_ws,
             );
             emit_post_processed_layer(
                 processed,
@@ -1281,7 +1411,13 @@ fn rasterize_vertical_aa_streaming_v3(
                 &mut on_processed_mask,
                 &mut raw_mask_layers,
                 &mut topology_reuse_pool,
+                &mut emitted_topologies,
+                cross_blend_cfg.is_some(),
+                look_back,
                 &z_blend_forward_ns,
+                &cross_blend_ns,
+                &cross_blend_touched_pixels,
+                &cross_blend_contributing_layers,
                 &post_blur_ns,
                 &support_merge_ns,
             )?;
@@ -1307,7 +1443,13 @@ fn rasterize_vertical_aa_streaming_v3(
                     &mut on_processed_mask,
                     &mut raw_mask_layers,
                     &mut topology_reuse_pool,
+                    &mut emitted_topologies,
+                    cross_blend_cfg.is_some(),
+                    look_back,
                     &z_blend_forward_ns,
+                    &cross_blend_ns,
+                    &cross_blend_touched_pixels,
+                    &cross_blend_contributing_layers,
                     &post_blur_ns,
                     &support_merge_ns,
                 )?;
@@ -1318,6 +1460,9 @@ fn rasterize_vertical_aa_streaming_v3(
 
     perf.z_blend_backward_ns = z_blend_backward_ns.load(Ordering::Relaxed);
     perf.z_blend_forward_ns = z_blend_forward_ns.load(Ordering::Relaxed);
+    perf.cross_blend_ns = cross_blend_ns.load(Ordering::Relaxed);
+    perf.cross_blend_touched_pixels = cross_blend_touched_pixels.load(Ordering::Relaxed);
+    perf.cross_blend_contributing_layers = cross_blend_contributing_layers.load(Ordering::Relaxed);
     perf.post_blur_ns = post_blur_ns.load(Ordering::Relaxed);
     perf.support_merge_ns = support_merge_ns.load(Ordering::Relaxed);
     perf.daa_post_threads = post_threads as u32;

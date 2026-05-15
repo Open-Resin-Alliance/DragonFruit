@@ -12,6 +12,12 @@ pub struct SlicingPerfV3 {
     pub z_blend_backward_ns: u64,
     /// CPU time spent in forward inter-layer z-blend compensation (3DAA path).
     pub z_blend_forward_ns: u64,
+    /// CPU time spent in experimental cross-layer blend kernel.
+    pub cross_blend_ns: u64,
+    /// Number of center-layer pixels raised by cross-blend max-merge.
+    pub cross_blend_touched_pixels: u64,
+    /// Aggregate number of neighbor layers that contributed occupancy.
+    pub cross_blend_contributing_layers: u64,
     /// CPU time spent in post z-blend blur stages (model + debug channels).
     pub post_blur_ns: u64,
     /// CPU time spent merging support mask back into model mask.
