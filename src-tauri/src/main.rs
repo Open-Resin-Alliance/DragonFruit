@@ -381,6 +381,8 @@ struct NativeSlicerRuntimeMetrics {
     pool_threads: u32,
     max_concurrent: u32,
     queue_buffer: u32,
+    daa_post_threads: u32,
+    daa_post_buffer_depth: u32,
     build_profile: String,
     artifact_dir: String,
     mesh_stage_dir: String,
@@ -559,6 +561,17 @@ fn v3_runtime_metrics(
         .unwrap_or(hw_threads)
         .clamp(1, hw_threads);
     let queue_buffer = (max_concurrent * 2).clamp(2, 16);
+    let daa_post_threads = std::env::var("DF_3DAA_POST_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= 1)
+        .unwrap_or(hw_threads)
+        .clamp(1, hw_threads);
+    let daa_post_buffer_depth = std::env::var("DF_3DAA_POST_BUFFER_DEPTH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(8);
 
     let artifact_dir = output_path
         .parent()
@@ -577,6 +590,8 @@ fn v3_runtime_metrics(
         pool_threads: hw_threads as u32,
         max_concurrent: max_concurrent as u32,
         queue_buffer: queue_buffer as u32,
+        daa_post_threads: daa_post_threads as u32,
+        daa_post_buffer_depth: daa_post_buffer_depth as u32,
         build_profile,
         artifact_dir,
         mesh_stage_dir,

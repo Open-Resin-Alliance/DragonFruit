@@ -323,6 +323,8 @@ export type NativeSlicerRuntimeMetrics = {
   poolThreads: number;
   maxConcurrent: number;
   queueBuffer: number;
+  daaPostThreads?: number;
+  daaPostBufferDepth?: number;
   buildProfile?: 'debug' | 'release' | string;
   artifactDir?: string;
   meshStageDir?: string;
