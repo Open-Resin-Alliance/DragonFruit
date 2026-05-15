@@ -12,7 +12,7 @@ import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
-import { isContactDiskHudInteractionActive } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { buildStick } from '../Stick/stickBuilder';
 import { buildTwig } from '../Twig/twigBuilder';
 
@@ -367,6 +367,10 @@ export function useTrunkPlacementV2() {
 
     const onSupportClick = useCallback((hit: THREE.Intersection) => {
         if (isPlacementHardDisabled || !hit) return;
+        // Suppress placement if a contact-disk HUD drag just ended; the
+        // mouseup that ends the drag would otherwise propagate to the canvas
+        // and be interpreted as a trunk placement click.
+        if (shouldSuppressContactDiskHudPlacementCommit()) return;
 
         // Re-calculate smoothed normal for click
         const tipNormal = calculateSmoothedNormal(hit);
