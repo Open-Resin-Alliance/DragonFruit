@@ -19,8 +19,9 @@ use crate::types::{
 use crate::z_blend;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -342,6 +343,272 @@ fn choose_3daa_post_buffer_depth() -> usize {
         .unwrap_or(0)
 }
 
+type TopologyBounds = Option<(usize, usize, usize, usize)>;
+
+struct PendingLayer {
+    layer_index: u32,
+    mask: Vec<u8>,
+    topology: Vec<u8>,
+    topology_bounds: TopologyBounds,
+    topology_non_empty: bool,
+    model_non_empty: bool,
+    backward_applied: bool,
+    backward_seed_bounds: TopologyBounds,
+    support_mask: Option<Vec<u8>>,
+    apply_model_aa: bool,
+    backward_contrib: Option<Vec<u8>>,
+}
+
+struct PostWorkerTask {
+    seq: u64,
+    layer: PendingLayer,
+    future_topologies: Vec<Vec<u8>>,
+    future_bounds: Vec<TopologyBounds>,
+    futures_have_topology: bool,
+}
+
+struct PostProcessedLayer {
+    seq: u64,
+    layer: PendingLayer,
+    forward_contrib: Option<Vec<u8>>,
+    z_blend_forward_ns: u64,
+    post_blur_ns: u64,
+    support_merge_ns: u64,
+}
+
+fn process_pending_layer_post(
+    mut layer: PendingLayer,
+    future_topologies: &[&[u8]],
+    future_bounds: &[TopologyBounds],
+    futures_have_topology: bool,
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    blur_radius: usize,
+    min_aa_alpha_u8: u8,
+    debug_color_overlay: bool,
+    lut: &[u8; 256],
+    workspace: &mut z_blend::ZBlendWorkspace,
+) -> PostProcessedLayer {
+    let pixels_per_layer = width.saturating_mul(height);
+
+    let forward_applied = layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
+
+    let mut forward_contrib = if debug_color_overlay && forward_applied {
+        Some(vec![0u8; pixels_per_layer])
+    } else {
+        None
+    };
+
+    let effective_look_back = future_topologies.len();
+    let mut z_blend_forward_ns = 0u64;
+    let mut post_blur_ns = 0u64;
+    let mut support_merge_ns = 0u64;
+
+    if forward_applied && effective_look_back > 0 {
+        let blend_start = std::time::Instant::now();
+        let before_forward = if debug_color_overlay {
+            Some(layer.mask.clone())
+        } else {
+            None
+        };
+
+        let mut forward_seed_bounds = layer.topology_bounds;
+        for bounds in future_bounds.iter().copied() {
+            forward_seed_bounds = merge_bounds(forward_seed_bounds, bounds);
+        }
+
+        let blend_pad = fade_px as usize + 1;
+        if let Some((min_x, max_x, min_y, max_y)) =
+            expand_bounds(forward_seed_bounds, blend_pad, width, height)
+        {
+            workspace.blend_layer_forward_inplace_with_roi(
+                &mut layer.mask,
+                layer.topology.as_slice(),
+                future_topologies,
+                effective_look_back,
+                width,
+                height,
+                fade_px,
+                Some(lut),
+                (min_x, max_x, min_y, max_y),
+            );
+        } else {
+            workspace.blend_layer_forward_inplace(
+                &mut layer.mask,
+                layer.topology.as_slice(),
+                future_topologies,
+                effective_look_back,
+                width,
+                height,
+                fade_px,
+                Some(lut),
+            );
+        }
+        z_blend_forward_ns = blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+
+        if let (Some(before), Some(ref mut forward)) =
+            (before_forward.as_ref(), forward_contrib.as_mut())
+        {
+            for ((dst, after), prev) in forward.iter_mut().zip(layer.mask.iter()).zip(before.iter()) {
+                *dst = after.saturating_sub(*prev);
+            }
+        }
+    }
+
+    let should_blur_model =
+        layer.apply_model_aa && (layer.model_non_empty || layer.backward_applied || forward_applied);
+    if should_blur_model {
+        let blur_start = std::time::Instant::now();
+        let mut model_blur_seed_bounds = layer.backward_seed_bounds;
+        if forward_applied {
+            model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
+            for bounds in future_bounds.iter().copied() {
+                model_blur_seed_bounds = merge_bounds(model_blur_seed_bounds, bounds);
+            }
+        }
+        let blur_pad = fade_px as usize + blur_radius;
+        if let Some((min_x, max_x, min_y, max_y)) =
+            expand_bounds(model_blur_seed_bounds, blur_pad, width, height)
+        {
+            apply_blur_postprocess_inplace_with_roi(
+                &mut layer.mask,
+                width,
+                height,
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+                blur_radius,
+                min_aa_alpha_u8,
+            );
+        } else {
+            apply_blur_postprocess_inplace(
+                &mut layer.mask,
+                width,
+                height,
+                blur_radius,
+                min_aa_alpha_u8,
+            );
+        }
+        if blur_radius == 0 {
+            apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
+        }
+        post_blur_ns = post_blur_ns.saturating_add(
+            blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        );
+    }
+
+    if let Some(ref mut backward) = layer.backward_contrib {
+        let blur_start = std::time::Instant::now();
+        apply_blur_postprocess_inplace(backward, width, height, blur_radius, min_aa_alpha_u8);
+        if blur_radius == 0 {
+            apply_min_alpha_floor(backward, min_aa_alpha_u8);
+        }
+        post_blur_ns = post_blur_ns.saturating_add(
+            blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        );
+    }
+    if let Some(ref mut forward) = forward_contrib {
+        let blur_start = std::time::Instant::now();
+        apply_blur_postprocess_inplace(forward, width, height, blur_radius, min_aa_alpha_u8);
+        if blur_radius == 0 {
+            apply_min_alpha_floor(forward, min_aa_alpha_u8);
+        }
+        post_blur_ns = post_blur_ns.saturating_add(
+            blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        );
+    }
+
+    if let Some(support_mask) = layer.support_mask.as_ref() {
+        let merge_start = std::time::Instant::now();
+        merge_support_mask_inplace(&mut layer.mask, support_mask);
+        support_merge_ns = support_merge_ns.saturating_add(
+            merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        );
+    }
+
+    PostProcessedLayer {
+        seq: 0,
+        layer,
+        forward_contrib,
+        z_blend_forward_ns,
+        post_blur_ns,
+        support_merge_ns,
+    }
+}
+
+fn emit_post_processed_layer(
+    processed: PostProcessedLayer,
+    png_layers: &mut Option<Vec<Vec<u8>>>,
+    debug_color_overlay: bool,
+    debug_rgb_buffer: &mut Vec<u8>,
+    pixels_per_layer: usize,
+    width: usize,
+    height: usize,
+    png_compression_strategy: &str,
+    on_processed_mask: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
+    raw_mask_layers: &mut Option<Vec<Vec<u8>>>,
+    topology_reuse_pool: &mut Vec<Vec<u8>>,
+    z_blend_forward_ns: &AtomicU64,
+    post_blur_ns: &AtomicU64,
+    support_merge_ns: &AtomicU64,
+) -> Result<(), SlicerV3Error> {
+    z_blend_forward_ns.fetch_add(processed.z_blend_forward_ns, Ordering::Relaxed);
+    post_blur_ns.fetch_add(processed.post_blur_ns, Ordering::Relaxed);
+    support_merge_ns.fetch_add(processed.support_merge_ns, Ordering::Relaxed);
+
+    if let Some(out_pngs) = png_layers {
+        let png = if debug_color_overlay {
+            if let (Some(backward), Some(forward)) = (
+                processed.layer.backward_contrib.as_ref(),
+                processed.forward_contrib.as_ref(),
+            ) {
+                if debug_rgb_buffer.len() != pixels_per_layer * 3 {
+                    debug_rgb_buffer.resize(pixels_per_layer * 3, 0);
+                }
+                for i in 0..pixels_per_layer {
+                    debug_rgb_buffer[i * 3] = forward[i];
+                    debug_rgb_buffer[i * 3 + 1] = backward[i];
+                    debug_rgb_buffer[i * 3 + 2] = 0;
+                }
+                encode_rgb_png_8bit(
+                    width as u32,
+                    height as u32,
+                    debug_rgb_buffer,
+                    png_compression_strategy,
+                )?
+            } else {
+                encode_grayscale_png(
+                    width as u32,
+                    height as u32,
+                    &processed.layer.mask,
+                    png_compression_strategy,
+                    false,
+                )?
+            }
+        } else {
+            encode_grayscale_png(
+                width as u32,
+                height as u32,
+                &processed.layer.mask,
+                png_compression_strategy,
+                false,
+            )?
+        };
+        out_pngs.push(png);
+    }
+
+    if let Some(emit) = on_processed_mask {
+        emit(processed.layer.layer_index, processed.layer.mask)?;
+    } else if let Some(out_masks) = raw_mask_layers {
+        out_masks.push(processed.layer.mask);
+    }
+
+    topology_reuse_pool.push(processed.layer.topology);
+    Ok(())
+}
+
 fn rasterize_vertical_aa_streaming_v3(
     job: &SliceJobV3,
     raster_job: &SliceJobV3,
@@ -410,20 +677,56 @@ fn rasterize_vertical_aa_streaming_v3(
     // At emission time we apply forward blend first (lookahead window), then XY
     // blur, then support merge. This keeps forward and backward Z blending
     // symmetric and ensures both happen before blur.
-    struct PendingLayer {
-        layer_index: u32,
-        mask: Vec<u8>,
-        topology: Vec<u8>,
-        topology_bounds: Option<(usize, usize, usize, usize)>,
-        topology_non_empty: bool,
-        model_non_empty: bool,
-        backward_applied: bool,
-        backward_seed_bounds: Option<(usize, usize, usize, usize)>,
-        support_mask: Option<Vec<u8>>,
-        apply_model_aa: bool,
-        backward_contrib: Option<Vec<u8>>,
-    }
     let mut pending_layers: VecDeque<PendingLayer> = VecDeque::with_capacity(look_back + 1);
+
+    let overlap_enabled = post_buffer_depth > 0;
+    let mut post_worker_txs: Vec<mpsc::SyncSender<PostWorkerTask>> = Vec::new();
+    let mut post_worker_rx: Option<mpsc::Receiver<PostProcessedLayer>> = None;
+    let mut post_next_send_seq: u64 = 0;
+    let mut post_next_emit_seq: u64 = 0;
+    let mut post_rr_index: usize = 0;
+    let mut post_done_reorder: BTreeMap<u64, PostProcessedLayer> = BTreeMap::new();
+
+    if overlap_enabled {
+        let worker_depth = post_buffer_depth.max(1);
+        let worker_count = post_threads.min(worker_depth).max(1);
+        let (done_tx, done_rx) = mpsc::sync_channel::<PostProcessedLayer>(worker_depth);
+
+        for _ in 0..worker_count {
+            let (task_tx, task_rx) = mpsc::sync_channel::<PostWorkerTask>(worker_depth);
+            let done_tx_worker = done_tx.clone();
+            std::thread::spawn(move || {
+                let lut = z_blend::default_z_blend_lut();
+                let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
+                while let Ok(task) = task_rx.recv() {
+                    let future_slices: Vec<&[u8]> =
+                        task.future_topologies.iter().map(|v| v.as_slice()).collect();
+                    let mut out = process_pending_layer_post(
+                        task.layer,
+                        &future_slices,
+                        &task.future_bounds,
+                        task.futures_have_topology,
+                        width,
+                        height,
+                        fade_px,
+                        blur_radius,
+                        min_aa_alpha_u8,
+                        debug_color_overlay,
+                        &lut,
+                        &mut workspace,
+                    );
+                    out.seq = task.seq;
+                    if done_tx_worker.send(out).is_err() {
+                        break;
+                    }
+                }
+            });
+            post_worker_txs.push(task_tx);
+        }
+        drop(done_tx);
+
+        post_worker_rx = Some(done_rx);
+    }
 
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>|
@@ -731,218 +1034,113 @@ fn rasterize_vertical_aa_streaming_v3(
         // Flush once the oldest pending layer has a full future window plus
         // optional extra buffering depth for post-stage scheduling experiments.
         if pending_layers.len() > look_back + post_buffer_depth {
-            let mut layer = pending_layers.pop_front().expect("pending layer exists");
-            let futures: Vec<&[u8]> = pending_layers
-                .iter()
-                .take(look_back)
-                .map(|future| future.topology.as_slice())
-                .collect();
+            let layer = pending_layers.pop_front().expect("pending layer exists");
 
-            let futures_have_topology = pending_layers
-                .iter()
-                .any(|future| future.topology_non_empty);
-            let forward_applied =
-                layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
+            if !post_worker_txs.is_empty() {
+                let future_topologies: Vec<Vec<u8>> = pending_layers
+                    .iter()
+                    .take(look_back)
+                    .map(|future| future.topology.clone())
+                    .collect();
+                let future_bounds: Vec<TopologyBounds> = pending_layers
+                    .iter()
+                    .take(look_back)
+                    .map(|future| future.topology_bounds)
+                    .collect();
+                let futures_have_topology = pending_layers
+                    .iter()
+                    .take(look_back)
+                    .any(|future| future.topology_non_empty);
 
-            let mut forward_contrib = if debug_color_overlay && forward_applied {
-                Some(vec![0u8; pixels_per_layer])
+                let worker_idx = post_rr_index % post_worker_txs.len();
+                post_rr_index = post_rr_index.wrapping_add(1);
+                let seq = post_next_send_seq;
+                post_next_send_seq = post_next_send_seq.wrapping_add(1);
+
+                post_worker_txs[worker_idx]
+                    .send(PostWorkerTask {
+                    seq,
+                    layer,
+                    future_topologies,
+                    future_bounds,
+                    futures_have_topology,
+                })
+                .map_err(|_| {
+                    SlicerV3Error::LayerPreview(
+                        "3DAA post worker task channel unexpectedly closed".to_string(),
+                    )
+                })?;
+
+                if let Some(rx) = post_worker_rx.as_ref() {
+                    while let Ok(done) = rx.try_recv() {
+                        post_done_reorder.insert(done.seq, done);
+                        while let Some(next_done) = post_done_reorder.remove(&post_next_emit_seq) {
+                            emit_post_processed_layer(
+                                next_done,
+                                &mut png_layers,
+                                debug_color_overlay,
+                                &mut debug_rgb_buffer,
+                                pixels_per_layer,
+                                width,
+                                height,
+                                &raster_job.png_compression_strategy,
+                                &mut on_processed_mask,
+                                &mut raw_mask_layers,
+                                &mut topology_reuse_pool,
+                                &z_blend_forward_ns,
+                                &post_blur_ns,
+                                &support_merge_ns,
+                            )?;
+                            post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
+                        }
+                    }
+                }
             } else {
-                None
-            };
-
-            let effective_look_back = futures.len();
-            if forward_applied && effective_look_back > 0 {
-                let blend_start = std::time::Instant::now();
-                let before_forward = if debug_color_overlay {
-                    Some(layer.mask.clone())
-                } else {
-                    None
-                };
-
-                let mut forward_seed_bounds = layer.topology_bounds;
-                for future in pending_layers.iter().take(look_back) {
-                    forward_seed_bounds = merge_bounds(forward_seed_bounds, future.topology_bounds);
-                }
-                let blend_pad = fade_px as usize + 1;
-                if let Some((min_x, max_x, min_y, max_y)) =
-                    expand_bounds(forward_seed_bounds, blend_pad, width, height)
-                {
-                    workspace.blend_layer_forward_inplace_with_roi(
-                        &mut layer.mask,
-                        layer.topology.as_slice(),
-                        &futures,
-                        effective_look_back,
-                        width,
-                        height,
-                        fade_px,
-                        Some(&lut),
-                        (min_x, max_x, min_y, max_y),
-                    );
-                } else {
-                    workspace.blend_layer_forward_inplace(
-                        &mut layer.mask,
-                        layer.topology.as_slice(),
-                        &futures,
-                        effective_look_back,
-                        width,
-                        height,
-                        fade_px,
-                        Some(&lut),
-                    );
-                }
-                z_blend_forward_ns.fetch_add(
-                    blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                    Ordering::Relaxed,
-                );
-
-                if let (Some(before), Some(ref mut forward)) =
-                    (before_forward.as_ref(), forward_contrib.as_mut())
-                {
-                    for ((dst, after), prev) in
-                        forward.iter_mut().zip(layer.mask.iter()).zip(before.iter())
-                    {
-                        *dst = after.saturating_sub(*prev);
-                    }
-                }
-            }
-
-            // XY smoothing runs after both vertical blend directions.
-            let should_blur_model = layer.apply_model_aa
-                && (layer.model_non_empty || layer.backward_applied || forward_applied);
-            if should_blur_model {
-                let blur_start = std::time::Instant::now();
-                let mut model_blur_seed_bounds = layer.backward_seed_bounds;
-                if forward_applied {
-                    model_blur_seed_bounds =
-                        merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
-                    for future in pending_layers.iter().take(look_back) {
-                        model_blur_seed_bounds =
-                            merge_bounds(model_blur_seed_bounds, future.topology_bounds);
-                    }
-                }
-                let blur_pad = fade_px as usize + blur_radius;
-                if let Some((min_x, max_x, min_y, max_y)) =
-                    expand_bounds(model_blur_seed_bounds, blur_pad, width, height)
-                {
-                    apply_blur_postprocess_inplace_with_roi(
-                        &mut layer.mask,
-                        width,
-                        height,
-                        min_x,
-                        max_x,
-                        min_y,
-                        max_y,
-                        blur_radius,
-                        min_aa_alpha_u8,
-                    );
-                } else {
-                    apply_blur_postprocess_inplace(
-                        &mut layer.mask,
-                        width,
-                        height,
-                        blur_radius,
-                        min_aa_alpha_u8,
-                    );
-                }
-                if blur_radius == 0 {
-                    apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
-                }
-                post_blur_ns.fetch_add(
-                    blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                    Ordering::Relaxed,
-                );
-            }
-
-            if let Some(ref mut backward) = layer.backward_contrib {
-                let blur_start = std::time::Instant::now();
-                apply_blur_postprocess_inplace(
-                    backward,
+                let future_topologies: Vec<&[u8]> = pending_layers
+                    .iter()
+                    .take(look_back)
+                    .map(|future| future.topology.as_slice())
+                    .collect();
+                let future_bounds: Vec<TopologyBounds> = pending_layers
+                    .iter()
+                    .take(look_back)
+                    .map(|future| future.topology_bounds)
+                    .collect();
+                let futures_have_topology = pending_layers
+                    .iter()
+                    .take(look_back)
+                    .any(|future| future.topology_non_empty);
+                let processed = process_pending_layer_post(
+                    layer,
+                    &future_topologies,
+                    &future_bounds,
+                    futures_have_topology,
                     width,
                     height,
+                    fade_px,
                     blur_radius,
                     min_aa_alpha_u8,
+                    debug_color_overlay,
+                    &lut,
+                    &mut workspace,
                 );
-                if blur_radius == 0 {
-                    apply_min_alpha_floor(backward, min_aa_alpha_u8);
-                }
-                post_blur_ns.fetch_add(
-                    blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                    Ordering::Relaxed,
-                );
-            }
-            if let Some(ref mut forward) = forward_contrib {
-                let blur_start = std::time::Instant::now();
-                apply_blur_postprocess_inplace(
-                    forward,
+                emit_post_processed_layer(
+                    processed,
+                    &mut png_layers,
+                    debug_color_overlay,
+                    &mut debug_rgb_buffer,
+                    pixels_per_layer,
                     width,
                     height,
-                    blur_radius,
-                    min_aa_alpha_u8,
-                );
-                if blur_radius == 0 {
-                    apply_min_alpha_floor(forward, min_aa_alpha_u8);
-                }
-                post_blur_ns.fetch_add(
-                    blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                    Ordering::Relaxed,
-                );
+                    &raster_job.png_compression_strategy,
+                    &mut on_processed_mask,
+                    &mut raw_mask_layers,
+                    &mut topology_reuse_pool,
+                    &z_blend_forward_ns,
+                    &post_blur_ns,
+                    &support_merge_ns,
+                )?;
             }
-
-            if let Some(support_mask) = layer.support_mask.as_ref() {
-                let merge_start = std::time::Instant::now();
-                merge_support_mask_inplace(&mut layer.mask, support_mask);
-                support_merge_ns.fetch_add(
-                    merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                    Ordering::Relaxed,
-                );
-            }
-
-            if let Some(ref mut out_pngs) = png_layers {
-                let png = if debug_color_overlay {
-                    if let (Some(backward), Some(forward)) =
-                        (layer.backward_contrib.as_ref(), forward_contrib.as_ref())
-                    {
-                        if debug_rgb_buffer.len() != pixels_per_layer * 3 {
-                            debug_rgb_buffer.resize(pixels_per_layer * 3, 0);
-                        }
-                        for i in 0..pixels_per_layer {
-                            debug_rgb_buffer[i * 3] = forward[i]; // Red = look-ahead
-                            debug_rgb_buffer[i * 3 + 1] = backward[i]; // Green = look-behind
-                            debug_rgb_buffer[i * 3 + 2] = 0;
-                        }
-                        encode_rgb_png_8bit(
-                            width as u32,
-                            height as u32,
-                            &debug_rgb_buffer,
-                            &raster_job.png_compression_strategy,
-                        )?
-                    } else {
-                        encode_grayscale_png(
-                            width as u32,
-                            height as u32,
-                            &layer.mask,
-                            &raster_job.png_compression_strategy,
-                            false,
-                        )?
-                    }
-                } else {
-                    encode_grayscale_png(
-                        width as u32,
-                        height as u32,
-                        &layer.mask,
-                        &raster_job.png_compression_strategy,
-                        false,
-                    )?
-                };
-                out_pngs.push(png);
-            }
-            if let Some(ref mut emit) = on_processed_mask {
-                emit(layer.layer_index, layer.mask)?;
-            } else if let Some(ref mut out_masks) = raw_mask_layers {
-                out_masks.push(layer.mask);
-            }
-
-            topology_reuse_pool.push(layer.topology);
         }
 
         Ok(())
@@ -958,212 +1156,122 @@ fn rasterize_vertical_aa_streaming_v3(
         cancel_flag,
     )?;
 
+    // Flush tail layers with the remaining (short) future window.
+    while let Some(layer) = pending_layers.pop_front() {
+        if !post_worker_txs.is_empty() {
+            let future_topologies: Vec<Vec<u8>> = pending_layers
+                .iter()
+                .take(look_back)
+                .map(|future| future.topology.clone())
+                .collect();
+            let future_bounds: Vec<TopologyBounds> = pending_layers
+                .iter()
+                .take(look_back)
+                .map(|future| future.topology_bounds)
+                .collect();
+            let futures_have_topology = pending_layers
+                .iter()
+                .take(look_back)
+                .any(|future| future.topology_non_empty);
+
+            let worker_idx = post_rr_index % post_worker_txs.len();
+            post_rr_index = post_rr_index.wrapping_add(1);
+            let seq = post_next_send_seq;
+            post_next_send_seq = post_next_send_seq.wrapping_add(1);
+
+            post_worker_txs[worker_idx].send(PostWorkerTask {
+                seq,
+                layer,
+                future_topologies,
+                future_bounds,
+                futures_have_topology,
+            })
+            .map_err(|_| {
+                SlicerV3Error::LayerPreview(
+                    "3DAA post worker task channel unexpectedly closed during tail flush"
+                        .to_string(),
+                )
+            })?;
+        } else {
+            let future_topologies: Vec<&[u8]> = pending_layers
+                .iter()
+                .take(look_back)
+                .map(|future| future.topology.as_slice())
+                .collect();
+            let future_bounds: Vec<TopologyBounds> = pending_layers
+                .iter()
+                .take(look_back)
+                .map(|future| future.topology_bounds)
+                .collect();
+            let futures_have_topology = pending_layers
+                .iter()
+                .take(look_back)
+                .any(|future| future.topology_non_empty);
+            let processed = process_pending_layer_post(
+                layer,
+                &future_topologies,
+                &future_bounds,
+                futures_have_topology,
+                width,
+                height,
+                fade_px,
+                blur_radius,
+                min_aa_alpha_u8,
+                debug_color_overlay,
+                &lut,
+                &mut workspace,
+            );
+            emit_post_processed_layer(
+                processed,
+                &mut png_layers,
+                debug_color_overlay,
+                &mut debug_rgb_buffer,
+                pixels_per_layer,
+                width,
+                height,
+                &raster_job.png_compression_strategy,
+                &mut on_processed_mask,
+                &mut raw_mask_layers,
+                &mut topology_reuse_pool,
+                &z_blend_forward_ns,
+                &post_blur_ns,
+                &support_merge_ns,
+            )?;
+        }
+    }
+
+    if !post_worker_txs.is_empty() {
+        post_worker_txs.clear();
+    }
+    if let Some(rx) = post_worker_rx.take() {
+        while let Ok(done) = rx.recv() {
+            post_done_reorder.insert(done.seq, done);
+            while let Some(next_done) = post_done_reorder.remove(&post_next_emit_seq) {
+                emit_post_processed_layer(
+                    next_done,
+                    &mut png_layers,
+                    debug_color_overlay,
+                    &mut debug_rgb_buffer,
+                    pixels_per_layer,
+                    width,
+                    height,
+                    &raster_job.png_compression_strategy,
+                    &mut on_processed_mask,
+                    &mut raw_mask_layers,
+                    &mut topology_reuse_pool,
+                    &z_blend_forward_ns,
+                    &post_blur_ns,
+                    &support_merge_ns,
+                )?;
+                post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
+            }
+        }
+    }
+
     perf.z_blend_backward_ns = z_blend_backward_ns.load(Ordering::Relaxed);
     perf.z_blend_forward_ns = z_blend_forward_ns.load(Ordering::Relaxed);
     perf.post_blur_ns = post_blur_ns.load(Ordering::Relaxed);
     perf.support_merge_ns = support_merge_ns.load(Ordering::Relaxed);
-
-    // Flush tail layers with the remaining (short) future window.
-    while let Some(mut layer) = pending_layers.pop_front() {
-        let futures: Vec<&[u8]> = pending_layers
-            .iter()
-            .take(look_back)
-            .map(|future| future.topology.as_slice())
-            .collect();
-
-        let futures_have_topology = pending_layers
-            .iter()
-            .any(|future| future.topology_non_empty);
-        let forward_applied =
-            layer.apply_model_aa && layer.topology_non_empty && futures_have_topology;
-
-        let mut forward_contrib = if debug_color_overlay && forward_applied {
-            Some(vec![0u8; pixels_per_layer])
-        } else {
-            None
-        };
-
-        let effective_look_back = futures.len();
-        if forward_applied && effective_look_back > 0 {
-            let blend_start = std::time::Instant::now();
-            let before_forward = if debug_color_overlay {
-                Some(layer.mask.clone())
-            } else {
-                None
-            };
-
-            let mut forward_seed_bounds = layer.topology_bounds;
-            for future in pending_layers.iter().take(look_back) {
-                forward_seed_bounds = merge_bounds(forward_seed_bounds, future.topology_bounds);
-            }
-            let blend_pad = fade_px as usize + 1;
-            if let Some((min_x, max_x, min_y, max_y)) =
-                expand_bounds(forward_seed_bounds, blend_pad, width, height)
-            {
-                workspace.blend_layer_forward_inplace_with_roi(
-                    &mut layer.mask,
-                    layer.topology.as_slice(),
-                    &futures,
-                    effective_look_back,
-                    width,
-                    height,
-                    fade_px,
-                    Some(&lut),
-                    (min_x, max_x, min_y, max_y),
-                );
-            } else {
-                workspace.blend_layer_forward_inplace(
-                    &mut layer.mask,
-                    layer.topology.as_slice(),
-                    &futures,
-                    effective_look_back,
-                    width,
-                    height,
-                    fade_px,
-                    Some(&lut),
-                );
-            }
-            z_blend_forward_ns.fetch_add(
-                blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                Ordering::Relaxed,
-            );
-
-            if let (Some(before), Some(ref mut forward)) =
-                (before_forward.as_ref(), forward_contrib.as_mut())
-            {
-                for ((dst, after), prev) in
-                    forward.iter_mut().zip(layer.mask.iter()).zip(before.iter())
-                {
-                    *dst = after.saturating_sub(*prev);
-                }
-            }
-        }
-
-        let should_blur_model = layer.apply_model_aa
-            && (layer.model_non_empty || layer.backward_applied || forward_applied);
-        if should_blur_model {
-            let blur_start = std::time::Instant::now();
-            let mut model_blur_seed_bounds = layer.backward_seed_bounds;
-            if forward_applied {
-                model_blur_seed_bounds =
-                    merge_bounds(model_blur_seed_bounds, layer.topology_bounds);
-                for future in pending_layers.iter().take(look_back) {
-                    model_blur_seed_bounds =
-                        merge_bounds(model_blur_seed_bounds, future.topology_bounds);
-                }
-            }
-            let blur_pad = fade_px as usize + blur_radius;
-            if let Some((min_x, max_x, min_y, max_y)) =
-                expand_bounds(model_blur_seed_bounds, blur_pad, width, height)
-            {
-                apply_blur_postprocess_inplace_with_roi(
-                    &mut layer.mask,
-                    width,
-                    height,
-                    min_x,
-                    max_x,
-                    min_y,
-                    max_y,
-                    blur_radius,
-                    min_aa_alpha_u8,
-                );
-            } else {
-                apply_blur_postprocess_inplace(
-                    &mut layer.mask,
-                    width,
-                    height,
-                    blur_radius,
-                    min_aa_alpha_u8,
-                );
-            }
-            if blur_radius == 0 {
-                apply_min_alpha_floor(&mut layer.mask, min_aa_alpha_u8);
-            }
-            post_blur_ns.fetch_add(
-                blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                Ordering::Relaxed,
-            );
-        }
-
-        if let Some(ref mut backward) = layer.backward_contrib {
-            let blur_start = std::time::Instant::now();
-            apply_blur_postprocess_inplace(backward, width, height, blur_radius, min_aa_alpha_u8);
-            if blur_radius == 0 {
-                apply_min_alpha_floor(backward, min_aa_alpha_u8);
-            }
-            post_blur_ns.fetch_add(
-                blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                Ordering::Relaxed,
-            );
-        }
-        if let Some(ref mut forward) = forward_contrib {
-            let blur_start = std::time::Instant::now();
-            apply_blur_postprocess_inplace(forward, width, height, blur_radius, min_aa_alpha_u8);
-            if blur_radius == 0 {
-                apply_min_alpha_floor(forward, min_aa_alpha_u8);
-            }
-            post_blur_ns.fetch_add(
-                blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                Ordering::Relaxed,
-            );
-        }
-
-        if let Some(support_mask) = layer.support_mask.as_ref() {
-            let merge_start = std::time::Instant::now();
-            merge_support_mask_inplace(&mut layer.mask, support_mask);
-            support_merge_ns.fetch_add(
-                merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                Ordering::Relaxed,
-            );
-        }
-
-        if let Some(ref mut out_pngs) = png_layers {
-            let png = if debug_color_overlay {
-                if let (Some(backward), Some(forward)) =
-                    (layer.backward_contrib.as_ref(), forward_contrib.as_ref())
-                {
-                    if debug_rgb_buffer.len() != pixels_per_layer * 3 {
-                        debug_rgb_buffer.resize(pixels_per_layer * 3, 0);
-                    }
-                    for i in 0..pixels_per_layer {
-                        debug_rgb_buffer[i * 3] = forward[i];
-                        debug_rgb_buffer[i * 3 + 1] = backward[i];
-                        debug_rgb_buffer[i * 3 + 2] = 0;
-                    }
-                    encode_rgb_png_8bit(
-                        width as u32,
-                        height as u32,
-                        &debug_rgb_buffer,
-                        &raster_job.png_compression_strategy,
-                    )?
-                } else {
-                    encode_grayscale_png(
-                        width as u32,
-                        height as u32,
-                        &layer.mask,
-                        &raster_job.png_compression_strategy,
-                        false,
-                    )?
-                }
-            } else {
-                encode_grayscale_png(
-                    width as u32,
-                    height as u32,
-                    &layer.mask,
-                    &raster_job.png_compression_strategy,
-                    false,
-                )?
-            };
-            out_pngs.push(png);
-        }
-        if let Some(ref mut emit) = on_processed_mask {
-            emit(layer.layer_index, layer.mask)?;
-        } else if let Some(ref mut out_masks) = raw_mask_layers {
-            out_masks.push(layer.mask);
-        }
-
-        topology_reuse_pool.push(layer.topology);
-    }
 
     Ok((
         RenderedLayersV3 {
