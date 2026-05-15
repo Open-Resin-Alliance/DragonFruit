@@ -323,8 +323,15 @@ function resolvePlacementPreviewMaterial(preview: SupportData): { color: string;
         };
     }
 
-    let angle = preview.angle;
-    if (angle === undefined && preview.contactCone) {
+    // Leaf previews have a knot + contactCone but no shaft segments. The
+    // surface-steepness gradient is calibrated for trunk-style placements;
+    // for leaves the angle has the opposite semantic and always resolves to
+    // orange. Treat leaves like trunks/branches and fall through to the
+    // standard green / yellow / red states.
+    const isLeafPreview = preview.segments.length === 0 && !!preview.knot && !!preview.contactCone;
+
+    let angle = isLeafPreview ? undefined : preview.angle;
+    if (!isLeafPreview && angle === undefined && preview.contactCone) {
         const normal = new THREE.Vector3(
             preview.contactCone.normal.x,
             preview.contactCone.normal.y,
@@ -422,7 +429,10 @@ function buildSupportPlacementPreviewBatch(
         currentStart = new THREE.Vector3(0, 0, 0);
     }
 
-    if (preview.knot && preview.segments.length > 0) {
+    if (preview.knot) {
+        // Leaves carry preview.knot but have no shaft segments — without
+        // including the knot here the preview's parent ball is invisible
+        // when snapping a leaf onto another support (trunk, twig, etc.).
         jointsMap.set(preview.knot.id, {
             id: preview.knot.id,
             pos: preview.knot.pos,

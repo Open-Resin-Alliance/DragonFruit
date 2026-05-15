@@ -377,10 +377,16 @@ export function LeafPlacementController() {
 
                 // On a twig, the parent knot is 10% larger than the local
                 // tapered diameter (matching the disk-end joint rule). On
-                // other hosts, the legacy +0.1mm offset is used.
+                // other hosts, the legacy +0.1mm offset is used. For the
+                // placement preview specifically, take whichever yields the
+                // larger ball so the visual feedback is consistently visible
+                // even on thin twig ends where 10% adds barely a fraction.
                 const previewKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
                 const previewKnotDiameter = previewKnotIsOnTwig
-                    ? twigJointDiameterForLocalDiameter(resolvedHostDiameter)
+                    ? Math.max(
+                        twigJointDiameterForLocalDiameter(resolvedHostDiameter),
+                        resolvedHostDiameter + 0.1,
+                    )
                     : resolvedHostDiameter + 0.1;
 
                 const parentKnot: Knot = {
@@ -412,9 +418,13 @@ export function LeafPlacementController() {
                 const knotAboveTip = knotPos.z > tipPosition.z + epsilonZ;
                 const tooFlat = angleFromUpDeg > maxAngleDeg;
 
+                // Don't pass `angle` here: it triggers the orange→yellow→green
+                // surface-steepness gradient (calibrated for trunks). For leaves,
+                // the angle is already validated via tooFlat→warning, so the
+                // preview should fall through to the standard green / yellow /
+                // red error states like other knot placements.
                 leafPlacementStore.setPreviewData({
                     ...buildResult.supportData,
-                    angle: angleFromUpDeg,
                     error: knotAboveTip ? 'KNOT_ABOVE_TIP' : undefined,
                     warning: !knotAboveTip && tooFlat ? 'SHAFT_ANGLE_TOO_FLAT' : undefined,
                 });

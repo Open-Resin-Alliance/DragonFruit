@@ -25,6 +25,7 @@ import {
   SupportLeafPayload,
   SupportBranchPayload,
   SupportTwigPayload,
+  SupportTwigRemovePayload,
   SupportStickPayload,
   SupportBranchRemovePayload,
   BraceLinkPayload,
@@ -221,10 +222,16 @@ export function useSupportHistoryHandlers(enabled = true) {
         return true;
       }),
       registerHistoryHandler(SUPPORT_REMOVE_TWIG, (action, direction) => {
-        const payload = action.payload as SupportTwigPayload | undefined;
+        const payload = action.payload as SupportTwigRemovePayload | undefined;
         if (!payload?.twig) return false;
         if (direction === 'undo') {
           addTwig(payload.twig);
+          for (const knot of payload.knots ?? []) {
+            addKnot(knot);
+          }
+          for (const leaf of payload.leaves ?? []) {
+            addLeaf(leaf);
+          }
         } else {
           removeTwig(payload.twig.id);
         }

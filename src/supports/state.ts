@@ -217,16 +217,54 @@ function deepClone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
 }
 
-export function removeTwig(twigId: string): { twig: Twig } | null {
+export function removeTwig(twigId: string): { twig: Twig; knots: Knot[]; leaves: Leaf[] } | null {
     const existing = state.twigs[twigId];
     if (!existing) return null;
 
-    const snapshot = { twig: deepClone(existing) };
+    // Cascade: any knot whose parentShaftId is one of this twig's segments
+    // (i.e. a leaf base sitting on the twig) must be removed, along with the
+    // leaves attached to those knots.
+    const twigSegmentIds = new Set<string>(existing.segments.map((s) => s.id));
+    const knotIdsToRemove = new Set<string>();
+    for (const knot of Object.values(state.knots)) {
+        if (twigSegmentIds.has(knot.parentShaftId)) {
+            knotIdsToRemove.add(knot.id);
+        }
+    }
+    const leafIdsToRemove = new Set<string>();
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.parentKnotId && knotIdsToRemove.has(leaf.parentKnotId)) {
+            leafIdsToRemove.add(leaf.id);
+        }
+    }
+
+    const snapshot = {
+        twig: deepClone(existing),
+        knots: Array.from(knotIdsToRemove)
+            .map((id) => state.knots[id])
+            .filter(Boolean)
+            .map((k) => deepClone(k)),
+        leaves: Array.from(leafIdsToRemove)
+            .map((id) => state.leaves[id])
+            .filter(Boolean)
+            .map((l) => deepClone(l)),
+    };
+
     const { [twigId]: _, ...remainingTwigs } = state.twigs;
+
+    const nextKnots = { ...state.knots };
+    for (const id of knotIdsToRemove) delete nextKnots[id];
+
+    const nextLeaves = { ...state.leaves };
+    for (const id of leafIdsToRemove) delete nextLeaves[id];
 
     let nextSelectedId = state.selectedId;
     let nextSelectedCategory = state.selectedCategory;
-    if (state.selectedId === twigId) {
+    if (
+        state.selectedId === twigId
+        || (state.selectedId && knotIdsToRemove.has(state.selectedId))
+        || (state.selectedId && leafIdsToRemove.has(state.selectedId))
+    ) {
         nextSelectedId = null;
         nextSelectedCategory = null;
     }
@@ -234,9 +272,16 @@ export function removeTwig(twigId: string): { twig: Twig } | null {
     state = {
         ...state,
         twigs: remainingTwigs,
+        knots: nextKnots,
+        leaves: nextLeaves,
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
     };
+
+    for (const id of leafIdsToRemove) {
+        deleteCachedSupportSettingsHex('leaf', id);
+    }
+
     notify();
     return snapshot;
 }

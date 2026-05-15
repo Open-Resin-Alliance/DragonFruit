@@ -3,6 +3,7 @@ import type { Knot, Leaf, Twig } from '../../types';
 import { subscribeSupportInteractionReset } from '../../interaction/supportInteractionReset';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './twigTaper';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Knot/knotUtils';
 
 const EVENT_NAME = 'dragonfruit-twig-drag-preview';
 
@@ -82,13 +83,10 @@ export function computeTwigDragAttachmentUpdates(
         if (knot.t === undefined) continue;
 
         const t = Math.max(0, Math.min(1, knot.t));
-        const startPos = seg.bottomJoint.pos;
-        const endPos = seg.topJoint.pos;
-        const newPos = {
-            x: startPos.x + (endPos.x - startPos.x) * t,
-            y: startPos.y + (endPos.y - startPos.y) * t,
-            z: startPos.z + (endPos.z - startPos.z) * t,
-        };
+        // Bezier-aware: when the segment is curved, evaluate the curve at t
+        // instead of lerping along the straight chord. Without this, attached
+        // leaf knots stay on the chord while the twig curves away.
+        const newPos = calculateKnotPositionOnSegmentFromT(seg.bottomJoint.pos, seg.topJoint.pos, seg, t);
 
         const localTwigDia = resolveTwigDiameterAtSegmentT(nextTwig, seg.id, t);
         const newDiameter = localTwigDia !== null
