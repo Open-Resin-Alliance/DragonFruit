@@ -310,6 +310,9 @@ export function SliceMetricsDebugModal({
                   <RuntimeStat label="archiveEncodeNs" value={formatNs(perf?.archiveEncodeNs)} />
                   <RuntimeStat label="zBlendBackwardNs" value={formatNs(perf?.zBlendBackwardNs)} />
                   <RuntimeStat label="zBlendForwardNs" value={formatNs(perf?.zBlendForwardNs)} />
+                  <RuntimeStat label="crossBlendNs" value={formatNs(perf?.crossBlendNs)} />
+                  <RuntimeStat label="crossBlendTouchedPixels" value={perf?.crossBlendTouchedPixels != null ? perf.crossBlendTouchedPixels.toLocaleString() : '—'} />
+                  <RuntimeStat label="crossBlendContributingLayers" value={perf?.crossBlendContributingLayers != null ? perf.crossBlendContributingLayers.toLocaleString() : '—'} />
                   <RuntimeStat label="postBlurNs" value={formatNs(perf?.postBlurNs)} />
                   <RuntimeStat label="supportMergeNs" value={formatNs(perf?.supportMergeNs)} />
                   <RuntimeStat label="layers" value={perf?.layers != null ? `${perf.layers}` : '—'} />

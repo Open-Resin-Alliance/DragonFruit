@@ -21,7 +21,7 @@ export type NativeSolidSliceJobEnvelope = {
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
   antiAliasingLevel: AntiAliasingLevel;
-  antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Vertical3' | 'CrossBlend' | 'Volumetric' | 'Coverage';
   blurBrushRadiusPx: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
@@ -62,7 +62,7 @@ type NativeSolidSlicePayload = {
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
   anti_aliasing_level: AntiAliasingLevel;
-  anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Vertical3' | 'CrossBlend' | 'Volumetric' | 'Coverage';
   blur_brush_radius_px: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
@@ -103,7 +103,7 @@ type NativeSolidSliceMetadataPayload = {
   x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: AntiAliasingLevel;
-  anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Vertical3' | 'CrossBlend' | 'Volumetric' | 'Coverage';
   blur_brush_radius_px: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
@@ -314,6 +314,9 @@ export type NativeSlicerPerfMetrics = {
   archiveEncodeNs: number;
   zBlendBackwardNs: number;
   zBlendForwardNs: number;
+  crossBlendNs: number;
+  crossBlendTouchedPixels: number;
+  crossBlendContributingLayers: number;
   postBlurNs: number;
   supportMergeNs: number;
   layers: number;

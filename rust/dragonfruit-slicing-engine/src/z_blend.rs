@@ -714,6 +714,244 @@ fn has_non_current_4neighbor(
 }
 
 // ---------------------------------------------------------------------------
+// Experimental cross-blend (volumetric) API scaffolding
+// ---------------------------------------------------------------------------
+
+/// Configuration for experimental cross-layer volumetric blending.
+///
+/// This is the planned successor to the current 2.5D EDT compensation path.
+/// For now it acts as a stable API surface while the kernel is developed.
+#[derive(Debug, Clone, Copy)]
+pub struct CrossBlendConfig {
+    /// Number of prior/future layers sampled on each side.
+    pub window_layers: usize,
+    /// Spatial fade radius in pixels for XY distance attenuation.
+    pub fade_px: u32,
+    /// Temporal falloff exponent across Z neighbors.
+    pub temporal_power: f32,
+    /// Overall effect strength [0..1].
+    pub strength: f32,
+}
+
+impl Default for CrossBlendConfig {
+    fn default() -> Self {
+        Self {
+            window_layers: 4,
+            fade_px: 8,
+            temporal_power: 1.0,
+            strength: 1.0,
+        }
+    }
+}
+
+/// Reusable scratch buffers for cross-blend experiments.
+pub struct CrossBlendWorkspace {
+    accum: Vec<f32>,
+    dist: Vec<u16>,
+    queue: VecDeque<usize>,
+}
+
+impl CrossBlendWorkspace {
+    pub fn new(width: usize, height: usize) -> Self {
+        let n = width.saturating_mul(height);
+        Self {
+            accum: vec![0.0; n],
+            dist: vec![u16::MAX; n],
+            queue: VecDeque::with_capacity(n / 8),
+        }
+    }
+
+    fn ensure_len(&mut self, n: usize) {
+        if self.accum.len() != n {
+            self.accum.resize(n, 0.0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CrossBlendStats {
+    pub contributing_layers: u32,
+    pub touched_pixels: u32,
+}
+
+/// Experimental volumetric cross-blend entrypoint.
+///
+/// Current behavior is intentionally a no-op placeholder to keep output stable
+/// while the full 3D accumulation kernel is introduced incrementally.
+pub fn cross_blend_layer_inplace(
+    mask: &mut [u8],
+    center_topology: &[u8],
+    priors: &[&[u8]],
+    futures: &[&[u8]],
+    width: usize,
+    height: usize,
+    cfg: &CrossBlendConfig,
+    ws: &mut CrossBlendWorkspace,
+) -> CrossBlendStats {
+    let n = width.saturating_mul(height);
+    if n == 0 || mask.len() < n || center_topology.len() < n {
+        return CrossBlendStats::default();
+    }
+    if priors.is_empty() && futures.is_empty() {
+        return CrossBlendStats::default();
+    }
+
+    const TOPO_THRESHOLD: u8 = 127;
+    let strength = cfg.strength.clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return CrossBlendStats::default();
+    }
+    let temporal_power = cfg.temporal_power.max(0.05);
+    let max_window = cfg.window_layers.max(1);
+
+    ws.ensure_len(n);
+    ws.accum.fill(0.0);
+    ws.dist.fill(u16::MAX);
+    ws.queue.clear();
+
+    let mut touched_pixels: u32 = 0;
+    let mut contributing_layers: u32 = 0;
+    let mut max_temporal_weight = 0.0f32;
+
+    // Priors are provided nearest-first in the streaming engine path when wired;
+    // keep explicit depth indexing for deterministic falloff.
+    for (depth_idx, prior) in priors.iter().take(max_window).enumerate() {
+        let depth = depth_idx + 1;
+        let w = 1.0f32 / (depth as f32).powf(temporal_power);
+        if w <= 0.0 {
+            continue;
+        }
+        max_temporal_weight += w;
+        let mut layer_contributed = false;
+        for i in 0..n {
+            if prior[i] > TOPO_THRESHOLD {
+                ws.accum[i] += w;
+                layer_contributed = true;
+            }
+        }
+        if layer_contributed {
+            contributing_layers = contributing_layers.saturating_add(1);
+        }
+    }
+
+    for (depth_idx, future) in futures.iter().take(max_window).enumerate() {
+        let depth = depth_idx + 1;
+        let w = 1.0f32 / (depth as f32).powf(temporal_power);
+        if w <= 0.0 {
+            continue;
+        }
+        max_temporal_weight += w;
+        let mut layer_contributed = false;
+        for i in 0..n {
+            if future[i] > TOPO_THRESHOLD {
+                ws.accum[i] += w;
+                layer_contributed = true;
+            }
+        }
+        if layer_contributed {
+            contributing_layers = contributing_layers.saturating_add(1);
+        }
+    }
+
+    if max_temporal_weight <= 0.0 {
+        return CrossBlendStats {
+            contributing_layers,
+            touched_pixels,
+        };
+    }
+
+    // Seed boundary of current topology and compute outward distances into
+    // candidate cross-blend region (non-topology pixels with temporal support).
+    let max_d = cfg.fade_px.max(1);
+    for y in 0..height {
+        for x in 0..width {
+            let idx = y * width + x;
+            if center_topology[idx] <= TOPO_THRESHOLD {
+                continue;
+            }
+            if has_non_current_4neighbor(center_topology, x, y, width, height, TOPO_THRESHOLD) {
+                ws.dist[idx] = 0;
+                ws.queue.push_back(idx);
+            }
+        }
+    }
+
+    while let Some(idx) = ws.queue.pop_front() {
+        let next_d = ws.dist[idx].saturating_add(1);
+        if (next_d as u32) > max_d {
+            continue;
+        }
+        let y = idx / width;
+        let x = idx % width;
+
+        macro_rules! try_neighbor {
+            ($nidx:expr) => {
+                let nidx = $nidx;
+                if center_topology[nidx] <= TOPO_THRESHOLD
+                    && ws.accum[nidx] > 0.0
+                    && ws.dist[nidx] > next_d
+                {
+                    ws.dist[nidx] = next_d;
+                    ws.queue.push_back(nidx);
+                }
+            };
+        }
+
+        if x > 0 {
+            try_neighbor!(idx - 1);
+        }
+        if x + 1 < width {
+            try_neighbor!(idx + 1);
+        }
+        if y > 0 {
+            try_neighbor!(idx - width);
+        }
+        if y + 1 < height {
+            try_neighbor!(idx + width);
+        }
+    }
+
+    // Volumetric blend: temporal occupancy density normalized against maximum
+    // sampled weight, modulated by XY distance fade from center-layer boundary.
+    let fade_denom = (max_d + 1) as f32;
+    for i in 0..n {
+        if center_topology[i] > TOPO_THRESHOLD {
+            continue;
+        }
+        if ws.accum[i] <= 0.0 {
+            continue;
+        }
+        let d = ws.dist[i];
+        if d == u16::MAX || (d as u32) > max_d {
+            continue;
+        }
+        let occ = (ws.accum[i] / max_temporal_weight).clamp(0.0, 1.0);
+        if occ <= 0.0 {
+            continue;
+        }
+        let spatial = 1.0 - (d as f32 / fade_denom);
+        if spatial <= 0.0 {
+            continue;
+        }
+        let alpha = (occ * spatial * strength * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+        if alpha > mask[i] {
+            mask[i] = alpha;
+            touched_pixels = touched_pixels.saturating_add(1);
+        }
+    }
+
+    CrossBlendStats {
+        contributing_layers,
+        touched_pixels,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LUT utilities
 // ---------------------------------------------------------------------------
 
@@ -944,5 +1182,83 @@ mod tests {
         }
         assert_eq!(lut[0], 0);
         assert_eq!(lut[255], 255);
+    }
+
+    #[test]
+    fn cross_blend_prototype_lifts_non_topology_pixel() {
+        let width = 3;
+        let height = 1;
+        let mut mask = vec![0u8, 255, 0];
+        let center_topology = vec![0u8, 255, 0];
+
+        let prior = vec![255u8, 255, 0];
+        let future = vec![255u8, 255, 0];
+        let priors: Vec<&[u8]> = vec![prior.as_slice()];
+        let futures: Vec<&[u8]> = vec![future.as_slice()];
+
+        let cfg = CrossBlendConfig {
+            window_layers: 2,
+            fade_px: 8,
+            temporal_power: 1.0,
+            strength: 0.5,
+        };
+        let mut ws = CrossBlendWorkspace::new(width, height);
+
+        let stats = cross_blend_layer_inplace(
+            &mut mask,
+            &center_topology,
+            &priors,
+            &futures,
+            width,
+            height,
+            &cfg,
+            &mut ws,
+        );
+
+        assert!(stats.touched_pixels >= 1);
+        assert_eq!(mask[1], 255, "center topology pixel should remain solid");
+        assert!(mask[0] > 0, "neighbor should receive volumetric lift");
+        assert_eq!(mask[2], 0, "non-contributing side should remain unchanged");
+    }
+
+    #[test]
+    fn cross_blend_applies_spatial_fade_from_boundary() {
+        let width = 4;
+        let height = 1;
+        let mut mask = vec![0u8, 255, 0, 0];
+        let center_topology = vec![0u8, 255, 0, 0];
+
+        // Future occupancy exists on both empty-side pixels; nearest (idx2)
+        // should receive stronger lift than farther (idx3) due to XY fade.
+        let future = vec![0u8, 255, 255, 255];
+        let futures: Vec<&[u8]> = vec![future.as_slice()];
+
+        let cfg = CrossBlendConfig {
+            window_layers: 1,
+            fade_px: 3,
+            temporal_power: 1.0,
+            strength: 1.0,
+        };
+        let mut ws = CrossBlendWorkspace::new(width, height);
+
+        let _stats = cross_blend_layer_inplace(
+            &mut mask,
+            &center_topology,
+            &[],
+            &futures,
+            width,
+            height,
+            &cfg,
+            &mut ws,
+        );
+
+        assert!(mask[2] > 0, "nearest pixel should be lifted");
+        assert!(mask[3] > 0, "farther pixel should still be lifted within fade");
+        assert!(
+            mask[2] > mask[3],
+            "nearer pixel should be stronger than farther pixel; got {} vs {}",
+            mask[2],
+            mask[3]
+        );
     }
 }
