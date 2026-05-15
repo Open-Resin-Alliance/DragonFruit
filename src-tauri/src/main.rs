@@ -368,6 +368,10 @@ struct NativeSlicerPerfMetrics {
     render_ns: u64,
     png_encode_ns: u64,
     archive_encode_ns: u64,
+    z_blend_backward_ns: u64,
+    z_blend_forward_ns: u64,
+    post_blur_ns: u64,
+    support_merge_ns: u64,
     layers: u32,
 }
 
@@ -1307,6 +1311,10 @@ async fn slice_solid_native_to_temp_path(
                 render_ns: perf_raw.render_ns,
                 png_encode_ns: perf_raw.png_encode_ns,
                 archive_encode_ns: perf_raw.archive_encode_ns,
+                z_blend_backward_ns: perf_raw.z_blend_backward_ns,
+                z_blend_forward_ns: perf_raw.z_blend_forward_ns,
+                post_blur_ns: perf_raw.post_blur_ns,
+                support_merge_ns: perf_raw.support_merge_ns,
                 layers: perf_raw.layers,
             };
 

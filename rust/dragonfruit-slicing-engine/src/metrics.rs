@@ -8,6 +8,14 @@ pub struct SlicingPerfV3 {
     pub render_ns: u64,
     pub png_encode_ns: u64,
     pub archive_encode_ns: u64,
+    /// CPU time spent in backward inter-layer z-blend compensation (3DAA path).
+    pub z_blend_backward_ns: u64,
+    /// CPU time spent in forward inter-layer z-blend compensation (3DAA path).
+    pub z_blend_forward_ns: u64,
+    /// CPU time spent in post z-blend blur stages (model + debug channels).
+    pub post_blur_ns: u64,
+    /// CPU time spent merging support mask back into model mask.
+    pub support_merge_ns: u64,
     pub layers: u32,
 }
 
