@@ -4,6 +4,7 @@ import { Vec3 } from '../../types';
 import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementState';
 import { useKickstandPlacementState } from '../../SupportTypes/Kickstand/kickstandPlacementState';
+import { useLeafPlacementState } from '../../SupportTypes/Leaf/leafPlacementState';
 import { emitImmediateModelHover } from '../../interaction/pointerOcclusion';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
@@ -64,7 +65,9 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive);
+    const { hotkeyActive: leafHotkeyActive, stage: leafStage } = useLeafPlacementState();
+    const leafPlacementActive = leafHotkeyActive || leafStage === 'awaitingBase';
+    const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive || leafPlacementActive);
     const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({

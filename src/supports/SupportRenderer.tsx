@@ -575,7 +575,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const useMultiSelectionDetail = hasSupportMultiSelection && effectiveSelectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
-    const enableTwigSceneBatching = false;
+    // Twigs participate in scene-batched shaft rendering like other supports.
+    // TwigRenderer still mounts (to draw the disks + joints, which have no
+    // scene-batched equivalent); it just defers its straight shafts to the
+    // batched pipeline via deferStraightShaftsToSceneBatch.
+    const enableTwigSceneBatching = true;
 
     const interactionHooksEnabled = !passive;
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
@@ -1967,15 +1971,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             for (const segment of twig.segments) {
                 let startPoint: THREE.Vector3;
                 let endPoint: THREE.Vector3;
-                let diameterStart = segment.diameter;
-                let diameterEnd = segment.diameter;
+                // Twig shaft tapers between the two contact disks (matches
+                // TwigRenderer). Batchability is decided by whether the two
+                // ends are equal.
+                const diameterStart = twig.contactDiskA.contactDiameterMm;
+                const diameterEnd = twig.contactDiskB.contactDiameterMm;
 
                 if (segment.bottomJoint) {
                     startPoint = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
                 } else {
                     const diskATipCenter = getDiskTipCenter(twig.contactDiskA);
                     startPoint = new THREE.Vector3(diskATipCenter.x, diskATipCenter.y, diskATipCenter.z);
-                    diameterStart = twig.contactDiskA.contactDiameterMm;
                 }
 
                 if (segment.topJoint) {
@@ -1983,7 +1989,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 } else {
                     const diskBTipCenter = getDiskTipCenter(twig.contactDiskB);
                     endPoint = new THREE.Vector3(diskBTipCenter.x, diskBTipCenter.y, diskBTipCenter.z);
-                    diameterEnd = twig.contactDiskB.contactDiameterMm;
                 }
 
                 const isUniformDiameter = Math.abs(diameterStart - diameterEnd) < 1e-6;
@@ -4038,13 +4043,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 );
             })}
 
-            {/* Render Twigs */}
+            {/* Render Twigs.
+             *
+             * Unlike Trunks/Branches, twigs always mount TwigRenderer (even
+             * when scene-batched), because the contact disks and joints have
+             * no scene-batched equivalent and would otherwise vanish for
+             * unselected twigs. TwigRenderer defers its shafts to the
+             * scene batch via deferStraightShaftsToSceneBatch.
+             */}
             {renderTwigList.map(twig => {
                 if (!isModelVisible(twig.modelId, twig.id)) return null;
                 const effectiveSelected = selectedTwigIds.has(twig.id);
                 const isTwigBatchable = twigShaftsBySupport.has(twig.id);
-                const renderDetailedTwig = effectiveSelected || !isTwigBatchable;
-                if (!renderDetailedTwig) return null;
 
                 const isTwigHovered = hoveredSupportIdForVisual === twig.id
                     || marqueeHoveredSupportIdSet.has(twig.id);
