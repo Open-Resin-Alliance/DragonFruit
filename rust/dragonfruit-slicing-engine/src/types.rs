@@ -45,6 +45,14 @@ fn default_z_blend_fade_px() -> u32 {
     20
 }
 
+fn default_z_blend_auto_fade() -> bool {
+    false
+}
+
+fn default_z_blend_minimum_alpha_percent() -> f32 {
+    0.0
+}
+
 fn default_z_blend_debug_color_overlay() -> bool {
     false
 }
@@ -124,8 +132,32 @@ pub struct SliceJobV3 {
     pub z_blend_look_back: u32,
     /// Fade-out distance in pixels for the 3DAA inter-layer gradient.
     /// The gradient reaches 0 at this many pixels from the current layer's edge.
+    ///
+    /// When `z_blend_auto_fade` is `true` this value is ignored and the engine
+    /// auto-computes the physically correct fade from `layer_height_mm` and the
+    /// printer's XY pixel pitch.  Only used (and respected) when `z_blend_auto_fade`
+    /// is `false`.
     #[serde(default = "default_z_blend_fade_px")]
     pub z_blend_fade_px: u32,
+    /// When true the engine auto-computes `z_blend_fade_px` from physical
+    /// printer geometry: `fade_px = ceil(layer_height_mm / xy_pixel_pitch_mm) × look_back`.
+    ///
+    /// This is the physically correct calibration for most MSLA printers and
+    /// should be preferred over a manually-tuned `z_blend_fade_px`.  The manual
+    /// override exists only for advanced users who understand why they're
+    /// deviating from the physical calibration.
+    #[serde(default = "default_z_blend_auto_fade")]
+    pub z_blend_auto_fade: bool,
+    /// Minimum gray level (0–100 %) for z-blend gradient pixels that fall outside
+    /// the current layer's binary footprint.  Defaults to 0 so that the
+    /// EDT gradient naturally tapers to zero at `fade_px`.  Non-zero values
+    /// extend printing into the receding zone even where the gradient is faint,
+    /// which can cause dimensional overgrowth and should generally be left at 0.
+    ///
+    /// This is separate from `minimum_aa_alpha_percent`, which applies only to
+    /// XY blur / coverage AA pixels inside the current layer's footprint.
+    #[serde(default = "default_z_blend_minimum_alpha_percent")]
+    pub z_blend_minimum_alpha_percent: f32,
     /// Debug-only visualization mode for 3DAA blending.
     ///
     /// When enabled, generated PNG layer previews color-code blend direction:
@@ -152,6 +184,43 @@ impl SliceJobV3 {
     #[inline]
     pub fn effective_render_width_px(&self) -> u32 {
         self.source_width_px
+    }
+
+    /// Physical XY pixel pitch in millimeters (width axis).
+    ///
+    /// Uses the source (physical sub-pixel) width so that high-resolution
+    /// sub-pixel packing modes (e.g. `rgb8_div3`) report the true pixel pitch,
+    /// not the packed-pixel pitch.
+    #[inline]
+    pub fn xy_pixel_pitch_mm(&self) -> f32 {
+        if self.source_width_px == 0 || self.build_width_mm <= 0.0 {
+            return 1.0; // fallback: 1 mm/px to avoid division-by-zero
+        }
+        self.build_width_mm / self.source_width_px as f32
+    }
+
+    /// Effective z-blend fade distance in pixels, honouring `z_blend_auto_fade`.
+    ///
+    /// When auto-fade is enabled the fade is derived from physical printer
+    /// geometry so that the gradient spans exactly the XY distance that
+    /// corresponds to `look_back` layer-height steps on a 45° surface:
+    ///
+    /// ```text
+    /// fade_px = ceil(layer_height_mm / xy_pixel_pitch_mm) × look_back
+    /// ```
+    ///
+    /// This ensures the gradient falls off steeply within the physically
+    /// meaningful XY extent and does not bleed across unrelated features.
+    pub fn effective_z_blend_fade_px(&self) -> u32 {
+        if self.z_blend_auto_fade && self.layer_height_mm > 0.0 {
+            let pitch = self.xy_pixel_pitch_mm();
+            let layer_height_px = (self.layer_height_mm / pitch).ceil() as u32;
+            // Clamp to a reasonable maximum to prevent runaway on degenerate
+            // input (e.g. very thick layers on a coarse-resolution printer).
+            (layer_height_px.max(1) * self.z_blend_look_back.max(1)).min(64)
+        } else {
+            self.z_blend_fade_px.max(1)
+        }
     }
 }
 
