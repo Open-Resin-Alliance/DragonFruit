@@ -181,6 +181,7 @@ const SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3
 const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
 const SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePxCustomEnabled';
 const SLICING_3DAA_FADE_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaFadeMode';
+const SLICING_3DAA_AUTO_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaAutoMode';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
@@ -430,6 +431,14 @@ function resolveInitialZBlendFadeMode(): 'auto' | 'manual' {
   return stored === 'manual' ? 'manual' : 'auto';
 }
 
+function resolveInitialZBlendAutoMode(): boolean {
+  if (typeof window === 'undefined') return true;
+  const stored = window.localStorage.getItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY);
+  // Default to true (Auto / slope-adaptive) unless user explicitly selected 'advanced'.
+  return stored !== 'false';
+}
+
 export function SlicingPanel({
   models,
   activeModel,
@@ -506,6 +515,7 @@ export function SlicingPanel({
   });
   const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
   const [zBlendFadeMode, setZBlendFadeMode] = useState<'auto' | 'manual'>(resolveInitialZBlendFadeMode);
+  const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [useCustomZBlendFadePx, setUseCustomZBlendFadePx] = useState<boolean>(() => {
     const initial = resolveInitialZBlendFadePx();
     const initialLookBack = resolveInitialZBlendLookBack();
@@ -1072,6 +1082,13 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    const serialized = String(zBlendAutoMode);
+    window.localStorage.setItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY, serialized);
+  }, [zBlendAutoMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     const serialized = String(Math.max(0, Math.min(100, Math.round(minimumAaAlphaPercent))));
     window.localStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
@@ -1332,6 +1349,7 @@ export function SlicingPanel({
         zBlendFadePx: aaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
         zBlendAutoFade: aaMode === '3DAA' ? (zBlendFadeMode === 'auto') : undefined,
         zBlendMinimumAlphaPercent: aaMode === '3DAA' ? 0 : undefined,
+        zBlendSlopeAdaptive: aaMode === '3DAA' ? zBlendAutoMode : undefined,
         minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
           ? minimumAaAlphaPercent
           : profileMinimumAaAlphaPercent,
@@ -1968,6 +1986,49 @@ export function SlicingPanel({
                       {aaMode === '3DAA' && (
                         <>
                           <SettingLabelWithHelp
+                            label="3DAA Mode"
+                            help="Auto: engine analyses each layer's slope and applies the correct gradient automatically — only Blend Window is needed. Advanced: exposes all manual controls."
+                          />
+                          <div className="grid grid-cols-2 gap-1">
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={zBlendAutoMode
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setZBlendAutoMode(true)}
+                            >
+                              Auto
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={!zBlendAutoMode
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setZBlendAutoMode(false)}
+                            >
+                              Advanced
+                            </button>
+                          </div>
+
+                          <SettingLabelWithHelp
                             label="Blend Window"
                             help="How many nearby layers contribute to Z blending. Higher values can reduce stepping but may blur very thin layer transitions."
                           />
@@ -2033,6 +2094,8 @@ export function SlicingPanel({
                             />
                           )}
 
+                          {!zBlendAutoMode && (
+                          <>
                           <SettingLabelWithHelp
                             label="Compensation Reach"
                             help="How far Z-compensation reaches from edges in XY. Auto derives this from layer height, pixel pitch, and Blend Window; Manual lets you override it."
@@ -2143,6 +2206,8 @@ export function SlicingPanel({
                                 />
                               )}
                             </>
+                          )}
+                          </>
                           )}
                         </>
                       )}

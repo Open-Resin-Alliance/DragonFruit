@@ -156,6 +156,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         z_blend_fade_px: 20,
         z_blend_auto_fade: true,
         z_blend_minimum_alpha_percent: 0.0,
+        z_blend_slope_adaptive: true,
         z_blend_debug_color_overlay: false,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),

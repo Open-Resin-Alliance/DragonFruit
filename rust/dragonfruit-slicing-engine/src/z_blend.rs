@@ -190,6 +190,159 @@ impl ZBlendWorkspace {
             roi,
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Slope-adaptive variants — no global fade_px; gradient derived from
+    // layer-history depth instead of XY distance, automatically calibrating
+    // to the local surface slope without any manual tuning.
+    // -----------------------------------------------------------------------
+
+    /// Slope-adaptive backward blend.
+    ///
+    /// Receding pixels (present in prior layers, absent from current) receive a
+    /// gradient value of `(look_back + 1 − depth) / (look_back + 1)` passed
+    /// through the LUT, where `depth` is how many layers ago the pixel was last
+    /// solid. This fraction is the correct Z-coverage proxy for any surface
+    /// slope: steep slopes produce narrow depth-rings (fine gradient), shallow
+    /// slopes produce wide rings (gentle gradient) — all without a `fade_px`
+    /// knob.
+    ///
+    /// The BFS connectivity check is still performed so that isolated in-prior
+    /// islands disconnected from the current boundary are not affected.
+    pub fn blend_layer_slope_adaptive_inplace(
+        &mut self,
+        current: &mut [u8],
+        priors: &[&[u8]],
+        width: usize,
+        height: usize,
+        lut: Option<&[u8; 256]>,
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+        if width == 0 || height == 0 {
+            return;
+        }
+        z_blend_layer_slope_adaptive_inplace_with_roi(
+            current,
+            priors,
+            width,
+            height,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+            (0, width - 1, 0, height - 1),
+        );
+    }
+
+    /// Slope-adaptive backward blend with ROI.
+    pub fn blend_layer_slope_adaptive_inplace_with_roi(
+        &mut self,
+        current: &mut [u8],
+        priors: &[&[u8]],
+        width: usize,
+        height: usize,
+        lut: Option<&[u8; 256]>,
+        roi: (usize, usize, usize, usize),
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+        z_blend_layer_slope_adaptive_inplace_with_roi(
+            current,
+            priors,
+            width,
+            height,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+            roi,
+        );
+    }
+
+    /// Slope-adaptive forward blend.
+    ///
+    /// Pre-appearing pixels (absent from current topology but present in future
+    /// layers) receive the same depth-proportional gradient as the backward
+    /// variant so that growing and shrinking edges are treated symmetrically.
+    pub fn blend_layer_forward_slope_adaptive_inplace(
+        &mut self,
+        mask: &mut [u8],
+        topology: &[u8],
+        futures: &[&[u8]],
+        look_back: usize,
+        width: usize,
+        height: usize,
+        lut: Option<&[u8; 256]>,
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+        if width == 0 || height == 0 {
+            return;
+        }
+        z_blend_forward_slope_adaptive_inplace_with_roi(
+            mask,
+            topology,
+            futures,
+            look_back,
+            width,
+            height,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+            (0, width - 1, 0, height - 1),
+        );
+    }
+
+    /// Slope-adaptive forward blend with ROI.
+    pub fn blend_layer_forward_slope_adaptive_inplace_with_roi(
+        &mut self,
+        mask: &mut [u8],
+        topology: &[u8],
+        futures: &[&[u8]],
+        look_back: usize,
+        width: usize,
+        height: usize,
+        lut: Option<&[u8; 256]>,
+        roi: (usize, usize, usize, usize),
+    ) {
+        let n = width.saturating_mul(height);
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, u16::MAX);
+        }
+        z_blend_forward_slope_adaptive_inplace_with_roi(
+            mask,
+            topology,
+            futures,
+            look_back,
+            width,
+            height,
+            lut,
+            &mut self.in_prior,
+            &mut self.dist,
+            &mut self.queue,
+            roi,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +839,320 @@ fn z_blend_forward_inplace_with_roi(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Slope-adaptive private implementations
+// ---------------------------------------------------------------------------
+
+/// Slope-adaptive backward blend.
+///
+/// Gradient formula: `fraction = (look_back + 1 - depth) / (look_back + 1)`,
+/// where `depth = in_prior[idx]` (layers since pixel was last solid).  No
+/// global `fade_px` limit; the BFS terminates naturally at the edge of the
+/// look-back zone (`in_prior == 0`).
+///
+/// This automatically calibrates to local surface slope:
+/// - Steep/vertical surfaces → narrow depth-rings → sharp, physically correct gradient.
+/// - Shallow surfaces → wide depth-rings → gentle gradient spanning the full zone.
+fn z_blend_layer_slope_adaptive_inplace_with_roi(
+    current: &mut [u8],
+    priors: &[&[u8]],
+    width: usize,
+    height: usize,
+    lut: Option<&[u8; 256]>,
+    in_prior: &mut [u8],
+    dist: &mut [u16],
+    queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
+    const TOPO_THRESHOLD: u8 = 127;
+
+    // Step 1 — build depth map (same as standard z_blend).
+    for y in roi_min_y..=roi_max_y {
+        let row = y * width;
+        for x in roi_min_x..=roi_max_x {
+            in_prior[row + x] = 0;
+        }
+    }
+
+    let mut receding_any = false;
+    let mut rec_min_x = width;
+    let mut rec_max_x = 0usize;
+    let mut rec_min_y = height;
+    let mut rec_max_y = 0usize;
+
+    for (depth_idx, prior) in priors.iter().rev().enumerate() {
+        let depth_val = (depth_idx + 1) as u8;
+        for y in roi_min_y..=roi_max_y {
+            let row = y * width;
+            for x in roi_min_x..=roi_max_x {
+                let idx = row + x;
+                if prior[idx] > TOPO_THRESHOLD && in_prior[idx] == 0 {
+                    in_prior[idx] = depth_val;
+                    if current[idx] <= TOPO_THRESHOLD {
+                        receding_any = true;
+                        rec_min_x = rec_min_x.min(x);
+                        rec_max_x = rec_max_x.max(x);
+                        rec_min_y = rec_min_y.min(y);
+                        rec_max_y = rec_max_y.max(y);
+                    }
+                }
+            }
+        }
+    }
+
+    if !receding_any {
+        return;
+    }
+
+    let seed_min_x = rec_min_x.saturating_sub(1);
+    let seed_min_y = rec_min_y.saturating_sub(1);
+    let seed_max_x = (rec_max_x + 1).min(width - 1);
+    let seed_max_y = (rec_max_y + 1).min(height - 1);
+
+    // Step 2 — BFS connectivity check (no fade_px limit — zone boundary is
+    // `in_prior == 0`; cap at 512 to guard against degenerate geometry).
+    const SLOPE_ADAPTIVE_MAX_DIST: u16 = 512;
+    for y in rec_min_y..=rec_max_y {
+        let row = y * width;
+        for x in rec_min_x..=rec_max_x {
+            dist[row + x] = u16::MAX;
+        }
+    }
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            dist[row + x] = u16::MAX;
+        }
+    }
+    queue.clear();
+
+    for y in seed_min_y..=seed_max_y {
+        for x in seed_min_x..=seed_max_x {
+            let idx = y * width + x;
+            if current[idx] <= TOPO_THRESHOLD {
+                continue;
+            }
+            if has_non_current_4neighbor(current, x, y, width, height, TOPO_THRESHOLD) {
+                dist[idx] = 0;
+                queue.push_back(idx);
+            }
+        }
+    }
+
+    while let Some(idx) = queue.pop_front() {
+        let next_d = dist[idx].saturating_add(1);
+        if next_d > SLOPE_ADAPTIVE_MAX_DIST {
+            continue;
+        }
+        let y = idx / width;
+        let x = idx % width;
+
+        macro_rules! try_neighbor {
+            ($nidx:expr) => {
+                let nidx = $nidx;
+                if current[nidx] <= TOPO_THRESHOLD && in_prior[nidx] > 0 && dist[nidx] > next_d {
+                    dist[nidx] = next_d;
+                    queue.push_back(nidx);
+                }
+            };
+        }
+
+        if x > rec_min_x {
+            try_neighbor!(idx - 1);
+        }
+        if x < rec_max_x {
+            try_neighbor!(idx + 1);
+        }
+        if y > rec_min_y {
+            try_neighbor!(idx - width);
+        }
+        if y < rec_max_y {
+            try_neighbor!(idx + width);
+        }
+    }
+
+    // Step 3 — depth-based gradient.  Fraction depends only on how many layers
+    // ago the pixel was last solid, giving an automatic slope calibration.
+    let look_back = priors.len();
+    let denom = (look_back + 1) as f32;
+    for y in rec_min_y..=rec_max_y {
+        let row = y * width;
+        for x in rec_min_x..=rec_max_x {
+            let idx = row + x;
+            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && dist[idx] != u16::MAX {
+                let depth = in_prior[idx] as usize;
+                let num = (look_back + 1).saturating_sub(depth) as f32;
+                let fraction = (num / denom).clamp(0.0, 1.0);
+                let raw = (fraction * 255.0 + 0.5) as u8;
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
+                if v > current[idx] {
+                    current[idx] = v;
+                }
+            }
+        }
+    }
+}
+
+/// Slope-adaptive forward blend.
+///
+/// Mirrors `z_blend_layer_slope_adaptive_inplace_with_roi` for the growing-edge
+/// direction.  Pre-appearing pixels receive `(look_back + 1 - depth) /
+/// (look_back + 1)` so that both edge directions are treated symmetrically.
+fn z_blend_forward_slope_adaptive_inplace_with_roi(
+    mask: &mut [u8],
+    topology: &[u8],
+    futures: &[&[u8]],
+    look_back: usize,
+    width: usize,
+    height: usize,
+    lut: Option<&[u8; 256]>,
+    in_forward: &mut [u8],
+    dist: &mut [u16],
+    queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    if futures.is_empty() || look_back == 0 {
+        return;
+    }
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
+    const TOPO_THRESHOLD: u8 = 127;
+
+    for y in roi_min_y..=roi_max_y {
+        let row = y * width;
+        for x in roi_min_x..=roi_max_x {
+            in_forward[row + x] = 0;
+        }
+    }
+
+    let mut appearing_any = false;
+    let mut app_min_x = width;
+    let mut app_max_x = 0usize;
+    let mut app_min_y = height;
+    let mut app_max_y = 0usize;
+
+    for (depth_idx, future) in futures.iter().enumerate() {
+        let depth_val = (depth_idx + 1) as u8;
+        for y in roi_min_y..=roi_max_y {
+            let row = y * width;
+            for x in roi_min_x..=roi_max_x {
+                let idx = row + x;
+                if future[idx] > TOPO_THRESHOLD && in_forward[idx] == 0 {
+                    in_forward[idx] = depth_val;
+                    if topology[idx] <= TOPO_THRESHOLD {
+                        appearing_any = true;
+                        app_min_x = app_min_x.min(x);
+                        app_max_x = app_max_x.max(x);
+                        app_min_y = app_min_y.min(y);
+                        app_max_y = app_max_y.max(y);
+                    }
+                }
+            }
+        }
+    }
+
+    if !appearing_any {
+        return;
+    }
+
+    let seed_min_x = app_min_x.saturating_sub(1);
+    let seed_min_y = app_min_y.saturating_sub(1);
+    let seed_max_x = (app_max_x + 1).min(width - 1);
+    let seed_max_y = (app_max_y + 1).min(height - 1);
+
+    const SLOPE_ADAPTIVE_MAX_DIST: u16 = 512;
+    for y in app_min_y..=app_max_y {
+        let row = y * width;
+        for x in app_min_x..=app_max_x {
+            dist[row + x] = u16::MAX;
+        }
+    }
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            dist[row + x] = u16::MAX;
+        }
+    }
+    queue.clear();
+
+    for y in seed_min_y..=seed_max_y {
+        for x in seed_min_x..=seed_max_x {
+            let idx = y * width + x;
+            if topology[idx] <= TOPO_THRESHOLD {
+                continue;
+            }
+            if has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD) {
+                dist[idx] = 0;
+                queue.push_back(idx);
+            }
+        }
+    }
+
+    while let Some(idx) = queue.pop_front() {
+        let next_d = dist[idx].saturating_add(1);
+        if next_d > SLOPE_ADAPTIVE_MAX_DIST {
+            continue;
+        }
+        let y = idx / width;
+        let x = idx % width;
+
+        macro_rules! try_neighbor {
+            ($nidx:expr) => {
+                let nidx = $nidx;
+                if topology[nidx] <= TOPO_THRESHOLD && in_forward[nidx] > 0 && dist[nidx] > next_d {
+                    dist[nidx] = next_d;
+                    queue.push_back(nidx);
+                }
+            };
+        }
+
+        if x > app_min_x {
+            try_neighbor!(idx - 1);
+        }
+        if x < app_max_x {
+            try_neighbor!(idx + 1);
+        }
+        if y > app_min_y {
+            try_neighbor!(idx - width);
+        }
+        if y < app_max_y {
+            try_neighbor!(idx + width);
+        }
+    }
+
+    let denom = (look_back + 1) as f32;
+    for y in app_min_y..=app_max_y {
+        let row = y * width;
+        for x in app_min_x..=app_max_x {
+            let idx = row + x;
+            if topology[idx] <= TOPO_THRESHOLD && in_forward[idx] > 0 && dist[idx] != u16::MAX {
+                let depth = in_forward[idx] as usize;
+                let num = (look_back + 1).saturating_sub(depth) as f32;
+                let fraction = (num / denom).clamp(0.0, 1.0);
+                let raw = (fraction * 255.0 + 0.5) as u8;
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
+                if v > mask[idx] {
+                    mask[idx] = v;
+                }
+            }
+        }
+    }
+}
+
 /// Returns true if the pixel at (x, y) has at least one 4-connected neighbour
 /// that is NOT in the current layer (i.e., ≤ threshold).
 #[inline]
@@ -936,9 +1403,7 @@ pub fn cross_blend_layer_inplace(
         if spatial <= 0.0 {
             continue;
         }
-        let alpha = (occ * spatial * strength * 255.0)
-            .round()
-            .clamp(0.0, 255.0) as u8;
+        let alpha = (occ * spatial * strength * 255.0).round().clamp(0.0, 255.0) as u8;
         if alpha > mask[i] {
             mask[i] = alpha;
             touched_pixels = touched_pixels.saturating_add(1);
@@ -1253,7 +1718,10 @@ mod tests {
         );
 
         assert!(mask[2] > 0, "nearest pixel should be lifted");
-        assert!(mask[3] > 0, "farther pixel should still be lifted within fade");
+        assert!(
+            mask[3] > 0,
+            "farther pixel should still be lifted within fade"
+        );
         assert!(
             mask[2] > mask[3],
             "nearer pixel should be stronger than farther pixel; got {} vs {}",

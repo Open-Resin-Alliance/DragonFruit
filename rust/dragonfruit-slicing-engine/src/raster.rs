@@ -2080,6 +2080,7 @@ mod tests {
             z_blend_fade_px: 20,
             z_blend_auto_fade: true,
             z_blend_minimum_alpha_percent: 0.0,
+            z_blend_slope_adaptive: true,
             z_blend_debug_color_overlay: false,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
