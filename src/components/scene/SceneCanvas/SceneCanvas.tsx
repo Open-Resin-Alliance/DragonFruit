@@ -1580,7 +1580,12 @@ export function SceneCanvas({
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
   const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
-  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive || supportHoverTargetActive || sceneHoveredSupportId !== null;
+  // When a placement mode is active, hovering a support is *intentional*
+  // (it's the snap target). The support-hover and scene-hover suppression
+  // conditions only apply outside placement mode. Contact-disk HUD
+  // interaction still overrides because it's a different gesture entirely.
+  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive
+    || (!supportCreationModeActive && (supportHoverTargetActive || sceneHoveredSupportId !== null));
 
   const queueSupportPlacementGuideZ = React.useCallback((nextZ: number | null) => {
     supportPlacementGuidePendingZRef.current = nextZ;
