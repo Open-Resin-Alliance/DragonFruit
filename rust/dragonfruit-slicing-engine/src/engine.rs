@@ -635,32 +635,38 @@ fn process_pending_layer_post(
                 if *px == 0 {
                     continue;
                 }
-                let floor = if topology[idx] > TOPO_THRESHOLD {
-                    min_aa_alpha_u8
+                if topology[idx] > TOPO_THRESHOLD {
+                    // XY AA pixel: floor up so it cures reliably.
+                    if *px < min_aa_alpha_u8 {
+                        *px = min_aa_alpha_u8;
+                    }
                 } else {
-                    z_blend_min_alpha_u8
-                };
-                if *px < floor {
-                    *px = floor;
+                    // z-blend gradient pixel: zero out if below cure threshold
+                    // so the gradient fades to black rather than forming a hard
+                    // lifted ring (the "fat block" artefact).
+                    if *px < z_blend_min_alpha_u8 {
+                        *px = 0;
+                    }
                 }
             }
         }
         if blur_radius == 0 {
             // No blur ran; still need to apply XY AA floor to topology pixels
-            // and z-blend floor to gradient pixels.
+            // and z-blend cutoff to gradient pixels.
             const TOPO_THRESHOLD2: u8 = 127;
             let topology = layer.topology.as_slice();
             for (idx, px) in layer.mask.iter_mut().enumerate() {
                 if *px == 0 {
                     continue;
                 }
-                let floor = if topology[idx] > TOPO_THRESHOLD2 {
-                    min_aa_alpha_u8
+                if topology[idx] > TOPO_THRESHOLD2 {
+                    if *px < min_aa_alpha_u8 {
+                        *px = min_aa_alpha_u8;
+                    }
                 } else {
-                    z_blend_min_alpha_u8
-                };
-                if *px < floor {
-                    *px = floor;
+                    if *px < z_blend_min_alpha_u8 {
+                        *px = 0;
+                    }
                 }
             }
         }
