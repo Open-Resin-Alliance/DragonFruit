@@ -28,13 +28,10 @@ use std::collections::VecDeque;
 /// against a look-back ring of prior layers without materializing all layers.
 pub struct ZBlendWorkspace {
     in_prior: Vec<u8>,
-    /// BFS distance map. u16 is sufficient since fade_px is always well under
-    /// 65535 in practice; halving the element size saves ~112 MB at 7680².
-    dist: Vec<u16>,
-    /// Back-BFS distance map for the two-BFS smooth gradient (slope-adaptive
-    /// mode): distance from the outer edge of the receding / appearing zone.
-    dist_back: Vec<u16>,
-    queue: VecDeque<usize>,
+    /// Felzenszwalb EDT distance map (exact Euclidean, in pixels).
+    dist: Vec<f32>,
+    /// Temporary seed-marker buffer used during the EDT phase.
+    seeds: Vec<bool>,
 }
 
 impl ZBlendWorkspace {
@@ -42,9 +39,8 @@ impl ZBlendWorkspace {
         let n = width.saturating_mul(height);
         Self {
             in_prior: vec![0u8; n],
-            dist: vec![u16::MAX; n],
-            dist_back: vec![u16::MAX; n],
-            queue: VecDeque::with_capacity(n / 8),
+            dist: vec![f32::INFINITY; n],
+            seeds: vec![false; n],
         }
     }
 
@@ -62,9 +58,11 @@ impl ZBlendWorkspace {
             self.in_prior.resize(n, 0);
         }
         if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
+            self.dist.resize(n, f32::INFINITY);
         }
-
+        if self.seeds.len() != n {
+            self.seeds.resize(n, false);
+        }
         z_blend_layer_inplace(
             current,
             priors,
@@ -74,7 +72,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
-            &mut self.queue,
+            &mut self.seeds,
         );
     }
 
@@ -93,9 +91,11 @@ impl ZBlendWorkspace {
             self.in_prior.resize(n, 0);
         }
         if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
+            self.dist.resize(n, f32::INFINITY);
         }
-
+        if self.seeds.len() != n {
+            self.seeds.resize(n, false);
+        }
         z_blend_layer_inplace_with_roi(
             current,
             priors,
@@ -105,7 +105,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
-            &mut self.queue,
+            &mut self.seeds,
             roi,
         );
     }
@@ -113,9 +113,9 @@ impl ZBlendWorkspace {
     /// Apply forward (lookahead) Z-blend compensation to a processed mask.
     ///
     /// For each "pre-appearing" pixel — one absent from `topology` (this layer)
-    /// but present in at least one of `futures` (upcoming layers) — computes a
-    /// Manhattan-distance BFS from the topology boundary outward and applies a
-    /// depth-scaled alpha gradient that is symmetric to the backward receding
+    /// but present in at least one of `futures` (upcoming layers) — computes the
+    /// exact Euclidean distance from the topology boundary outward and applies a
+    /// per-component-normalized alpha gradient symmetric to the backward receding
     /// gradient produced by [`blend_layer_inplace`].
     ///
     /// **Why this prevents dimensional overgrowth:** without forward compensation
@@ -124,9 +124,7 @@ impl ZBlendWorkspace {
     /// growing edges an identical pre-appearing gradient, both transitions are
     /// treated symmetrically and the net Z-dimensional footprint is neutral.
     ///
-    /// `look_back` should be the same value used for backward blending so the
-    /// peak alpha formula is identical in both directions:
-    /// `peak = 255 × look_back / (look_back + 1)` for the nearest layer.
+    /// `look_back` should be the same value used for backward blending.
     pub fn blend_layer_forward_inplace(
         &mut self,
         mask: &mut [u8],
@@ -143,7 +141,10 @@ impl ZBlendWorkspace {
             self.in_prior.resize(n, 0);
         }
         if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
+            self.dist.resize(n, f32::INFINITY);
+        }
+        if self.seeds.len() != n {
+            self.seeds.resize(n, false);
         }
         z_blend_forward_inplace(
             mask,
@@ -156,7 +157,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
-            &mut self.queue,
+            &mut self.seeds,
         );
     }
 
@@ -177,7 +178,10 @@ impl ZBlendWorkspace {
             self.in_prior.resize(n, 0);
         }
         if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
+            self.dist.resize(n, f32::INFINITY);
+        }
+        if self.seeds.len() != n {
+            self.seeds.resize(n, false);
         }
         z_blend_forward_inplace_with_roi(
             mask,
@@ -190,176 +194,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
-            &mut self.queue,
-            roi,
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Slope-adaptive variants — no global fade_px; gradient derived from
-    // layer-history depth instead of XY distance, automatically calibrating
-    // to the local surface slope without any manual tuning.
-    // -----------------------------------------------------------------------
-
-    /// Slope-adaptive backward blend.
-    ///
-    /// Receding pixels (present in prior layers, absent from current) receive a
-    /// gradient value of `(look_back + 1 − depth) / (look_back + 1)` passed
-    /// through the LUT, where `depth` is how many layers ago the pixel was last
-    /// solid. This fraction is the correct Z-coverage proxy for any surface
-    /// slope: steep slopes produce narrow depth-rings (fine gradient), shallow
-    /// slopes produce wide rings (gentle gradient) — all without a `fade_px`
-    /// knob.
-    ///
-    /// The BFS connectivity check is still performed so that isolated in-prior
-    /// islands disconnected from the current boundary are not affected.
-    pub fn blend_layer_slope_adaptive_inplace(
-        &mut self,
-        current: &mut [u8],
-        priors: &[&[u8]],
-        width: usize,
-        height: usize,
-        lut: Option<&[u8; 256]>,
-    ) {
-        let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
-        }
-        if self.dist_back.len() != n {
-            self.dist_back.resize(n, u16::MAX);
-        }
-        if width == 0 || height == 0 {
-            return;
-        }
-        z_blend_layer_slope_adaptive_inplace_with_roi(
-            current,
-            priors,
-            width,
-            height,
-            lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.dist_back,
-            &mut self.queue,
-            (0, width - 1, 0, height - 1),
-        );
-    }
-
-    /// Slope-adaptive backward blend with ROI.
-    pub fn blend_layer_slope_adaptive_inplace_with_roi(
-        &mut self,
-        current: &mut [u8],
-        priors: &[&[u8]],
-        width: usize,
-        height: usize,
-        lut: Option<&[u8; 256]>,
-        roi: (usize, usize, usize, usize),
-    ) {
-        let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
-        }
-        if self.dist_back.len() != n {
-            self.dist_back.resize(n, u16::MAX);
-        }
-        z_blend_layer_slope_adaptive_inplace_with_roi(
-            current,
-            priors,
-            width,
-            height,
-            lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.dist_back,
-            &mut self.queue,
-            roi,
-        );
-    }
-
-    /// Slope-adaptive forward blend.
-    ///
-    /// Pre-appearing pixels (absent from current topology but present in future
-    /// layers) receive the same depth-proportional gradient as the backward
-    /// variant so that growing and shrinking edges are treated symmetrically.
-    pub fn blend_layer_forward_slope_adaptive_inplace(
-        &mut self,
-        mask: &mut [u8],
-        topology: &[u8],
-        futures: &[&[u8]],
-        look_back: usize,
-        width: usize,
-        height: usize,
-        lut: Option<&[u8; 256]>,
-    ) {
-        let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
-        }
-        if self.dist_back.len() != n {
-            self.dist_back.resize(n, u16::MAX);
-        }
-        if width == 0 || height == 0 {
-            return;
-        }
-        z_blend_forward_slope_adaptive_inplace_with_roi(
-            mask,
-            topology,
-            futures,
-            look_back,
-            width,
-            height,
-            lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.dist_back,
-            &mut self.queue,
-            (0, width - 1, 0, height - 1),
-        );
-    }
-
-    /// Slope-adaptive forward blend with ROI.
-    pub fn blend_layer_forward_slope_adaptive_inplace_with_roi(
-        &mut self,
-        mask: &mut [u8],
-        topology: &[u8],
-        futures: &[&[u8]],
-        look_back: usize,
-        width: usize,
-        height: usize,
-        lut: Option<&[u8; 256]>,
-        roi: (usize, usize, usize, usize),
-    ) {
-        let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, u16::MAX);
-        }
-        if self.dist_back.len() != n {
-            self.dist_back.resize(n, u16::MAX);
-        }
-        z_blend_forward_slope_adaptive_inplace_with_roi(
-            mask,
-            topology,
-            futures,
-            look_back,
-            width,
-            height,
-            lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.dist_back,
-            &mut self.queue,
+            &mut self.seeds,
             roi,
         );
     }
@@ -416,8 +251,8 @@ fn z_blend_layer_inplace(
     fade_px: u32,
     lut: Option<&[u8; 256]>,
     in_prior: &mut [u8],
-    dist: &mut [u16],
-    queue: &mut VecDeque<usize>,
+    dist: &mut [f32],
+    seeds: &mut [bool],
 ) {
     if width == 0 || height == 0 {
         return;
@@ -431,7 +266,7 @@ fn z_blend_layer_inplace(
         lut,
         in_prior,
         dist,
-        queue,
+        seeds,
         (0, width - 1, 0, height - 1),
     );
 }
@@ -465,8 +300,8 @@ fn z_blend_layer_inplace_with_roi(
     fade_px: u32,
     lut: Option<&[u8; 256]>,
     in_prior: &mut [u8],
-    dist: &mut [u16],
-    queue: &mut VecDeque<usize>,
+    dist: &mut [f32],
+    seeds: &mut [bool],
     roi: (usize, usize, usize, usize),
 ) {
     let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
@@ -490,9 +325,7 @@ fn z_blend_layer_inplace_with_roi(
     //                       (d=1 = most-recent prior N-1, d=2 = N-2, …)
     //
     // Iterating priors from most-recent to oldest means the FIRST write wins,
-    // so in_prior always records the minimum (most-recent) depth.  Depth is used
-    // in Step 3 to scale the receding gradient peak: a pixel that was solid just
-    // one layer ago blends in close to 255; one from two layers ago is dimmer.
+    // so in_prior always records the minimum (most-recent) depth.
     for y in roi_min_y..=roi_max_y {
         let row = y * width;
         for x in roi_min_x..=roi_max_x {
@@ -526,8 +359,7 @@ fn z_blend_layer_inplace_with_roi(
         }
     }
 
-    // Quick early-out: if no receding pixels exist (prior occupied, current empty),
-    // there is nothing to blend for this layer.
+    // Quick early-out: if no receding pixels exist there is nothing to blend.
     if !receding_any {
         return;
     }
@@ -539,108 +371,99 @@ fn z_blend_layer_inplace_with_roi(
     let seed_max_x = (rec_max_x + 1).min(width - 1);
     let seed_max_y = (rec_max_y + 1).min(height - 1);
 
-    // -- Step 2: BFS from current-layer boundary into receding area. --
+    // -- Step 2: Felzenszwalb exact Euclidean EDT. --
+    //
+    // Seeds are current-layer boundary pixels that border at least one
+    // receding (non-current) pixel.  The EDT produces exact Euclidean
+    // distances in pixels from those seeds outward into the receding zone.
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            let idx = row + x;
+            seeds[idx] = current[idx] > TOPO_THRESHOLD
+                && has_non_current_4neighbor(current, x, y, width, height, TOPO_THRESHOLD);
+        }
+    }
+
+    felzenszwalb_edt_roi(
+        seeds,
+        width,
+        seed_min_x,
+        seed_max_x,
+        seed_min_y,
+        seed_max_y,
+        dist,
+    );
+
+    // Clear seed markers for next call.
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            seeds[row + x] = false;
+        }
+    }
+
+    // -- Step 3: label connected components in the receding zone. --
+    //
+    // Each isolated island of receding pixels gets its own gradient steepness
+    // determined by its own maximum distance to the boundary.  This makes the
+    // gradient automatically slope-adaptive: narrow (steep) islands produce
+    // steep gradients; wide (shallow) islands produce gentle ones.
+    let roi_w_rec = rec_max_x - rec_min_x + 1;
+    let (labels, num_labels) = label_receding_components(
+        in_prior,
+        current,
+        width,
+        rec_min_x,
+        rec_max_x,
+        rec_min_y,
+        rec_max_y,
+        TOPO_THRESHOLD,
+    );
+
+    // Find per-component maximum distance (uncapped — we use the full extent
+    // for normalization so the gradient is truly self-calibrating).
+    let mut max_dist = vec![0.0f32; num_labels as usize + 1];
     for y in rec_min_y..=rec_max_y {
-        let row_start = y * width;
+        let row = y * width;
         for x in rec_min_x..=rec_max_x {
-            dist[row_start + x] = u16::MAX;
-        }
-    }
-    for y in seed_min_y..=seed_max_y {
-        let row_start = y * width;
-        for x in seed_min_x..=seed_max_x {
-            dist[row_start + x] = u16::MAX;
-        }
-    }
-    queue.clear();
-
-    // Seed: current-layer pixels that border at least one non-current pixel.
-    // These are distance=0 from the boundary edge.
-    for y in seed_min_y..=seed_max_y {
-        for x in seed_min_x..=seed_max_x {
-            let idx = y * width + x;
-            if current[idx] <= TOPO_THRESHOLD {
-                continue; // not in current layer
-            }
-            if has_non_current_4neighbor(current, x, y, width, height, TOPO_THRESHOLD) {
-                dist[idx] = 0;
-                queue.push_back(idx);
-            }
-        }
-    }
-
-    // BFS: spread distance outward into receding pixels (in_prior=1, not in current).
-    while let Some(idx) = queue.pop_front() {
-        // saturating_add guards against the theoretical u16::MAX wrap; in
-        // practice fade_px is always << 65535 so this never saturates.
-        let next_d = dist[idx].saturating_add(1);
-        if (next_d as u32) > fade_px {
-            continue;
-        }
-        let y = idx / width;
-        let x = idx % width;
-
-        macro_rules! try_neighbor {
-            ($nidx:expr) => {
-                let nidx = $nidx;
-                // Only enter pixels that are receding (in prior, not in current)
-                // and that haven't been reached with a shorter distance yet.
-                if current[nidx] <= TOPO_THRESHOLD && in_prior[nidx] > 0 && dist[nidx] > next_d {
-                    dist[nidx] = next_d;
-                    queue.push_back(nidx);
+            let idx = row + x;
+            if in_prior[idx] > 0 && current[idx] <= TOPO_THRESHOLD {
+                let d = dist[idx];
+                if d.is_finite() {
+                    let lbl =
+                        labels[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                    if d > max_dist[lbl] {
+                        max_dist[lbl] = d;
+                    }
                 }
-            };
-        }
-
-        if x > rec_min_x {
-            try_neighbor!(idx - 1);
-        }
-        if x < rec_max_x {
-            try_neighbor!(idx + 1);
-        }
-        if y > rec_min_y {
-            try_neighbor!(idx - width);
-        }
-        if y < rec_max_y {
-            try_neighbor!(idx + width);
+            }
         }
     }
 
-    // -- Step 3: convert distances → gradient, apply LUT, max-merge. --
-    // Use fade_px+1 as divisor so the pixel AT fade_px distance still gets a
-    // small but non-zero gradient value (inclusive boundary).
-    let fade_denom = (fade_px + 1) as f32;
+    // -- Step 4: convert distances → per-component-normalized gradient. --
+    //
+    // For each receding pixel:
+    //   t = dist / max_dist_of_component   (0 = inner edge, 1 = outer edge)
+    //   raw = round((1 - t) * 255)
+    //
+    // Pixels beyond fade_px are excluded (hard cutoff).
+    // raw is then remapped through the cure-window LUT and max-merged.
+    let fade_f = fade_px as f32;
     for y in rec_min_y..=rec_max_y {
-        let row_start = y * width;
+        let row = y * width;
         for x in rec_min_x..=rec_max_x {
-            let idx = row_start + x;
-            // Only receding pixels get a gradient.
-            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && (dist[idx] as u32) <= fade_px
-            {
-                // Scale the gradient peak by Z-depth so prior layers bleed into
-                // the current layer at proportionally lower alpha:
-                //
-                //   peak = 255 × (look_back + 1 − depth) / (look_back + 1)
-                //
-                // depth=1 (most-recent prior N-1): peak = look_back/(look_back+1) × 255
-                // depth=2 (one layer older N-2):   peak = (look_back-1)/(look_back+1) × 255
-                // …
-                //
-                // The current layer always stays at full 255 and is never reduced
-                // here; only the receding zone outside the current boundary is
-                // affected.  Within that zone the XY distance further attenuates:
-                // alpha = peak × (1 − dist/fade_px), giving a smooth 2D gradient
-                // that also encodes the Z-layer history.
-                let look_back = priors.len();
-                let depth = in_prior[idx] as usize;
-                let peak_alpha = if look_back > 0 && depth <= look_back {
-                    let num = (look_back + 1).saturating_sub(depth) as f32;
-                    (255.0 * num / (look_back + 1) as f32).round() as u8
-                } else {
-                    255
-                };
-                let t = 1.0 - (dist[idx] as f32 / fade_denom);
-                let raw = (t * peak_alpha as f32 + 0.5) as u8;
+            let idx = row + x;
+            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 {
+                let d = dist[idx];
+                if !d.is_finite() || d > fade_f {
+                    continue;
+                }
+                let lbl =
+                    labels[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                let max_d = max_dist[lbl].max(1.0);
+                let t = (d / max_d).clamp(0.0, 1.0);
+                let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
                 let v = if let Some(lut) = lut {
                     lut[raw as usize]
                 } else {
@@ -657,11 +480,10 @@ fn z_blend_layer_inplace_with_roi(
 
 /// Forward EDT Z-blend: bleed pre-appearing pixels (not in `topology` but
 /// present in at least one of `futures`) into `mask` using a symmetric
-/// depth-scaled gradient.
+/// per-component-normalized Euclidean gradient.
 ///
 /// Mirrors `z_blend_layer_inplace` but operates on growing edges instead of
-/// shrinking ones.  The `look_back` denominator is shared so that peak alphas
-/// are identical for the nearest layer in each direction.
+/// shrinking ones.
 fn z_blend_forward_inplace(
     mask: &mut [u8],
     topology: &[u8],
@@ -672,8 +494,8 @@ fn z_blend_forward_inplace(
     fade_px: u32,
     lut: Option<&[u8; 256]>,
     in_forward: &mut [u8],
-    dist: &mut [u16],
-    queue: &mut VecDeque<usize>,
+    dist: &mut [f32],
+    seeds: &mut [bool],
 ) {
     if width == 0 || height == 0 {
         return;
@@ -689,7 +511,7 @@ fn z_blend_forward_inplace(
         lut,
         in_forward,
         dist,
-        queue,
+        seeds,
         (0, width - 1, 0, height - 1),
     );
 }
@@ -704,8 +526,8 @@ fn z_blend_forward_inplace_with_roi(
     fade_px: u32,
     lut: Option<&[u8; 256]>,
     in_forward: &mut [u8],
-    dist: &mut [u16],
-    queue: &mut VecDeque<usize>,
+    dist: &mut [f32],
+    seeds: &mut [bool],
     roi: (usize, usize, usize, usize),
 ) {
     if futures.is_empty() || fade_px == 0 || look_back == 0 {
@@ -718,10 +540,7 @@ fn z_blend_forward_inplace_with_roi(
     const TOPO_THRESHOLD: u8 = 127;
 
     // Build forward depth map: in_forward[idx] = d → pixel first appears
-    // d layers ahead (d=1 = next layer = most-recent future, d=2 = further …).
-    // Iterating from most-recent future to furthest means the FIRST write wins,
-    // recording the minimum (nearest) future depth.  Only pixels absent from
-    // the current topology can be pre-appearing.
+    // d layers ahead (d=1 = next layer = most-recent future, d=2 = further…).
     for y in roi_min_y..=roi_max_y {
         let row = y * width;
         for x in roi_min_x..=roi_max_x {
@@ -765,724 +584,309 @@ fn z_blend_forward_inplace_with_roi(
     let seed_max_x = (app_max_x + 1).min(width - 1);
     let seed_max_y = (app_max_y + 1).min(height - 1);
 
-    // Reset dist in the working ROI.
+    // -- Step 2: Felzenszwalb exact Euclidean EDT. --
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            let idx = row + x;
+            seeds[idx] = topology[idx] > TOPO_THRESHOLD
+                && has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD);
+        }
+    }
+
+    felzenszwalb_edt_roi(
+        seeds,
+        width,
+        seed_min_x,
+        seed_max_x,
+        seed_min_y,
+        seed_max_y,
+        dist,
+    );
+
+    // Clear seed markers.
+    for y in seed_min_y..=seed_max_y {
+        let row = y * width;
+        for x in seed_min_x..=seed_max_x {
+            seeds[row + x] = false;
+        }
+    }
+
+    // -- Step 3: label connected components in the pre-appearing zone. --
+    let roi_w_app = app_max_x - app_min_x + 1;
+    let (labels, num_labels) = label_receding_components(
+        in_forward,
+        topology,
+        width,
+        app_min_x,
+        app_max_x,
+        app_min_y,
+        app_max_y,
+        TOPO_THRESHOLD,
+    );
+
+    let mut max_dist = vec![0.0f32; num_labels as usize + 1];
     for y in app_min_y..=app_max_y {
         let row = y * width;
         for x in app_min_x..=app_max_x {
-            dist[row + x] = u16::MAX;
+            let idx = row + x;
+            if in_forward[idx] > 0 && topology[idx] <= TOPO_THRESHOLD {
+                let d = dist[idx];
+                if d.is_finite() {
+                    let lbl =
+                        labels[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                    if d > max_dist[lbl] {
+                        max_dist[lbl] = d;
+                    }
+                }
+            }
         }
     }
-    for y in seed_min_y..=seed_max_y {
-        let row = y * width;
-        for x in seed_min_x..=seed_max_x {
-            dist[row + x] = u16::MAX;
-        }
-    }
-    queue.clear();
 
-    // Seed: topology boundary pixels that border at least one non-topology pixel.
-    for y in seed_min_y..=seed_max_y {
-        for x in seed_min_x..=seed_max_x {
-            let idx = y * width + x;
-            if topology[idx] <= TOPO_THRESHOLD {
+    // -- Step 4: convert distances → gradient, max-merge into mask. --
+    let fade_f = fade_px as f32;
+    for y in app_min_y..=app_max_y {
+        let row = y * width;
+        for x in app_min_x..=app_max_x {
+            let idx = row + x;
+            if topology[idx] <= TOPO_THRESHOLD && in_forward[idx] > 0 {
+                let d = dist[idx];
+                if !d.is_finite() || d > fade_f {
+                    continue;
+                }
+                let lbl =
+                    labels[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                let max_d = max_dist[lbl].max(1.0);
+                let t = (d / max_d).clamp(0.0, 1.0);
+                let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
+                if v > mask[idx] {
+                    mask[idx] = v;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Felzenszwalb exact Euclidean distance transform
+// ---------------------------------------------------------------------------
+
+/// Compute an exact Euclidean distance transform (EDT) over a rectangular ROI.
+///
+/// Uses the Felzenszwalb/Huttenlocher (2012) separable parabola lower-envelope
+/// algorithm: O(W×H) time, exact to floating-point precision.
+///
+/// Seeds (`seeds[y*width+x] == true`) receive distance 0.  All other positions
+/// in the ROI receive the Euclidean distance to the nearest seed.  Positions
+/// with no reachable seed receive `f32::INFINITY`.
+///
+/// Results are written into `dist` (full-image indexed by `y * width + x`).
+fn felzenszwalb_edt_roi(
+    seeds: &[bool],
+    width: usize,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+    dist: &mut [f32],
+) {
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    if roi_w == 0 || roi_h == 0 {
+        return;
+    }
+
+    // Phase 1: for each row, compute squared horizontal distance to nearest seed.
+    // g[roi_y * roi_w + roi_x] = (horizontal pixel distance to nearest seed)²
+    let mut g = vec![f32::INFINITY; roi_w * roi_h];
+    for roi_y in 0..roi_h {
+        let y = roi_min_y + roi_y;
+        let row = y * width;
+
+        // Left-to-right pass.
+        let mut left_d = f32::INFINITY;
+        for roi_x in 0..roi_w {
+            if seeds[row + roi_min_x + roi_x] {
+                left_d = 0.0;
+            } else if left_d < f32::INFINITY {
+                left_d += 1.0;
+            }
+            g[roi_y * roi_w + roi_x] = left_d * left_d;
+        }
+
+        // Right-to-left pass: update with nearest seed to the right.
+        let mut right_d = f32::INFINITY;
+        for roi_x in (0..roi_w).rev() {
+            if seeds[row + roi_min_x + roi_x] {
+                right_d = 0.0;
+            } else if right_d < f32::INFINITY {
+                right_d += 1.0;
+            }
+            let d2 = right_d * right_d;
+            if d2 < g[roi_y * roi_w + roi_x] {
+                g[roi_y * roi_w + roi_x] = d2;
+            }
+        }
+    }
+
+    // Phase 2: for each column, 1D vertical DT using the parabola lower-envelope.
+    // dt[y] = min_{y'} { g[y'][x] + (y - y')² }
+    let mut v = vec![0usize; roi_h]; // centres of parabolas in the lower envelope
+    let mut z = vec![0.0f32; roi_h + 1]; // boundaries between parabola segments
+
+    for roi_x in 0..roi_w {
+        // Find the first row in this column with a finite g value.
+        let first = match (0..roi_h).find(|&ry| g[ry * roi_w + roi_x] < f32::INFINITY) {
+            None => {
+                // No seed visible in this column — distances stay INFINITY.
+                for roi_y in 0..roi_h {
+                    dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = f32::INFINITY;
+                }
                 continue;
             }
-            if has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD) {
-                dist[idx] = 0;
-                queue.push_back(idx);
+            Some(f) => f,
+        };
+
+        v[0] = first;
+        z[0] = f32::NEG_INFINITY;
+        z[1] = f32::INFINITY;
+        let mut k = 0usize;
+
+        // Build lower envelope of parabolas.
+        for roi_y in (first + 1)..roi_h {
+            let fq = g[roi_y * roi_w + roi_x];
+            if fq == f32::INFINITY {
+                continue;
+            }
+            let q = roi_y as f32;
+            loop {
+                let vk = v[k] as f32;
+                let fvk = g[v[k] * roi_w + roi_x];
+                // Intersection of parabolas centred at vk and q.
+                let s = ((fq + q * q) - (fvk + vk * vk)) / (2.0 * (q - vk));
+                if s > z[k] {
+                    // New parabola extends the lower envelope.
+                    k += 1;
+                    v[k] = roi_y;
+                    z[k] = s;
+                    z[k + 1] = f32::INFINITY;
+                    break;
+                }
+                // New parabola dominates; remove the k-th and try again.
+                if k == 0 {
+                    v[0] = roi_y;
+                    z[0] = f32::NEG_INFINITY;
+                    z[1] = f32::INFINITY;
+                    break;
+                }
+                k -= 1;
             }
         }
-    }
 
-    // BFS into pre-appearing pixels.
-    while let Some(idx) = queue.pop_front() {
-        let next_d = dist[idx].saturating_add(1);
-        if (next_d as u32) > fade_px {
-            continue;
-        }
-        let y = idx / width;
-        let x = idx % width;
-
-        macro_rules! try_neighbor {
-            ($nidx:expr) => {
-                let nidx = $nidx;
-                if topology[nidx] <= TOPO_THRESHOLD && in_forward[nidx] > 0 && dist[nidx] > next_d {
-                    dist[nidx] = next_d;
-                    queue.push_back(nidx);
-                }
-            };
-        }
-
-        if x > app_min_x {
-            try_neighbor!(idx - 1);
-        }
-        if x < app_max_x {
-            try_neighbor!(idx + 1);
-        }
-        if y > app_min_y {
-            try_neighbor!(idx - width);
-        }
-        if y < app_max_y {
-            try_neighbor!(idx + width);
+        // Scan the column and write final distances.
+        let mut ki = 0;
+        for roi_y in 0..roi_h {
+            while z[ki + 1] < roi_y as f32 {
+                ki += 1;
+            }
+            let vk = v[ki] as f32;
+            let diff = roi_y as f32 - vk;
+            let d2 = diff * diff + g[v[ki] * roi_w + roi_x];
+            dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = d2.sqrt();
         }
     }
+}
 
-    // Convert distances → gradient, apply LUT, max-merge into mask.
-    // Peak alpha uses look_back as the denominator (same as backward) so that
-    // the nearest future layer (depth=1) gives exactly the same peak as the
-    // nearest prior layer (depth=1).
-    let fade_denom = (fade_px + 1) as f32;
-    let denominator = (look_back + 1) as f32;
-    for y in app_min_y..=app_max_y {
-        let row_start = y * width;
-        for x in app_min_x..=app_max_x {
-            let idx = row_start + x;
-            if topology[idx] <= TOPO_THRESHOLD
-                && in_forward[idx] > 0
-                && (dist[idx] as u32) <= fade_px
+// ---------------------------------------------------------------------------
+// Connected-component labeling for the receding / pre-appearing zone
+// ---------------------------------------------------------------------------
+
+/// 8-connected BFS connected-component labeling for a zone of pixels where
+/// `in_occupancy[idx] > 0` AND `current[idx] <= topo_threshold`.
+///
+/// Returns `(labels, num_labels)`:
+/// - `labels` is indexed by ROI position `(y - min_y) * roi_w + (x - min_x)`.
+/// - Label 0 = not part of the zone; labels 1..=num_labels are the components.
+fn label_receding_components(
+    in_occupancy: &[u8],
+    current: &[u8],
+    width: usize,
+    rec_min_x: usize,
+    rec_max_x: usize,
+    rec_min_y: usize,
+    rec_max_y: usize,
+    topo_threshold: u8,
+) -> (Vec<u32>, u32) {
+    let roi_w = rec_max_x - rec_min_x + 1;
+    let roi_h = rec_max_y - rec_min_y + 1;
+    let mut labels = vec![0u32; roi_w * roi_h];
+    let mut next_label = 1u32;
+    let mut queue = VecDeque::<usize>::new();
+
+    for start_ry in 0..roi_h {
+        let start_y = rec_min_y + start_ry;
+        for start_rx in 0..roi_w {
+            let start_x = rec_min_x + start_rx;
+            let roi_idx = start_ry * roi_w + start_rx;
+            let img_idx = start_y * width + start_x;
+
+            // Must be in the receding zone and unlabelled.
+            if in_occupancy[img_idx] == 0
+                || current[img_idx] > topo_threshold
+                || labels[roi_idx] != 0
             {
-                let depth = in_forward[idx] as usize;
-                let num = (look_back + 1).saturating_sub(depth) as f32;
-                let peak_alpha = (255.0 * num / denominator).round() as u8;
-                let t = 1.0 - (dist[idx] as f32 / fade_denom);
-                let raw = (t * peak_alpha as f32 + 0.5) as u8;
-                let v = if let Some(lut) = lut {
-                    lut[raw as usize]
-                } else {
-                    raw
-                };
-                if v > mask[idx] {
-                    mask[idx] = v;
-                }
+                continue;
             }
-        }
-    }
-}
 
-// ---------------------------------------------------------------------------
-// Slope-adaptive private implementations
-// ---------------------------------------------------------------------------
+            // BFS flood-fill from this seed.
+            let label = next_label;
+            next_label += 1;
+            labels[roi_idx] = label;
+            queue.push_back(roi_idx);
 
-/// Slope-adaptive backward blend.
-///
-/// Gradient formula: `fraction = (look_back + 1 - depth) / (look_back + 1)`,
-/// where `depth = in_prior[idx]` (layers since pixel was last solid).  No
-/// global `fade_px` limit; the BFS terminates naturally at the edge of the
-/// look-back zone (`in_prior == 0`).
-///
-/// This automatically calibrates to local surface slope:
-/// - Steep/vertical surfaces → narrow depth-rings → sharp, physically correct gradient.
-/// - Shallow surfaces → wide depth-rings → gentle gradient spanning the full zone.
-fn z_blend_layer_slope_adaptive_inplace_with_roi(
-    current: &mut [u8],
-    priors: &[&[u8]],
-    width: usize,
-    height: usize,
-    lut: Option<&[u8; 256]>,
-    in_prior: &mut [u8],
-    dist: &mut [u16],
-    dist_back: &mut [u16],
-    queue: &mut VecDeque<usize>,
-    roi: (usize, usize, usize, usize),
-) {
-    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
-    else {
-        return;
-    };
-    const TOPO_THRESHOLD: u8 = 127;
+            while let Some(ri) = queue.pop_front() {
+                let ry = ri / roi_w;
+                let rx = ri % roi_w;
+                let y = rec_min_y + ry;
+                let x = rec_min_x + rx;
 
-    // Step 1 — build depth map (same as standard z_blend).
-    for y in roi_min_y..=roi_max_y {
-        let row = y * width;
-        for x in roi_min_x..=roi_max_x {
-            in_prior[row + x] = 0;
-        }
-    }
-
-    let mut receding_any = false;
-    let mut rec_min_x = width;
-    let mut rec_max_x = 0usize;
-    let mut rec_min_y = height;
-    let mut rec_max_y = 0usize;
-
-    for (depth_idx, prior) in priors.iter().rev().enumerate() {
-        let depth_val = (depth_idx + 1) as u8;
-        for y in roi_min_y..=roi_max_y {
-            let row = y * width;
-            for x in roi_min_x..=roi_max_x {
-                let idx = row + x;
-                if prior[idx] > TOPO_THRESHOLD && in_prior[idx] == 0 {
-                    in_prior[idx] = depth_val;
-                    if current[idx] <= TOPO_THRESHOLD {
-                        receding_any = true;
-                        rec_min_x = rec_min_x.min(x);
-                        rec_max_x = rec_max_x.max(x);
-                        rec_min_y = rec_min_y.min(y);
-                        rec_max_y = rec_max_y.max(y);
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let ny = y as i32 + dy;
+                        let nx = x as i32 + dx;
+                        if nx < rec_min_x as i32
+                            || nx > rec_max_x as i32
+                            || ny < rec_min_y as i32
+                            || ny > rec_max_y as i32
+                        {
+                            continue;
+                        }
+                        let nrx = nx as usize - rec_min_x;
+                        let nry = ny as usize - rec_min_y;
+                        let nri = nry * roi_w + nrx;
+                        let ni = ny as usize * width + nx as usize;
+                        if in_occupancy[ni] > 0
+                            && current[ni] <= topo_threshold
+                            && labels[nri] == 0
+                        {
+                            labels[nri] = label;
+                            queue.push_back(nri);
+                        }
                     }
                 }
             }
         }
     }
 
-    if !receding_any {
-        return;
-    }
-
-    let seed_min_x = rec_min_x.saturating_sub(1);
-    let seed_min_y = rec_min_y.saturating_sub(1);
-    let seed_max_x = (rec_max_x + 1).min(width - 1);
-    let seed_max_y = (rec_max_y + 1).min(height - 1);
-
-    // Step 2 — chamfer EDT from the inner boundary.  8-connected propagation
-    // (cardinal weight 10, diagonal weight 14) approximates Euclidean distance
-    // and eliminates the sawtooth iso-distance contours of 4-connected BFS.
-    for y in rec_min_y..=rec_max_y {
-        let row = y * width;
-        for x in rec_min_x..=rec_max_x {
-            dist[row + x] = u16::MAX;
-        }
-    }
-    for y in seed_min_y..=seed_max_y {
-        let row = y * width;
-        for x in seed_min_x..=seed_max_x {
-            dist[row + x] = u16::MAX;
-        }
-    }
-    queue.clear();
-
-    for y in seed_min_y..=seed_max_y {
-        for x in seed_min_x..=seed_max_x {
-            let idx = y * width + x;
-            if current[idx] <= TOPO_THRESHOLD {
-                continue;
-            }
-            if has_non_current_4neighbor(current, x, y, width, height, TOPO_THRESHOLD) {
-                dist[idx] = 0;
-                queue.push_back(idx);
-            }
-        }
-    }
-
-    // Forward chamfer EDT pass (top-left → bottom-right).
-    for y in rec_min_y..=rec_max_y {
-        for x in rec_min_x..=rec_max_x {
-            let idx = y * width + x;
-            if current[idx] > TOPO_THRESHOLD || in_prior[idx] == 0 {
-                continue;
-            }
-            let mut d = u16::MAX;
-            if y > 0 {
-                let ra = (y - 1) * width;
-                if x > 0 && dist[ra + x - 1] < u16::MAX {
-                    d = d.min(dist[ra + x - 1].saturating_add(14));
-                }
-                if dist[ra + x] < u16::MAX {
-                    d = d.min(dist[ra + x].saturating_add(10));
-                }
-                if x + 1 < width && dist[ra + x + 1] < u16::MAX {
-                    d = d.min(dist[ra + x + 1].saturating_add(14));
-                }
-            }
-            if x > 0 && dist[idx - 1] < u16::MAX {
-                d = d.min(dist[idx - 1].saturating_add(10));
-            }
-            dist[idx] = d;
-        }
-    }
-    // Backward chamfer EDT pass (bottom-right → top-left).
-    for y in (rec_min_y..=rec_max_y).rev() {
-        for x in (rec_min_x..=rec_max_x).rev() {
-            let idx = y * width + x;
-            if current[idx] > TOPO_THRESHOLD || in_prior[idx] == 0 {
-                continue;
-            }
-            let mut d = dist[idx];
-            if y + 1 < height {
-                let rb = (y + 1) * width;
-                if x > 0 && dist[rb + x - 1] < u16::MAX {
-                    d = d.min(dist[rb + x - 1].saturating_add(14));
-                }
-                if dist[rb + x] < u16::MAX {
-                    d = d.min(dist[rb + x].saturating_add(10));
-                }
-                if x + 1 < width && dist[rb + x + 1] < u16::MAX {
-                    d = d.min(dist[rb + x + 1].saturating_add(14));
-                }
-            }
-            if x + 1 < width && dist[idx + 1] < u16::MAX {
-                d = d.min(dist[idx + 1].saturating_add(10));
-            }
-            dist[idx] = d;
-        }
-    }
-
-    // Step 2b — back-EDT from the outer edge of the receding zone.
-    //
-    // Seeds are reachable receding pixels that abut the background (in_prior
-    // == 0, not currently solid).  Combined with the front-BFS `dist` this
-    // gives a per-pixel t = dist_back / (dist + dist_back) ∈ [0, 1] that is
-    // 0 at the outer edge and 1 at the inner edge, capturing the LOCAL zone
-    // width for any slope angle without any global normalisation.
-    for y in rec_min_y..=rec_max_y {
-        let row = y * width;
-        for x in rec_min_x..=rec_max_x {
-            dist_back[row + x] = u16::MAX;
-        }
-    }
-    queue.clear();
-    for y in rec_min_y..=rec_max_y {
-        for x in rec_min_x..=rec_max_x {
-            let idx = y * width + x;
-            if in_prior[idx] == 0 || dist[idx] == u16::MAX {
-                continue;
-            }
-            let mut on_outer_edge = false;
-            if x > 0 {
-                let ni = idx - 1;
-                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if !on_outer_edge && x + 1 < width {
-                let ni = idx + 1;
-                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if !on_outer_edge && y > 0 {
-                let ni = idx - width;
-                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if !on_outer_edge && y + 1 < height {
-                let ni = idx + width;
-                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if on_outer_edge {
-                dist_back[idx] = 0;
-            }
-        }
-    }
-    // Forward chamfer EDT pass for dist_back (top-left → bottom-right).
-    for y in rec_min_y..=rec_max_y {
-        for x in rec_min_x..=rec_max_x {
-            let idx = y * width + x;
-            if in_prior[idx] == 0 || dist[idx] == u16::MAX {
-                continue;
-            }
-            let mut d = dist_back[idx];
-            macro_rules! chk_b {
-                ($ni:expr, $c:expr) => {
-                    let ni = $ni;
-                    if in_prior[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
-                        d = d.min(dist_back[ni].saturating_add($c));
-                    }
-                };
-            }
-            if y > 0 {
-                let ra = (y - 1) * width;
-                if x > 0 {
-                    chk_b!(ra + x - 1, 14);
-                }
-                chk_b!(ra + x, 10);
-                if x + 1 < width {
-                    chk_b!(ra + x + 1, 14);
-                }
-            }
-            if x > 0 {
-                chk_b!(idx - 1, 10);
-            }
-            dist_back[idx] = d;
-        }
-    }
-    // Backward chamfer EDT pass for dist_back (bottom-right → top-left).
-    for y in (rec_min_y..=rec_max_y).rev() {
-        for x in (rec_min_x..=rec_max_x).rev() {
-            let idx = y * width + x;
-            if in_prior[idx] == 0 || dist[idx] == u16::MAX {
-                continue;
-            }
-            let mut d = dist_back[idx];
-            macro_rules! chk_b {
-                ($ni:expr, $c:expr) => {
-                    let ni = $ni;
-                    if in_prior[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
-                        d = d.min(dist_back[ni].saturating_add($c));
-                    }
-                };
-            }
-            if y + 1 < height {
-                let rb = (y + 1) * width;
-                if x > 0 {
-                    chk_b!(rb + x - 1, 14);
-                }
-                chk_b!(rb + x, 10);
-                if x + 1 < width {
-                    chk_b!(rb + x + 1, 14);
-                }
-            }
-            if x + 1 < width {
-                chk_b!(idx + 1, 10);
-            }
-            dist_back[idx] = d;
-        }
-    }
-
-    // Step 3 — continuous gradient: fraction = t, where
-    //   t = dist_back / (dist + dist_back)  ∈ [0, 1]
-    // is 0 at the outer edge and 1 at the inner edge.
-    //
-    // Unlike the depth-anchored formula, t varies continuously across ring
-    // boundaries: adjacent pixels at a ring boundary differ by ≈1/zone_width
-    // (≈3 % for a 30-px zone) instead of the 1/(L+1) ≈25 % step that caused
-    // visible banding.  The gradient is scaled to [1/(L+1), (L+1)/(L+1)] so
-    // inner-edge pixels approach solid density and outer-edge pixels receive
-    // a small but nonzero exposure appropriate for the outermost depth ring.
-    let look_back = priors.len();
-    let denom = (look_back + 1) as f32;
-    for y in rec_min_y..=rec_max_y {
-        let row = y * width;
-        for x in rec_min_x..=rec_max_x {
-            let idx = row + x;
-            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && dist[idx] != u16::MAX {
-                let front = dist[idx] as f32;
-                let t = if dist_back[idx] != u16::MAX {
-                    let back = dist_back[idx] as f32;
-                    let total = front + back;
-                    if total > 0.0 {
-                        back / total
-                    } else {
-                        0.5
-                    }
-                } else {
-                    0.5 // enclosed zone — use midpoint
-                };
-                // Scale: outer edge (t=0) → 1/denom, inner edge (t=1) → 1.0.
-                // Apply a depth-ring floor to handle thin-zone pixels: a pixel
-                // adjacent to both the inner solid boundary and outer void
-                // (concave corner, 1-px zone) gets dist_back=0 → t=0, giving
-                // fraction=1/denom regardless of depth ring.  The floor
-                // (L+1−d)/(L+1) ensures depth-ring 1 pixels always get at
-                // least L/(L+1), matching the physical expectation without
-                // reintroducing hard ring-boundary steps in normal wide zones.
-                let depth = in_prior[idx] as usize;
-                let fraction_floor = (look_back + 1).saturating_sub(depth) as f32 / denom;
-                let fraction = ((1.0 + t * look_back as f32) / denom).max(fraction_floor);
-                let raw = (fraction * 255.0 + 0.5) as u8;
-                let v = if let Some(lut) = lut {
-                    lut[raw as usize]
-                } else {
-                    raw
-                };
-                if v > current[idx] {
-                    current[idx] = v;
-                }
-            }
-        }
-    }
-}
-
-/// Slope-adaptive forward blend.
-///
-/// Mirrors `z_blend_layer_slope_adaptive_inplace_with_roi` for the growing-edge
-/// direction.  Pre-appearing pixels receive `(look_back + 1 - depth) /
-/// (look_back + 1)` so that both edge directions are treated symmetrically.
-fn z_blend_forward_slope_adaptive_inplace_with_roi(
-    mask: &mut [u8],
-    topology: &[u8],
-    futures: &[&[u8]],
-    look_back: usize,
-    width: usize,
-    height: usize,
-    lut: Option<&[u8; 256]>,
-    in_forward: &mut [u8],
-    dist: &mut [u16],
-    dist_back: &mut [u16],
-    queue: &mut VecDeque<usize>,
-    roi: (usize, usize, usize, usize),
-) {
-    if futures.is_empty() || look_back == 0 {
-        return;
-    }
-    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
-    else {
-        return;
-    };
-    const TOPO_THRESHOLD: u8 = 127;
-
-    for y in roi_min_y..=roi_max_y {
-        let row = y * width;
-        for x in roi_min_x..=roi_max_x {
-            in_forward[row + x] = 0;
-        }
-    }
-
-    let mut appearing_any = false;
-    let mut app_min_x = width;
-    let mut app_max_x = 0usize;
-    let mut app_min_y = height;
-    let mut app_max_y = 0usize;
-
-    for (depth_idx, future) in futures.iter().enumerate() {
-        let depth_val = (depth_idx + 1) as u8;
-        for y in roi_min_y..=roi_max_y {
-            let row = y * width;
-            for x in roi_min_x..=roi_max_x {
-                let idx = row + x;
-                if future[idx] > TOPO_THRESHOLD && in_forward[idx] == 0 {
-                    in_forward[idx] = depth_val;
-                    if topology[idx] <= TOPO_THRESHOLD {
-                        appearing_any = true;
-                        app_min_x = app_min_x.min(x);
-                        app_max_x = app_max_x.max(x);
-                        app_min_y = app_min_y.min(y);
-                        app_max_y = app_max_y.max(y);
-                    }
-                }
-            }
-        }
-    }
-
-    if !appearing_any {
-        return;
-    }
-
-    let seed_min_x = app_min_x.saturating_sub(1);
-    let seed_min_y = app_min_y.saturating_sub(1);
-    let seed_max_x = (app_max_x + 1).min(width - 1);
-    let seed_max_y = (app_max_y + 1).min(height - 1);
-
-    // Step 2 — chamfer EDT from the inner boundary (8-connected, weights 10/14).
-    for y in app_min_y..=app_max_y {
-        let row = y * width;
-        for x in app_min_x..=app_max_x {
-            dist[row + x] = u16::MAX;
-        }
-    }
-    for y in seed_min_y..=seed_max_y {
-        let row = y * width;
-        for x in seed_min_x..=seed_max_x {
-            dist[row + x] = u16::MAX;
-        }
-    }
-    queue.clear();
-
-    for y in seed_min_y..=seed_max_y {
-        for x in seed_min_x..=seed_max_x {
-            let idx = y * width + x;
-            if topology[idx] <= TOPO_THRESHOLD {
-                continue;
-            }
-            if has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD) {
-                dist[idx] = 0;
-                queue.push_back(idx);
-            }
-        }
-    }
-
-    // Forward chamfer EDT pass (top-left → bottom-right).
-    for y in app_min_y..=app_max_y {
-        for x in app_min_x..=app_max_x {
-            let idx = y * width + x;
-            if topology[idx] > TOPO_THRESHOLD || in_forward[idx] == 0 {
-                continue;
-            }
-            let mut d = u16::MAX;
-            if y > 0 {
-                let ra = (y - 1) * width;
-                if x > 0 && dist[ra + x - 1] < u16::MAX {
-                    d = d.min(dist[ra + x - 1].saturating_add(14));
-                }
-                if dist[ra + x] < u16::MAX {
-                    d = d.min(dist[ra + x].saturating_add(10));
-                }
-                if x + 1 < width && dist[ra + x + 1] < u16::MAX {
-                    d = d.min(dist[ra + x + 1].saturating_add(14));
-                }
-            }
-            if x > 0 && dist[idx - 1] < u16::MAX {
-                d = d.min(dist[idx - 1].saturating_add(10));
-            }
-            dist[idx] = d;
-        }
-    }
-    // Backward chamfer EDT pass (bottom-right → top-left).
-    for y in (app_min_y..=app_max_y).rev() {
-        for x in (app_min_x..=app_max_x).rev() {
-            let idx = y * width + x;
-            if topology[idx] > TOPO_THRESHOLD || in_forward[idx] == 0 {
-                continue;
-            }
-            let mut d = dist[idx];
-            if y + 1 < height {
-                let rb = (y + 1) * width;
-                if x > 0 && dist[rb + x - 1] < u16::MAX {
-                    d = d.min(dist[rb + x - 1].saturating_add(14));
-                }
-                if dist[rb + x] < u16::MAX {
-                    d = d.min(dist[rb + x].saturating_add(10));
-                }
-                if x + 1 < width && dist[rb + x + 1] < u16::MAX {
-                    d = d.min(dist[rb + x + 1].saturating_add(14));
-                }
-            }
-            if x + 1 < width && dist[idx + 1] < u16::MAX {
-                d = d.min(dist[idx + 1].saturating_add(10));
-            }
-            dist[idx] = d;
-        }
-    }
-
-    // Step 2b — back-EDT from the outer edge of the appearing zone.
-    for y in app_min_y..=app_max_y {
-        let row = y * width;
-        for x in app_min_x..=app_max_x {
-            dist_back[row + x] = u16::MAX;
-        }
-    }
-    queue.clear();
-    for y in app_min_y..=app_max_y {
-        for x in app_min_x..=app_max_x {
-            let idx = y * width + x;
-            if in_forward[idx] == 0 || dist[idx] == u16::MAX {
-                continue;
-            }
-            let mut on_outer_edge = false;
-            if x > 0 {
-                let ni = idx - 1;
-                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if !on_outer_edge && x + 1 < width {
-                let ni = idx + 1;
-                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if !on_outer_edge && y > 0 {
-                let ni = idx - width;
-                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if !on_outer_edge && y + 1 < height {
-                let ni = idx + width;
-                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
-                    on_outer_edge = true;
-                }
-            }
-            if on_outer_edge {
-                dist_back[idx] = 0;
-            }
-        }
-    }
-    // Forward chamfer EDT pass for dist_back (top-left → bottom-right).
-    for y in app_min_y..=app_max_y {
-        for x in app_min_x..=app_max_x {
-            let idx = y * width + x;
-            if in_forward[idx] == 0 || dist[idx] == u16::MAX {
-                continue;
-            }
-            let mut d = dist_back[idx];
-            macro_rules! chk_b {
-                ($ni:expr, $c:expr) => {
-                    let ni = $ni;
-                    if in_forward[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
-                        d = d.min(dist_back[ni].saturating_add($c));
-                    }
-                };
-            }
-            if y > 0 {
-                let ra = (y - 1) * width;
-                if x > 0 {
-                    chk_b!(ra + x - 1, 14);
-                }
-                chk_b!(ra + x, 10);
-                if x + 1 < width {
-                    chk_b!(ra + x + 1, 14);
-                }
-            }
-            if x > 0 {
-                chk_b!(idx - 1, 10);
-            }
-            dist_back[idx] = d;
-        }
-    }
-    // Backward chamfer EDT pass for dist_back (bottom-right → top-left).
-    for y in (app_min_y..=app_max_y).rev() {
-        for x in (app_min_x..=app_max_x).rev() {
-            let idx = y * width + x;
-            if in_forward[idx] == 0 || dist[idx] == u16::MAX {
-                continue;
-            }
-            let mut d = dist_back[idx];
-            macro_rules! chk_b {
-                ($ni:expr, $c:expr) => {
-                    let ni = $ni;
-                    if in_forward[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
-                        d = d.min(dist_back[ni].saturating_add($c));
-                    }
-                };
-            }
-            if y + 1 < height {
-                let rb = (y + 1) * width;
-                if x > 0 {
-                    chk_b!(rb + x - 1, 14);
-                }
-                chk_b!(rb + x, 10);
-                if x + 1 < width {
-                    chk_b!(rb + x + 1, 14);
-                }
-            }
-            if x + 1 < width {
-                chk_b!(idx + 1, 10);
-            }
-            dist_back[idx] = d;
-        }
-    }
-
-    // Step 3 — continuous gradient: fraction = (1 + t·L) / (L+1) where
-    //   t = dist_back / (dist + dist_back)  ∈ [0, 1].
-    // No depth-anchor steps; ring boundaries cause ≈1/zone_width difference
-    // in t between adjacent pixels rather than the 1/(L+1) ≈25 % jump.
-    let denom = (look_back + 1) as f32;
-    for y in app_min_y..=app_max_y {
-        let row = y * width;
-        for x in app_min_x..=app_max_x {
-            let idx = row + x;
-            if topology[idx] <= TOPO_THRESHOLD && in_forward[idx] > 0 && dist[idx] != u16::MAX {
-                let front = dist[idx] as f32;
-                let t = if dist_back[idx] != u16::MAX {
-                    let back = dist_back[idx] as f32;
-                    let total = front + back;
-                    if total > 0.0 {
-                        back / total
-                    } else {
-                        0.5
-                    }
-                } else {
-                    0.5
-                };
-                let depth = in_forward[idx] as usize;
-                let fraction_floor = (look_back + 1).saturating_sub(depth) as f32 / denom;
-                let fraction = ((1.0 + t * look_back as f32) / denom).max(fraction_floor);
-                let raw = (fraction * 255.0 + 0.5) as u8;
-                let v = if let Some(lut) = lut {
-                    lut[raw as usize]
-                } else {
-                    raw
-                };
-                if v > mask[idx] {
-                    mask[idx] = v;
-                }
-            }
-        }
-    }
+    (labels, next_label - 1)
 }
 
 /// Returns true if the pixel at (x, y) has at least one 4-connected neighbour
@@ -1753,17 +1157,22 @@ pub fn cross_blend_layer_inplace(
 // ---------------------------------------------------------------------------
 
 /// Default exponential LUT: maps the linear edge-distance gradient (0 = far,
-/// 255 = at edge) to an exposure value that partially compensates for resin's
-/// logarithmic polymerization threshold.
+/// Build a "cure-window" look-up table that maps the per-component normalised
+/// gradient value (0 = outermost pixel, 255 = innermost boundary pixel) to an
+/// exposure value in the range `[min_alpha_u8, max_alpha_u8]`.
 ///
-/// Curve: `output = input^1.5`, which gently attenuates mid-range values while
-/// leaving full-bright (255) untouched. Users can supply a custom LUT via
-/// `SliceJobV3::z_blend_lut` to tune for their specific resin chemistry.
-pub fn default_z_blend_lut() -> [u8; 256] {
+/// - `lut[0]  = 0`   — void (not a receding pixel at all).
+/// - `lut[255] = 255` — fully solid boundary pixel.
+/// - `lut[1..=254]`  — linear from `min_alpha_u8` (near outer edge) to
+///   `max_alpha_u8` (near inner edge).
+pub fn make_cure_window_lut(min_alpha_u8: u8, max_alpha_u8: u8) -> [u8; 256] {
     let mut lut = [0u8; 256];
-    for (i, entry) in lut.iter_mut().enumerate() {
-        let t = i as f32 / 255.0;
-        *entry = (t.powf(1.5) * 255.0 + 0.5) as u8;
+    lut[255] = 255;
+    let lo = min_alpha_u8 as f32;
+    let hi = max_alpha_u8.max(min_alpha_u8) as f32;
+    for i in 1u8..=254 {
+        let t = (i as f32 - 1.0) / 253.0;
+        lut[i as usize] = (lo + t * (hi - lo) + 0.5).min(255.0) as u8;
     }
     lut
 }
@@ -1783,10 +1192,11 @@ mod tests {
     /// Receding pixels: indices 0 and 1.
     /// Index 2 is the nearest current-layer boundary (it borders index 1).
     ///
-    /// Expected BFS distances: index1 = 1, index0 = 2.
-    /// With fade_px=4 and no LUT:
-    ///   gradient[1] = round((1 - 1/4) * 255) = round(191.25) = 191
-    ///   gradient[0] = round((1 - 2/4) * 255) = round(127.5)  = 128
+    /// With per-component Euclidean normalization (Felzenszwalb EDT):
+    ///   Component has 2 pixels: dist[0]=2.0, dist[1]=1.0, max_dist=2.0
+    ///   pixel 1: t = 1.0/2.0 = 0.5  → raw = round((1-0.5)*255) = 128
+    ///   pixel 0: t = 2.0/2.0 = 1.0  → raw = round((1-1.0)*255) = 0
+    ///   (outermost pixel of any component always gets 0 = no blending)
     #[test]
     fn z_blend_gradient_receding_pixels_simple() {
         let width = 5;
@@ -1799,12 +1209,14 @@ mod tests {
         z_blend_all_layers(&mut masks, width, height, 1, 4, None);
 
         let layer = &masks[1];
-        // Receding pixels get gradient lifted
-        assert!(
-            layer[0] > 0,
-            "pixel 0 should have gradient > 0, got {}",
+        // Outermost receding pixel (farthest from solid) → t=1.0 → raw=0
+        assert_eq!(
+            layer[0],
+            0,
+            "outermost receding pixel gets 0 (t=1.0 at component max_dist), got {}",
             layer[0]
         );
+        // Inner receding pixel has positive gradient
         assert!(
             layer[1] > 0,
             "pixel 1 should have gradient > 0, got {}",
@@ -1964,10 +1376,14 @@ mod tests {
         assert_eq!(masks[1][1], 40);
     }
 
-    /// Default LUT is monotonically non-decreasing.
+    /// Cure-window LUT is monotonically non-decreasing and has correct endpoints.
     #[test]
-    fn default_lut_monotone() {
-        let lut = default_z_blend_lut();
+    fn cure_window_lut_monotone() {
+        let lut = make_cure_window_lut(90, 230);
+        assert_eq!(lut[0], 0);
+        assert_eq!(lut[1], 90);
+        assert_eq!(lut[254], 230);
+        assert_eq!(lut[255], 255);
         for i in 1..256 {
             assert!(
                 lut[i] >= lut[i - 1],
@@ -1977,8 +1393,6 @@ mod tests {
                 lut[i - 1]
             );
         }
-        assert_eq!(lut[0], 0);
-        assert_eq!(lut[255], 255);
     }
 
     #[test]

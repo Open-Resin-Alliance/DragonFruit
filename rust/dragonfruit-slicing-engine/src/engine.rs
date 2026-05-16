@@ -450,7 +450,6 @@ fn process_pending_layer_post(
     blur_radius: usize,
     min_aa_alpha_u8: u8,
     z_blend_min_alpha_u8: u8,
-    slope_adaptive: bool,
     debug_color_overlay: bool,
     lut: &[u8; 256],
     workspace: &mut z_blend::ZBlendWorkspace,
@@ -492,39 +491,16 @@ fn process_pending_layer_post(
         if let Some((min_x, max_x, min_y, max_y)) =
             expand_bounds(forward_seed_bounds, blend_pad, width, height)
         {
-            if slope_adaptive {
-                workspace.blend_layer_forward_slope_adaptive_inplace_with_roi(
-                    &mut layer.mask,
-                    layer.topology.as_slice(),
-                    future_topologies,
-                    effective_look_back,
-                    width,
-                    height,
-                    Some(lut),
-                    (min_x, max_x, min_y, max_y),
-                );
-            } else {
-                workspace.blend_layer_forward_inplace_with_roi(
-                    &mut layer.mask,
-                    layer.topology.as_slice(),
-                    future_topologies,
-                    effective_look_back,
-                    width,
-                    height,
-                    fade_px,
-                    Some(lut),
-                    (min_x, max_x, min_y, max_y),
-                );
-            }
-        } else if slope_adaptive {
-            workspace.blend_layer_forward_slope_adaptive_inplace(
+            workspace.blend_layer_forward_inplace_with_roi(
                 &mut layer.mask,
                 layer.topology.as_slice(),
                 future_topologies,
                 effective_look_back,
                 width,
                 height,
+                fade_px,
                 Some(lut),
+                (min_x, max_x, min_y, max_y),
             );
         } else {
             workspace.blend_layer_forward_inplace(
@@ -851,7 +827,6 @@ fn rasterize_vertical_aa_streaming_v3(
     // See `SliceJobV3::effective_z_blend_fade_px` for the derivation.
     let fade_px = job.effective_z_blend_fade_px();
     let blur_radius = job.blur_brush_radius_px as usize;
-    let lut = z_blend::default_z_blend_lut();
     let min_aa_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
     // Separate minimum alpha for z-blend gradient pixels.  These live outside
@@ -860,7 +835,9 @@ fn rasterize_vertical_aa_streaming_v3(
     // overgrowth and the "wide flat top" stair-step artefact.
     let z_blend_min_alpha_u8 =
         ((job.z_blend_minimum_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
-    let slope_adaptive = job.z_blend_slope_adaptive;
+    let z_blend_max_alpha_u8 =
+        ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let lut = z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8);
     let debug_color_overlay = job.z_blend_debug_color_overlay && collect_png_layers;
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
@@ -918,7 +895,6 @@ fn rasterize_vertical_aa_streaming_v3(
             let (task_tx, task_rx) = mpsc::sync_channel::<PostWorkerTask>(worker_depth);
             let done_tx_worker = done_tx.clone();
             std::thread::spawn(move || {
-                let lut = z_blend::default_z_blend_lut();
                 let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
                 let mut cross_blend_ws = cross_blend::CrossBlendWorkspace::new(width, height);
                 while let Ok(task) = task_rx.recv() {
@@ -941,7 +917,6 @@ fn rasterize_vertical_aa_streaming_v3(
                         blur_radius,
                         min_aa_alpha_u8,
                         z_blend_min_alpha_u8,
-                        slope_adaptive,
                         debug_color_overlay,
                         &lut,
                         &mut workspace,
@@ -1210,33 +1185,14 @@ fn rasterize_vertical_aa_streaming_v3(
             if let Some((min_x, max_x, min_y, max_y)) =
                 expand_bounds(backward_seed_bounds, blend_pad, width, height)
             {
-                if slope_adaptive {
-                    workspace.blend_layer_slope_adaptive_inplace_with_roi(
-                        &mut raw_mask,
-                        &priors,
-                        width,
-                        height,
-                        Some(&lut),
-                        (min_x, max_x, min_y, max_y),
-                    );
-                } else {
-                    workspace.blend_layer_inplace_with_roi(
-                        &mut raw_mask,
-                        &priors,
-                        width,
-                        height,
-                        fade_px,
-                        Some(&lut),
-                        (min_x, max_x, min_y, max_y),
-                    );
-                }
-            } else if slope_adaptive {
-                workspace.blend_layer_slope_adaptive_inplace(
+                workspace.blend_layer_inplace_with_roi(
                     &mut raw_mask,
                     &priors,
                     width,
                     height,
+                    fade_px,
                     Some(&lut),
+                    (min_x, max_x, min_y, max_y),
                 );
             } else {
                 workspace.blend_layer_inplace(
@@ -1396,7 +1352,6 @@ fn rasterize_vertical_aa_streaming_v3(
                     blur_radius,
                     min_aa_alpha_u8,
                     z_blend_min_alpha_u8,
-                    slope_adaptive,
                     debug_color_overlay,
                     &lut,
                     &mut workspace,
@@ -1519,7 +1474,6 @@ fn rasterize_vertical_aa_streaming_v3(
                 blur_radius,
                 min_aa_alpha_u8,
                 z_blend_min_alpha_u8,
-                slope_adaptive,
                 debug_color_overlay,
                 &lut,
                 &mut workspace,
