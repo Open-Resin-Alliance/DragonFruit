@@ -918,7 +918,6 @@ export function SlicingPanel({
   const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(autoAaConfig.aaSteps) : aaLevel;
   const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
   const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.zBlendLookBack : zBlendLookBack;
-  const resolvedZBlendAutoMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? true : zBlendAutoMode;
   const resolvedZBlendFadeMode = useAutoFadeDistance ? 'auto' as const : 'manual' as const;
 
   const effectiveAntiAliasingLevel =
@@ -1431,7 +1430,7 @@ export function SlicingPanel({
               ? profileMinimumAaAlphaPercent
               : minimumAaAlphaPercent)
           : undefined,
-        zBlendSlopeAdaptive: resolvedAaMode === '3DAA' ? resolvedZBlendAutoMode : undefined,
+        zBlendMaxAlphaPercent: 90,
         minimumAaAlphaPercentOverride: (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
           ? profileMinimumAaAlphaPercent
           : minimumAaAlphaPercent,

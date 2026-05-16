@@ -53,8 +53,8 @@ fn default_z_blend_minimum_alpha_percent() -> f32 {
     0.0
 }
 
-fn default_z_blend_slope_adaptive() -> bool {
-    true
+fn default_z_blend_max_alpha_percent() -> f32 {
+    90.0
 }
 
 fn default_z_blend_debug_color_overlay() -> bool {
@@ -162,14 +162,13 @@ pub struct SliceJobV3 {
     /// XY blur / coverage AA pixels inside the current layer's footprint.
     #[serde(default = "default_z_blend_minimum_alpha_percent")]
     pub z_blend_minimum_alpha_percent: f32,
-    /// When `true` (default), the engine uses slope-adaptive depth-based
-    /// gradient that automatically calibrates to the local surface slope from
-    /// layer-history analysis — no manual `z_blend_fade_px` tuning required.
-    ///
-    /// When `false` (legacy), the fixed XY-distance gradient using
-    /// `z_blend_fade_px` is used instead.
-    #[serde(default = "default_z_blend_slope_adaptive")]
-    pub z_blend_slope_adaptive: bool,
+    /// Maximum gray level (0–100 %) for z-blend gradient pixels at the inner
+    /// boundary (closest to the solid region).  Together with
+    /// `z_blend_minimum_alpha_percent` this defines the cure-window: the
+    /// gradient linearly maps from `min` (outermost receding pixel) to `max`
+    /// (innermost receding pixel adjacent to solid).  Defaults to 90 %.
+    #[serde(default = "default_z_blend_max_alpha_percent")]
+    pub z_blend_max_alpha_percent: f32,
     /// Debug-only visualization mode for 3DAA blending.
     ///
     /// When enabled, generated PNG layer previews color-code blend direction:
