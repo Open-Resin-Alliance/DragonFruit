@@ -308,6 +308,11 @@ export type NativeSliceTempPathArtifact = {
 
 export type NativeOpenDialogCategory = 'mesh' | 'scene' | 'bundle';
 
+export type NativeSaveDialogFilter = {
+  name: string;
+  extensions: string[];
+};
+
 export type NativePickedOpenFile = {
   path: string;
   name: string;
@@ -642,6 +647,25 @@ export async function pickSavePathWithNativeDialog(defaultFilename: string): Pro
   return core.invoke<string>('pick_save_path', {
     args: {
       defaultFilename,
+    },
+  });
+}
+
+export async function pickSavePathWithNativeDialogOptions(
+  defaultFilename: string,
+  options?: {
+    filters?: NativeSaveDialogFilter[];
+  },
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native save dialog is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('pick_save_path', {
+    args: {
+      defaultFilename,
+      filters: options?.filters,
     },
   });
 }
