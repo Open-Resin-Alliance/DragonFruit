@@ -30,6 +30,7 @@ import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { computePhysicalAaConfig, type AaPreset as AaAutoPreset, type PhysicalAaConfig as AutoAaConfig } from '@/features/slicing/autoAaPhysics';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
 
@@ -182,6 +183,8 @@ const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
 const SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePxCustomEnabled';
 const SLICING_3DAA_FADE_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaFadeMode';
 const SLICING_3DAA_AUTO_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaAutoMode';
+const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
+const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
@@ -439,6 +442,23 @@ function resolveInitialZBlendAutoMode(): boolean {
   return stored !== 'false';
 }
 
+function resolveInitialAaQualityMode(): 'auto' | 'advanced' {
+  if (typeof window === 'undefined') return 'auto';
+  const stored = window.localStorage.getItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY);
+  return stored === 'advanced' ? 'advanced' : 'auto';
+}
+
+function resolveInitialAaAutoPreset(): 'sharp' | 'balanced' | 'smooth' {
+  if (typeof window === 'undefined') return 'balanced';
+  const stored = window.localStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY);
+  if (stored === 'sharp' || stored === 'smooth') return stored;
+  return 'balanced';
+}
+
+// AaAutoPreset and AutoAaConfig are imported from autoAaPhysics.ts
+
 export function SlicingPanel({
   models,
   activeModel,
@@ -516,6 +536,8 @@ export function SlicingPanel({
   const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
   const [zBlendFadeMode, setZBlendFadeMode] = useState<'auto' | 'manual'>(resolveInitialZBlendFadeMode);
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
+  const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
+  const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoPreset>(resolveInitialAaAutoPreset);
   const [useCustomZBlendFadePx, setUseCustomZBlendFadePx] = useState<boolean>(() => {
     const initial = resolveInitialZBlendFadePx();
     const initialLookBack = resolveInitialZBlendLookBack();
@@ -816,15 +838,19 @@ export function SlicingPanel({
     return formatClockFromSeconds(totalSec);
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
-  const autoZBlendFadePx = useMemo(() => {
-    const lookBack = Math.max(
-      LOOK_BACK_MIN_LAYERS,
-      Math.min(LOOK_BACK_MAX_LAYERS, Math.round(zBlendLookBack)),
-    );
+  // Shared pixel pitch calculation used by both autoZBlendFadePx and autoAaConfig.
+  // Prefers the explicit pixelSize field (µm, stored directly from the manufacturer
+  // spec) when available — avoids floating-point rounding introduced by deriving
+  // pitch from buildVolumeMm which is stored at only 3 decimal places.
+  const pixelPitchMm = useMemo(() => {
+    // Direct pixel size path (most accurate)
+    const pxSizeX = Number(activePrinterProfile?.pixelSize?.x);
+    const pxSizeY = Number(activePrinterProfile?.pixelSize?.y);
+    if (Number.isFinite(pxSizeX) && Number.isFinite(pxSizeY) && pxSizeX > 0 && pxSizeY > 0) {
+      return Math.min(pxSizeX, pxSizeY) / 1000; // µm → mm
+    }
 
-    const layerHeightMm = Number(effectiveLayerHeightMm);
-    const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
-
+    // Fallback: derive from build volume ÷ resolution
     const resX = Number(activePrinterProfile?.display?.resolutionX);
     const resY = Number(activePrinterProfile?.display?.resolutionY);
     const buildW = Number(activePrinterProfile?.buildVolumeMm?.width);
@@ -837,36 +863,69 @@ export function SlicingPanel({
     if (Number.isFinite(resY) && Number.isFinite(buildD) && resY > 0 && buildD > 0) {
       pitchCandidates.push(buildD / resY);
     }
+    return pitchCandidates.length > 0 ? Math.min(...pitchCandidates) : 0.05;
+  }, [
+    activePrinterProfile?.pixelSize?.x,
+    activePrinterProfile?.pixelSize?.y,
+    activePrinterProfile?.buildVolumeMm?.depth,
+    activePrinterProfile?.buildVolumeMm?.width,
+    activePrinterProfile?.display?.resolutionX,
+    activePrinterProfile?.display?.resolutionY,
+  ]);
 
-    const pixelPitchMm = pitchCandidates.length > 0
-      ? Math.min(...pitchCandidates)
-      : 0.05;
+  const autoZBlendFadePx = useMemo(() => {
+    const lookBack = Math.max(
+      LOOK_BACK_MIN_LAYERS,
+      Math.min(LOOK_BACK_MAX_LAYERS, Math.round(zBlendLookBack)),
+    );
+
+    const layerHeightMm = Number(effectiveLayerHeightMm);
+    const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
 
     const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
     const AUTO_FADE_GAIN = 1.75;
     const base = Math.max(4, Math.ceil(lookBack * pxPerLayer * AUTO_FADE_GAIN));
     return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
   }, [
-    activePrinterProfile?.buildVolumeMm?.depth,
-    activePrinterProfile?.buildVolumeMm?.width,
-    activePrinterProfile?.display?.resolutionX,
-    activePrinterProfile?.display?.resolutionY,
     effectiveLayerHeightMm,
+    pixelPitchMm,
     zBlendLookBack,
   ]);
+
+  // Auto AA config: physics-grounded parameters from pixel pitch + layer height.
+  // Computed by autoAaPhysics.ts — see that module for the full engineering model.
+  const autoAaConfig = useMemo(() => {
+    const layerHeightMm = Number(effectiveLayerHeightMm);
+    const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
+    return computePhysicalAaConfig(aaAutoPreset, pixelPitchMm, safeLayerH);
+  }, [aaAutoPreset, effectiveLayerHeightMm, pixelPitchMm]);
 
   const fadeDistancePresets = useMemo(
     () => deriveFadeDistancePresets(autoZBlendFadePx),
     [autoZBlendFadePx],
   );
 
-  const effectiveZBlendFadePx = zBlendFadeMode === 'auto' ? autoZBlendFadePx : zBlendFadePx;
+  const useAutoFadeDistance =
+    (aaQualityMode === 'auto' && antiAliasingAvailable)
+    || (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode);
+
+  const effectiveZBlendFadePx = useAutoFadeDistance
+    ? autoZBlendFadePx
+    : zBlendFadePx;
+
+  // Resolved AA state: auto mode overrides manual state when AA is available.
+  const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.aaMode : aaMode;
+  const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(autoAaConfig.aaSteps) : aaLevel;
+  const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
+  const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.zBlendLookBack : zBlendLookBack;
+  const resolvedZBlendAutoMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? true : zBlendAutoMode;
+  const resolvedZBlendFadeMode = useAutoFadeDistance ? 'auto' as const : 'manual' as const;
 
   const effectiveAntiAliasingLevel =
-    !antiAliasingAvailable || aaMode === 'Off' ? 'Off' as const : aaLevel;
+    !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Off' as const : resolvedAaLevel;
   const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage' =
-    !antiAliasingAvailable || aaMode === 'Off' ? 'Coverage' :
-    aaMode === '3DAA' ? 'Vertical2' :
+    !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Coverage' :
+    resolvedAaMode === '3DAA' ? 'Vertical2' :
     'Blur';
 
   const minimumAaProfileSupport = useMemo(() => {
@@ -961,14 +1020,21 @@ export function SlicingPanel({
   }, []);
 
   useEffect(() => {
-    if (zBlendFadeMode !== 'manual') return;
+    if (useAutoFadeDistance) return;
     if (useCustomZBlendFadePx) return;
     if (isPresetValue(fadeDistancePresets, zBlendFadePx)) return;
     const fallback = fadeDistancePresets[Math.min(1, fadeDistancePresets.length - 1)]
       ?? fadeDistancePresets[0]
       ?? 8;
     setClampedZBlendFadePx(fallback);
-  }, [fadeDistancePresets, setClampedZBlendFadePx, useCustomZBlendFadePx, zBlendFadeMode, zBlendFadePx]);
+  }, [fadeDistancePresets, setClampedZBlendFadePx, useAutoFadeDistance, useCustomZBlendFadePx, zBlendFadePx]);
+
+  useEffect(() => {
+    if (aaQualityMode !== 'advanced' || aaMode !== '3DAA') return;
+    const targetMode: 'auto' | 'manual' = zBlendAutoMode ? 'auto' : 'manual';
+    if (zBlendFadeMode === targetMode) return;
+    setZBlendFadeMode(targetMode);
+  }, [aaMode, aaQualityMode, zBlendAutoMode, zBlendFadeMode]);
 
   const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
     if (typeof window === 'undefined') return;
@@ -1086,6 +1152,18 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY, serialized);
   }, [zBlendAutoMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY, aaQualityMode);
+    window.sessionStorage.setItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY, aaQualityMode);
+  }, [aaQualityMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY, aaAutoPreset);
+    window.sessionStorage.setItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY, aaAutoPreset);
+  }, [aaAutoPreset]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1344,15 +1422,19 @@ export function SlicingPanel({
         outputPath: resolvedOutputPath.length > 0 ? resolvedOutputPath : null,
         antiAliasingLevel: effectiveAntiAliasingLevel,
         antiAliasingMode: effectiveAntiAliasingMode,
-        blurBrushRadiusPx,
-        zBlendLookBack: aaMode === '3DAA' ? zBlendLookBack : undefined,
-        zBlendFadePx: aaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
-        zBlendAutoFade: aaMode === '3DAA' ? (zBlendFadeMode === 'auto') : undefined,
-        zBlendMinimumAlphaPercent: aaMode === '3DAA' ? 0 : undefined,
-        zBlendSlopeAdaptive: aaMode === '3DAA' ? zBlendAutoMode : undefined,
-        minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
-          ? minimumAaAlphaPercent
-          : profileMinimumAaAlphaPercent,
+        blurBrushRadiusPx: resolvedBlurBrushRadiusPx,
+        zBlendLookBack: resolvedAaMode === '3DAA' ? resolvedZBlendLookBack : undefined,
+        zBlendFadePx: resolvedAaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
+        zBlendAutoFade: resolvedAaMode === '3DAA' ? (resolvedZBlendFadeMode === 'auto') : undefined,
+        zBlendMinimumAlphaPercent: resolvedAaMode === '3DAA'
+          ? ((aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
+              ? profileMinimumAaAlphaPercent
+              : minimumAaAlphaPercent)
+          : undefined,
+        zBlendSlopeAdaptive: resolvedAaMode === '3DAA' ? resolvedZBlendAutoMode : undefined,
+        minimumAaAlphaPercentOverride: (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
+          ? profileMinimumAaAlphaPercent
+          : minimumAaAlphaPercent,
 
         outputMode: 'return',
         exportThumbnailPng,
@@ -1818,6 +1900,90 @@ export function SlicingPanel({
               {antiAliasingAvailable ? (
                 <>
                   <SettingLabelWithHelp
+                    label="Anti-Aliasing"
+                    help="Auto derives all settings from your printer resolution and material layer height. Advanced gives full manual control."
+                  />
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(['auto', 'advanced'] as const).map((qmode) => {
+                      const qActive = aaQualityMode === qmode;
+                      const meta = qmode === 'auto'
+                        ? { label: 'Auto', desc: 'Tuned to your printer & resin' }
+                        : { label: 'Advanced', desc: 'Full manual control' };
+                      return (
+                        <button
+                          key={qmode}
+                          type="button"
+                          className="rounded border px-2 py-2 text-center transition-colors"
+                          style={qActive
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-0)',
+                                color: 'var(--text-muted)',
+                              }}
+                          onClick={() => setAaQualityMode(qmode)}
+                        >
+                          <div className="text-xs font-semibold">{meta.label}</div>
+                          <div className="text-[10px] leading-snug mt-0.5" style={{ color: qActive ? 'color-mix(in srgb, var(--text-strong), var(--text-muted) 45%)' : 'var(--text-muted)' }}>{meta.desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {aaQualityMode === 'auto' && (
+                    <>
+                      <div className="space-y-1">
+                        {([
+                          { preset: 'sharp' as const, label: 'Sharp', desc: 'Crisp pixel-level edges. Best for fine details and text.' },
+                          { preset: 'balanced' as const, label: 'Balanced', desc: 'Smooth edges without sacrificing fine detail.' },
+                          { preset: 'smooth' as const, label: 'Smooth', desc: 'Maximum softness. Ideal for organic shapes and curved surfaces.' },
+                        ]).map(({ preset, label, desc }) => {
+                          const pActive = aaAutoPreset === preset;
+                          return (
+                            <button
+                              key={preset}
+                              type="button"
+                              className="w-full rounded border px-2.5 py-2 text-center transition-colors"
+                              style={pActive
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setAaAutoPreset(preset)}
+                            >
+                              <div className="text-xs font-semibold">{label}</div>
+                              <div className="text-[10px] leading-snug mt-0.5" style={{ color: pActive ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 45%)' : 'var(--text-muted)' }}>{desc}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div
+                        className="rounded px-2 py-1 text-[11px] leading-snug font-mono"
+                        style={{ background: 'var(--surface-0)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}
+                      >
+                        {[
+                          `${autoAaConfig.aaSteps}x`,
+                          `${autoAaConfig.blurBrushRadiusPx}px blur`,
+                          autoAaConfig.aaMode === '3DAA'
+                            ? `3DAA \u00b7 ${autoAaConfig.zBlendLookBack} lyr`
+                            : 'Blur only',
+                        ].join(' \u00b7 ')}
+                      </div>
+                    </>
+                  )}
+
+                  {aaQualityMode === 'advanced' && <>
+                  <SettingLabelWithHelp
                     label="Anti-Aliasing Mode"
                     help="Off disables AA. Blur smooths horizontal edges. 3DAA applies Blur and Z-axis blending between nearby layers."
                   />
@@ -1851,8 +2017,8 @@ export function SlicingPanel({
                   {aaMode !== 'Off' && (
                     <>
                       <SettingLabelWithHelp
-                        label="AA Strength"
-                        help="Controls supersampling level before blur/Z-blending. Higher levels preserve finer edge detail but cost more slicing time."
+                        label="2D AA Strength"
+                        help="Controls supersampling for the 2D edge-smoothing pass. Higher levels preserve finer edge detail but cost more slicing time."
                       />
                       <div className="grid grid-cols-5 gap-1">
                         {AA_STRENGTH_PRESETS.map((steps) => {
@@ -1918,8 +2084,8 @@ export function SlicingPanel({
                       )}
 
                       <SettingLabelWithHelp
-                        label="Blur Width"
-                        help="Controls edge blur width in pixels. Higher values create smoother transitions but can soften fine details."
+                        label="2D Blur Width"
+                        help="Controls edge blur width for the 2D pass in pixels. Higher values create smoother transitions but can soften fine details."
                       />
                       <div className="grid grid-cols-5 gap-1">
                         {BLUR_WIDTH_PRESETS.map((radius) => {
@@ -1985,9 +2151,15 @@ export function SlicingPanel({
 
                       {aaMode === '3DAA' && (
                         <>
+                          <div
+                            className="my-2.5 mx-1 h-px rounded-full"
+                            style={{
+                              background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
+                            }}
+                          />
                           <SettingLabelWithHelp
-                            label="3DAA Mode"
-                            help="Auto: engine analyses each layer's slope and applies the correct gradient automatically — only Blend Window is needed. Advanced: exposes all manual controls."
+                            label="3DAA Controls"
+                            help="These controls are specific to Z-axis blending in 3DAA. Auto uses slope-adaptive blending; Advanced exposes manual tuning."
                           />
                           <div className="grid grid-cols-2 gap-1">
                             <button
@@ -1995,9 +2167,9 @@ export function SlicingPanel({
                               className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                               style={zBlendAutoMode
                                 ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
                                   }
                                 : {
                                     borderColor: 'var(--border-subtle)',
@@ -2013,9 +2185,9 @@ export function SlicingPanel({
                               className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                               style={!zBlendAutoMode
                                 ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
                                   }
                                 : {
                                     borderColor: 'var(--border-subtle)',
@@ -2042,9 +2214,9 @@ export function SlicingPanel({
                                   className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                                   style={active
                                     ? {
-                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                        color: 'var(--text-strong)',
+                                        borderColor: 'var(--accent-secondary-action-border)',
+                                        background: 'var(--accent-secondary-action-bg-92)',
+                                        color: 'var(--accent-secondary-action-color)',
                                       }
                                     : {
                                         borderColor: 'var(--border-subtle)',
@@ -2065,9 +2237,9 @@ export function SlicingPanel({
                               className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                               style={useCustomZBlendLookBack
                                 ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
                                   }
                                 : {
                                     borderColor: 'var(--border-subtle)',
@@ -2095,50 +2267,6 @@ export function SlicingPanel({
                           )}
 
                           {!zBlendAutoMode && (
-                          <>
-                          <SettingLabelWithHelp
-                            label="Compensation Reach"
-                            help="How far Z-compensation reaches from edges in XY. Auto derives this from layer height, pixel pitch, and Blend Window; Manual lets you override it."
-                          />
-                          <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={zBlendFadeMode === 'auto'
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setZBlendFadeMode('auto')}
-                            >
-                              {`Auto - ${effectiveZBlendFadePx}px`}
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={zBlendFadeMode === 'manual'
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setZBlendFadeMode('manual')}
-                            >
-                              Manual
-                            </button>
-                          </div>
-                          {zBlendFadeMode === 'auto' ? null : (
                             <>
                               <SettingLabelWithHelp
                                 label="Fade Distance"
@@ -2154,9 +2282,9 @@ export function SlicingPanel({
                                       className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                                       style={active
                                         ? {
-                                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                            color: 'var(--text-strong)',
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
                                           }
                                         : {
                                             borderColor: 'var(--border-subtle)',
@@ -2177,9 +2305,9 @@ export function SlicingPanel({
                                   className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                                   style={useCustomZBlendFadePx
                                     ? {
-                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                        color: 'var(--text-strong)',
+                                        borderColor: 'var(--accent-secondary-action-border)',
+                                        background: 'var(--accent-secondary-action-bg-92)',
+                                        color: 'var(--accent-secondary-action-color)',
                                       }
                                     : {
                                         borderColor: 'var(--border-subtle)',
@@ -2207,9 +2335,16 @@ export function SlicingPanel({
                               )}
                             </>
                           )}
-                          </>
-                          )}
                         </>
+                      )}
+
+                      {aaMode === '3DAA' && (
+                        <div
+                          className="my-2.5 mx-1 h-px rounded-full"
+                          style={{
+                            background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
+                          }}
+                        />
                       )}
 
                       <div className="space-y-1">
@@ -2274,6 +2409,7 @@ export function SlicingPanel({
                       </div>
                     </>
                   )}
+                  </>}
                 </>
               ) : (
                 <div
