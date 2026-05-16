@@ -311,6 +311,20 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     radiusStart: number;
     radiusEnd: number;
   }> = [];
+  // Invisible pick-only tube shells for bezier segments when the twig is
+  // not selected. BezierRenderer's own pick mesh is gated on isParentSelected
+  // / Alt held, so without these the bezier segments are unpickable in the
+  // normal "click to select" / "hover to highlight" flow. Inside pickRef.
+  const bezierPickShafts: Array<{
+    id: string;
+    start: { x: number; y: number; z: number };
+    end: { x: number; y: number; z: number };
+    control1: { x: number; y: number; z: number };
+    control2: { x: number; y: number; z: number };
+    resolution: number;
+    radiusStart: number;
+    radiusEnd: number;
+  }> = [];
 
   const joints = useMemo(() => {
     const map = new Map<string, { id: string; pos: { x: number; y: number; z: number }; diameter: number }>();
@@ -365,6 +379,23 @@ export const TwigRenderer = React.memo(function TwigRenderer({
         id: seg.id,
         start: startPoint.clone(),
         end: endPoint.clone(),
+        radiusStart: diameterStart / 2,
+        radiusEnd: diameterEnd / 2,
+      });
+    }
+
+    // Bezier + unselected: BezierRenderer's pick mesh is gated on the parent
+    // being selected (or Alt held during brace placement). Without an always-
+    // on pick shell, an unselected bezier twig can't be hovered, selected,
+    // or used as a brace placement target. Mirror the tapered straight path.
+    if (seg.type === 'bezier' && !isSelected) {
+      bezierPickShafts.push({
+        id: seg.id,
+        start: startPosVec,
+        end: endPosVec,
+        control1: seg.controlPoint1,
+        control2: seg.controlPoint2,
+        resolution: seg.resolution,
         radiusStart: diameterStart / 2,
         radiusEnd: diameterEnd / 2,
       });
@@ -501,6 +532,9 @@ export const TwigRenderer = React.memo(function TwigRenderer({
             </mesh>
           );
         })}
+        {bezierPickShafts.map((pick) => (
+          <BezierTwigPickShell key={`bezier-pick-${pick.id}`} pick={pick} />
+        ))}
         {diskA}
         {diskB}
       </group>
@@ -537,3 +571,101 @@ export const TwigRenderer = React.memo(function TwigRenderer({
 });
 
 TwigRenderer.displayName = 'TwigRenderer';
+
+// Invisible pick-only tube hugging a bezier twig segment. Lives inside the
+// twig's pickRef so the GPU picker registers hits on it as twig hits (for
+// hover, select) and shaft hits with segmentId in userData (for brace
+// placement when Alt is held). BezierRenderer's own pick mesh is parent-
+// selected-only, so without this an unselected bezier twig is unpickable.
+function BezierTwigPickShell({ pick }: {
+  pick: {
+    id: string;
+    start: { x: number; y: number; z: number };
+    end: { x: number; y: number; z: number };
+    control1: { x: number; y: number; z: number };
+    control2: { x: number; y: number; z: number };
+    resolution: number;
+    radiusStart: number;
+    radiusEnd: number;
+  };
+}) {
+  const geometry = React.useMemo(() => {
+    const curve = new THREE.CubicBezierCurve3(
+      new THREE.Vector3(pick.start.x, pick.start.y, pick.start.z),
+      new THREE.Vector3(pick.control1.x, pick.control1.y, pick.control1.z),
+      new THREE.Vector3(pick.control2.x, pick.control2.y, pick.control2.z),
+      new THREE.Vector3(pick.end.x, pick.end.y, pick.end.z),
+    );
+    const tubularSegments = Math.max(8, Math.min(48, pick.resolution ?? 16));
+    const radialSegments = 10;
+    // Match BraceRenderer / BezierRenderer's pick generosity so glancing
+    // clicks on a thin curved twig still hit.
+    const PICK_RADIUS_MULTIPLIER = 1.9;
+    const MIN_PICK_RADIUS_MM = 0.45;
+    const maxR = Math.max(pick.radiusStart, pick.radiusEnd);
+    const pickRadius = Math.max(maxR * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
+    const g = new THREE.TubeGeometry(curve, tubularSegments, 1, radialSegments, false);
+
+    const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    const ringSize = radialSegments + 1;
+    const ringCount = tubularSegments + 1;
+    for (let i = 0; i < ringCount; i++) {
+      const u = i / tubularSegments;
+      const center = curve.getPointAt(u);
+      const localR = THREE.MathUtils.lerp(pick.radiusStart, pick.radiusEnd, u);
+      const r = Math.max(localR * PICK_RADIUS_MULTIPLIER, pickRadius);
+      for (let j = 0; j < ringSize; j++) {
+        const idx = i * ringSize + j;
+        const x = pos.getX(idx);
+        const y = pos.getY(idx);
+        const z = pos.getZ(idx);
+        const v = new THREE.Vector3(x, y, z);
+        const dir = v.sub(center);
+        const len = dir.length();
+        if (len > 0) dir.multiplyScalar(1 / len);
+        const nv = center.clone().add(dir.multiplyScalar(r));
+        pos.setXYZ(idx, nv.x, nv.y, nv.z);
+      }
+    }
+    pos.needsUpdate = true;
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  }, [
+    pick.start.x, pick.start.y, pick.start.z,
+    pick.end.x, pick.end.y, pick.end.z,
+    pick.control1.x, pick.control1.y, pick.control1.z,
+    pick.control2.x, pick.control2.y, pick.control2.z,
+    pick.radiusStart, pick.radiusEnd, pick.resolution,
+  ]);
+
+  React.useEffect(() => {
+    return () => { geometry.dispose(); };
+  }, [geometry]);
+
+  // Dispatch the same shaft-hover / shaft-click / shaft-leave window events
+  // BezierRenderer fires from its own pick mesh, so brace + leaf placement
+  // (which listen for these events to capture {segmentId, point}) still get
+  // the data they need when the raycast lands on this shell instead of on
+  // BezierRenderer's own pick mesh.
+  const dispatchShaftEvent = (eventName: 'shaft-hover' | 'shaft-click' | 'shaft-leave', e: any) => {
+    const detail: Record<string, unknown> = { segmentId: pick.id };
+    if (eventName !== 'shaft-leave') {
+      detail.point = e?.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null;
+      detail.intersection = e;
+    }
+    window.dispatchEvent(new CustomEvent(eventName, { detail }));
+  };
+
+  return (
+    <mesh
+      userData={{ supportPrimitiveType: 'shaft', segmentId: pick.id }}
+      onPointerMove={(e) => { dispatchShaftEvent('shaft-hover', e); }}
+      onPointerOut={(e) => { dispatchShaftEvent('shaft-leave', e); }}
+      onClick={(e) => { dispatchShaftEvent('shaft-click', e); }}
+    >
+      <primitive object={geometry} attach="geometry" />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+    </mesh>
+  );
+}

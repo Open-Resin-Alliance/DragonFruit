@@ -39,7 +39,8 @@ import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
 import { useResolvedSelectionState } from './interaction/shared/selection/resolvedSelectionStore';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
@@ -79,15 +80,37 @@ interface SupportRendererProps {
     kickstandPlacementPreview?: SupportData | null;
 }
 
+interface PlacementPreviewTaperedShaft {
+    id: string;
+    start: Vec3Like;
+    end: Vec3Like;
+    diameterStart: number;
+    diameterEnd: number;
+}
+
+interface PlacementPreviewDisk {
+    id: string;
+    pos: Vec3Like;
+    surfaceNormal: Vec3Like;
+    coneAxis: Vec3Like;
+    profile: ContactDiskProfile;
+    contactDiameterMm: number;
+    diskLengthOverride?: number;
+}
+
 interface PlacementPreviewBatch {
     id: string;
     color: string;
     opacity: number;
     shafts: InstancedShaft[];
+    taperedShafts: PlacementPreviewTaperedShaft[];
+    disks: PlacementPreviewDisk[];
     joints: InstancedJoint[];
     roots: InstancedRoot[];
     cones: InstancedContactCone[];
 }
+
+interface Vec3Like { x: number; y: number; z: number; }
 
 function applyBatchedBezierSeamOverlap(
     points: Array<{ x: number; y: number; z: number }>,
@@ -385,9 +408,33 @@ function buildSupportPlacementPreviewBatch(
     raftThickness: number,
 ): PlacementPreviewBatch | null {
     const shafts: InstancedShaft[] = [];
+    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
+    const disks: PlacementPreviewDisk[] = [];
     const jointsMap = new Map<string, InstancedJoint>();
     const roots: InstancedRoot[] = [];
     const cones: InstancedContactCone[] = [];
+
+    // Twig placements carry two ContactDisks (one per end). The disks define
+    // the rod's true per-end diameters; segment.diameter is a placeholder.
+    // Use the disk contact diameters to draw a tapered shaft so the preview
+    // matches what the finished twig will look like.
+    const twigDiskA = preview.contactDisks && preview.contactDisks.length === 2 ? preview.contactDisks[0] : null;
+    const twigDiskB = preview.contactDisks && preview.contactDisks.length === 2 ? preview.contactDisks[1] : null;
+    const isTwigPreview = !!(twigDiskA && twigDiskB);
+
+    if (preview.contactDisks) {
+        for (const disk of preview.contactDisks) {
+            disks.push({
+                id: disk.id,
+                pos: disk.pos,
+                surfaceNormal: disk.surfaceNormal,
+                coneAxis: disk.coneAxis,
+                profile: disk.profile,
+                contactDiameterMm: disk.contactDiameterMm,
+                diskLengthOverride: disk.diskLengthOverride,
+            });
+        }
+    }
 
     let currentStart: THREE.Vector3;
 
@@ -460,6 +507,37 @@ function buildSupportPlacementPreviewBatch(
         }
     }
 
+    // Twig taper: precompute per-segment start/end diameters lerped along the
+    // cumulative-length parameter so a multi-segment twig still presents one
+    // continuous A→B taper.
+    let twigSegmentDiameters: Array<{ start: number; end: number }> | null = null;
+    if (isTwigPreview) {
+        const segLengths: number[] = [];
+        let total = 0;
+        for (const seg of preview.segments) {
+            const a = seg.bottomJoint?.pos;
+            const b = seg.topJoint?.pos;
+            if (!a || !b) { segLengths.push(0); continue; }
+            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+            const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            segLengths.push(len);
+            total += len;
+        }
+        twigSegmentDiameters = [];
+        const dA = twigDiskA!.contactDiameterMm;
+        const dB = twigDiskB!.contactDiameterMm;
+        let cursor = 0;
+        for (let i = 0; i < preview.segments.length; i++) {
+            const sStart = total > 1e-8 ? cursor / total : 0;
+            cursor += segLengths[i];
+            const sEnd = total > 1e-8 ? cursor / total : 1;
+            twigSegmentDiameters.push({
+                start: dA + (dB - dA) * sStart,
+                end: dA + (dB - dA) * sEnd,
+            });
+        }
+    }
+
     const lastSegmentIndex = preview.segments.length - 1;
     preview.segments.forEach((segment, index) => {
         if (segment.bottomJoint) {
@@ -488,6 +566,15 @@ function buildSupportPlacementPreviewBatch(
                     id,
                 ),
             );
+        } else if (twigSegmentDiameters) {
+            const dia = twigSegmentDiameters[index];
+            taperedShafts.push({
+                id: segment.id,
+                start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                diameterStart: dia.start,
+                diameterEnd: dia.end,
+            });
         } else {
             shafts.push({
                 id: segment.id,
@@ -519,7 +606,7 @@ function buildSupportPlacementPreviewBatch(
         });
     });
 
-    if (shafts.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
+    if (shafts.length === 0 && taperedShafts.length === 0 && disks.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
         return null;
     }
 
@@ -529,6 +616,8 @@ function buildSupportPlacementPreviewBatch(
         color,
         opacity,
         shafts,
+        taperedShafts,
+        disks,
         joints: Array.from(jointsMap.values()),
         roots,
         cones,
@@ -557,14 +646,25 @@ function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData):
     ];
 
     const shafts: InstancedShaft[] = [];
+    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
     if (lenSq >= 1e-6) {
-        shafts.push({
-            id: `${id}:shaft`,
-            start,
-            end,
-            diameter: (startDiameter + endDiameter) / 2,
-            supportId: id,
-        });
+        if (Math.abs(startDiameter - endDiameter) > 1e-4) {
+            taperedShafts.push({
+                id: `${id}:shaft`,
+                start,
+                end,
+                diameterStart: startDiameter,
+                diameterEnd: endDiameter,
+            });
+        } else {
+            shafts.push({
+                id: `${id}:shaft`,
+                start,
+                end,
+                diameter: (startDiameter + endDiameter) / 2,
+                supportId: id,
+            });
+        }
 
         joints.push({
             id: `${id}:end-joint`,
@@ -579,6 +679,8 @@ function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData):
         color: PLACEMENT_PREVIEW_COLOR,
         opacity: PLACEMENT_PREVIEW_OPACITY,
         shafts,
+        taperedShafts,
+        disks: [],
         joints,
         roots: [],
         cones: [],
@@ -3824,6 +3926,57 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                             radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
                         />
                     )}
+                    {batch.taperedShafts.map((seg) => {
+                        const startVec = new THREE.Vector3(seg.start.x, seg.start.y, seg.start.z);
+                        const endVec = new THREE.Vector3(seg.end.x, seg.end.y, seg.end.z);
+                        const length = startVec.distanceTo(endVec);
+                        if (length < 0.001) return null;
+                        const midpoint = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5);
+                        const dir = new THREE.Vector3().subVectors(endVec, startVec).normalize();
+                        const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+                        return (
+                            <mesh key={`tapered-shaft:${batch.id}:${seg.id}`} position={[midpoint.x, midpoint.y, midpoint.z]} quaternion={quat}>
+                                <cylinderGeometry args={[seg.diameterEnd / 2, seg.diameterStart / 2, length, BATCHED_SHAFT_RADIAL_SEGMENTS]} />
+                                <meshStandardMaterial
+                                    color={batch.color}
+                                    emissive={batch.color}
+                                    emissiveIntensity={0.08}
+                                    transparent
+                                    opacity={batch.opacity}
+                                />
+                            </mesh>
+                        );
+                    })}
+                    {batch.disks.map((disk) => {
+                        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+                        const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
+                        const rotation = getDiskRotation(disk.surfaceNormal);
+                        const radius = disk.contactDiameterMm / 2;
+                        return (
+                            <group key={`preview-disk:${batch.id}:${disk.id}`} position={[center.x, center.y, center.z]} quaternion={rotation}>
+                                <mesh position={[0, 0, 0]}>
+                                    <cylinderGeometry args={[radius, radius, thickness, BATCHED_SHAFT_RADIAL_SEGMENTS]} />
+                                    <meshStandardMaterial
+                                        color={batch.color}
+                                        emissive={batch.color}
+                                        emissiveIntensity={0.08}
+                                        transparent
+                                        opacity={batch.opacity}
+                                    />
+                                </mesh>
+                                <mesh position={[0, thickness / 2, 0]}>
+                                    <sphereGeometry args={[radius, BATCHED_JOINT_WIDTH_SEGMENTS, BATCHED_JOINT_HEIGHT_SEGMENTS]} />
+                                    <meshStandardMaterial
+                                        color={batch.color}
+                                        emissive={batch.color}
+                                        emissiveIntensity={0.08}
+                                        transparent
+                                        opacity={batch.opacity}
+                                    />
+                                </mesh>
+                            </group>
+                        );
+                    })}
                     {batch.joints.length > 0 && (
                         <InstancedJointGroup
                             joints={batch.joints}
