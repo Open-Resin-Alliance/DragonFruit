@@ -64,6 +64,27 @@ const NEW_CURVE_CLEAR_POINTS: CurvePoint[] = [
   { x: 1, y: 0.65 },
 ];
 
+/**
+ * Compact 10-point control curve derived from Aaron's UVTools EXP_120-230 LUT.
+ *
+ * Sampling indices (0-based) from the 256-entry LUT:
+ * [1, 29, 57, 85, 113, 142, 170, 198, 226, 254]
+ * Values:
+ * [120, 125, 130, 135, 142, 151, 162, 178, 199, 230]
+ */
+export const DEFAULT_OPAQUE_EXP_120_230_CURVE: CurvePoint[] = [
+  { x: 0 / 253, y: 120 / 255 },
+  { x: 28 / 253, y: 125 / 255 },
+  { x: 56 / 253, y: 130 / 255 },
+  { x: 84 / 253, y: 135 / 255 },
+  { x: 112 / 253, y: 142 / 255 },
+  { x: 141 / 253, y: 151 / 255 },
+  { x: 169 / 253, y: 162 / 255 },
+  { x: 197 / 253, y: 178 / 255 },
+  { x: 225 / 253, y: 199 / 255 },
+  { x: 253 / 253, y: 230 / 255 },
+];
+
 // ── Math utilities ────────────────────────────────────────────────────────────
 
 function clamp01(v: number) {
