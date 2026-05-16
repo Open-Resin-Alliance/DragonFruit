@@ -1162,7 +1162,16 @@ fn z_blend_layer_slope_adaptive_inplace_with_roi(
                     0.5 // enclosed zone — use midpoint
                 };
                 // Scale: outer edge (t=0) → 1/denom, inner edge (t=1) → 1.0.
-                let fraction = (1.0 + t * look_back as f32) / denom;
+                // Apply a depth-ring floor to handle thin-zone pixels: a pixel
+                // adjacent to both the inner solid boundary and outer void
+                // (concave corner, 1-px zone) gets dist_back=0 → t=0, giving
+                // fraction=1/denom regardless of depth ring.  The floor
+                // (L+1−d)/(L+1) ensures depth-ring 1 pixels always get at
+                // least L/(L+1), matching the physical expectation without
+                // reintroducing hard ring-boundary steps in normal wide zones.
+                let depth = in_prior[idx] as usize;
+                let fraction_floor = (look_back + 1).saturating_sub(depth) as f32 / denom;
+                let fraction = ((1.0 + t * look_back as f32) / denom).max(fraction_floor);
                 let raw = (fraction * 255.0 + 0.5) as u8;
                 let v = if let Some(lut) = lut {
                     lut[raw as usize]
@@ -1459,7 +1468,9 @@ fn z_blend_forward_slope_adaptive_inplace_with_roi(
                 } else {
                     0.5
                 };
-                let fraction = (1.0 + t * look_back as f32) / denom;
+                let depth = in_forward[idx] as usize;
+                let fraction_floor = (look_back + 1).saturating_sub(depth) as f32 / denom;
+                let fraction = ((1.0 + t * look_back as f32) / denom).max(fraction_floor);
                 let raw = (fraction * 255.0 + 0.5) as u8;
                 let v = if let Some(lut) = lut {
                     lut[raw as usize]
