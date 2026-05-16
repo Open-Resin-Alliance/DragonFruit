@@ -32,6 +32,7 @@ export type NativeSolidSliceJobEnvelope = {
   zBlendAutoFade?: boolean;
   zBlendMinimumAlphaPercent?: number;
   zBlendMaxAlphaPercent?: number;
+  zBlendCustomLut?: number[];
   zBlendDebugColorOverlay?: boolean;
   modelTriangleCount: number;
   containerCompressionLevel?: number;
@@ -76,6 +77,7 @@ type NativeSolidSlicePayload = {
   z_blend_auto_fade?: boolean;
   z_blend_minimum_alpha_percent?: number;
   z_blend_max_alpha_percent?: number;
+  z_blend_custom_lut?: number[];
   z_blend_debug_color_overlay?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
@@ -120,6 +122,7 @@ type NativeSolidSliceMetadataPayload = {
   z_blend_auto_fade?: boolean;
   z_blend_minimum_alpha_percent?: number;
   z_blend_max_alpha_percent?: number;
+  z_blend_custom_lut?: number[];
   z_blend_debug_color_overlay?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
@@ -210,6 +213,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     z_blend_auto_fade: job.zBlendAutoFade !== false,
     z_blend_minimum_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMinimumAlphaPercent ?? 0))),
     z_blend_max_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMaxAlphaPercent ?? 90))),
+    z_blend_custom_lut: job.zBlendCustomLut,
     z_blend_debug_color_overlay: job.zBlendDebugColorOverlay === true,
     model_triangle_count: job.modelTriangleCount,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
@@ -257,6 +261,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     z_blend_auto_fade: job.zBlendAutoFade !== false,
     z_blend_minimum_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMinimumAlphaPercent ?? 0))),
     z_blend_max_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMaxAlphaPercent ?? 90))),
+    z_blend_custom_lut: job.zBlendCustomLut,
     z_blend_debug_color_overlay: job.zBlendDebugColorOverlay === true,
     model_triangle_count: Math.max(0, Math.floor(job.modelTriangleCount ?? 0)),
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),

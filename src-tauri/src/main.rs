@@ -357,6 +357,9 @@ struct SliceJobMetadata {
     /// Maximum gray level (0–100 %) for z-blend gradient pixels at the inner boundary.
     #[serde(default = "default_z_blend_max_alpha_percent")]
     z_blend_max_alpha_percent: f32,
+    /// Optional custom cure-window LUT (256 u8 values); overrides the linear ramp.
+    #[serde(default)]
+    z_blend_custom_lut: Option<Vec<u8>>,
     #[serde(default = "default_z_blend_debug_color_overlay")]
     z_blend_debug_color_overlay: bool,
     #[serde(default)]
@@ -1289,6 +1292,7 @@ async fn slice_solid_native_to_temp_path(
             z_blend_auto_fade: meta.z_blend_auto_fade,
             z_blend_minimum_alpha_percent: meta.z_blend_minimum_alpha_percent,
             z_blend_max_alpha_percent: meta.z_blend_max_alpha_percent,
+            z_blend_custom_lut: meta.z_blend_custom_lut,
             z_blend_debug_color_overlay: meta.z_blend_debug_color_overlay,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,

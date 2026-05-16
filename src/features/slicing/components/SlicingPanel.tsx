@@ -31,6 +31,15 @@ import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { computePhysicalAaConfig, type AaPreset as AaAutoPreset, type PhysicalAaConfig as AutoAaConfig } from '@/features/slicing/autoAaPhysics';
+import {
+  LutCurveSelector,
+  LutCurveEditorModal,
+  sampleCurveToLut,
+  DEFAULT_CUSTOM_CURVE,
+  DEFAULT_SAVED_CURVES,
+  type CurvePoint,
+  type SavedCurve,
+} from './LutCurveEditor';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
 
@@ -183,6 +192,10 @@ const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
 const SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePxCustomEnabled';
 const SLICING_3DAA_FADE_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaFadeMode';
 const SLICING_3DAA_AUTO_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaAutoMode';
+const SLICING_3DAA_RESIN_TYPE_STORAGE_KEY = 'dragonfruit.slicing.3daaResinType';
+const SLICING_3DAA_SAVED_CURVES_STORAGE_KEY = 'dragonfruit.slicing.3daaSavedCurves';
+const SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY = 'dragonfruit.slicing.3daaSelectedCurveId';
+const NEW_CURVE_EDITING_TARGET = '__dragonfruit_new_curve__';
 const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
 const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
@@ -442,6 +455,42 @@ function resolveInitialZBlendAutoMode(): boolean {
   return stored !== 'false';
 }
 
+/** Max-alpha (%) for the cure-window LUT keyed by resin transparency. */
+const Z_BLEND_MAX_ALPHA_BY_RESIN = {
+  opaque: 90,
+  clear: 65,
+} as const;
+
+function resolveInitialZBlendResinType(): 'opaque' | 'clear' | 'custom' {
+  if (typeof window === 'undefined') return 'opaque';
+  const stored = window.localStorage.getItem(SLICING_3DAA_RESIN_TYPE_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_3DAA_RESIN_TYPE_STORAGE_KEY);
+  return stored === 'clear' ? 'clear' : stored === 'custom' ? 'custom' : 'opaque';
+}
+
+function resolveInitialSavedCurves(): SavedCurve[] {
+  if (typeof window === 'undefined') return DEFAULT_SAVED_CURVES;
+  try {
+    const raw =
+      window.sessionStorage.getItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY)
+      ?? window.localStorage.getItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as SavedCurve[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_SAVED_CURVES;
+}
+
+function resolveInitialSelectedCurveId(curves: SavedCurve[]): string {
+  if (typeof window === 'undefined') return curves[0].id;
+  const stored =
+    window.sessionStorage.getItem(SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY)
+    ?? window.localStorage.getItem(SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY);
+  if (stored && curves.some((c) => c.id === stored)) return stored;
+  return curves[0].id;
+}
+
 function resolveInitialAaQualityMode(): 'auto' | 'advanced' {
   if (typeof window === 'undefined') return 'auto';
   const stored = window.localStorage.getItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY)
@@ -538,6 +587,10 @@ export function SlicingPanel({
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
   const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoPreset>(resolveInitialAaAutoPreset);
+  const [zBlendResinType, setZBlendResinType] = useState<'opaque' | 'clear' | 'custom'>(resolveInitialZBlendResinType);
+  const [savedCurves, setSavedCurves] = useState<SavedCurve[]>(() => resolveInitialSavedCurves());
+  const [selectedCurveId, setSelectedCurveId] = useState<string>(() => resolveInitialSelectedCurveId(resolveInitialSavedCurves()));
+  const [editingTarget, setEditingTarget] = useState<string | null>(null);
   const [useCustomZBlendFadePx, setUseCustomZBlendFadePx] = useState<boolean>(() => {
     const initial = resolveInitialZBlendFadePx();
     const initialLookBack = resolveInitialZBlendLookBack();
@@ -643,6 +696,59 @@ export function SlicingPanel({
       materialProfile: effectiveMaterialProfile,
     });
   }, [activePrinterProfile, effectiveMaterialProfile]);
+
+  const autoDetectedResinType = useMemo<'opaque' | 'clear'>(() => {
+    const name = effectiveMaterialProfile?.name ?? '';
+    return /\bclear\b/i.test(name) ? 'clear' : 'opaque';
+  }, [effectiveMaterialProfile?.name]);
+
+  useEffect(() => {
+    setZBlendResinType((current) => current === 'custom' ? 'custom' : autoDetectedResinType);
+  }, [autoDetectedResinType]);
+
+  useEffect(() => {
+    if (savedCurves.length === 0) {
+      const fallback: SavedCurve = {
+        ...DEFAULT_SAVED_CURVES[0],
+        id: crypto.randomUUID(),
+        points: [...DEFAULT_CUSTOM_CURVE],
+      };
+      setSavedCurves([fallback]);
+      setSelectedCurveId(fallback.id);
+      return;
+    }
+
+    if (!savedCurves.some((curve) => curve.id === selectedCurveId)) {
+      setSelectedCurveId(savedCurves[0].id);
+    }
+
+    if (
+      editingTarget
+      && editingTarget !== NEW_CURVE_EDITING_TARGET
+      && !savedCurves.some((curve) => curve.id === editingTarget)
+    ) {
+      setEditingTarget(null);
+    }
+  }, [editingTarget, savedCurves, selectedCurveId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_3DAA_RESIN_TYPE_STORAGE_KEY, zBlendResinType);
+    window.sessionStorage.setItem(SLICING_3DAA_RESIN_TYPE_STORAGE_KEY, zBlendResinType);
+  }, [zBlendResinType]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const json = JSON.stringify(savedCurves);
+    window.localStorage.setItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY, json);
+    window.sessionStorage.setItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY, json);
+  }, [savedCurves]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY, selectedCurveId);
+    window.sessionStorage.setItem(SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY, selectedCurveId);
+  }, [selectedCurveId]);
 
   const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
   const selectedNetworkDeviceId = useMemo(() => {
@@ -1430,7 +1536,15 @@ export function SlicingPanel({
               ? profileMinimumAaAlphaPercent
               : minimumAaAlphaPercent)
           : undefined,
-        zBlendMaxAlphaPercent: 90,
+        zBlendMaxAlphaPercent: resolvedAaMode === '3DAA' && zBlendResinType !== 'custom'
+          ? Z_BLEND_MAX_ALPHA_BY_RESIN[zBlendResinType]
+          : 90,
+        zBlendCustomLut: resolvedAaMode === '3DAA' && zBlendResinType === 'custom'
+          ? sampleCurveToLut(
+              (savedCurves.find((c) => c.id === selectedCurveId) ?? savedCurves[0])?.points
+              ?? DEFAULT_CUSTOM_CURVE
+            )
+          : undefined,
         minimumAaAlphaPercentOverride: (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
           ? profileMinimumAaAlphaPercent
           : minimumAaAlphaPercent,
@@ -1978,6 +2092,43 @@ export function SlicingPanel({
                             : 'Blur only',
                         ].join(' \u00b7 ')}
                       </div>
+                      {autoAaConfig.aaMode === '3DAA' && (
+                        <>
+                          <SettingLabelWithHelp
+                            label="Resin Type"
+                            help="Clear resins cure deeper per layer and need a narrower blend window. Auto-detected from your material name — override here if needed."
+                          />
+                          <div className="grid grid-cols-2 gap-1">
+                            {(['opaque', 'clear'] as const).map((rtype) => {
+                              const active = zBlendResinType === rtype;
+                              const isAutoDetected = autoDetectedResinType === rtype;
+                              return (
+                                <button
+                                  key={rtype}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'var(--accent-secondary-action-border)',
+                                        background: 'var(--accent-secondary-action-bg-92)',
+                                        color: 'var(--accent-secondary-action-color)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  title={isAutoDetected ? 'Auto-detected from material name' : undefined}
+                                  onClick={() => setZBlendResinType(rtype)}
+                                >
+                                  {rtype === 'opaque' ? 'Opaque' : 'Clear'}
+                                  {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
 
@@ -2198,6 +2349,84 @@ export function SlicingPanel({
                               Advanced
                             </button>
                           </div>
+
+                          <SettingLabelWithHelp
+                            label="LUT Curve"
+                            help="Selects the max-alpha preset for the cure-window LUT. Opaque (90%) suits standard resins; Clear (65%) suits deep-curing translucent resins; Custom lets you dial in any value."
+                          />
+                          <div className="grid grid-cols-3 gap-1">
+                            {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
+                              const active = zBlendResinType === rtype;
+                              const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
+                              return (
+                                <button
+                                  key={rtype}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'var(--accent-secondary-action-border)',
+                                        background: 'var(--accent-secondary-action-bg-92)',
+                                        color: 'var(--accent-secondary-action-color)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  title={isAutoDetected ? 'Auto-detected from material name' : undefined}
+                                  onClick={() => setZBlendResinType(rtype)}
+                                >
+                                  {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
+                                  {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {zBlendResinType === 'custom' && (
+                            <LutCurveSelector
+                              savedCurves={savedCurves}
+                              selectedCurveId={selectedCurveId}
+                              onSelectCurve={setSelectedCurveId}
+                              onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
+                            />
+                          )}
+                          <LutCurveEditorModal
+                            isOpen={editingTarget !== null}
+                            editingCurve={
+                              editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
+                                ? null
+                                : (savedCurves.find((c) => c.id === editingTarget) ?? null)
+                            }
+                            onSave={(curve) => {
+                              if (savedCurves.some((c) => c.id === curve.id)) {
+                                setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
+                              } else {
+                                setSavedCurves((prev) => [...prev, curve]);
+                                setSelectedCurveId(curve.id);
+                              }
+                              setEditingTarget(null);
+                            }}
+                            onDelete={(id) => {
+                              setSavedCurves((prev) => {
+                                const next = prev.filter((c) => c.id !== id);
+                                const fallback = next.length > 0
+                                  ? next
+                                  : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
+
+                                setSelectedCurveId((prevSelectedId) => {
+                                  if (prevSelectedId === id) return fallback[0].id;
+                                  return fallback.some((curve) => curve.id === prevSelectedId)
+                                    ? prevSelectedId
+                                    : fallback[0].id;
+                                });
+
+                                return fallback;
+                              });
+                              setEditingTarget(null);
+                            }}
+                            onClose={() => setEditingTarget(null)}
+                          />
 
                           <SettingLabelWithHelp
                             label="Blend Window"

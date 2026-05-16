@@ -169,6 +169,12 @@ pub struct SliceJobV3 {
     /// (innermost receding pixel adjacent to solid).  Defaults to 90 %.
     #[serde(default = "default_z_blend_max_alpha_percent")]
     pub z_blend_max_alpha_percent: f32,
+    /// Optional custom cure-window LUT (256 u8 values).  When present, this
+    /// array is used directly in place of the linear ramp generated from
+    /// `z_blend_minimum_alpha_percent` / `z_blend_max_alpha_percent`.  The
+    /// engine always forces index 0 to 0 (void) and index 255 to 255 (solid).
+    #[serde(default)]
+    pub z_blend_custom_lut: Option<Vec<u8>>,
     /// Debug-only visualization mode for 3DAA blending.
     ///
     /// When enabled, generated PNG layer previews color-code blend direction:

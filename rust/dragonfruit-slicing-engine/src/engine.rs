@@ -835,9 +835,19 @@ fn rasterize_vertical_aa_streaming_v3(
     // overgrowth and the "wide flat top" stair-step artefact.
     let z_blend_min_alpha_u8 =
         ((job.z_blend_minimum_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
-    let z_blend_max_alpha_u8 =
-        ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
-    let lut = z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8);
+    let lut: [u8; 256] = if let Some(custom) = &job.z_blend_custom_lut {
+        let mut arr = [0u8; 256];
+        for (i, &v) in custom.iter().enumerate().take(256) {
+            arr[i] = v;
+        }
+        arr[0] = 0;
+        arr[255] = 255;
+        arr
+    } else {
+        let z_blend_max_alpha_u8 =
+            ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+        z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8)
+    };
     let debug_color_overlay = job.z_blend_debug_color_overlay && collect_png_layers;
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
