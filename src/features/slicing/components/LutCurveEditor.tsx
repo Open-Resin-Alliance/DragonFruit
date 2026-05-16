@@ -119,6 +119,52 @@ function normalizeImportedCurvePoints(rawPoints: unknown): CurvePoint[] {
   return withBounds;
 }
 
+function deriveImportedCurveName(fileNameHint?: string): string {
+  const raw = (fileNameHint ?? '').trim();
+  if (!raw) return 'Imported Curve';
+  const withoutPath = raw.replace(/^.*[\\/]/, '');
+  const withoutExt = withoutPath.replace(/(\.lutcurve\.json|\.lut|\.json)$/i, '');
+  const normalized = withoutExt.trim();
+  return normalized || 'Imported Curve';
+}
+
+function parseUvToolsLutArray(raw: unknown): number[] | null {
+  if (!Array.isArray(raw) || raw.length !== 256) return null;
+  const parsed = raw.map((value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    return Math.max(0, Math.min(255, Math.round(num)));
+  });
+  if (parsed.some((value) => value == null)) return null;
+  return parsed as number[];
+}
+
+function convertUvToolsLutToCurvePoints(lut: number[]): CurvePoint[] {
+  // Re-interpret UVTools' 256-sample LUT into a compact spline control set.
+  // We keep exactly 10 points (including endpoints) spaced across [1..254].
+  // This keeps editor UX clean while preserving overall curve intent.
+  const UVTOOLS_CONTROL_POINT_COUNT = 10;
+  const candidatePoints: CurvePoint[] = [];
+  for (let p = 0; p < UVTOOLS_CONTROL_POINT_COUNT; p++) {
+    const t = UVTOOLS_CONTROL_POINT_COUNT <= 1 ? 0 : p / (UVTOOLS_CONTROL_POINT_COUNT - 1);
+    const lutIndex = Math.max(1, Math.min(254, 1 + Math.round(t * 253)));
+    candidatePoints.push({
+      x: (lutIndex - 1) / 253,
+      y: (lut[lutIndex] ?? 0) / 255,
+    });
+  }
+
+  // Guard against occasional non-monotone noise in source LUTs so monotone
+  // spline interpolation remains physically meaningful for alpha ramps.
+  for (let i = 1; i < candidatePoints.length; i++) {
+    if (candidatePoints[i].y < candidatePoints[i - 1].y) {
+      candidatePoints[i].y = candidatePoints[i - 1].y;
+    }
+  }
+
+  return normalizeImportedCurvePoints(candidatePoints);
+}
+
 export function exportLutCurveProfileToJson(params: {
   name: string;
   points: CurvePoint[];
@@ -141,17 +187,27 @@ export function exportLutCurveProfileToJson(params: {
   return JSON.stringify(doc, null, 2);
 }
 
-export function importLutCurveProfileFromJson(jsonText: string): {
+export function importLutCurveProfileFromJson(jsonText: string, options?: { fileNameHint?: string }): {
   name: string;
   points: CurvePoint[];
 } {
-  const parsed = JSON.parse(jsonText) as Partial<LutCurveProfileExchangeDocument>;
-  if (parsed?.header?.kind !== 'dragonfruit-lut-curve-profile' || parsed?.header?.formatVersion !== 1) {
-    throw new Error('Unsupported LUT profile format.');
+  const parsed = JSON.parse(jsonText) as Partial<LutCurveProfileExchangeDocument> | unknown;
+
+  const uvToolsLut = parseUvToolsLutArray(parsed);
+  if (uvToolsLut) {
+    return {
+      name: deriveImportedCurveName(options?.fileNameHint),
+      points: convertUvToolsLutToCurvePoints(uvToolsLut),
+    };
   }
 
-  const name = (parsed.curve?.name ?? '').trim() || 'Imported Curve';
-  const points = normalizeImportedCurvePoints(parsed.curve?.points);
+  const dragonfruitDoc = parsed as Partial<LutCurveProfileExchangeDocument>;
+  if (dragonfruitDoc?.header?.kind !== 'dragonfruit-lut-curve-profile' || dragonfruitDoc?.header?.formatVersion !== 1) {
+    throw new Error('Unsupported LUT profile format. Use a DragonFruit .lutcurve.json file or a UVTools 256-value .lut/.json LUT array.');
+  }
+
+  const name = (dragonfruitDoc.curve?.name ?? '').trim() || deriveImportedCurveName(options?.fileNameHint);
+  const points = normalizeImportedCurvePoints(dragonfruitDoc.curve?.points);
   return { name, points };
 }
 
@@ -976,7 +1032,7 @@ export function LutCurveEditorModal({
 
   const handleImportCurveFile = useCallback(async (file: File) => {
     const rawJson = await file.text();
-    const imported = importLutCurveProfileFromJson(rawJson);
+    const imported = importLutCurveProfileFromJson(rawJson, { fileNameHint: file.name });
     const importedCurve: SavedCurve = {
       id: crypto.randomUUID(),
       name: imported.name,
@@ -1077,7 +1133,7 @@ export function LutCurveEditorModal({
             <input
               ref={importInputRef}
               type="file"
-              accept=".json,.lutcurve.json,application/json"
+              accept=".json,.lut,.lutcurve.json,application/json,text/plain"
               onChange={handleImportInputChange}
               className="hidden"
             />
