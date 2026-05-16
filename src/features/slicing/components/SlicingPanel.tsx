@@ -36,6 +36,7 @@ import {
   LutCurveEditorModal,
   sampleCurveToLut,
   DEFAULT_CUSTOM_CURVE,
+  DEFAULT_OPAQUE_EXP_120_230_CURVE,
   DEFAULT_SAVED_CURVES,
   type CurvePoint,
   type SavedCurve,
@@ -727,6 +728,11 @@ export function SlicingPanel({
     }
     return zBlendResinType === 'clear' ? 'Clear' : 'Opaque';
   }, [savedCurves, selectedCurveId, zBlendResinType]);
+
+  const opaqueDefaultLut = useMemo(
+    () => sampleCurveToLut(DEFAULT_OPAQUE_EXP_120_230_CURVE),
+    [],
+  );
 
   useEffect(() => {
     if (savedCurves.length === 0) {
@@ -1585,11 +1591,15 @@ export function SlicingPanel({
         zBlendMaxAlphaPercent: resolvedAaMode === '3DAA' && zBlendResinType !== 'custom'
           ? Z_BLEND_MAX_ALPHA_BY_RESIN[zBlendResinType]
           : 90,
-        zBlendCustomLut: resolvedAaMode === '3DAA' && zBlendResinType === 'custom'
-          ? sampleCurveToLut(
-              (savedCurves.find((c) => c.id === selectedCurveId) ?? savedCurves[0])?.points
-              ?? DEFAULT_CUSTOM_CURVE
-            )
+        zBlendCustomLut: resolvedAaMode === '3DAA'
+          ? (zBlendResinType === 'custom'
+              ? sampleCurveToLut(
+                  (savedCurves.find((c) => c.id === selectedCurveId) ?? savedCurves[0])?.points
+                  ?? DEFAULT_CUSTOM_CURVE
+                )
+              : zBlendResinType === 'opaque'
+                ? opaqueDefaultLut
+                : undefined)
           : undefined,
         minimumAaAlphaPercentOverride: (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
           ? profileMinimumAaAlphaPercent
