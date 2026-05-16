@@ -30,7 +30,7 @@ import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
-import { computePhysicalAaConfig, type AaPreset as AaAutoPreset, type PhysicalAaConfig as AutoAaConfig } from '@/features/slicing/autoAaPhysics';
+import { computePhysicalAaConfig, type AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
   LutCurveSelector,
   LutCurveEditorModal,
@@ -498,15 +498,25 @@ function resolveInitialAaQualityMode(): 'auto' | 'advanced' {
   return stored === 'advanced' ? 'advanced' : 'auto';
 }
 
-function resolveInitialAaAutoPreset(): 'sharp' | 'balanced' | 'smooth' {
+type AaAutoUiPreset = 'raw' | AaAutoPreset;
+
+type AutoAaResolvedConfig = {
+  aaMode: 'Off' | 'Blur' | '3DAA';
+  aaSteps: number;
+  blurBrushRadiusPx: number;
+  zBlendLookBack: number;
+};
+
+function resolveInitialAaAutoPreset(): AaAutoUiPreset {
   if (typeof window === 'undefined') return 'balanced';
   const stored = window.localStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY);
+  if (stored === 'raw') return 'raw';
   if (stored === 'sharp' || stored === 'smooth') return stored;
   return 'balanced';
 }
 
-// AaAutoPreset and AutoAaConfig are imported from autoAaPhysics.ts
+// AaAutoPreset is imported from autoAaPhysics.ts
 
 export function SlicingPanel({
   models,
@@ -586,7 +596,7 @@ export function SlicingPanel({
   const [zBlendFadeMode, setZBlendFadeMode] = useState<'auto' | 'manual'>(resolveInitialZBlendFadeMode);
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
-  const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoPreset>(resolveInitialAaAutoPreset);
+  const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoUiPreset>(resolveInitialAaAutoPreset);
   const [zBlendResinType, setZBlendResinType] = useState<'opaque' | 'clear' | 'custom'>(resolveInitialZBlendResinType);
   const [savedCurves, setSavedCurves] = useState<SavedCurve[]>(() => resolveInitialSavedCurves());
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => resolveInitialSelectedCurveId(resolveInitialSavedCurves()));
@@ -703,8 +713,20 @@ export function SlicingPanel({
   }, [effectiveMaterialProfile?.name]);
 
   useEffect(() => {
-    setZBlendResinType((current) => current === 'custom' ? 'custom' : autoDetectedResinType);
-  }, [autoDetectedResinType]);
+    setZBlendResinType((current) => {
+      if (aaQualityMode === 'auto' || zBlendAutoMode) {
+        return autoDetectedResinType;
+      }
+      return current === 'custom' ? 'custom' : autoDetectedResinType;
+    });
+  }, [aaQualityMode, autoDetectedResinType, zBlendAutoMode]);
+
+  const selectedLutCurveLabel = useMemo(() => {
+    if (zBlendResinType === 'custom') {
+      return (savedCurves.find((curve) => curve.id === selectedCurveId)?.name ?? 'Custom').trim() || 'Custom';
+    }
+    return zBlendResinType === 'clear' ? 'Clear' : 'Opaque';
+  }, [savedCurves, selectedCurveId, zBlendResinType]);
 
   useEffect(() => {
     if (savedCurves.length === 0) {
@@ -1000,7 +1022,15 @@ export function SlicingPanel({
 
   // Auto AA config: physics-grounded parameters from pixel pitch + layer height.
   // Computed by autoAaPhysics.ts — see that module for the full engineering model.
-  const autoAaConfig = useMemo(() => {
+  const autoAaConfig = useMemo<AutoAaResolvedConfig>(() => {
+    if (aaAutoPreset === 'raw') {
+      return {
+        aaMode: 'Off',
+        aaSteps: 0,
+        blurBrushRadiusPx: 0,
+        zBlendLookBack: 0,
+      };
+    }
     const layerHeightMm = Number(effectiveLayerHeightMm);
     const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
     return computePhysicalAaConfig(aaAutoPreset, pixelPitchMm, safeLayerH);
@@ -2051,6 +2081,7 @@ export function SlicingPanel({
                     <>
                       <div className="space-y-1">
                         {([
+                          { preset: 'raw' as const, label: 'Disabled', desc: 'No anti-aliasing. Pure voxel edges.' },
                           { preset: 'sharp' as const, label: 'Sharp', desc: 'Crisp pixel-level edges. Best for fine details and text.' },
                           { preset: 'balanced' as const, label: 'Balanced', desc: 'Smooth edges without sacrificing fine detail.' },
                           { preset: 'smooth' as const, label: 'Smooth', desc: 'Maximum softness. Ideal for organic shapes and curved surfaces.' },
@@ -2080,55 +2111,20 @@ export function SlicingPanel({
                           );
                         })}
                       </div>
-                      <div
-                        className="rounded px-2 py-1 text-[11px] leading-snug font-mono"
-                        style={{ background: 'var(--surface-0)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}
-                      >
-                        {[
-                          `${autoAaConfig.aaSteps}x`,
-                          `${autoAaConfig.blurBrushRadiusPx}px blur`,
-                          autoAaConfig.aaMode === '3DAA'
-                            ? `3DAA \u00b7 ${autoAaConfig.zBlendLookBack} lyr`
-                            : 'Blur only',
-                        ].join(' \u00b7 ')}
+                      <div className="grid grid-cols-4 gap-1 text-center">
+                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+                          {autoAaConfig.aaMode === 'Off' ? 'No AA' : `${autoAaConfig.aaSteps}x AA`}
+                        </span>
+                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+                          {autoAaConfig.aaMode === 'Off' ? 'No Blur' : `${autoAaConfig.blurBrushRadiusPx}px Blur`}
+                        </span>
+                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+                          {autoAaConfig.aaMode === 'Off' ? 'No 3DAA' : autoAaConfig.aaMode === '3DAA' ? `${autoAaConfig.zBlendLookBack} Layer` : 'Blur only'}
+                        </span>
+                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
+                          {autoAaConfig.aaMode === '3DAA' ? `LUT ${selectedLutCurveLabel}` : 'LUT N/A'}
+                        </span>
                       </div>
-                      {autoAaConfig.aaMode === '3DAA' && (
-                        <>
-                          <SettingLabelWithHelp
-                            label="Resin Type"
-                            help="Clear resins cure deeper per layer and need a narrower blend window. Auto-detected from your material name — override here if needed."
-                          />
-                          <div className="grid grid-cols-2 gap-1">
-                            {(['opaque', 'clear'] as const).map((rtype) => {
-                              const active = zBlendResinType === rtype;
-                              const isAutoDetected = autoDetectedResinType === rtype;
-                              return (
-                                <button
-                                  key={rtype}
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={active
-                                    ? {
-                                        borderColor: 'var(--accent-secondary-action-border)',
-                                        background: 'var(--accent-secondary-action-bg-92)',
-                                        color: 'var(--accent-secondary-action-color)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  title={isAutoDetected ? 'Auto-detected from material name' : undefined}
-                                  onClick={() => setZBlendResinType(rtype)}
-                                >
-                                  {rtype === 'opaque' ? 'Opaque' : 'Clear'}
-                                  {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </>
-                      )}
                     </>
                   )}
 
@@ -2350,83 +2346,112 @@ export function SlicingPanel({
                             </button>
                           </div>
 
-                          <SettingLabelWithHelp
-                            label="LUT Curve"
-                            help="Selects the max-alpha preset for the cure-window LUT. Opaque (90%) suits standard resins; Clear (65%) suits deep-curing translucent resins; Custom lets you dial in any value."
-                          />
-                          <div className="grid grid-cols-3 gap-1">
-                            {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
-                              const active = zBlendResinType === rtype;
-                              const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
-                              return (
-                                <button
-                                  key={rtype}
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={active
-                                    ? {
-                                        borderColor: 'var(--accent-secondary-action-border)',
-                                        background: 'var(--accent-secondary-action-bg-92)',
-                                        color: 'var(--accent-secondary-action-color)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  title={isAutoDetected ? 'Auto-detected from material name' : undefined}
-                                  onClick={() => setZBlendResinType(rtype)}
-                                >
-                                  {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
-                                  {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
-                                </button>
-                              );
-                            })}
-                          </div>
-                          {zBlendResinType === 'custom' && (
-                            <LutCurveSelector
-                              savedCurves={savedCurves}
-                              selectedCurveId={selectedCurveId}
-                              onSelectCurve={setSelectedCurveId}
-                              onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
-                            />
+                          {!zBlendAutoMode && (
+                            <>
+                              <SettingLabelWithHelp
+                                label="LUT Curve"
+                                help="Selects the max-alpha preset for the cure-window LUT. Opaque (90%) suits standard resins; Clear (65%) suits deep-curing translucent resins; Custom lets you dial in any value."
+                              />
+                              <div className="grid grid-cols-3 gap-1 pt-1">
+                                {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
+                                  const active = zBlendResinType === rtype;
+                                  const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
+                                  return (
+                                    <button
+                                      key={rtype}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      title={isAutoDetected ? 'Auto-detected from material name' : undefined}
+                                      onClick={() => setZBlendResinType(rtype)}
+                                    >
+                                      {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
+                                      {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {zBlendResinType === 'custom' && (
+                                <LutCurveSelector
+                                  savedCurves={savedCurves}
+                                  selectedCurveId={selectedCurveId}
+                                  onSelectCurve={setSelectedCurveId}
+                                  onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
+                                />
+                              )}
+                              <LutCurveEditorModal
+                                isOpen={editingTarget !== null}
+                                savedCurves={savedCurves}
+                                selectedCurveId={selectedCurveId}
+                                onSelectCurve={(id) => {
+                                  setSelectedCurveId(id);
+                                  setEditingTarget(id);
+                                }}
+                                onImportCurve={(curve) => {
+                                  const importedId = curve.id.trim() || crypto.randomUUID();
+                                  const normalizedName = curve.name.trim() || 'Imported Curve';
+                                  setSavedCurves((prev) => {
+                                    const lowerNames = new Set(prev.map((entry) => entry.name.trim().toLowerCase()));
+                                    let finalName = normalizedName;
+                                    let suffix = 2;
+                                    while (lowerNames.has(finalName.trim().toLowerCase())) {
+                                      finalName = `${normalizedName} (${suffix})`;
+                                      suffix += 1;
+                                    }
+                                    const importedCurve = {
+                                      ...curve,
+                                      id: importedId,
+                                      name: finalName,
+                                    };
+                                    return [...prev, importedCurve];
+                                  });
+                                  setSelectedCurveId(importedId);
+                                  setEditingTarget(importedId);
+                                }}
+                                editingCurve={
+                                  editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
+                                    ? null
+                                    : (savedCurves.find((c) => c.id === editingTarget) ?? null)
+                                }
+                                onSave={(curve) => {
+                                  if (savedCurves.some((c) => c.id === curve.id)) {
+                                    setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
+                                  } else {
+                                    setSavedCurves((prev) => [...prev, curve]);
+                                    setSelectedCurveId(curve.id);
+                                  }
+                                  setEditingTarget(null);
+                                }}
+                                onDelete={(id) => {
+                                  const next = savedCurves.filter((c) => c.id !== id);
+                                  const fallback = next.length > 0
+                                    ? next
+                                    : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
+
+                                  const nextSelectedId = selectedCurveId === id
+                                    ? fallback[0].id
+                                    : (fallback.some((curve) => curve.id === selectedCurveId)
+                                        ? selectedCurveId
+                                        : fallback[0].id);
+
+                                  setSavedCurves(fallback);
+                                  setSelectedCurveId(nextSelectedId);
+                                  setEditingTarget(nextSelectedId);
+                                }}
+                                onClose={() => setEditingTarget(null)}
+                              />
+                            </>
                           )}
-                          <LutCurveEditorModal
-                            isOpen={editingTarget !== null}
-                            editingCurve={
-                              editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
-                                ? null
-                                : (savedCurves.find((c) => c.id === editingTarget) ?? null)
-                            }
-                            onSave={(curve) => {
-                              if (savedCurves.some((c) => c.id === curve.id)) {
-                                setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
-                              } else {
-                                setSavedCurves((prev) => [...prev, curve]);
-                                setSelectedCurveId(curve.id);
-                              }
-                              setEditingTarget(null);
-                            }}
-                            onDelete={(id) => {
-                              setSavedCurves((prev) => {
-                                const next = prev.filter((c) => c.id !== id);
-                                const fallback = next.length > 0
-                                  ? next
-                                  : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
-
-                                setSelectedCurveId((prevSelectedId) => {
-                                  if (prevSelectedId === id) return fallback[0].id;
-                                  return fallback.some((curve) => curve.id === prevSelectedId)
-                                    ? prevSelectedId
-                                    : fallback[0].id;
-                                });
-
-                                return fallback;
-                              });
-                              setEditingTarget(null);
-                            }}
-                            onClose={() => setEditingTarget(null)}
-                          />
 
                           <SettingLabelWithHelp
                             label="Blend Window"

@@ -1,9 +1,13 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Pencil, Plus, Trash2, X, RotateCcw, TrendingUp } from 'lucide-react';
+import { AlertTriangle, Check, Download, Edit3, Pencil, Plus, Trash2, Upload, X, RotateCcw, TrendingUp } from 'lucide-react';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { savePrintArtifactWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
+
+const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -20,6 +24,24 @@ export interface SavedCurve {
   points: CurvePoint[];
 }
 
+type NewCurvePreset = 'opaque' | 'clear' | 'custom';
+
+type LutCurveProfileExchangeHeader = {
+  kind: 'dragonfruit-lut-curve-profile';
+  formatVersion: 1;
+  exportedAt: string;
+  generator: 'DragonFruit';
+  appVersion?: string;
+};
+
+type LutCurveProfileExchangeDocument = {
+  header: LutCurveProfileExchangeHeader;
+  curve: {
+    name: string;
+    points: CurvePoint[];
+  };
+};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Default control points — linear ramp matching the opaque preset (55 % → 90 %). */
@@ -32,6 +54,16 @@ export const DEFAULT_SAVED_CURVES: SavedCurve[] = [
   { id: 'default', name: 'My Curve', points: DEFAULT_CUSTOM_CURVE },
 ];
 
+const NEW_CURVE_OPAQUE_POINTS: CurvePoint[] = [
+  { x: 0, y: 0.55 },
+  { x: 1, y: 0.90 },
+];
+
+const NEW_CURVE_CLEAR_POINTS: CurvePoint[] = [
+  { x: 0, y: 0.55 },
+  { x: 1, y: 0.65 },
+];
+
 // ── Math utilities ────────────────────────────────────────────────────────────
 
 function clamp01(v: number) {
@@ -40,6 +72,87 @@ function clamp01(v: number) {
 
 function clampRange(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+function normalizeImportedCurvePoints(rawPoints: unknown): CurvePoint[] {
+  if (!Array.isArray(rawPoints)) return [...DEFAULT_CUSTOM_CURVE];
+
+  const parsed = rawPoints
+    .map((point) => {
+      const candidate = point as Partial<CurvePoint>;
+      const x = Number(candidate?.x);
+      const y = Number(candidate?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      return { x: clamp01(x), y: clamp01(y) };
+    })
+    .filter((point): point is CurvePoint => point !== null)
+    .sort((a, b) => a.x - b.x);
+
+  if (parsed.length < 2) return [...DEFAULT_CUSTOM_CURVE];
+
+  const deduped: CurvePoint[] = [];
+  for (const point of parsed) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && Math.abs(prev.x - point.x) < 1e-6) {
+      deduped[deduped.length - 1] = point;
+    } else {
+      deduped.push(point);
+    }
+  }
+
+  if (deduped.length < 2) return [...DEFAULT_CUSTOM_CURVE];
+
+  const withBounds = deduped.map((point) => ({ ...point }));
+  if (withBounds[0].x > 0) {
+    withBounds.unshift({ x: 0, y: withBounds[0].y });
+  } else {
+    withBounds[0].x = 0;
+  }
+
+  const lastIndex = withBounds.length - 1;
+  if (withBounds[lastIndex].x < 1) {
+    withBounds.push({ x: 1, y: withBounds[lastIndex].y });
+  } else {
+    withBounds[lastIndex].x = 1;
+  }
+
+  return withBounds;
+}
+
+export function exportLutCurveProfileToJson(params: {
+  name: string;
+  points: CurvePoint[];
+  appVersion?: string;
+}): string {
+  const doc: LutCurveProfileExchangeDocument = {
+    header: {
+      kind: 'dragonfruit-lut-curve-profile',
+      formatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      generator: 'DragonFruit',
+      appVersion: params.appVersion?.trim() || undefined,
+    },
+    curve: {
+      name: params.name.trim() || 'Imported Curve',
+      points: normalizeImportedCurvePoints(params.points),
+    },
+  };
+
+  return JSON.stringify(doc, null, 2);
+}
+
+export function importLutCurveProfileFromJson(jsonText: string): {
+  name: string;
+  points: CurvePoint[];
+} {
+  const parsed = JSON.parse(jsonText) as Partial<LutCurveProfileExchangeDocument>;
+  if (parsed?.header?.kind !== 'dragonfruit-lut-curve-profile' || parsed?.header?.formatVersion !== 1) {
+    throw new Error('Unsupported LUT profile format.');
+  }
+
+  const name = (parsed.curve?.name ?? '').trim() || 'Imported Curve';
+  const points = normalizeImportedCurvePoints(parsed.curve?.points);
+  return { name, points };
 }
 
 /**
@@ -146,8 +259,11 @@ interface CurveCanvasProps {
 function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const draggingIdx = useRef(-1);
+  const dragStarted = useRef(false);
+  const dragStartClient = useRef<[number, number] | null>(null);
   const didDrag = useRef(false);
   const [hoverPos, setHoverPos] = useState<[number, number] | null>(null);
+  const DRAG_THRESHOLD_PX = 4;
 
   const spline = makeSpline(points);
   const curvePath = buildCurvePath(spline);
@@ -167,6 +283,8 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
     e.preventDefault();
     e.stopPropagation();
     draggingIdx.current = idx;
+    dragStarted.current = false;
+    dragStartClient.current = [e.clientX, e.clientY];
     didDrag.current = false;
     onSelectPoint(idx);
   }, [onSelectPoint]);
@@ -178,7 +296,20 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
 
     const idx = draggingIdx.current;
     if (idx < 0) return;
-    didDrag.current = true;
+
+    if (!dragStarted.current) {
+      const start = dragStartClient.current;
+      if (start) {
+        const dx = e.clientX - start[0];
+        const dy = e.clientY - start[1];
+        if ((dx * dx + dy * dy) < (DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX)) {
+          return;
+        }
+      }
+      dragStarted.current = true;
+      didDrag.current = true;
+    }
+
     const updated = points.map((p, i) => {
       if (i !== idx) return p;
       if (i === 0) return { x: 0, y: ny };
@@ -188,18 +319,23 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
       return { x: clampRange(nx, minX, maxX), y: ny };
     });
     onChange(updated);
-  }, [getSvgCoords, onChange, points]);
+  }, [DRAG_THRESHOLD_PX, getSvgCoords, onChange, points]);
 
   const onMouseUp = useCallback(() => {
     draggingIdx.current = -1;
+    dragStarted.current = false;
+    dragStartClient.current = null;
   }, []);
 
   const onMouseLeave = useCallback(() => {
     draggingIdx.current = -1;
+    dragStarted.current = false;
+    dragStartClient.current = null;
     setHoverPos(null);
   }, []);
 
-  const onSvgClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+  const onSvgContextMenu = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    e.preventDefault();
     if (didDrag.current) { didDrag.current = false; return; }
     const [sx, sy] = getSvgCoords(e);
     const [nx, ny] = fromSvgC(sx, sy);
@@ -213,25 +349,14 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
     onSelectPoint(newIdx >= 0 ? newIdx : null);
   }, [getSvgCoords, onChange, onSelectPoint, points]);
 
-  const onPointDblClick = useCallback((idx: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (points.length <= 2) return;
-    const pt = points[idx];
-    if (pt.x === 0 || pt.x === 1) return;
-    onChange(points.filter((_, i) => i !== idx));
-    onSelectPoint(null);
-  }, [onChange, onSelectPoint, points]);
-
   const gridVals = [0, 0.25, 0.5, 0.75, 1];
 
   return (
     <svg
       ref={svgRef}
       viewBox={`0 0 ${VW} ${VH}`}
-      className="w-full rounded-lg"
+      className="w-full"
       style={{
-        background: 'var(--surface-1)',
-        border: '1px solid var(--border-subtle)',
         cursor: 'crosshair',
         userSelect: 'none',
         display: 'block',
@@ -239,23 +364,27 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onMouseLeave={onMouseLeave}
-      onClick={onSvgClick}
+      onContextMenu={onSvgContextMenu}
     >
       {/* Y-axis grid + labels */}
       {gridVals.map((v) => {
         const [, gy] = toSvgC(0, v);
         const isBound = v === 0 || v === 1;
+        const yLabelY = v === 0 ? gy - 4 : gy + 3.5;
         return (
           <React.Fragment key={`y-${v}`}>
             <line
               x1={IX0} y1={gy} x2={IX1} y2={gy}
-              stroke={isBound ? 'var(--border-default)' : 'var(--border-subtle)'}
-              strokeWidth={isBound ? 0.75 : 0.5}
+              stroke={isBound
+                ? 'color-mix(in srgb, var(--text-muted), white 6%)'
+                : 'color-mix(in srgb, var(--text-muted), white 2%)'}
+              strokeWidth={isBound ? 0.85 : 0.5}
               strokeDasharray={isBound ? '' : '3 4'}
+              opacity={isBound ? 0.68 : 0.36}
             />
             <text
-              x={IX0 - 6} y={gy + 3.5}
-              fontSize={9} fill="var(--text-muted)"
+              x={IX0 - 8} y={yLabelY}
+              fontSize={9} fill="color-mix(in srgb, var(--text-muted), white 5%)"
               textAnchor="end"
             >{v === 0 ? '0%' : v === 1 ? '100%' : `${Math.round(v * 100)}%`}</text>
           </React.Fragment>
@@ -265,15 +394,21 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
       {/* X-axis labels */}
       {gridVals.map((v) => {
         const [gx] = toSvgC(v, 0);
+        const isBound = v === 0 || v === 1;
+        const xLabelX = v === 0 ? gx + 4 : v === 1 ? gx - 4 : gx;
+        const xLabelAnchor = v === 0 ? 'start' : v === 1 ? 'end' : 'middle';
         return (
           <React.Fragment key={`x-${v}`}>
-            {v !== 0 && v !== 1 && (
-              <line
-                x1={gx} y1={IY0} x2={gx} y2={IY1}
-                stroke="var(--border-subtle)" strokeWidth={0.5} strokeDasharray="3 4"
-              />
-            )}
-            <text x={gx} y={IY1 + 14} fontSize={9} fill="var(--text-muted)" textAnchor="middle">
+            <line
+              x1={gx} y1={IY0} x2={gx} y2={IY1}
+              stroke={isBound
+                ? 'color-mix(in srgb, var(--text-muted), white 6%)'
+                : 'color-mix(in srgb, var(--text-muted), white 2%)'}
+              strokeWidth={isBound ? 0.85 : 0.5}
+              strokeDasharray={isBound ? '' : '3 4'}
+              opacity={isBound ? 0.68 : 0.36}
+            />
+            <text x={xLabelX} y={IY1 + 16} fontSize={9} fill="color-mix(in srgb, var(--text-muted), white 5%)" textAnchor={xLabelAnchor}>
               {v === 0 ? 'Outer' : v === 1 ? 'Inner' : `${Math.round(v * 100)}%`}
             </text>
           </React.Fragment>
@@ -328,6 +463,15 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
         const isSelected = idx === selectedIdx;
         const isEndpoint = pt.x === 0 || pt.x === 1;
         const r = isSelected ? 8 : 6;
+        const isLeftEndpoint = idx === 0;
+        const isRightEndpoint = idx === points.length - 1;
+        const labelX = isLeftEndpoint ? px + 10 : isRightEndpoint ? px - 10 : px;
+        const labelY = Math.max(IY0 + 9, py - r - 4);
+        const labelAnchor: 'start' | 'middle' | 'end' = isLeftEndpoint
+          ? 'start'
+          : isRightEndpoint
+            ? 'end'
+            : 'middle';
         return (
           <React.Fragment key={idx}>
             {isSelected && (
@@ -342,14 +486,13 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
               strokeWidth={isEndpoint ? 2.5 : 2}
               style={{ cursor: isEndpoint ? 'ns-resize' : 'grab' }}
               onMouseDown={(ev) => onPointMouseDown(idx, ev)}
-              onDoubleClick={(ev) => onPointDblClick(idx, ev)}
             />
             {/* Value badge */}
             <text
-              x={px} y={py - r - 4}
+              x={labelX} y={labelY}
               fontSize={8}
               fill={isSelected ? 'var(--accent-secondary-action-border)' : 'var(--text-muted)'}
-              textAnchor="middle"
+              textAnchor={labelAnchor}
               pointerEvents="none"
             >{Math.round(pt.y * 100)}%</text>
           </React.Fragment>
@@ -385,7 +528,7 @@ export function LutCurveSelector({
   }, [onSelectCurve]);
 
   return (
-    <div className="mt-1.5">
+    <div className="mt-2.5">
       <div className="flex min-w-0 items-center gap-1.5">
         <div className="min-w-0 flex-1">
           <SelectDropdown
@@ -394,13 +537,12 @@ export function LutCurveSelector({
             onChange={handleSelectCurve}
             className="space-y-0"
             selectClassName="!h-8 !px-2.5 text-[12px] w-full"
-            ariaLabel="Select LUT curve"
-            menuFooterAction={{
-              label: 'Create new curve',
-              onClick: () => onOpenEditor(null),
-              icon: <Plus className="h-3.5 w-3.5" />,
-              tone: 'accent',
+            selectStyle={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              color: 'var(--text-strong)',
             }}
+            ariaLabel="Select LUT curve"
           />
         </div>
 
@@ -412,7 +554,11 @@ export function LutCurveSelector({
             if (canEdit) onOpenEditor(effectiveId);
           }}
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5 disabled:opacity-35 disabled:cursor-not-allowed"
-          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-0)',
+            color: 'var(--text-strong)',
+          }}
           aria-label="Edit selected curve"
         >
           <Pencil className="h-3.5 w-3.5" />
@@ -426,6 +572,10 @@ export function LutCurveSelector({
 
 interface LutCurveEditorModalProps {
   isOpen: boolean;
+  savedCurves: SavedCurve[];
+  selectedCurveId: string;
+  onSelectCurve: (id: string) => void;
+  onImportCurve: (curve: SavedCurve) => void;
   /** Pass the curve to edit, or null to create a new one. */
   editingCurve: SavedCurve | null;
   onSave: (curve: SavedCurve) => void;
@@ -433,12 +583,29 @@ interface LutCurveEditorModalProps {
   onClose: () => void;
 }
 
-export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, onClose }: LutCurveEditorModalProps) {
+export function LutCurveEditorModal({
+  isOpen,
+  savedCurves,
+  selectedCurveId,
+  onSelectCurve,
+  onImportCurve,
+  editingCurve,
+  onSave,
+  onDelete,
+  onClose,
+}: LutCurveEditorModalProps) {
   const [draftPoints, setDraftPoints] = useState<CurvePoint[]>(DEFAULT_CUSTOM_CURVE);
   const [draftName, setDraftName] = useState('My Curve');
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [draftRenameName, setDraftRenameName] = useState('');
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [draftCreateName, setDraftCreateName] = useState('New Curve');
+  const [draftCreatePreset, setDraftCreatePreset] = useState<NewCurvePreset>('opaque');
+  const [draftCreateCustomMin, setDraftCreateCustomMin] = useState<number>(55);
+  const [draftCreateCustomMax, setDraftCreateCustomMax] = useState<number>(90);
   const initialSnapshotRef = useRef<{ name: string; points: CurvePoint[] } | null>(null);
 
   const normalizeDraftName = useCallback((name: string) => name.trim() || 'Untitled Curve', []);
@@ -460,6 +627,13 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
     setSelectedIdx(null);
     setShowDiscardConfirm(false);
     setShowDeleteConfirm(false);
+    setShowRenameDialog(false);
+    setDraftRenameName('');
+    setShowCreateDialog(false);
+    setDraftCreateName('New Curve');
+    setDraftCreatePreset('opaque');
+    setDraftCreateCustomMin(55);
+    setDraftCreateCustomMax(90);
     initialSnapshotRef.current = {
       name: normalizeDraftName(initialName),
       points: initialPoints.map((p) => ({ ...p })),
@@ -502,24 +676,179 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
     setShowDeleteConfirm(false);
   }, []);
 
+  const handleCancelRename = useCallback(() => {
+    setShowRenameDialog(false);
+  }, []);
+
+  const handleCancelCreate = useCallback(() => {
+    setShowCreateDialog(false);
+  }, []);
+
+  const handleOpenRename = useCallback(() => {
+    setDraftRenameName(normalizeDraftName(draftName));
+    setShowRenameDialog(true);
+  }, [draftName, normalizeDraftName]);
+
+  const handleConfirmRename = useCallback(() => {
+    setDraftName(normalizeDraftName(draftRenameName));
+    setShowRenameDialog(false);
+  }, [draftRenameName, normalizeDraftName]);
+
+  const handleConfirmCreate = useCallback(() => {
+    const normalizedName = normalizeDraftName(draftCreateName);
+    const clampPercent = (value: number) => {
+      const numeric = Number.isFinite(value) ? value : 0;
+      return Math.max(0, Math.min(100, Math.round(numeric)));
+    };
+
+    let points: CurvePoint[];
+    if (draftCreatePreset === 'clear') {
+      points = NEW_CURVE_CLEAR_POINTS.map((point) => ({ ...point }));
+    } else if (draftCreatePreset === 'custom') {
+      const minPct = clampPercent(draftCreateCustomMin);
+      const maxPct = clampPercent(draftCreateCustomMax);
+      const lo = Math.min(minPct, maxPct) / 100;
+      const hi = Math.max(minPct, maxPct) / 100;
+      points = [
+        { x: 0, y: lo },
+        { x: 1, y: hi },
+      ];
+    } else {
+      points = NEW_CURVE_OPAQUE_POINTS.map((point) => ({ ...point }));
+    }
+
+    const newCurve: SavedCurve = {
+      id: crypto.randomUUID(),
+      name: normalizedName,
+      points,
+    };
+
+    onImportCurve(newCurve);
+    onSelectCurve(newCurve.id);
+    setShowCreateDialog(false);
+  }, [
+    draftCreateCustomMax,
+    draftCreateCustomMin,
+    draftCreateName,
+    draftCreatePreset,
+    normalizeDraftName,
+    onImportCurve,
+    onSelectCurve,
+  ]);
+
+  const nudgeSelectedPoint = useCallback((dx: number, dy: number) => {
+    if (selectedIdx === null) return;
+    setDraftPoints((prev) => prev.map((p, i) => {
+      if (i !== selectedIdx) return p;
+      const nextY = clamp01(p.y + dy);
+      const isCurrentEndpoint = i === 0 || i === prev.length - 1;
+      if (isCurrentEndpoint) return { ...p, y: nextY };
+      const minX = i > 0 ? prev[i - 1].x + 0.01 : 0;
+      const maxX = i < prev.length - 1 ? prev[i + 1].x - 0.01 : 1;
+      return {
+        ...p,
+        x: clampRange(p.x + dx, minX, maxX),
+        y: nextY,
+      };
+    }));
+  }, [selectedIdx]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      if (showDeleteConfirm) {
-        handleCancelDelete();
+      const target = e.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      const isTypingTarget = tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || !!target?.isContentEditable;
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (showRenameDialog) {
+          handleCancelRename();
+          return;
+        }
+        if (showCreateDialog) {
+          handleCancelCreate();
+          return;
+        }
+        if (showDeleteConfirm) {
+          handleCancelDelete();
+          return;
+        }
+        if (showDiscardConfirm) {
+          handleCancelDiscardClose();
+          return;
+        }
+        requestClose();
         return;
       }
-      if (showDiscardConfirm) {
-        handleCancelDiscardClose();
-        return;
+
+      if (showCreateDialog || showRenameDialog || showDeleteConfirm || showDiscardConfirm || isTypingTarget || selectedIdx === null) return;
+
+      const step = e.shiftKey ? 0.05 : 0.01;
+      const key = e.key;
+      const code = e.code;
+      switch (key) {
+        case 'ArrowLeft':
+        case 'Left':
+          e.preventDefault();
+          nudgeSelectedPoint(-step, 0);
+          break;
+        case 'ArrowRight':
+        case 'Right':
+          e.preventDefault();
+          nudgeSelectedPoint(step, 0);
+          break;
+        case 'ArrowUp':
+        case 'Up':
+          e.preventDefault();
+          nudgeSelectedPoint(0, step);
+          break;
+        case 'ArrowDown':
+        case 'Down':
+          e.preventDefault();
+          nudgeSelectedPoint(0, -step);
+          break;
+        default:
+          if (code === 'ArrowLeft') {
+            e.preventDefault();
+            nudgeSelectedPoint(-step, 0);
+            return;
+          }
+          if (code === 'ArrowRight') {
+            e.preventDefault();
+            nudgeSelectedPoint(step, 0);
+            return;
+          }
+          if (code === 'ArrowUp') {
+            e.preventDefault();
+            nudgeSelectedPoint(0, step);
+            return;
+          }
+          if (code === 'ArrowDown') {
+            e.preventDefault();
+            nudgeSelectedPoint(0, -step);
+            return;
+          }
+          break;
       }
-      requestClose();
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [handleCancelDelete, handleCancelDiscardClose, isOpen, requestClose, showDeleteConfirm, showDiscardConfirm]);
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [
+    handleCancelDelete,
+    handleCancelDiscardClose,
+    handleCancelCreate,
+    handleCancelRename,
+    handleConfirmRename,
+    isOpen,
+    nudgeSelectedPoint,
+    requestClose,
+    selectedIdx,
+    showCreateDialog,
+    showRenameDialog,
+    showDeleteConfirm,
+    showDiscardConfirm,
+  ]);
 
   const selectedPoint = selectedIdx !== null ? draftPoints[selectedIdx] ?? null : null;
   const isEndpoint = selectedPoint ? (selectedPoint.x === 0 || selectedPoint.x === 1) : false;
@@ -561,8 +890,115 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
     }));
   }, [isEndpoint, selectedIdx]);
 
-  const outerAlpha = Math.round((draftPoints[0]?.y ?? 0) * 100);
-  const innerAlpha = Math.round((draftPoints[draftPoints.length - 1]?.y ?? 0) * 100);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const curveDropdownOptions = useMemo(
+    () => savedCurves.map((curve) => ({ value: curve.id, label: curve.name })),
+    [savedCurves],
+  );
+
+  const activeCurveId = editingCurve?.id ?? selectedCurveId;
+
+  const handleSelectCurveFromModal = useCallback((curveId: string) => {
+    onSelectCurve(curveId);
+  }, [onSelectCurve]);
+
+  const handleOpenCreateDialog = useCallback(() => {
+    setDraftCreateName('New Curve');
+    setDraftCreatePreset('opaque');
+    setDraftCreateCustomMin(55);
+    setDraftCreateCustomMax(90);
+    setShowCreateDialog(true);
+  }, []);
+
+  useEffect(() => {
+    if (!showRenameDialog) return;
+    const id = window.setTimeout(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [showRenameDialog]);
+
+  const handleExportCurve = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    void (async () => {
+      try {
+        const exportName = normalizeDraftName(draftName);
+        const exportJson = exportLutCurveProfileToJson({
+          name: exportName,
+          points: draftPoints,
+          appVersion: DRAGONFRUIT_VERSION,
+        });
+
+        const safeName = exportName
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'dragonfruit-lut-curve';
+        const fileName = `${safeName}.lutcurve.json`;
+
+        const bytes = new TextEncoder().encode(exportJson);
+        try {
+          await savePrintArtifactWithNativeDialog(bytes, fileName);
+          return;
+        } catch (nativeError) {
+          const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError ?? '');
+          const loweredNativeMessage = nativeMessage.toLowerCase();
+          if (loweredNativeMessage.includes('cancel')) return;
+
+          const nativeUnavailable = loweredNativeMessage.includes('only available in dragonfruit desktop')
+            || loweredNativeMessage.includes('tauri runtime');
+          if (!nativeUnavailable) {
+            throw nativeError;
+          }
+        }
+
+        const blob = new Blob([exportJson], { type: 'application/json;charset=utf-8' });
+        const blobUrl = window.URL.createObjectURL(blob);
+
+        const anchor = document.createElement('a');
+        anchor.href = blobUrl;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+
+        window.URL.revokeObjectURL(blobUrl);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown export error';
+        window.alert(`Failed to export LUT curve profile. ${message}`);
+      }
+    })();
+  }, [draftName, draftPoints, normalizeDraftName]);
+
+  const handleImportCurveFile = useCallback(async (file: File) => {
+    const rawJson = await file.text();
+    const imported = importLutCurveProfileFromJson(rawJson);
+    const importedCurve: SavedCurve = {
+      id: crypto.randomUUID(),
+      name: imported.name,
+      points: imported.points,
+    };
+    onImportCurve(importedCurve);
+    onSelectCurve(importedCurve.id);
+  }, [onImportCurve, onSelectCurve]);
+
+  const handleImportInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    void handleImportCurveFile(file).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Failed to import LUT profile.';
+      if (typeof window !== 'undefined') window.alert(message);
+    });
+  }, [handleImportCurveFile]);
+
+  const handleImportCurve = useCallback(() => {
+    importInputRef.current?.click();
+  }, []);
 
   if (!isOpen) return null;
 
@@ -571,6 +1007,14 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
       className="fixed inset-0 z-[135] flex items-center justify-center bg-black/55 px-4 py-5"
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
+        if (showCreateDialog) {
+          handleCancelCreate();
+          return;
+        }
+        if (showRenameDialog) {
+          handleCancelRename();
+          return;
+        }
         if (showDiscardConfirm) {
           handleCancelDiscardClose();
           return;
@@ -630,36 +1074,59 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
         {/* Body */}
         <div className="p-4 space-y-3">
           <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="flex items-center gap-2">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,.lutcurve.json,application/json"
+              onChange={handleImportInputChange}
+              className="hidden"
+            />
+
+            <div className="flex flex-wrap items-center gap-2">
               <label className="text-[11px] font-medium shrink-0" style={{ color: 'var(--text-muted)' }}>
-                Curve Name
+                Profile
               </label>
-              <input
-                type="text"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                maxLength={48}
-                placeholder="Curve name…"
-                className="flex-1 h-8 rounded-md border bg-transparent px-2.5 text-[12px] outline-none"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  color: 'var(--text-strong)',
-                  background: 'var(--surface-0)',
-                }}
-              />
+              <div className="min-w-0 flex-1">
+                <SelectDropdown
+                  value={activeCurveId}
+                  options={curveDropdownOptions}
+                  onChange={handleSelectCurveFromModal}
+                  className="space-y-0"
+                  selectClassName="!h-8 !px-2.5 text-[12px] w-full"
+                  ariaLabel="Select curve profile to edit"
+                  menuFooterAction={{
+                    label: 'New Curve',
+                    onClick: handleOpenCreateDialog,
+                    icon: <Plus className="h-3.5 w-3.5" />,
+                    tone: 'accent',
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenRename}
+                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCurve}
+                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export
+              </button>
+              <button
+                type="button"
+                onClick={handleImportCurve}
+                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Import
+              </button>
             </div>
 
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex h-6 items-center rounded border px-2 text-[10px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
-                Outer {outerAlpha}%
-              </span>
-              <span className="inline-flex h-6 items-center rounded border px-2 text-[10px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
-                Inner {innerAlpha}%
-              </span>
-              <span className="inline-flex h-6 items-center rounded border px-2 text-[10px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
-                Monotone spline
-              </span>
-            </div>
           </div>
 
           <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -668,7 +1135,7 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
                 Curve Canvas
               </span>
               <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                Click to add · Drag to move · Double-click to remove
+                Right-click to add · Drag to move · Use inspector to remove
               </span>
             </div>
 
@@ -682,50 +1149,63 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
 
           {/* Inspector */}
           <div
-            className="rounded-md border p-3 min-h-[52px]"
+            className="rounded-md border h-[62px] px-3"
             style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
           >
             {selectedPoint !== null ? (
-              <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-2">
-                <span className="text-[11px] font-medium shrink-0" style={{ color: 'var(--text-muted)' }}>
-                  Point {selectedIdx! + 1}
-                  {isEndpoint && <span className="ml-1 opacity-60">(endpoint)</span>}
-                </span>
-
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>Position</label>
-                  <input
-                    type="number" min={0} max={100} step={1}
-                    disabled={isEndpoint}
+              <div className="flex h-full w-full items-center gap-2">
+                <div className="inline-flex h-9 min-w-0 flex-1 items-center gap-1.5">
+                  <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}>Position</label>
+                  <ScrollableNumberField
                     value={Math.round(selectedPoint.x * 100)}
-                    onChange={(e) => handleInspectorChange('x', Number(e.target.value))}
-                    className="w-16 h-7 rounded border bg-transparent px-1.5 text-[12px] text-center disabled:opacity-50 outline-none"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}
+                    onChange={(nextValue) => handleInspectorChange('x', nextValue)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    ariaLabel="Selected point position"
+                    decreaseTitle="Decrease point position"
+                    increaseTitle="Increase point position"
+                    disabled={isEndpoint}
+                    className="min-w-0 flex-1"
+                    inputClassName="!h-8 !text-[12px]"
                   />
-                  <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>%</span>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] shrink-0" style={{ color: 'var(--text-muted)' }}>Alpha</label>
-                  <input
-                    type="number" min={0} max={100} step={1}
+                <span className="h-4 w-px" style={{ background: 'var(--border-subtle)' }} />
+
+                <div className="inline-flex h-9 min-w-0 flex-1 items-center gap-1.5">
+                  <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}>Alpha</label>
+                  <ScrollableNumberField
                     value={Math.round(selectedPoint.y * 100)}
-                    onChange={(e) => handleInspectorChange('y', Number(e.target.value))}
-                    className="w-16 h-7 rounded border bg-transparent px-1.5 text-[12px] text-center outline-none"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}
+                    onChange={(nextValue) => handleInspectorChange('y', nextValue)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    ariaLabel="Selected point alpha"
+                    decreaseTitle="Decrease point alpha"
+                    increaseTitle="Increase point alpha"
+                    className="min-w-0 flex-1"
+                    inputClassName="!h-8 !text-[12px]"
                   />
-                  <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>%</span>
                 </div>
 
                 <button
                   type="button"
                   onClick={handleRemoveSelected}
                   disabled={isEndpoint || draftPoints.length <= 2}
-                  className="ml-auto inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-[11px] font-medium transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+                  className="ml-auto ui-button !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
                   style={{
-                    borderColor: (isEndpoint || draftPoints.length <= 2) ? 'var(--border-subtle)' : 'color-mix(in srgb, var(--danger), var(--border-subtle) 52%)',
-                    background: (isEndpoint || draftPoints.length <= 2) ? 'var(--surface-0)' : 'color-mix(in srgb, var(--danger), var(--surface-1) 92%)',
-                    color: (isEndpoint || draftPoints.length <= 2) ? 'var(--text-muted)' : 'color-mix(in srgb, var(--danger), var(--text-muted) 26%)',
+                    borderColor: (isEndpoint || draftPoints.length <= 2)
+                      ? 'var(--border-subtle)'
+                      : 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                    background: (isEndpoint || draftPoints.length <= 2)
+                      ? 'var(--surface-0)'
+                      : 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                    color: (isEndpoint || draftPoints.length <= 2)
+                      ? 'var(--text-muted)'
+                      : 'var(--danger)',
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -733,8 +1213,8 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
                 </button>
               </div>
             ) : (
-              <p className="text-[11px] w-full text-center" style={{ color: 'var(--text-muted)' }}>
-                Click a point to inspect · Drag to move · Double-click to remove · Click canvas to add
+              <p className="h-full w-full inline-flex items-center justify-center text-[11px] text-center" style={{ color: 'var(--text-muted)' }}>
+                Click a point to inspect · Drag to move · Right-click canvas to add · Use inspector to remove
               </p>
             )}
           </div>
@@ -790,13 +1270,216 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
       </div>
 
       <StructuredDialogModal
+        open={showCreateDialog}
+        ariaLabel="Create new LUT curve profile"
+        title="Create New Curve"
+        subtitle="Start from Opaque, Clear, or your own custom min/max alpha values."
+        icon={<Plus className="h-4 w-4" />}
+        iconTone="accent"
+        zIndexClassName="z-[136]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel="Close create curve profile dialog"
+        onClose={handleCancelCreate}
+        onBackdropClick={handleCancelCreate}
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={handleCancelCreate}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmCreate}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'var(--accent-secondary-action-border)',
+                background: 'var(--accent-secondary-action-bg-92)',
+                color: 'var(--accent-secondary-action-color)',
+              }}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Create
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Curve name
+            </label>
+            <input
+              type="text"
+              value={draftCreateName}
+              onChange={(event) => setDraftCreateName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleConfirmCreate();
+                }
+              }}
+              maxLength={48}
+              className="ui-input h-9 w-full text-xs"
+              placeholder="New Curve"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Preset
+            </label>
+            <div
+              className="inline-flex w-full rounded-md border p-1"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+            >
+              {(['opaque', 'clear', 'custom'] as const).map((preset) => {
+                const active = draftCreatePreset === preset;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setDraftCreatePreset(preset)}
+                    className="flex-1 rounded-sm border px-2 py-1 text-[11px] font-semibold transition-colors"
+                    style={active
+                      ? {
+                        color: 'var(--accent-secondary-action-color)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 22%)',
+                        background: 'color-mix(in srgb, var(--accent-secondary), transparent 94%)',
+                        boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 78%) inset',
+                      }
+                      : {
+                        color: 'var(--text-muted)',
+                        borderColor: 'var(--border-subtle)',
+                        background: 'transparent',
+                      }}
+                  >
+                    {preset === 'opaque' ? 'Opaque' : preset === 'clear' ? 'Clear' : 'Custom'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {draftCreatePreset === 'custom' ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Min alpha (%)
+                </label>
+                <ScrollableNumberField
+                  value={draftCreateCustomMin}
+                  onChange={(nextValue) => setDraftCreateCustomMin(nextValue)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  unit="%"
+                  ariaLabel="Custom minimum alpha"
+                  decreaseTitle="Decrease minimum alpha"
+                  increaseTitle="Increase minimum alpha"
+                  className="w-full"
+                  inputClassName="!h-9 !text-xs"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Max alpha (%)
+                </label>
+                <ScrollableNumberField
+                  value={draftCreateCustomMax}
+                  onChange={(nextValue) => setDraftCreateCustomMax(nextValue)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  unit="%"
+                  ariaLabel="Custom maximum alpha"
+                  decreaseTitle="Decrease maximum alpha"
+                  increaseTitle="Increase maximum alpha"
+                  className="w-full"
+                  inputClassName="!h-9 !text-xs"
+                />
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {draftCreatePreset === 'opaque'
+                ? 'Opaque starts at 55% and ramps to 90%.'
+                : 'Clear starts at 55% and ramps to 65%.'}
+            </p>
+          )}
+        </div>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
+        open={showRenameDialog}
+        ariaLabel="Rename LUT curve profile"
+        title="Rename Curve Profile"
+        subtitle="Update the display name for this LUT curve profile."
+        icon={<Edit3 className="h-4 w-4" />}
+        iconTone="accent"
+        zIndexClassName="z-[137]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel="Close rename curve profile dialog"
+        onClose={handleCancelRename}
+        onBackdropClick={handleCancelRename}
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={handleCancelRename}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmRename}
+              disabled={draftRenameName.trim().length === 0}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+              style={{
+                borderColor: 'var(--accent-secondary-action-border)',
+                background: 'var(--accent-secondary-action-bg-92)',
+                color: 'var(--accent-secondary-action-color)',
+              }}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Save Name
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            Curve name
+          </label>
+          <input
+            ref={renameInputRef}
+            type="text"
+            value={draftRenameName}
+            onChange={(event) => setDraftRenameName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && draftRenameName.trim().length > 0) {
+                event.preventDefault();
+                handleConfirmRename();
+              }
+            }}
+            maxLength={48}
+            className="ui-input h-9 w-full text-xs"
+            placeholder="Curve name"
+          />
+        </div>
+      </StructuredDialogModal>
+
+      <StructuredDialogModal
         open={showDiscardConfirm}
         ariaLabel="Discard unsaved LUT curve changes"
         title="Do you wanna quit?"
         subtitle="You have unsaved LUT curve edits."
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
-        zIndexClassName="z-[136]"
+        zIndexClassName="z-[138]"
         maxWidthClassName="max-w-md"
         closeAriaLabel="Close discard changes confirmation"
         onClose={handleCancelDiscardClose}
@@ -838,7 +1521,7 @@ export function LutCurveEditorModal({ isOpen, editingCurve, onSave, onDelete, on
         subtitle={editingCurve ? `Delete “${editingCurve.name}”?` : 'Delete this curve preset?'}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
-        zIndexClassName="z-[137]"
+        zIndexClassName="z-[139]"
         maxWidthClassName="max-w-md"
         closeAriaLabel="Close delete confirmation"
         onClose={handleCancelDelete}
