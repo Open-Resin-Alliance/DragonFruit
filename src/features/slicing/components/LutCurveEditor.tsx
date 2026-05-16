@@ -5,7 +5,7 @@ import { AlertTriangle, Check, Download, Edit3, Pencil, Plus, Trash2, Upload, X,
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
-import { savePrintArtifactWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { pickSavePathWithNativeDialogOptions, writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 
@@ -185,6 +185,18 @@ export function exportLutCurveProfileToJson(params: {
   };
 
   return JSON.stringify(doc, null, 2);
+}
+
+export function exportLutCurveProfileToUvToolsLut(params: {
+  points: CurvePoint[];
+}): string {
+  const lut = sampleCurveToLut(normalizeImportedCurvePoints(params.points));
+  return `${JSON.stringify(lut, null, 2)}\n`;
+}
+
+function resolveLutCurveExportTargetFromPath(path: string): 'dragonfruit-json' | 'uvtools-lut' {
+  const lowered = path.trim().toLowerCase();
+  return lowered.endsWith('.lut') ? 'uvtools-lut' : 'dragonfruit-json';
 }
 
 export function importLutCurveProfileFromJson(jsonText: string, options?: { fileNameHint?: string }): {
@@ -983,22 +995,40 @@ export function LutCurveEditorModal({
     void (async () => {
       try {
         const exportName = normalizeDraftName(draftName);
-        const exportJson = exportLutCurveProfileToJson({
-          name: exportName,
-          points: draftPoints,
-          appVersion: DRAGONFRUIT_VERSION,
-        });
-
         const safeName = exportName
           .trim()
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '') || 'dragonfruit-lut-curve';
-        const fileName = `${safeName}.lutcurve.json`;
+        const defaultFilename = `${safeName}.lutcurve.json`;
 
-        const bytes = new TextEncoder().encode(exportJson);
         try {
-          await savePrintArtifactWithNativeDialog(bytes, fileName);
+          const selectedPath = await pickSavePathWithNativeDialogOptions(defaultFilename, {
+            filters: [
+              { name: 'DragonFruit LUT Curve', extensions: ['lutcurve.json', 'json'] },
+              { name: 'UVTools LUT', extensions: ['lut'] },
+            ],
+          });
+
+          const trimmedPath = selectedPath.trim();
+          if (!trimmedPath) return;
+
+          const selectedTarget = resolveLutCurveExportTargetFromPath(trimmedPath);
+          const selectedPayload = selectedTarget === 'uvtools-lut'
+            ? exportLutCurveProfileToUvToolsLut({ points: draftPoints })
+            : exportLutCurveProfileToJson({
+                name: exportName,
+                points: draftPoints,
+                appVersion: DRAGONFRUIT_VERSION,
+              });
+
+          const hasExplicitExtension = /\.[^\\/]+$/.test(trimmedPath);
+          const destinationPath = hasExplicitExtension
+            ? trimmedPath
+            : `${trimmedPath}${selectedTarget === 'uvtools-lut' ? '.lut' : '.lutcurve.json'}`;
+
+          const selectedBytes = new TextEncoder().encode(selectedPayload);
+          await writeBytesToNativePath(destinationPath, selectedBytes);
           return;
         } catch (nativeError) {
           const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError ?? '');
@@ -1012,7 +1042,14 @@ export function LutCurveEditorModal({
           }
         }
 
-        const blob = new Blob([exportJson], { type: 'application/json;charset=utf-8' });
+        const exportPayload = exportLutCurveProfileToJson({
+          name: exportName,
+          points: draftPoints,
+          appVersion: DRAGONFRUIT_VERSION,
+        });
+        const fileName = `${safeName}.lutcurve.json`;
+
+        const blob = new Blob([exportPayload], { type: 'application/json;charset=utf-8' });
         const blobUrl = window.URL.createObjectURL(blob);
 
         const anchor = document.createElement('a');
@@ -1169,6 +1206,7 @@ export function LutCurveEditorModal({
                 type="button"
                 onClick={handleExportCurve}
                 className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+                title="Export selected curve"
               >
                 <Download className="h-3.5 w-3.5" />
                 Export
