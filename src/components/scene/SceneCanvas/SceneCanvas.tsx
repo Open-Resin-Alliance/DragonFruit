@@ -6291,8 +6291,12 @@ export function SceneCanvas({
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
 
-      {/* DEBUG: temporary twig disk B diameter override — remove with __debug__ folder */}
-      <TwigDebugOverrideCard />
+      {/* DEBUG: twig disk B diameter override. Hidden in normal builds — the
+          default twig is the tapered-twig code path with disk B forced equal
+          to disk A (achieved by leaving the override null). Lychee importer
+          bypasses buildTwig and can still produce asymmetric A/B. Re-mount
+          this card to expose the override for dev testing. */}
+      {false && <TwigDebugOverrideCard />}
 
 
       {showCrossSectionCapDebugPanel && (
