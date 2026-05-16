@@ -455,7 +455,7 @@ function resolveInitialZBlendAutoMode(): boolean {
   return stored !== 'false';
 }
 
-/** Max-alpha (%) for the cure-window LUT keyed by resin transparency. */
+/** Max-alpha (%) for the cure-window LUT keyed by material transparency. */
 const Z_BLEND_MAX_ALPHA_BY_RESIN = {
   opaque: 90,
   clear: 65,
@@ -1001,25 +1001,6 @@ export function SlicingPanel({
     activePrinterProfile?.display?.resolutionY,
   ]);
 
-  const autoZBlendFadePx = useMemo(() => {
-    const lookBack = Math.max(
-      LOOK_BACK_MIN_LAYERS,
-      Math.min(LOOK_BACK_MAX_LAYERS, Math.round(zBlendLookBack)),
-    );
-
-    const layerHeightMm = Number(effectiveLayerHeightMm);
-    const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
-
-    const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
-    const AUTO_FADE_GAIN = 1.75;
-    const base = Math.max(4, Math.ceil(lookBack * pxPerLayer * AUTO_FADE_GAIN));
-    return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
-  }, [
-    effectiveLayerHeightMm,
-    pixelPitchMm,
-    zBlendLookBack,
-  ]);
-
   // Auto AA config: physics-grounded parameters from pixel pitch + layer height.
   // Computed by autoAaPhysics.ts — see that module for the full engineering model.
   const autoAaConfig = useMemo<AutoAaResolvedConfig>(() => {
@@ -1035,6 +1016,37 @@ export function SlicingPanel({
     const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
     return computePhysicalAaConfig(aaAutoPreset, pixelPitchMm, safeLayerH);
   }, [aaAutoPreset, effectiveLayerHeightMm, pixelPitchMm]);
+
+  const autoZBlendLookBack = useMemo(() => {
+    const layerHeightMm = Number(effectiveLayerHeightMm);
+    const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
+    return computePhysicalAaConfig('balanced', pixelPitchMm, safeLayerH).zBlendLookBack;
+  }, [effectiveLayerHeightMm, pixelPitchMm]);
+
+  const autoLookBackForFade = (aaQualityMode === 'auto' && antiAliasingAvailable)
+    ? autoAaConfig.zBlendLookBack
+    : autoZBlendLookBack;
+
+  const autoZBlendFadePx = useMemo(() => {
+    const lookBack = Math.max(
+      LOOK_BACK_MIN_LAYERS,
+      Math.min(LOOK_BACK_MAX_LAYERS, Math.round(autoLookBackForFade)),
+    );
+
+    const layerHeightMm = Number(effectiveLayerHeightMm);
+    const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
+
+    const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
+    // Calibrated style: ~4 px fade radius per receding layer at near-1:1
+    // voxel aspect, then scale with px/layer.
+    const AUTO_FADE_DISTANCE_GAIN = 4;
+    const base = Math.max(4, Math.ceil(lookBack * pxPerLayer * AUTO_FADE_DISTANCE_GAIN));
+    return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
+  }, [
+    autoLookBackForFade,
+    effectiveLayerHeightMm,
+    pixelPitchMm,
+  ]);
 
   const fadeDistancePresets = useMemo(
     () => deriveFadeDistancePresets(autoZBlendFadePx),
@@ -1053,7 +1065,11 @@ export function SlicingPanel({
   const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.aaMode : aaMode;
   const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(autoAaConfig.aaSteps) : aaLevel;
   const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
-  const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.zBlendLookBack : zBlendLookBack;
+  const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable)
+    ? autoAaConfig.zBlendLookBack
+    : (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode)
+      ? autoZBlendLookBack
+      : zBlendLookBack;
   const resolvedZBlendFadeMode = useAutoFadeDistance ? 'auto' as const : 'manual' as const;
 
   const effectiveAntiAliasingLevel =
@@ -2050,7 +2066,7 @@ export function SlicingPanel({
                     {(['auto', 'advanced'] as const).map((qmode) => {
                       const qActive = aaQualityMode === qmode;
                       const meta = qmode === 'auto'
-                        ? { label: 'Auto', desc: 'Tuned to your printer & resin' }
+                        ? { label: 'Auto', desc: 'Tuned to your printer & material' }
                         : { label: 'Advanced', desc: 'Full manual control' };
                       return (
                         <button
@@ -2122,7 +2138,7 @@ export function SlicingPanel({
                           {autoAaConfig.aaMode === 'Off' ? 'No 3DAA' : autoAaConfig.aaMode === '3DAA' ? `${autoAaConfig.zBlendLookBack} Layer` : 'Blur only'}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaConfig.aaMode === '3DAA' ? `LUT ${selectedLutCurveLabel}` : 'LUT N/A'}
+                          {autoAaConfig.aaMode === '3DAA' ? ` ${selectedLutCurveLabel}` : 'No LUT'}
                         </span>
                       </div>
                     </>
@@ -2197,7 +2213,7 @@ export function SlicingPanel({
                         })}
                         <button
                           type="button"
-                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
                           style={useCustomAaLevel
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
@@ -2263,7 +2279,7 @@ export function SlicingPanel({
                         })}
                         <button
                           type="button"
-                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
                           style={useCustomBlurBrushRadius
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
@@ -2350,7 +2366,7 @@ export function SlicingPanel({
                             <>
                               <SettingLabelWithHelp
                                 label="LUT Curve"
-                                help="Selects the max-alpha preset for the cure-window LUT. Opaque (90%) suits standard resins; Clear (65%) suits deep-curing translucent resins; Custom lets you dial in any value."
+                                help="Selects the max-alpha preset for the cure-window LUT. Opaque (90%) suits standard materials; Clear (65%) suits deep-curing translucent materials; Custom lets you dial in any value."
                               />
                               <div className="grid grid-cols-3 gap-1 pt-1">
                                 {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
@@ -2453,19 +2469,44 @@ export function SlicingPanel({
                             </>
                           )}
 
-                          <SettingLabelWithHelp
-                            label="Blend Window"
-                            help="How many nearby layers contribute to Z blending. Higher values can reduce stepping but may blur very thin layer transitions."
-                          />
-                          <div className="grid grid-cols-5 gap-1">
-                            {LOOK_BACK_PRESETS.map((n) => {
-                              const active = !useCustomZBlendLookBack && zBlendLookBack === n;
-                              return (
+                          {!zBlendAutoMode && (
+                            <>
+                              <SettingLabelWithHelp
+                                label="Blend Window"
+                                help="How many nearby layers contribute to Z blending. Higher values can reduce stepping but may blur very thin layer transitions."
+                              />
+                              <div className="grid grid-cols-5 gap-1">
+                                {LOOK_BACK_PRESETS.map((n) => {
+                                  const active = !useCustomZBlendLookBack && zBlendLookBack === n;
+                                  return (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => {
+                                        setUseCustomZBlendLookBack(false);
+                                        setClampedZBlendLookBack(n);
+                                      }}
+                                    >
+                                      {n}
+                                    </button>
+                                  );
+                                })}
                                 <button
-                                  key={n}
                                   type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={active
+                                  className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
+                                  style={useCustomZBlendLookBack
                                     ? {
                                         borderColor: 'var(--accent-secondary-action-border)',
                                         background: 'var(--accent-secondary-action-bg-92)',
@@ -2476,47 +2517,26 @@ export function SlicingPanel({
                                         background: 'var(--surface-0)',
                                         color: 'var(--text-muted)',
                                       }}
-                                  onClick={() => {
-                                    setUseCustomZBlendLookBack(false);
-                                    setClampedZBlendLookBack(n);
-                                  }}
+                                  onClick={() => setUseCustomZBlendLookBack(true)}
                                 >
-                                  {n}
+                                  Custom
                                 </button>
-                              );
-                            })}
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={useCustomZBlendLookBack
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setUseCustomZBlendLookBack(true)}
-                            >
-                              Custom
-                            </button>
-                          </div>
-                          {useCustomZBlendLookBack && (
-                            <ScrollableNumberField
-                              className="mt-1"
-                              value={zBlendLookBack}
-                              onChange={setClampedZBlendLookBack}
-                              min={LOOK_BACK_MIN_LAYERS}
-                              max={LOOK_BACK_MAX_LAYERS}
-                              step={1}
-                              unit="lyr"
-                              ariaLabel="Custom blend window layer count"
-                              decreaseTitle="Decrease blend window"
-                              increaseTitle="Increase blend window"
-                            />
+                              </div>
+                              {useCustomZBlendLookBack && (
+                                <ScrollableNumberField
+                                  className="mt-1"
+                                  value={zBlendLookBack}
+                                  onChange={setClampedZBlendLookBack}
+                                  min={LOOK_BACK_MIN_LAYERS}
+                                  max={LOOK_BACK_MAX_LAYERS}
+                                  step={1}
+                                  unit="lyr"
+                                  ariaLabel="Custom blend window layer count"
+                                  decreaseTitle="Decrease blend window"
+                                  increaseTitle="Increase blend window"
+                                />
+                              )}
+                            </>
                           )}
 
                           {!zBlendAutoMode && (
@@ -2555,7 +2575,7 @@ export function SlicingPanel({
                                 })}
                                 <button
                                   type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
                                   style={useCustomZBlendFadePx
                                     ? {
                                         borderColor: 'var(--accent-secondary-action-border)',

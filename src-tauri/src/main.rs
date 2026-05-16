@@ -30,9 +30,6 @@ fn default_z_blend_max_alpha_percent() -> f32 {
     90.0
 }
 
-fn default_true() -> bool {
-    true
-}
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -134,8 +131,43 @@ fn sweep_all_temp_artifacts() -> u32 {
     removed
 }
 
-fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SaveDialogFilterDef {
+    name: String,
+    extensions: Vec<String>,
+}
+
+fn build_save_dialog_with_filters(
+    suggested_name: &str,
+    custom_filters: Option<&[SaveDialogFilterDef]>,
+) -> rfd::FileDialog {
     let mut dialog = rfd::FileDialog::new().set_file_name(suggested_name);
+
+    if let Some(filters) = custom_filters {
+        for filter in filters {
+            let trimmed_name = filter.name.trim();
+            if trimmed_name.is_empty() {
+                continue;
+            }
+
+            let normalized_exts: Vec<String> = filter
+                .extensions
+                .iter()
+                .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
+                .filter(|ext| !ext.is_empty())
+                .collect();
+
+            if normalized_exts.is_empty() {
+                continue;
+            }
+
+            let ext_refs: Vec<&str> = normalized_exts.iter().map(String::as_str).collect();
+            dialog = dialog.add_filter(trimmed_name, &ext_refs);
+        }
+
+        return dialog;
+    }
 
     let maybe_ext = std::path::Path::new(suggested_name)
         .extension()
@@ -1741,6 +1773,8 @@ struct SavePrintFileFromPathArgs {
 #[serde(rename_all = "camelCase")]
 struct PickSavePathArgs {
     default_filename: String,
+    #[serde(default)]
+    filters: Option<Vec<SaveDialogFilterDef>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2363,7 +2397,7 @@ async fn save_print_file(args: SavePrintFileArgs) -> Result<String, String> {
             }
         };
 
-        let picked = build_save_dialog_with_filters(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name, None)
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
@@ -2400,7 +2434,7 @@ async fn save_print_file_from_path(args: SavePrintFileFromPathArgs) -> Result<St
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        let picked = build_save_dialog_with_filters(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name, None)
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
@@ -2432,7 +2466,7 @@ async fn pick_save_path(args: PickSavePathArgs) -> Result<String, String> {
             }
         };
 
-        let picked = build_save_dialog_with_filters(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name, args.filters.as_deref())
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
