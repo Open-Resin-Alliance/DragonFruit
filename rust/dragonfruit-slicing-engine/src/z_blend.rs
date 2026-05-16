@@ -31,6 +31,9 @@ pub struct ZBlendWorkspace {
     /// BFS distance map. u16 is sufficient since fade_px is always well under
     /// 65535 in practice; halving the element size saves ~112 MB at 7680².
     dist: Vec<u16>,
+    /// Back-BFS distance map for the two-BFS smooth gradient (slope-adaptive
+    /// mode): distance from the outer edge of the receding / appearing zone.
+    dist_back: Vec<u16>,
     queue: VecDeque<usize>,
 }
 
@@ -40,6 +43,7 @@ impl ZBlendWorkspace {
         Self {
             in_prior: vec![0u8; n],
             dist: vec![u16::MAX; n],
+            dist_back: vec![u16::MAX; n],
             queue: VecDeque::with_capacity(n / 8),
         }
     }
@@ -224,6 +228,9 @@ impl ZBlendWorkspace {
         if self.dist.len() != n {
             self.dist.resize(n, u16::MAX);
         }
+        if self.dist_back.len() != n {
+            self.dist_back.resize(n, u16::MAX);
+        }
         if width == 0 || height == 0 {
             return;
         }
@@ -235,6 +242,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
+            &mut self.dist_back,
             &mut self.queue,
             (0, width - 1, 0, height - 1),
         );
@@ -257,6 +265,9 @@ impl ZBlendWorkspace {
         if self.dist.len() != n {
             self.dist.resize(n, u16::MAX);
         }
+        if self.dist_back.len() != n {
+            self.dist_back.resize(n, u16::MAX);
+        }
         z_blend_layer_slope_adaptive_inplace_with_roi(
             current,
             priors,
@@ -265,6 +276,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
+            &mut self.dist_back,
             &mut self.queue,
             roi,
         );
@@ -292,6 +304,9 @@ impl ZBlendWorkspace {
         if self.dist.len() != n {
             self.dist.resize(n, u16::MAX);
         }
+        if self.dist_back.len() != n {
+            self.dist_back.resize(n, u16::MAX);
+        }
         if width == 0 || height == 0 {
             return;
         }
@@ -305,6 +320,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
+            &mut self.dist_back,
             &mut self.queue,
             (0, width - 1, 0, height - 1),
         );
@@ -329,6 +345,9 @@ impl ZBlendWorkspace {
         if self.dist.len() != n {
             self.dist.resize(n, u16::MAX);
         }
+        if self.dist_back.len() != n {
+            self.dist_back.resize(n, u16::MAX);
+        }
         z_blend_forward_slope_adaptive_inplace_with_roi(
             mask,
             topology,
@@ -339,6 +358,7 @@ impl ZBlendWorkspace {
             lut,
             &mut self.in_prior,
             &mut self.dist,
+            &mut self.dist_back,
             &mut self.queue,
             roi,
         );
@@ -861,6 +881,7 @@ fn z_blend_layer_slope_adaptive_inplace_with_roi(
     lut: Option<&[u8; 256]>,
     in_prior: &mut [u8],
     dist: &mut [u16],
+    dist_back: &mut [u16],
     queue: &mut VecDeque<usize>,
     roi: (usize, usize, usize, usize),
 ) {
@@ -913,9 +934,9 @@ fn z_blend_layer_slope_adaptive_inplace_with_roi(
     let seed_max_x = (rec_max_x + 1).min(width - 1);
     let seed_max_y = (rec_max_y + 1).min(height - 1);
 
-    // Step 2 — BFS connectivity check (no fade_px limit — zone boundary is
-    // `in_prior == 0`; cap at 512 to guard against degenerate geometry).
-    const SLOPE_ADAPTIVE_MAX_DIST: u16 = 512;
+    // Step 2 — chamfer EDT from the inner boundary.  8-connected propagation
+    // (cardinal weight 10, diagonal weight 14) approximates Euclidean distance
+    // and eliminates the sawtooth iso-distance contours of 4-connected BFS.
     for y in rec_min_y..=rec_max_y {
         let row = y * width;
         for x in rec_min_x..=rec_max_x {
@@ -943,40 +964,184 @@ fn z_blend_layer_slope_adaptive_inplace_with_roi(
         }
     }
 
-    while let Some(idx) = queue.pop_front() {
-        let next_d = dist[idx].saturating_add(1);
-        if next_d > SLOPE_ADAPTIVE_MAX_DIST {
-            continue;
-        }
-        let y = idx / width;
-        let x = idx % width;
-
-        macro_rules! try_neighbor {
-            ($nidx:expr) => {
-                let nidx = $nidx;
-                if current[nidx] <= TOPO_THRESHOLD && in_prior[nidx] > 0 && dist[nidx] > next_d {
-                    dist[nidx] = next_d;
-                    queue.push_back(nidx);
+    // Forward chamfer EDT pass (top-left → bottom-right).
+    for y in rec_min_y..=rec_max_y {
+        for x in rec_min_x..=rec_max_x {
+            let idx = y * width + x;
+            if current[idx] > TOPO_THRESHOLD || in_prior[idx] == 0 {
+                continue;
+            }
+            let mut d = u16::MAX;
+            if y > 0 {
+                let ra = (y - 1) * width;
+                if x > 0 && dist[ra + x - 1] < u16::MAX {
+                    d = d.min(dist[ra + x - 1].saturating_add(14));
                 }
-            };
+                if dist[ra + x] < u16::MAX {
+                    d = d.min(dist[ra + x].saturating_add(10));
+                }
+                if x + 1 < width && dist[ra + x + 1] < u16::MAX {
+                    d = d.min(dist[ra + x + 1].saturating_add(14));
+                }
+            }
+            if x > 0 && dist[idx - 1] < u16::MAX {
+                d = d.min(dist[idx - 1].saturating_add(10));
+            }
+            dist[idx] = d;
         }
-
-        if x > rec_min_x {
-            try_neighbor!(idx - 1);
-        }
-        if x < rec_max_x {
-            try_neighbor!(idx + 1);
-        }
-        if y > rec_min_y {
-            try_neighbor!(idx - width);
-        }
-        if y < rec_max_y {
-            try_neighbor!(idx + width);
+    }
+    // Backward chamfer EDT pass (bottom-right → top-left).
+    for y in (rec_min_y..=rec_max_y).rev() {
+        for x in (rec_min_x..=rec_max_x).rev() {
+            let idx = y * width + x;
+            if current[idx] > TOPO_THRESHOLD || in_prior[idx] == 0 {
+                continue;
+            }
+            let mut d = dist[idx];
+            if y + 1 < height {
+                let rb = (y + 1) * width;
+                if x > 0 && dist[rb + x - 1] < u16::MAX {
+                    d = d.min(dist[rb + x - 1].saturating_add(14));
+                }
+                if dist[rb + x] < u16::MAX {
+                    d = d.min(dist[rb + x].saturating_add(10));
+                }
+                if x + 1 < width && dist[rb + x + 1] < u16::MAX {
+                    d = d.min(dist[rb + x + 1].saturating_add(14));
+                }
+            }
+            if x + 1 < width && dist[idx + 1] < u16::MAX {
+                d = d.min(dist[idx + 1].saturating_add(10));
+            }
+            dist[idx] = d;
         }
     }
 
-    // Step 3 — depth-based gradient.  Fraction depends only on how many layers
-    // ago the pixel was last solid, giving an automatic slope calibration.
+    // Step 2b — back-EDT from the outer edge of the receding zone.
+    //
+    // Seeds are reachable receding pixels that abut the background (in_prior
+    // == 0, not currently solid).  Combined with the front-BFS `dist` this
+    // gives a per-pixel t = dist_back / (dist + dist_back) ∈ [0, 1] that is
+    // 0 at the outer edge and 1 at the inner edge, capturing the LOCAL zone
+    // width for any slope angle without any global normalisation.
+    for y in rec_min_y..=rec_max_y {
+        let row = y * width;
+        for x in rec_min_x..=rec_max_x {
+            dist_back[row + x] = u16::MAX;
+        }
+    }
+    queue.clear();
+    for y in rec_min_y..=rec_max_y {
+        for x in rec_min_x..=rec_max_x {
+            let idx = y * width + x;
+            if in_prior[idx] == 0 || dist[idx] == u16::MAX {
+                continue;
+            }
+            let mut on_outer_edge = false;
+            if x > 0 {
+                let ni = idx - 1;
+                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if !on_outer_edge && x + 1 < width {
+                let ni = idx + 1;
+                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if !on_outer_edge && y > 0 {
+                let ni = idx - width;
+                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if !on_outer_edge && y + 1 < height {
+                let ni = idx + width;
+                if in_prior[ni] == 0 && current[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if on_outer_edge {
+                dist_back[idx] = 0;
+            }
+        }
+    }
+    // Forward chamfer EDT pass for dist_back (top-left → bottom-right).
+    for y in rec_min_y..=rec_max_y {
+        for x in rec_min_x..=rec_max_x {
+            let idx = y * width + x;
+            if in_prior[idx] == 0 || dist[idx] == u16::MAX {
+                continue;
+            }
+            let mut d = dist_back[idx];
+            macro_rules! chk_b {
+                ($ni:expr, $c:expr) => {
+                    let ni = $ni;
+                    if in_prior[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
+                        d = d.min(dist_back[ni].saturating_add($c));
+                    }
+                };
+            }
+            if y > 0 {
+                let ra = (y - 1) * width;
+                if x > 0 {
+                    chk_b!(ra + x - 1, 14);
+                }
+                chk_b!(ra + x, 10);
+                if x + 1 < width {
+                    chk_b!(ra + x + 1, 14);
+                }
+            }
+            if x > 0 {
+                chk_b!(idx - 1, 10);
+            }
+            dist_back[idx] = d;
+        }
+    }
+    // Backward chamfer EDT pass for dist_back (bottom-right → top-left).
+    for y in (rec_min_y..=rec_max_y).rev() {
+        for x in (rec_min_x..=rec_max_x).rev() {
+            let idx = y * width + x;
+            if in_prior[idx] == 0 || dist[idx] == u16::MAX {
+                continue;
+            }
+            let mut d = dist_back[idx];
+            macro_rules! chk_b {
+                ($ni:expr, $c:expr) => {
+                    let ni = $ni;
+                    if in_prior[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
+                        d = d.min(dist_back[ni].saturating_add($c));
+                    }
+                };
+            }
+            if y + 1 < height {
+                let rb = (y + 1) * width;
+                if x > 0 {
+                    chk_b!(rb + x - 1, 14);
+                }
+                chk_b!(rb + x, 10);
+                if x + 1 < width {
+                    chk_b!(rb + x + 1, 14);
+                }
+            }
+            if x + 1 < width {
+                chk_b!(idx + 1, 10);
+            }
+            dist_back[idx] = d;
+        }
+    }
+
+    // Step 3 — continuous gradient: fraction = t, where
+    //   t = dist_back / (dist + dist_back)  ∈ [0, 1]
+    // is 0 at the outer edge and 1 at the inner edge.
+    //
+    // Unlike the depth-anchored formula, t varies continuously across ring
+    // boundaries: adjacent pixels at a ring boundary differ by ≈1/zone_width
+    // (≈3 % for a 30-px zone) instead of the 1/(L+1) ≈25 % step that caused
+    // visible banding.  The gradient is scaled to [1/(L+1), (L+1)/(L+1)] so
+    // inner-edge pixels approach solid density and outer-edge pixels receive
+    // a small but nonzero exposure appropriate for the outermost depth ring.
     let look_back = priors.len();
     let denom = (look_back + 1) as f32;
     for y in rec_min_y..=rec_max_y {
@@ -984,9 +1149,20 @@ fn z_blend_layer_slope_adaptive_inplace_with_roi(
         for x in rec_min_x..=rec_max_x {
             let idx = row + x;
             if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 && dist[idx] != u16::MAX {
-                let depth = in_prior[idx] as usize;
-                let num = (look_back + 1).saturating_sub(depth) as f32;
-                let fraction = (num / denom).clamp(0.0, 1.0);
+                let front = dist[idx] as f32;
+                let t = if dist_back[idx] != u16::MAX {
+                    let back = dist_back[idx] as f32;
+                    let total = front + back;
+                    if total > 0.0 {
+                        back / total
+                    } else {
+                        0.5
+                    }
+                } else {
+                    0.5 // enclosed zone — use midpoint
+                };
+                // Scale: outer edge (t=0) → 1/denom, inner edge (t=1) → 1.0.
+                let fraction = (1.0 + t * look_back as f32) / denom;
                 let raw = (fraction * 255.0 + 0.5) as u8;
                 let v = if let Some(lut) = lut {
                     lut[raw as usize]
@@ -1016,6 +1192,7 @@ fn z_blend_forward_slope_adaptive_inplace_with_roi(
     lut: Option<&[u8; 256]>,
     in_forward: &mut [u8],
     dist: &mut [u16],
+    dist_back: &mut [u16],
     queue: &mut VecDeque<usize>,
     roi: (usize, usize, usize, usize),
 ) {
@@ -1070,7 +1247,7 @@ fn z_blend_forward_slope_adaptive_inplace_with_roi(
     let seed_max_x = (app_max_x + 1).min(width - 1);
     let seed_max_y = (app_max_y + 1).min(height - 1);
 
-    const SLOPE_ADAPTIVE_MAX_DIST: u16 = 512;
+    // Step 2 — chamfer EDT from the inner boundary (8-connected, weights 10/14).
     for y in app_min_y..=app_max_y {
         let row = y * width;
         for x in app_min_x..=app_max_x {
@@ -1098,47 +1275,191 @@ fn z_blend_forward_slope_adaptive_inplace_with_roi(
         }
     }
 
-    while let Some(idx) = queue.pop_front() {
-        let next_d = dist[idx].saturating_add(1);
-        if next_d > SLOPE_ADAPTIVE_MAX_DIST {
-            continue;
-        }
-        let y = idx / width;
-        let x = idx % width;
-
-        macro_rules! try_neighbor {
-            ($nidx:expr) => {
-                let nidx = $nidx;
-                if topology[nidx] <= TOPO_THRESHOLD && in_forward[nidx] > 0 && dist[nidx] > next_d {
-                    dist[nidx] = next_d;
-                    queue.push_back(nidx);
+    // Forward chamfer EDT pass (top-left → bottom-right).
+    for y in app_min_y..=app_max_y {
+        for x in app_min_x..=app_max_x {
+            let idx = y * width + x;
+            if topology[idx] > TOPO_THRESHOLD || in_forward[idx] == 0 {
+                continue;
+            }
+            let mut d = u16::MAX;
+            if y > 0 {
+                let ra = (y - 1) * width;
+                if x > 0 && dist[ra + x - 1] < u16::MAX {
+                    d = d.min(dist[ra + x - 1].saturating_add(14));
                 }
-            };
+                if dist[ra + x] < u16::MAX {
+                    d = d.min(dist[ra + x].saturating_add(10));
+                }
+                if x + 1 < width && dist[ra + x + 1] < u16::MAX {
+                    d = d.min(dist[ra + x + 1].saturating_add(14));
+                }
+            }
+            if x > 0 && dist[idx - 1] < u16::MAX {
+                d = d.min(dist[idx - 1].saturating_add(10));
+            }
+            dist[idx] = d;
         }
-
-        if x > app_min_x {
-            try_neighbor!(idx - 1);
-        }
-        if x < app_max_x {
-            try_neighbor!(idx + 1);
-        }
-        if y > app_min_y {
-            try_neighbor!(idx - width);
-        }
-        if y < app_max_y {
-            try_neighbor!(idx + width);
+    }
+    // Backward chamfer EDT pass (bottom-right → top-left).
+    for y in (app_min_y..=app_max_y).rev() {
+        for x in (app_min_x..=app_max_x).rev() {
+            let idx = y * width + x;
+            if topology[idx] > TOPO_THRESHOLD || in_forward[idx] == 0 {
+                continue;
+            }
+            let mut d = dist[idx];
+            if y + 1 < height {
+                let rb = (y + 1) * width;
+                if x > 0 && dist[rb + x - 1] < u16::MAX {
+                    d = d.min(dist[rb + x - 1].saturating_add(14));
+                }
+                if dist[rb + x] < u16::MAX {
+                    d = d.min(dist[rb + x].saturating_add(10));
+                }
+                if x + 1 < width && dist[rb + x + 1] < u16::MAX {
+                    d = d.min(dist[rb + x + 1].saturating_add(14));
+                }
+            }
+            if x + 1 < width && dist[idx + 1] < u16::MAX {
+                d = d.min(dist[idx + 1].saturating_add(10));
+            }
+            dist[idx] = d;
         }
     }
 
+    // Step 2b — back-EDT from the outer edge of the appearing zone.
+    for y in app_min_y..=app_max_y {
+        let row = y * width;
+        for x in app_min_x..=app_max_x {
+            dist_back[row + x] = u16::MAX;
+        }
+    }
+    queue.clear();
+    for y in app_min_y..=app_max_y {
+        for x in app_min_x..=app_max_x {
+            let idx = y * width + x;
+            if in_forward[idx] == 0 || dist[idx] == u16::MAX {
+                continue;
+            }
+            let mut on_outer_edge = false;
+            if x > 0 {
+                let ni = idx - 1;
+                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if !on_outer_edge && x + 1 < width {
+                let ni = idx + 1;
+                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if !on_outer_edge && y > 0 {
+                let ni = idx - width;
+                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if !on_outer_edge && y + 1 < height {
+                let ni = idx + width;
+                if in_forward[ni] == 0 && topology[ni] <= TOPO_THRESHOLD {
+                    on_outer_edge = true;
+                }
+            }
+            if on_outer_edge {
+                dist_back[idx] = 0;
+            }
+        }
+    }
+    // Forward chamfer EDT pass for dist_back (top-left → bottom-right).
+    for y in app_min_y..=app_max_y {
+        for x in app_min_x..=app_max_x {
+            let idx = y * width + x;
+            if in_forward[idx] == 0 || dist[idx] == u16::MAX {
+                continue;
+            }
+            let mut d = dist_back[idx];
+            macro_rules! chk_b {
+                ($ni:expr, $c:expr) => {
+                    let ni = $ni;
+                    if in_forward[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
+                        d = d.min(dist_back[ni].saturating_add($c));
+                    }
+                };
+            }
+            if y > 0 {
+                let ra = (y - 1) * width;
+                if x > 0 {
+                    chk_b!(ra + x - 1, 14);
+                }
+                chk_b!(ra + x, 10);
+                if x + 1 < width {
+                    chk_b!(ra + x + 1, 14);
+                }
+            }
+            if x > 0 {
+                chk_b!(idx - 1, 10);
+            }
+            dist_back[idx] = d;
+        }
+    }
+    // Backward chamfer EDT pass for dist_back (bottom-right → top-left).
+    for y in (app_min_y..=app_max_y).rev() {
+        for x in (app_min_x..=app_max_x).rev() {
+            let idx = y * width + x;
+            if in_forward[idx] == 0 || dist[idx] == u16::MAX {
+                continue;
+            }
+            let mut d = dist_back[idx];
+            macro_rules! chk_b {
+                ($ni:expr, $c:expr) => {
+                    let ni = $ni;
+                    if in_forward[ni] > 0 && dist[ni] != u16::MAX && dist_back[ni] < u16::MAX {
+                        d = d.min(dist_back[ni].saturating_add($c));
+                    }
+                };
+            }
+            if y + 1 < height {
+                let rb = (y + 1) * width;
+                if x > 0 {
+                    chk_b!(rb + x - 1, 14);
+                }
+                chk_b!(rb + x, 10);
+                if x + 1 < width {
+                    chk_b!(rb + x + 1, 14);
+                }
+            }
+            if x + 1 < width {
+                chk_b!(idx + 1, 10);
+            }
+            dist_back[idx] = d;
+        }
+    }
+
+    // Step 3 — continuous gradient: fraction = (1 + t·L) / (L+1) where
+    //   t = dist_back / (dist + dist_back)  ∈ [0, 1].
+    // No depth-anchor steps; ring boundaries cause ≈1/zone_width difference
+    // in t between adjacent pixels rather than the 1/(L+1) ≈25 % jump.
     let denom = (look_back + 1) as f32;
     for y in app_min_y..=app_max_y {
         let row = y * width;
         for x in app_min_x..=app_max_x {
             let idx = row + x;
             if topology[idx] <= TOPO_THRESHOLD && in_forward[idx] > 0 && dist[idx] != u16::MAX {
-                let depth = in_forward[idx] as usize;
-                let num = (look_back + 1).saturating_sub(depth) as f32;
-                let fraction = (num / denom).clamp(0.0, 1.0);
+                let front = dist[idx] as f32;
+                let t = if dist_back[idx] != u16::MAX {
+                    let back = dist_back[idx] as f32;
+                    let total = front + back;
+                    if total > 0.0 {
+                        back / total
+                    } else {
+                        0.5
+                    }
+                } else {
+                    0.5
+                };
+                let fraction = (1.0 + t * look_back as f32) / denom;
                 let raw = (fraction * 255.0 + 0.5) as u8;
                 let v = if let Some(lut) = lut {
                     lut[raw as usize]
