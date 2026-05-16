@@ -23,7 +23,7 @@ import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction'
 import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
 import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
 import { useActiveTwigDragPreview } from './SupportTypes/Twig/twigDragPreview';
-import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectGhostedBraceIds, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
+import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
@@ -1719,15 +1719,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.leaves, previewLeavesById]);
 
     const renderBracesById = state.braces;
-    const ghostedBraceIdSet = useMemo(() => {
-        return collectGhostedBraceIds({
-            activeJointDragPreview,
-            previewKnotOverrideIds,
-            braceIdsByKnotId,
-            bracesById: state.braces,
-            isBraceVisible: (brace) => isModelVisible(brace.modelId, brace.id),
-        });
-    }, [activeJointDragPreview, hasPreviewKnotOverrides, previewKnotOverrideIds, braceIdsByKnotId, state.braces, isModelVisible]);
+    // Historically braces were ghosted during joint-drag preview because their
+    // live geometry couldn't be trusted. Now that brace endpoint knots ride
+    // the live preview overrides (see enableBraceLivePreview), the brace can
+    // render at its true live position instead of going transparent.
+    const ghostedBraceIdSet = useMemo(() => new Set<string>(), []);
     const renderKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return state.knots;
         const knots = Object.create(state.knots) as typeof state.knots;
@@ -1745,12 +1741,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return knots;
     }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
 
-    const activeKnotDragPreviewKnotId = activeKnotDragPreview?.knot.id ?? null;
-    const enableBraceLivePreviewForActiveBraceEdit = !!activeKnotDragPreviewKnotId
-        && (braceIdsByKnotId.get(activeKnotDragPreviewKnotId)?.length ?? 0) > 0;
+    // Live brace render: enable whenever any current preview override touches a
+    // brace endpoint knot, regardless of which interaction produced it (direct
+    // brace knot drag, host joint/trunk drag, twig curve reshape, twig disk
+    // drag, etc.). Without this the brace freezes mid-drag and only snaps to
+    // its new geometry on release.
+    const enableBraceLivePreview = useMemo(() => {
+        if (previewKnotOverrideIds.length === 0) return false;
+        for (const knotId of previewKnotOverrideIds) {
+            if ((braceIdsByKnotId.get(knotId)?.length ?? 0) > 0) return true;
+        }
+        return false;
+    }, [previewKnotOverrideIds, braceIdsByKnotId]);
     const braceRenderKnotsById = useMemo(() => {
-        return enableBraceLivePreviewForActiveBraceEdit ? renderKnotsById : state.knots;
-    }, [enableBraceLivePreviewForActiveBraceEdit, renderKnotsById, state.knots]);
+        return enableBraceLivePreview ? renderKnotsById : state.knots;
+    }, [enableBraceLivePreview, renderKnotsById, state.knots]);
 
     const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
     const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
@@ -1945,8 +1950,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const brace of renderBraceList) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
 
-            // Keep braces anchored to committed knots during non-brace edits,
-            // but allow live preview while the user is directly editing a brace knot.
+            // braceRenderKnotsById uses live preview overrides whenever any
+            // brace endpoint knot is being reflowed by an upstream drag — so
+            // braces follow live as their host moves (twig curve reshape, twig
+            // disk drag, trunk/branch joint drag, direct brace knot drag).
             const startKnot = braceRenderKnotsById[brace.startKnotId];
             const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
