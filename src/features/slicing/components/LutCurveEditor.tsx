@@ -85,6 +85,28 @@ export const DEFAULT_OPAQUE_EXP_120_230_CURVE: CurvePoint[] = [
   { x: 253 / 253, y: 230 / 255 },
 ];
 
+/**
+ * Compact 10-point control curve using Aaron's EXP-100 shape remapped for
+ * clear resin windowing (roughly 100..166 PWM, i.e. ~39%..65%).
+ *
+ * Source EXP-100 samples at indices [1,29,57,85,113,142,170,198,226,254]:
+ * [100,107,114,121,131,143,159,180,210,252]
+ * Remapped to clear window:
+ * [100,103,106,109,113,119,126,135,148,166]
+ */
+export const DEFAULT_CLEAR_EXP_100_CURVE: CurvePoint[] = [
+  { x: 0 / 253, y: 100 / 255 },
+  { x: 28 / 253, y: 103 / 255 },
+  { x: 56 / 253, y: 106 / 255 },
+  { x: 84 / 253, y: 109 / 255 },
+  { x: 112 / 253, y: 113 / 255 },
+  { x: 141 / 253, y: 119 / 255 },
+  { x: 169 / 253, y: 126 / 255 },
+  { x: 197 / 253, y: 135 / 255 },
+  { x: 225 / 253, y: 148 / 255 },
+  { x: 253 / 253, y: 166 / 255 },
+];
+
 // ── Math utilities ────────────────────────────────────────────────────────────
 
 function clamp01(v: number) {

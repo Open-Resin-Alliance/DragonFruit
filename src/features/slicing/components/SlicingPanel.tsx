@@ -36,6 +36,7 @@ import {
   LutCurveEditorModal,
   sampleCurveToLut,
   DEFAULT_CUSTOM_CURVE,
+  DEFAULT_CLEAR_EXP_100_CURVE,
   DEFAULT_OPAQUE_EXP_120_230_CURVE,
   DEFAULT_SAVED_CURVES,
   type CurvePoint,
@@ -731,6 +732,11 @@ export function SlicingPanel({
 
   const opaqueDefaultLut = useMemo(
     () => sampleCurveToLut(DEFAULT_OPAQUE_EXP_120_230_CURVE),
+    [],
+  );
+
+  const clearDefaultLut = useMemo(
+    () => sampleCurveToLut(DEFAULT_CLEAR_EXP_100_CURVE),
     [],
   );
 
@@ -1599,6 +1605,8 @@ export function SlicingPanel({
                 )
               : zBlendResinType === 'opaque'
                 ? opaqueDefaultLut
+                : zBlendResinType === 'clear'
+                  ? clearDefaultLut
                 : undefined)
           : undefined,
         minimumAaAlphaPercentOverride: (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
@@ -2376,7 +2384,7 @@ export function SlicingPanel({
                             <>
                               <SettingLabelWithHelp
                                 label="LUT Curve"
-                                help="Selects the max-alpha preset for the cure-window LUT. Opaque (90%) suits standard materials; Clear (65%) suits deep-curing translucent materials; Custom lets you dial in any value."
+                                help="Chooses the cure-window LUT profile for 3DAA blending. Opaque uses a stronger EXP curve (~47%→90%) for standard resins, Clear uses a gentler EXP curve (~39%→65%) for translucent materials, and Custom lets you import or tune your own curve."
                               />
                               <div className="grid grid-cols-3 gap-1 pt-1">
                                 {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
