@@ -32,6 +32,14 @@ pub struct ZBlendWorkspace {
     dist: Vec<f32>,
     /// Temporary seed-marker buffer used during the EDT phase.
     seeds: Vec<bool>,
+    /// Scratch buffer for felzenszwalb_edt_roi Phase-1 squared horizontal distances.
+    /// Preallocated to W×H to eliminate 82.9 MB/layer heap churn at 8K resolution.
+    edt_g: Vec<f32>,
+    /// Scratch buffer for label_receding_components output labels.
+    /// Preallocated to W×H to eliminate another 82.9 MB/layer heap churn.
+    labels_buf: Vec<u32>,
+    /// Reusable BFS queue for label_receding_components (avoids per-layer VecDeque alloc).
+    bfs_queue: VecDeque<usize>,
 }
 
 impl ZBlendWorkspace {
@@ -41,6 +49,11 @@ impl ZBlendWorkspace {
             in_prior: vec![0u8; n],
             dist: vec![f32::INFINITY; n],
             seeds: vec![false; n],
+            // Preallocate to full image capacity so per-layer EDT calls never
+            // hit the global allocator.  Both buffers are ~82.9 MB at 8K.
+            edt_g: Vec::with_capacity(n),
+            labels_buf: Vec::with_capacity(n),
+            bfs_queue: VecDeque::new(),
         }
     }
 
@@ -73,6 +86,9 @@ impl ZBlendWorkspace {
             &mut self.in_prior,
             &mut self.dist,
             &mut self.seeds,
+            &mut self.edt_g,
+            &mut self.labels_buf,
+            &mut self.bfs_queue,
         );
     }
 
@@ -106,6 +122,9 @@ impl ZBlendWorkspace {
             &mut self.in_prior,
             &mut self.dist,
             &mut self.seeds,
+            &mut self.edt_g,
+            &mut self.labels_buf,
+            &mut self.bfs_queue,
             roi,
         );
     }
@@ -158,6 +177,9 @@ impl ZBlendWorkspace {
             &mut self.in_prior,
             &mut self.dist,
             &mut self.seeds,
+            &mut self.edt_g,
+            &mut self.labels_buf,
+            &mut self.bfs_queue,
         );
     }
 
@@ -195,6 +217,9 @@ impl ZBlendWorkspace {
             &mut self.in_prior,
             &mut self.dist,
             &mut self.seeds,
+            &mut self.edt_g,
+            &mut self.labels_buf,
+            &mut self.bfs_queue,
             roi,
         );
     }
@@ -253,6 +278,9 @@ fn z_blend_layer_inplace(
     in_prior: &mut [u8],
     dist: &mut [f32],
     seeds: &mut [bool],
+    edt_g: &mut Vec<f32>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
 ) {
     if width == 0 || height == 0 {
         return;
@@ -267,6 +295,9 @@ fn z_blend_layer_inplace(
         in_prior,
         dist,
         seeds,
+        edt_g,
+        labels_buf,
+        bfs_queue,
         (0, width - 1, 0, height - 1),
     );
 }
@@ -302,6 +333,9 @@ fn z_blend_layer_inplace_with_roi(
     in_prior: &mut [u8],
     dist: &mut [f32],
     seeds: &mut [bool],
+    edt_g: &mut Vec<f32>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
     roi: (usize, usize, usize, usize),
 ) {
     let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
@@ -386,13 +420,7 @@ fn z_blend_layer_inplace_with_roi(
     }
 
     felzenszwalb_edt_roi(
-        seeds,
-        width,
-        seed_min_x,
-        seed_max_x,
-        seed_min_y,
-        seed_max_y,
-        dist,
+        seeds, width, seed_min_x, seed_max_x, seed_min_y, seed_max_y, dist, edt_g,
     );
 
     // Clear seed markers for next call.
@@ -410,7 +438,7 @@ fn z_blend_layer_inplace_with_roi(
     // gradient automatically slope-adaptive: narrow (steep) islands produce
     // steep gradients; wide (shallow) islands produce gentle ones.
     let roi_w_rec = rec_max_x - rec_min_x + 1;
-    let (labels, num_labels) = label_receding_components(
+    let num_labels = label_receding_components(
         in_prior,
         current,
         width,
@@ -419,6 +447,8 @@ fn z_blend_layer_inplace_with_roi(
         rec_min_y,
         rec_max_y,
         TOPO_THRESHOLD,
+        labels_buf,
+        bfs_queue,
     );
 
     // Find per-component maximum distance (uncapped — we use the full extent
@@ -431,8 +461,7 @@ fn z_blend_layer_inplace_with_roi(
             if in_prior[idx] > 0 && current[idx] <= TOPO_THRESHOLD {
                 let d = dist[idx];
                 if d.is_finite() {
-                    let lbl =
-                        labels[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                    let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
                     if d > max_dist[lbl] {
                         max_dist[lbl] = d;
                     }
@@ -459,8 +488,7 @@ fn z_blend_layer_inplace_with_roi(
                 if !d.is_finite() || d > fade_f {
                     continue;
                 }
-                let lbl =
-                    labels[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
                 let max_d = max_dist[lbl].max(1.0);
                 let t = (d / max_d).clamp(0.0, 1.0);
                 let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
@@ -496,6 +524,9 @@ fn z_blend_forward_inplace(
     in_forward: &mut [u8],
     dist: &mut [f32],
     seeds: &mut [bool],
+    edt_g: &mut Vec<f32>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
 ) {
     if width == 0 || height == 0 {
         return;
@@ -512,6 +543,9 @@ fn z_blend_forward_inplace(
         in_forward,
         dist,
         seeds,
+        edt_g,
+        labels_buf,
+        bfs_queue,
         (0, width - 1, 0, height - 1),
     );
 }
@@ -528,6 +562,9 @@ fn z_blend_forward_inplace_with_roi(
     in_forward: &mut [u8],
     dist: &mut [f32],
     seeds: &mut [bool],
+    edt_g: &mut Vec<f32>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
     roi: (usize, usize, usize, usize),
 ) {
     if futures.is_empty() || fade_px == 0 || look_back == 0 {
@@ -595,13 +632,7 @@ fn z_blend_forward_inplace_with_roi(
     }
 
     felzenszwalb_edt_roi(
-        seeds,
-        width,
-        seed_min_x,
-        seed_max_x,
-        seed_min_y,
-        seed_max_y,
-        dist,
+        seeds, width, seed_min_x, seed_max_x, seed_min_y, seed_max_y, dist, edt_g,
     );
 
     // Clear seed markers.
@@ -614,7 +645,7 @@ fn z_blend_forward_inplace_with_roi(
 
     // -- Step 3: label connected components in the pre-appearing zone. --
     let roi_w_app = app_max_x - app_min_x + 1;
-    let (labels, num_labels) = label_receding_components(
+    let num_labels = label_receding_components(
         in_forward,
         topology,
         width,
@@ -623,6 +654,8 @@ fn z_blend_forward_inplace_with_roi(
         app_min_y,
         app_max_y,
         TOPO_THRESHOLD,
+        labels_buf,
+        bfs_queue,
     );
 
     let mut max_dist = vec![0.0f32; num_labels as usize + 1];
@@ -633,8 +666,7 @@ fn z_blend_forward_inplace_with_roi(
             if in_forward[idx] > 0 && topology[idx] <= TOPO_THRESHOLD {
                 let d = dist[idx];
                 if d.is_finite() {
-                    let lbl =
-                        labels[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                    let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
                     if d > max_dist[lbl] {
                         max_dist[lbl] = d;
                     }
@@ -654,8 +686,7 @@ fn z_blend_forward_inplace_with_roi(
                 if !d.is_finite() || d > fade_f {
                     continue;
                 }
-                let lbl =
-                    labels[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
                 let max_d = max_dist[lbl].max(1.0);
                 let t = (d / max_d).clamp(0.0, 1.0);
                 let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
@@ -694,6 +725,7 @@ fn felzenszwalb_edt_roi(
     roi_min_y: usize,
     roi_max_y: usize,
     dist: &mut [f32],
+    scratch_g: &mut Vec<f32>,
 ) {
     let roi_w = roi_max_x - roi_min_x + 1;
     let roi_h = roi_max_y - roi_min_y + 1;
@@ -703,7 +735,16 @@ fn felzenszwalb_edt_roi(
 
     // Phase 1: for each row, compute squared horizontal distance to nearest seed.
     // g[roi_y * roi_w + roi_x] = (horizontal pixel distance to nearest seed)²
-    let mut g = vec![f32::INFINITY; roi_w * roi_h];
+    //
+    // Phase 1 unconditionally overwrites every element in the left-to-right
+    // scan before any read, so no initialisation is required — just ensure the
+    // scratch buffer is large enough (will never reallocate after the first
+    // full-plate layer at a given resolution).
+    let g_len = roi_w * roi_h;
+    if scratch_g.len() < g_len {
+        scratch_g.resize(g_len, 0.0);
+    }
+    let g = &mut scratch_g[..g_len];
     for roi_y in 0..roi_h {
         let y = roi_min_y + roi_y;
         let row = y * width;
@@ -821,12 +862,22 @@ fn label_receding_components(
     rec_min_y: usize,
     rec_max_y: usize,
     topo_threshold: u8,
-) -> (Vec<u32>, u32) {
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+) -> u32 {
     let roi_w = rec_max_x - rec_min_x + 1;
     let roi_h = rec_max_y - rec_min_y + 1;
-    let mut labels = vec![0u32; roi_w * roi_h];
+    let roi_len = roi_w * roi_h;
+    // Reuse preallocated buffer; ensure it is large enough then zero the active
+    // portion.  After the first full-plate layer the capacity is sufficient and
+    // no heap allocation occurs.
+    if labels_buf.len() < roi_len {
+        labels_buf.resize(roi_len, 0);
+    }
+    labels_buf[..roi_len].fill(0);
+    bfs_queue.clear();
+
     let mut next_label = 1u32;
-    let mut queue = VecDeque::<usize>::new();
 
     for start_ry in 0..roi_h {
         let start_y = rec_min_y + start_ry;
@@ -838,7 +889,7 @@ fn label_receding_components(
             // Must be in the receding zone and unlabelled.
             if in_occupancy[img_idx] == 0
                 || current[img_idx] > topo_threshold
-                || labels[roi_idx] != 0
+                || labels_buf[roi_idx] != 0
             {
                 continue;
             }
@@ -846,10 +897,10 @@ fn label_receding_components(
             // BFS flood-fill from this seed.
             let label = next_label;
             next_label += 1;
-            labels[roi_idx] = label;
-            queue.push_back(roi_idx);
+            labels_buf[roi_idx] = label;
+            bfs_queue.push_back(roi_idx);
 
-            while let Some(ri) = queue.pop_front() {
+            while let Some(ri) = bfs_queue.pop_front() {
                 let ry = ri / roi_w;
                 let rx = ri % roi_w;
                 let y = rec_min_y + ry;
@@ -875,10 +926,10 @@ fn label_receding_components(
                         let ni = ny as usize * width + nx as usize;
                         if in_occupancy[ni] > 0
                             && current[ni] <= topo_threshold
-                            && labels[nri] == 0
+                            && labels_buf[nri] == 0
                         {
-                            labels[nri] = label;
-                            queue.push_back(nri);
+                            labels_buf[nri] = label;
+                            bfs_queue.push_back(nri);
                         }
                     }
                 }
@@ -886,7 +937,7 @@ fn label_receding_components(
         }
     }
 
-    (labels, next_label - 1)
+    next_label - 1
 }
 
 /// Returns true if the pixel at (x, y) has at least one 4-connected neighbour
@@ -1211,8 +1262,7 @@ mod tests {
         let layer = &masks[1];
         // Outermost receding pixel (farthest from solid) → t=1.0 → raw=0
         assert_eq!(
-            layer[0],
-            0,
+            layer[0], 0,
             "outermost receding pixel gets 0 (t=1.0 at component max_dist), got {}",
             layer[0]
         );
