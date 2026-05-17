@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, CircleHelp, Cpu, Download, Edit3, Layers3, Play, Printer, Timer } from 'lucide-react';
+import { ChevronDown, CircleHelp, Cpu, Download, Edit3, Layers3, Loader2, Play, Printer, Timer } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
@@ -509,6 +509,22 @@ type AutoAaResolvedConfig = {
   zBlendLookBack: number;
 };
 
+const DEFAULT_AUTO_Z_BLEND_LOOK_BACK = 2;
+
+const PENDING_AUTO_AA_CONFIG: AutoAaResolvedConfig = {
+  aaMode: 'Blur',
+  aaSteps: 4,
+  blurBrushRadiusPx: 1,
+  zBlendLookBack: DEFAULT_AUTO_Z_BLEND_LOOK_BACK,
+};
+
+const DEFAULT_AUTO_AA_CONFIG: AutoAaResolvedConfig = {
+  aaMode: 'Blur',
+  aaSteps: 4,
+  blurBrushRadiusPx: 1,
+  zBlendLookBack: DEFAULT_AUTO_Z_BLEND_LOOK_BACK,
+};
+
 function resolveInitialAaAutoPreset(): AaAutoUiPreset {
   if (typeof window === 'undefined') return 'balanced';
   const stored = window.localStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY)
@@ -599,6 +615,9 @@ export function SlicingPanel({
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
   const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoUiPreset>(resolveInitialAaAutoPreset);
+  const [autoAaConfig, setAutoAaConfig] = useState<AutoAaResolvedConfig>(DEFAULT_AUTO_AA_CONFIG);
+  const [autoZBlendLookBack, setAutoZBlendLookBack] = useState<number>(DEFAULT_AUTO_Z_BLEND_LOOK_BACK);
+  const [isAutoAaCalculating, setIsAutoAaCalculating] = useState(false);
   const [zBlendResinType, setZBlendResinType] = useState<'opaque' | 'clear' | 'custom'>(resolveInitialZBlendResinType);
   const [savedCurves, setSavedCurves] = useState<SavedCurve[]>(() => resolveInitialSavedCurves());
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => resolveInitialSelectedCurveId(resolveInitialSavedCurves()));
@@ -1014,30 +1033,49 @@ export function SlicingPanel({
   ]);
 
   // Auto AA config: physics-grounded parameters from pixel pitch + layer height.
-  // Computed by autoAaPhysics.ts — see that module for the full engineering model.
-  const autoAaConfig = useMemo<AutoAaResolvedConfig>(() => {
-    if (aaAutoPreset === 'raw') {
-      return {
-        aaMode: 'Off',
-        aaSteps: 0,
-        blurBrushRadiusPx: 0,
-        zBlendLookBack: 0,
-      };
-    }
-    const layerHeightMm = Number(effectiveLayerHeightMm);
-    const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
-    return computePhysicalAaConfig(aaAutoPreset, pixelPitchMm, safeLayerH);
+  // Computed asynchronously so Export-page transition can paint first, with
+  // a visible pending state in the AA panel.
+  useEffect(() => {
+    let cancelled = false;
+    setIsAutoAaCalculating(true);
+
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+
+      const layerHeightMm = Number(effectiveLayerHeightMm);
+      const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
+
+      const nextAutoAaConfig: AutoAaResolvedConfig = aaAutoPreset === 'raw'
+        ? {
+            aaMode: 'Off',
+            aaSteps: 0,
+            blurBrushRadiusPx: 0,
+            zBlendLookBack: 0,
+          }
+        : computePhysicalAaConfig(aaAutoPreset, pixelPitchMm, safeLayerH);
+
+      const nextAutoZBlendLookBack = computePhysicalAaConfig('balanced', pixelPitchMm, safeLayerH).zBlendLookBack;
+
+      if (cancelled) return;
+      setAutoAaConfig(nextAutoAaConfig);
+      setAutoZBlendLookBack(nextAutoZBlendLookBack);
+      setIsAutoAaCalculating(false);
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [aaAutoPreset, effectiveLayerHeightMm, pixelPitchMm]);
 
-  const autoZBlendLookBack = useMemo(() => {
-    const layerHeightMm = Number(effectiveLayerHeightMm);
-    const safeLayerH = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
-    return computePhysicalAaConfig('balanced', pixelPitchMm, safeLayerH).zBlendLookBack;
-  }, [effectiveLayerHeightMm, pixelPitchMm]);
+  const effectiveAutoAaConfig = isAutoAaCalculating ? PENDING_AUTO_AA_CONFIG : autoAaConfig;
+  const effectiveAutoZBlendLookBack = isAutoAaCalculating
+    ? DEFAULT_AUTO_Z_BLEND_LOOK_BACK
+    : autoZBlendLookBack;
 
   const autoLookBackForFade = (aaQualityMode === 'auto' && antiAliasingAvailable)
-    ? autoAaConfig.zBlendLookBack
-    : autoZBlendLookBack;
+    ? effectiveAutoAaConfig.zBlendLookBack
+    : effectiveAutoZBlendLookBack;
 
   const autoZBlendFadePx = useMemo(() => {
     const lookBack = Math.max(
@@ -1074,13 +1112,13 @@ export function SlicingPanel({
     : zBlendFadePx;
 
   // Resolved AA state: auto mode overrides manual state when AA is available.
-  const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.aaMode : aaMode;
-  const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(autoAaConfig.aaSteps) : aaLevel;
-  const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? autoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
+  const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.aaMode : aaMode;
+  const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(effectiveAutoAaConfig.aaSteps) : aaLevel;
+  const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
   const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable)
-    ? autoAaConfig.zBlendLookBack
+    ? effectiveAutoAaConfig.zBlendLookBack
     : (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode)
-      ? autoZBlendLookBack
+      ? effectiveAutoZBlendLookBack
       : zBlendLookBack;
   const resolvedZBlendFadeMode = useAutoFadeDistance ? 'auto' as const : 'manual' as const;
 
@@ -1857,6 +1895,10 @@ export function SlicingPanel({
 
   // Auto-trigger slice when shouldAutoSlice becomes true
   useEffect(() => {
+    if (aaQualityMode === 'auto' && isAutoAaCalculating) {
+      return;
+    }
+
     if (!shouldAutoSlice) {
       if (autoSliceTimeoutRef.current !== null) {
         window.clearTimeout(autoSliceTimeoutRef.current);
@@ -1885,7 +1927,7 @@ export function SlicingPanel({
         autoSliceTimeoutRef.current = null;
       }
     };
-  }, [isSlicingZip, shouldAutoSlice]);
+  }, [aaQualityMode, isAutoAaCalculating, isSlicingZip, shouldAutoSlice]);
 
   const selectedLayerPreviewUrl = useMemo(() => {
     if (previewSelectedLayer < 1) return null;
@@ -2145,18 +2187,31 @@ export function SlicingPanel({
                           );
                         })}
                       </div>
+                      {isAutoAaCalculating && (
+                        <div
+                          className="flex items-center justify-center gap-1 rounded border px-2 py-1 text-[10px] font-medium"
+                          style={{
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-0)',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>Calculating AA profile…</span>
+                        </div>
+                      )}
                       <div className="grid grid-cols-4 gap-1 text-center">
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaConfig.aaMode === 'Off' ? 'No AA' : `${autoAaConfig.aaSteps}x AA`}
+                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No AA' : `${effectiveAutoAaConfig.aaSteps}x AA`}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaConfig.aaMode === 'Off' ? 'No Blur' : `${autoAaConfig.blurBrushRadiusPx}px Blur`}
+                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No Blur' : `${effectiveAutoAaConfig.blurBrushRadiusPx}px Blur`}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaConfig.aaMode === 'Off' ? 'No 3DAA' : autoAaConfig.aaMode === '3DAA' ? `${autoAaConfig.zBlendLookBack} Layer` : 'Blur only'}
+                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No 3DAA' : effectiveAutoAaConfig.aaMode === '3DAA' ? `${effectiveAutoAaConfig.zBlendLookBack} Layer` : 'Blur only'}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaConfig.aaMode === '3DAA' ? ` ${selectedLutCurveLabel}` : 'No LUT'}
+                          {effectiveAutoAaConfig.aaMode === '3DAA' ? ` ${selectedLutCurveLabel}` : 'No LUT'}
                         </span>
                       </div>
                     </>
@@ -2717,7 +2772,8 @@ export function SlicingPanel({
 
           {/* Slice intent split-button */}
           {(() => {
-            const isDisabled = isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
+            const isAutoAaPending = aaQualityMode === 'auto' && isAutoAaCalculating;
+            const isDisabled = isSlicingZip || isAutoAaPending || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
               { key: 'file',    label: 'Slice to File',  Icon: Download as IconType, enabled: true },
@@ -2738,7 +2794,7 @@ export function SlicingPanel({
                     className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasNetworkOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
                     <CurrentIcon className="w-4 h-4 shrink-0" />
-                    {isSlicingZip ? 'Slicing…' : current.label}
+                    {isSlicingZip ? 'Slicing…' : isAutoAaPending ? 'Profiling AA…' : current.label}
                   </button>
                   {hasNetworkOptions && !isShiftHeld && (
                     <button

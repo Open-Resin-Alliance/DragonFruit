@@ -261,6 +261,14 @@ type HomeSupportCollectionsSnapshot = Pick<
   'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
 >;
 
+function countRecordEntries(record: Record<string, unknown>): number {
+  let count = 0;
+  for (const _key in record) {
+    count += 1;
+  }
+  return count;
+}
+
 type HomeKickstandSnapshot = ReturnType<typeof getKickstandSnapshot>;
 type HomeKickstandCollectionsSnapshot = Pick<
   HomeKickstandSnapshot,
@@ -2388,15 +2396,15 @@ export default function Home() {
         lastAt: historyDebug.lastAt,
       },
       supportCounts: {
-        trunks: Object.keys(supportStateSnapshot.trunks).length,
-        branches: Object.keys(supportStateSnapshot.branches).length,
-        leaves: Object.keys(supportStateSnapshot.leaves).length,
-        twigs: Object.keys(supportStateSnapshot.twigs).length,
-        sticks: Object.keys(supportStateSnapshot.sticks).length,
-        braces: Object.keys(supportStateSnapshot.braces).length,
-        roots: Object.keys(supportStateSnapshot.roots).length,
-        knots: Object.keys(supportStateSnapshot.knots).length,
-        kickstands: Object.keys(kickstandStateSnapshot.kickstands).length,
+        trunks: countRecordEntries(supportStateSnapshot.trunks),
+        branches: countRecordEntries(supportStateSnapshot.branches),
+        leaves: countRecordEntries(supportStateSnapshot.leaves),
+        twigs: countRecordEntries(supportStateSnapshot.twigs),
+        sticks: countRecordEntries(supportStateSnapshot.sticks),
+        braces: countRecordEntries(supportStateSnapshot.braces),
+        roots: countRecordEntries(supportStateSnapshot.roots),
+        knots: countRecordEntries(supportStateSnapshot.knots),
+        kickstands: countRecordEntries(kickstandStateSnapshot.kickstands),
       },
     };
   }, [kickstandStateSnapshot.kickstands, scene.activeModelId, scene.models, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
@@ -3388,9 +3396,9 @@ export default function Home() {
   }, [computeBaseResinMlChunked]);
 
   // Support/raft aggregation is comparatively heavy, so keep it scoped to
-  // export + pre-artifact printing. Base model volume estimation runs in the
+  // pre-artifact printing only. Base model volume estimation runs in the
   // background across active editing modes (for warm, up-to-date estimates).
-  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'printing' && !printingArtifact;
   const resinBuildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
@@ -3476,7 +3484,7 @@ export default function Home() {
   const supportAndRaftResinMl = React.useMemo(() => {
     if (!shouldCalculateSupportAndRaftVolumes) return 0;
 
-    // Expensive calculation ONLY runs when mode is export/printing
+    // Expensive calculation ONLY runs in pre-artifact printing mode.
     const visibleModelIds = resinInBoundsModelIdSet;
     if (visibleModelIds.size === 0) return 0;
 
@@ -10338,8 +10346,17 @@ export default function Home() {
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
+  const setSceneZRangeIfChanged = React.useCallback((nextRange: { min: number; max: number }) => {
+    setSceneZRange((previous) => {
+      if (Object.is(previous.min, nextRange.min) && Object.is(previous.max, nextRange.max)) {
+        return previous;
+      }
+      return nextRange;
+    });
+  }, []);
+
   const projectedZRangeCacheRef = React.useRef<Map<string, { min: number; max: number }>>(new Map());
-  const projectedZRangeCacheKey = React.useMemo(() => {
+  const buildProjectedZRangeCacheKey = React.useCallback(() => {
     const visibleSignature = scene.models
       .filter((model) => model.visible)
       .map((model) => {
@@ -10364,14 +10381,14 @@ export default function Home() {
       visibleSignature,
       `support-refresh:${supportRenderRefreshNonce}`,
       `raft-mode:${raftSettingsSnapshot.bottomMode}`,
-      `roots:${Object.keys(supportStateSnapshot.roots).length}`,
-      `trunks:${Object.keys(supportStateSnapshot.trunks).length}`,
-      `branches:${Object.keys(supportStateSnapshot.branches).length}`,
-      `leaves:${Object.keys(supportStateSnapshot.leaves).length}`,
-      `twigs:${Object.keys(supportStateSnapshot.twigs).length}`,
-      `sticks:${Object.keys(supportStateSnapshot.sticks).length}`,
-      `braces:${Object.keys(supportStateSnapshot.braces).length}`,
-      `kickstands:${Object.keys(kickstandStateSnapshot.kickstands).length}`,
+      `roots:${countRecordEntries(supportStateSnapshot.roots)}`,
+      `trunks:${countRecordEntries(supportStateSnapshot.trunks)}`,
+      `branches:${countRecordEntries(supportStateSnapshot.branches)}`,
+      `leaves:${countRecordEntries(supportStateSnapshot.leaves)}`,
+      `twigs:${countRecordEntries(supportStateSnapshot.twigs)}`,
+      `sticks:${countRecordEntries(supportStateSnapshot.sticks)}`,
+      `braces:${countRecordEntries(supportStateSnapshot.braces)}`,
+      `kickstands:${countRecordEntries(kickstandStateSnapshot.kickstands)}`,
     ].join('||');
   }, [
     kickstandStateSnapshot.kickstands,
@@ -10390,15 +10407,16 @@ export default function Home() {
   useEffect(() => {
     // Projected world-triangle bounds are expensive.
     // Analysis can run on fallback bounds to keep mode-entry instant.
-    // Printing needs accurate support/raft-aware bounds before a print artifact
-    // exists; Export needs the same fidelity so layer estimates match real slicing.
-    const needsAccurateZRange = (scene.mode === 'printing' && !printingArtifact) || scene.mode === 'export';
+    // Printing needs accurate support/raft-aware bounds before a print artifact exists.
+    // Export intentionally uses fallback bounds to avoid full-plate OOM spikes on entry.
+    const needsAccurateZRange = scene.mode === 'printing' && !printingArtifact;
     const shouldUseSlicerAlignedRange = scene.mode === 'printing' || scene.mode === 'export';
     
     if (needsAccurateZRange) {
+      const projectedZRangeCacheKey = buildProjectedZRangeCacheKey();
       const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
       if (cached) {
-        setSceneZRange(cached);
+        setSceneZRangeIfChanged(cached);
         return;
       }
 
@@ -10419,7 +10437,7 @@ export default function Home() {
           const oldest = projectedZRangeCacheRef.current.keys().next().value;
           if (oldest != null) projectedZRangeCacheRef.current.delete(oldest);
         }
-        setSceneZRange(nextRange);
+        setSceneZRangeIfChanged(nextRange);
       };
 
       timeoutId = window.setTimeout(() => {
@@ -10442,15 +10460,19 @@ export default function Home() {
       };
     } else {
       // Use fast fallback for non-export modes where projected bounds aren't required.
-      setSceneZRange(shouldUseSlicerAlignedRange ? normalizeToSlicerZRange(fallbackZRange) : fallbackZRange);
+      const nextRange = shouldUseSlicerAlignedRange
+        ? normalizeToSlicerZRange(fallbackZRange)
+        : fallbackZRange;
+      setSceneZRangeIfChanged(nextRange);
     }
   }, [
+    buildProjectedZRangeCacheKey,
     normalizeToSlicerZRange,
     fallbackZRange,
     printingArtifact,
-    projectedZRangeCacheKey,
     scene.mode,
     scene.models,
+    setSceneZRangeIfChanged,
   ]);
 
   const slicing = useSlicingManager({
