@@ -2126,8 +2126,8 @@ export function SlicingPanel({
                     {(['auto', 'advanced'] as const).map((qmode) => {
                       const qActive = aaQualityMode === qmode;
                       const meta = qmode === 'auto'
-                        ? { label: 'Auto', desc: 'Tuned to your printer & material' }
-                        : { label: 'Advanced', desc: 'Full manual control' };
+                        ? { label: 'Auto', desc: 'Let the magic happen.' }
+                        : { label: 'Advanced', desc: 'Take full manual control.' };
                       return (
                         <button
                           key={qmode}
