@@ -120,13 +120,16 @@ fn cap_concurrency_for_mask_bytes(
     // (max_concurrent + buffer) masks alive at once.
     //
     // Rough peak: (max_concurrent + buffer) × bytes_per_mask
-    //   48 MB × (4+2) = 288 MB — fine for 16 GB+
-    //   59 MB × (4+2) = 354 MB — fine for 16 GB+
-    //   74 MB × (4+2) = 444 MB — fine for 16 GB+
+    //   48 MB × (8+8) = 768 MB — fine for 16 GB+
+    //   59 MB × (8+8) = 944 MB — fine for 16 GB+
+    //   74 MB × (8+8) = 1184 MB — fine for 32 GB+
     if budget_override.is_none() {
         if bytes_per_mask >= 48 * 1024 * 1024 {
-            // 8K–12K class: 4 workers keeps raster rate ≥ EDT rate (~18 ms/layer).
-            capped = capped.min(4);
+            // 8K–12K class: after 3DAA pump/encode decoupling and ROI-RLE,
+            // raster supply is the limiter on 16-core hosts.  Allow up to 8
+            // streaming workers by default; memory remains bounded by the raw
+            // mask channel and streaming buffer below.
+            capped = capped.min(8);
         } else if bytes_per_mask >= 24 * 1024 * 1024 {
             capped = capped.min(6);
         } else if bytes_per_mask >= 12 * 1024 * 1024 {
@@ -137,13 +140,25 @@ fn cap_concurrency_for_mask_bytes(
     capped.max(1)
 }
 
-fn choose_streaming_buffer_depth_for_mask_bytes(layer_pixels_len: usize) -> usize {
+fn choose_streaming_buffer_depth_for_mask_bytes(
+    layer_pixels_len: usize,
+    max_concurrent: usize,
+) -> usize {
     let bytes_per_mask = layer_pixels_len;
-    if bytes_per_mask >= 24 * 1024 * 1024 {
-        // For giant layers (8K-12K-class): keep 2 masks queued so the consumer
-        // always has a pre-rasterized layer ready while it processes the current one.
-        // Extra memory: 2 × ~60 MB = ~120 MB — well within normal budgets.
-        2
+    if let Ok(v) = std::env::var("DF_V3_STREAMING_BUFFER_DEPTH") {
+        if let Ok(parsed) = v.parse::<usize>() {
+            return parsed.clamp(1, 32);
+        }
+    }
+    if bytes_per_mask >= 48 * 1024 * 1024 {
+        // 8K-12K-class: with 8 raster workers, a 2-slot result channel caused
+        // out-of-order completed layers to block workers before the ordered
+        // drain could advance, limiting measured raster parallelism to ~4.4×.
+        // Match worker count by default to keep producers fed while preserving
+        // a hard, predictable memory bound.
+        max_concurrent.clamp(4, 8)
+    } else if bytes_per_mask >= 24 * 1024 * 1024 {
+        4
     } else {
         4
     }
@@ -193,7 +208,7 @@ pub fn render_layers_bounded(
     // can use a generous buffer matching render_layers_rle.  Streaming raw
     // masks need a tight buffer to avoid accumulating 56MB masks.
     let buffer = if streaming_raw_mask_sink {
-        choose_streaming_buffer_depth_for_mask_bytes(layer_pixels)
+        choose_streaming_buffer_depth_for_mask_bytes(layer_pixels, max_concurrent)
     } else if use_rle_png_path {
         (max_concurrent * 4).clamp(4, 64)
     } else {

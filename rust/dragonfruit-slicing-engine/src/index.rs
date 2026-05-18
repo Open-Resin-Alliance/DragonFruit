@@ -147,8 +147,12 @@ pub fn build_layer_index(
         return LayerIndex::Dense(buckets);
     }
 
-    build_zbin_index_from_ranges(triangles, layer_height_mm,
-        estimated_dense_entries, max_dense_entries)
+    build_zbin_index_from_ranges(
+        triangles,
+        layer_height_mm,
+        estimated_dense_entries,
+        max_dense_entries,
+    )
 }
 
 /// Build a Z-bin spatial index as a memory-efficient fallback when Dense is too large.
