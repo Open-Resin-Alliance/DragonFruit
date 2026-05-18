@@ -25,6 +25,7 @@ export interface SavedCurve {
 }
 
 type NewCurvePreset = 'opaque' | 'clear' | 'custom';
+type AlphaUnitMode = 'percent' | 'u8';
 
 type LutCurveProfileExchangeHeader = {
   kind: 'dragonfruit-lut-curve-profile';
@@ -53,6 +54,8 @@ export const DEFAULT_CUSTOM_CURVE: CurvePoint[] = [
 export const DEFAULT_SAVED_CURVES: SavedCurve[] = [
   { id: 'default', name: 'My Curve', points: DEFAULT_CUSTOM_CURVE },
 ];
+
+const LUT_ALPHA_UNIT_MODE_STORAGE_KEY = 'dragonfruit.lut-editor.alpha-unit-mode';
 
 const NEW_CURVE_OPAQUE_POINTS: CurvePoint[] = [
   { x: 0, y: 0.55 },
@@ -115,6 +118,32 @@ function clamp01(v: number) {
 
 function clampRange(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+function normalizedAlphaToDisplayValue(alpha01: number, unitMode: AlphaUnitMode): number {
+  const clamped = clamp01(alpha01);
+  return unitMode === 'u8'
+    ? Math.round(clamped * 255)
+    : Math.round(clamped * 100);
+}
+
+function formatAlphaValueForUnit(alpha01: number, unitMode: AlphaUnitMode): string {
+  const value = normalizedAlphaToDisplayValue(alpha01, unitMode);
+  return unitMode === 'u8' ? `${value}` : `${value}%`;
+}
+
+function alphaDisplayValueToNormalized(displayValue: number, unitMode: AlphaUnitMode): number {
+  const numeric = Number.isFinite(displayValue) ? displayValue : 0;
+  return unitMode === 'u8'
+    ? clamp01(numeric / 255)
+    : clamp01(numeric / 100);
+}
+
+function alphaDisplayValueToPercent(displayValue: number, unitMode: AlphaUnitMode): number {
+  const numeric = Number.isFinite(displayValue) ? displayValue : 0;
+  return unitMode === 'u8'
+    ? clampRange((numeric / 255) * 100, 0, 100)
+    : clampRange(numeric, 0, 100);
 }
 
 function normalizeImportedCurvePoints(rawPoints: unknown): CurvePoint[] {
@@ -365,15 +394,17 @@ interface CurveCanvasProps {
   onChange: (pts: CurvePoint[]) => void;
   selectedIdx: number | null;
   onSelectPoint: (idx: number | null) => void;
+  alphaUnitMode: AlphaUnitMode;
 }
 
-function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanvasProps) {
+function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint, alphaUnitMode }: CurveCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const draggingIdx = useRef(-1);
   const dragStarted = useRef(false);
   const dragStartClient = useRef<[number, number] | null>(null);
   const didDrag = useRef(false);
   const [hoverPos, setHoverPos] = useState<[number, number] | null>(null);
+  const [isPointerDragging, setIsPointerDragging] = useState(false);
   const DRAG_THRESHOLD_PX = 4;
 
   const spline = makeSpline(points);
@@ -397,6 +428,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
     dragStarted.current = false;
     dragStartClient.current = [e.clientX, e.clientY];
     didDrag.current = false;
+    setIsPointerDragging(true);
     onSelectPoint(idx);
   }, [onSelectPoint]);
 
@@ -436,6 +468,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
     draggingIdx.current = -1;
     dragStarted.current = false;
     dragStartClient.current = null;
+    setIsPointerDragging(false);
   }, []);
 
   const onMouseLeave = useCallback(() => {
@@ -443,6 +476,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
     dragStarted.current = false;
     dragStartClient.current = null;
     setHoverPos(null);
+    setIsPointerDragging(false);
   }, []);
 
   const onSvgContextMenu = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -461,6 +495,9 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
   }, [getSvgCoords, onChange, onSelectPoint, points]);
 
   const gridVals = [0, 0.25, 0.5, 0.75, 1];
+  const yAxisLabels = alphaUnitMode === 'u8'
+    ? ['0', '64', '128', '192', '255']
+    : ['0%', '25%', '50%', '75%', '100%'];
 
   return (
     <svg
@@ -478,7 +515,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
       onContextMenu={onSvgContextMenu}
     >
       {/* Y-axis grid + labels */}
-      {gridVals.map((v) => {
+      {gridVals.map((v, idx) => {
         const [, gy] = toSvgC(0, v);
         const isBound = v === 0 || v === 1;
         const yLabelY = v === 0 ? gy - 4 : gy + 3.5;
@@ -497,7 +534,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
               x={IX0 - 8} y={yLabelY}
               fontSize={9} fill="color-mix(in srgb, var(--text-muted), white 5%)"
               textAnchor="end"
-            >{v === 0 ? '0%' : v === 1 ? '100%' : `${Math.round(v * 100)}%`}</text>
+            >{yAxisLabels[idx]}</text>
           </React.Fragment>
         );
       })}
@@ -539,7 +576,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
       </text>
 
       {/* Hover crosshair */}
-      {hoverPos && draggingIdx.current < 0 && (
+      {hoverPos && !isPointerDragging && (
         <>
           <line
             x1={IX0 + hoverPos[0] * IW_C} y1={IY0}
@@ -554,7 +591,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
           <text
             x={IX1 - 4} y={IY0 + (1 - hoverPos[1]) * IH_C - 4}
             fontSize={8} fill="var(--text-muted)" textAnchor="end" opacity={0.8}
-          >{`${Math.round(hoverPos[0] * 100)}% → ${Math.round(hoverPos[1] * 100)}%`}</text>
+          >{`${Math.round(hoverPos[0] * 100)}% → ${formatAlphaValueForUnit(hoverPos[1], alphaUnitMode)}`}</text>
         </>
       )}
 
@@ -605,7 +642,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint }: CurveCanv
               fill={isSelected ? 'var(--accent-secondary-action-border)' : 'var(--text-muted)'}
               textAnchor={labelAnchor}
               pointerEvents="none"
-            >{Math.round(pt.y * 100)}%</text>
+            >{formatAlphaValueForUnit(pt.y, alphaUnitMode)}</text>
           </React.Fragment>
         );
       })}
@@ -717,7 +754,25 @@ export function LutCurveEditorModal({
   const [draftCreatePreset, setDraftCreatePreset] = useState<NewCurvePreset>('opaque');
   const [draftCreateCustomMin, setDraftCreateCustomMin] = useState<number>(55);
   const [draftCreateCustomMax, setDraftCreateCustomMax] = useState<number>(90);
+  const [alphaUnitMode, setAlphaUnitMode] = useState<AlphaUnitMode>(() => {
+    if (typeof window === 'undefined') return 'percent';
+    try {
+      const saved = window.localStorage.getItem(LUT_ALPHA_UNIT_MODE_STORAGE_KEY);
+      return saved === 'u8' ? 'u8' : 'percent';
+    } catch {
+      return 'percent';
+    }
+  });
   const initialSnapshotRef = useRef<{ name: string; points: CurvePoint[] } | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(LUT_ALPHA_UNIT_MODE_STORAGE_KEY, alphaUnitMode);
+    } catch {
+      // Ignore storage failures (private mode / restricted environments).
+    }
+  }, [alphaUnitMode]);
 
   const normalizeDraftName = useCallback((name: string) => name.trim() || 'Untitled Curve', []);
 
@@ -809,7 +864,7 @@ export function LutCurveEditorModal({
     const normalizedName = normalizeDraftName(draftCreateName);
     const clampPercent = (value: number) => {
       const numeric = Number.isFinite(value) ? value : 0;
-      return Math.max(0, Math.min(100, Math.round(numeric)));
+      return Math.max(0, Math.min(100, numeric));
     };
 
     let points: CurvePoint[];
@@ -988,28 +1043,36 @@ export function LutCurveEditorModal({
     setSelectedIdx(null);
   }, [draftPoints, isEndpoint, selectedIdx]);
 
-  const handleInspectorChange = useCallback((axis: 'x' | 'y', rawPct: number) => {
+  const handleInspectorChange = useCallback((axis: 'x' | 'y', rawValue: number) => {
     if (selectedIdx === null) return;
-    const value = clamp01(rawPct / 100);
     setDraftPoints((prev) => prev.map((p, i) => {
       if (i !== selectedIdx) return p;
-      if (axis === 'y') return { ...p, y: value };
+      if (axis === 'y') {
+        return { ...p, y: alphaDisplayValueToNormalized(rawValue, alphaUnitMode) };
+      }
+      const value = clamp01(rawValue / 100);
       if (isEndpoint) return p;
       const minX = i > 0 ? prev[i - 1].x + 0.01 : 0;
       const maxX = i < prev.length - 1 ? prev[i + 1].x - 0.01 : 1;
       return { ...p, x: clampRange(value, minX, maxX) };
     }));
-  }, [isEndpoint, selectedIdx]);
+  }, [alphaUnitMode, isEndpoint, selectedIdx]);
 
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
-  const curveDropdownOptions = useMemo(
-    () => savedCurves.map((curve) => ({ value: curve.id, label: curve.name })),
-    [savedCurves],
-  );
-
   const activeCurveId = editingCurve?.id ?? selectedCurveId;
+
+  const curveDropdownOptions = useMemo(() => {
+    const draftLabel = normalizeDraftName(draftName);
+    const editingCurveId = editingCurve?.id ?? null;
+    return savedCurves.map((curve) => {
+      const label = editingCurveId && curve.id === activeCurveId && curve.id === editingCurveId
+        ? draftLabel
+        : curve.name;
+      return { value: curve.id, label };
+    });
+  }, [activeCurveId, draftName, editingCurve?.id, normalizeDraftName, savedCurves]);
 
   const handleSelectCurveFromModal = useCallback((curveId: string) => {
     onSelectCurve(curveId);
@@ -1196,15 +1259,65 @@ export function LutCurveEditorModal({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={requestClose}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <div
+              className="inline-flex rounded-md border p-0.5"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+              role="group"
+              aria-label="Alpha value display mode"
+            >
+              <button
+                type="button"
+                onClick={() => setAlphaUnitMode('percent')}
+                className="rounded px-2 py-1 text-[10px] font-semibold transition-colors"
+                aria-pressed={alphaUnitMode === 'percent'}
+                title="Show alpha as 0-100%"
+                style={alphaUnitMode === 'percent'
+                  ? {
+                    color: 'var(--accent-secondary-action-color)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 22%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), transparent 94%)',
+                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 78%) inset',
+                  }
+                  : {
+                    color: 'var(--text-muted)',
+                    background: 'transparent',
+                  }}
+              >
+                0-100%
+              </button>
+              <button
+                type="button"
+                onClick={() => setAlphaUnitMode('u8')}
+                className="rounded px-2 py-1 text-[10px] font-semibold transition-colors"
+                aria-pressed={alphaUnitMode === 'u8'}
+                title="Show alpha as 0-255"
+                style={alphaUnitMode === 'u8'
+                  ? {
+                    color: 'var(--accent-secondary-action-color)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 22%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), transparent 94%)',
+                    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 78%) inset',
+                  }
+                  : {
+                    color: 'var(--text-muted)',
+                    background: 'transparent',
+                  }}
+              >
+                0-255
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={requestClose}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -1281,6 +1394,7 @@ export function LutCurveEditorModal({
               onChange={setDraftPoints}
               selectedIdx={selectedIdx}
               onSelectPoint={setSelectedIdx}
+              alphaUnitMode={alphaUnitMode}
             />
           </div>
 
@@ -1314,12 +1428,12 @@ export function LutCurveEditorModal({
                 <div className="inline-flex h-9 min-w-0 flex-1 items-center gap-1.5">
                   <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}>Alpha</label>
                   <ScrollableNumberField
-                    value={Math.round(selectedPoint.y * 100)}
+                    value={normalizedAlphaToDisplayValue(selectedPoint.y, alphaUnitMode)}
                     onChange={(nextValue) => handleInspectorChange('y', nextValue)}
                     min={0}
-                    max={100}
+                    max={alphaUnitMode === 'u8' ? 255 : 100}
                     step={1}
-                    unit="%"
+                    unit={alphaUnitMode === 'percent' ? '%' : undefined}
                     ariaLabel="Selected point alpha"
                     decreaseTitle="Decrease point alpha"
                     increaseTitle="Increase point alpha"
@@ -1504,15 +1618,17 @@ export function LutCurveEditorModal({
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Min alpha (%)
+                  Min alpha {alphaUnitMode === 'u8' ? '(0-255)' : '(%)'}
                 </label>
                 <ScrollableNumberField
-                  value={draftCreateCustomMin}
-                  onChange={(nextValue) => setDraftCreateCustomMin(nextValue)}
+                  value={alphaUnitMode === 'u8'
+                    ? Math.round(clampRange(draftCreateCustomMin, 0, 100) * 255 / 100)
+                    : Math.round(clampRange(draftCreateCustomMin, 0, 100))}
+                  onChange={(nextValue) => setDraftCreateCustomMin(alphaDisplayValueToPercent(nextValue, alphaUnitMode))}
                   min={0}
-                  max={100}
+                  max={alphaUnitMode === 'u8' ? 255 : 100}
                   step={1}
-                  unit="%"
+                  unit={alphaUnitMode === 'percent' ? '%' : undefined}
                   ariaLabel="Custom minimum alpha"
                   decreaseTitle="Decrease minimum alpha"
                   increaseTitle="Increase minimum alpha"
@@ -1522,15 +1638,17 @@ export function LutCurveEditorModal({
               </div>
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Max alpha (%)
+                  Max alpha {alphaUnitMode === 'u8' ? '(0-255)' : '(%)'}
                 </label>
                 <ScrollableNumberField
-                  value={draftCreateCustomMax}
-                  onChange={(nextValue) => setDraftCreateCustomMax(nextValue)}
+                  value={alphaUnitMode === 'u8'
+                    ? Math.round(clampRange(draftCreateCustomMax, 0, 100) * 255 / 100)
+                    : Math.round(clampRange(draftCreateCustomMax, 0, 100))}
+                  onChange={(nextValue) => setDraftCreateCustomMax(alphaDisplayValueToPercent(nextValue, alphaUnitMode))}
                   min={0}
-                  max={100}
+                  max={alphaUnitMode === 'u8' ? 255 : 100}
                   step={1}
-                  unit="%"
+                  unit={alphaUnitMode === 'percent' ? '%' : undefined}
                   ariaLabel="Custom maximum alpha"
                   decreaseTitle="Decrease maximum alpha"
                   increaseTitle="Increase maximum alpha"
