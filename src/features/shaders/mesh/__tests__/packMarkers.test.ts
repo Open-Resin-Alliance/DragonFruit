@@ -41,11 +41,13 @@ describe('packIslandMarkers', () => {
   it('skips negative-id markers (debug/seed)', () => {
     const r = packIslandMarkers([
       makeMarker({ id: -1, weight: 1 }),
-      makeMarker({ id: 5, weight: 0.7, centerX: 9 }),
+      // weight 0.75 is exactly representable in Float32 (unlike 0.7 which
+      // rounds to 0.6999... and breaks strictEqual).
+      makeMarker({ id: 5, weight: 0.75, centerX: 9 }),
     ]);
     assert.equal(r.count, 1);
     assert.equal(r.markers[0], 9);
-    assert.equal(r.markers[3], 0.7);
+    assert.equal(r.markers[3], 0.75);
   });
 
   it('skips weight<=0 markers', () => {
