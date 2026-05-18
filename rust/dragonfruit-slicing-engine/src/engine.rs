@@ -495,6 +495,75 @@ struct PostProcessedLayer {
     support_merge_ns: u64,
 }
 
+/// A fully z-blended, blurred layer ready for encoding.  Carries only the
+/// fields the encode thread needs; heavyweight 3DAA data has already been
+/// consumed by the consumer thread (topology tracking, perf counters).
+struct EncodeTask {
+    layer_index: u32,
+    mask: Vec<u8>,
+    /// Backward z-blend contribution — only used for the debug colour overlay.
+    backward_contrib: Option<Vec<u8>>,
+    /// Forward z-blend contribution — only used for the debug colour overlay.
+    forward_contrib: Option<Vec<u8>>,
+}
+
+/// Wraps a raw pointer to an `FnMut` callback so it can be sent to the encode
+/// thread.
+///
+/// # Safety
+/// The encode thread is always joined before `rasterize_vertical_aa_streaming_v3`
+/// returns (enforced by [`EncodeThreadHandle`]'s `Drop` impl), and no other
+/// code calls the function while the thread is running.
+///
+/// The `'static` bound on the `dyn` is a type-system fiction: the actual
+/// referent has a shorter lifetime that is manually enforced by the invariant
+/// above.  `std::mem::transmute` is used at construction to erase the
+/// compile-time lifetime (both `&mut dyn FnMut(...)` and
+/// `*mut (dyn FnMut(...) + 'static)` are identical 2-word fat pointers).
+struct SendMaskCallback(
+    Option<*mut (dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error> + 'static)>,
+);
+// SAFETY: see above — exclusive access + bounded lifetime guaranteed by caller.
+unsafe impl Send for SendMaskCallback {}
+
+/// RAII wrapper that ensures the encode thread is always joined before the
+/// enclosing function returns, even on early-exit `?` paths.
+///
+/// Declare this BEFORE the `encode_tx` local so that Rust's reverse-drop
+/// ordering causes `encode_tx` to close first (unblocking the thread) and
+/// this handle's `Drop` to join second.
+struct EncodeThreadHandle {
+    handle: Option<
+        std::thread::JoinHandle<
+            Result<(Option<Vec<Vec<u8>>>, Option<Vec<Vec<u8>>>), SlicerV3Error>,
+        >,
+    >,
+}
+
+impl EncodeThreadHandle {
+    /// Consume the handle on the success path: joins the thread and returns the
+    /// accumulated `(png_layers, raw_mask_layers)`.  Must only be called after
+    /// `encode_tx` has been dropped (otherwise the thread will never exit).
+    fn finish(mut self) -> Result<(Option<Vec<Vec<u8>>>, Option<Vec<Vec<u8>>>), SlicerV3Error> {
+        self.handle
+            .take()
+            .expect("EncodeThreadHandle::finish called twice")
+            .join()
+            .map_err(|_| SlicerV3Error::LayerPreview("3DAA encode thread panicked".to_string()))?
+    }
+}
+
+impl Drop for EncodeThreadHandle {
+    fn drop(&mut self) {
+        // On error paths `finish()` was not called; join the thread here so
+        // the raw `on_processed_mask` pointer stays valid until the thread
+        // terminates.  Errors from the thread are discarded on this path.
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 fn process_pending_layer_post(
     mut layer: PendingLayer,
     prior_topologies: &[&[u8]],
@@ -551,13 +620,10 @@ fn process_pending_layer_post(
                 Some(lut),
             );
         }
-        z_blend_backward_ns_local =
-            blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        z_blend_backward_ns_local = blend_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
         if let Some(before) = before_backward {
             let mut diff = vec![0u8; pixels_per_layer];
-            for ((dst, after), prev) in
-                diff.iter_mut().zip(layer.mask.iter()).zip(before.iter())
-            {
+            for ((dst, after), prev) in diff.iter_mut().zip(layer.mask.iter()).zip(before.iter()) {
                 *dst = after.saturating_sub(*prev);
             }
             layer.backward_contrib = Some(diff);
@@ -801,21 +867,21 @@ fn process_pending_layer_post(
     }
 }
 
-fn emit_post_processed_layer(
-    processed: PostProcessedLayer,
-    png_layers: &mut Option<Vec<Vec<u8>>>,
-    debug_color_overlay: bool,
-    debug_rgb_buffer: &mut Vec<u8>,
-    pixels_per_layer: usize,
-    width: usize,
-    height: usize,
-    png_compression_strategy: &str,
-    on_processed_mask: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
-    raw_mask_layers: &mut Option<Vec<Vec<u8>>>,
-    topology_reuse_pool: &mut Vec<Vec<u8>>,
+/// Fast consumer-thread path: updates perf counters and the topology window,
+/// recycles the topology buffer, then forwards the processed mask to the
+/// dedicated encode thread via the bounded channel.
+///
+/// This replaces the old `emit_post_processed_layer` at every call site.
+/// The slow work (PNG encoding / `on_processed_mask` callback) now runs
+/// concurrently with the next layer's raster/EDT pipeline.
+#[allow(clippy::too_many_arguments)]
+fn forward_to_encode(
+    done: PostProcessedLayer,
     emitted_topologies: &mut VecDeque<Arc<Vec<u8>>>,
+    topology_reuse_pool: &mut Vec<Vec<u8>>,
     keep_emitted_topologies: bool,
     look_back: usize,
+    encode_tx: &std::sync::mpsc::SyncSender<EncodeTask>,
     z_blend_backward_ns: &AtomicU64,
     z_blend_forward_ns: &AtomicU64,
     cross_blend_ns: &AtomicU64,
@@ -823,77 +889,43 @@ fn emit_post_processed_layer(
     cross_blend_contributing_layers: &AtomicU64,
     post_blur_ns: &AtomicU64,
     support_merge_ns: &AtomicU64,
+    forwarded_layers: &AtomicU64,
 ) -> Result<(), SlicerV3Error> {
-    z_blend_backward_ns.fetch_add(processed.z_blend_backward_ns, Ordering::Relaxed);
-    z_blend_forward_ns.fetch_add(processed.z_blend_forward_ns, Ordering::Relaxed);
-    cross_blend_ns.fetch_add(processed.cross_blend_ns, Ordering::Relaxed);
-    cross_blend_touched_pixels.fetch_add(processed.cross_blend_touched_pixels, Ordering::Relaxed);
+    // Perf counters (cheap atomics).
+    z_blend_backward_ns.fetch_add(done.z_blend_backward_ns, Ordering::Relaxed);
+    z_blend_forward_ns.fetch_add(done.z_blend_forward_ns, Ordering::Relaxed);
+    cross_blend_ns.fetch_add(done.cross_blend_ns, Ordering::Relaxed);
+    cross_blend_touched_pixels.fetch_add(done.cross_blend_touched_pixels, Ordering::Relaxed);
     cross_blend_contributing_layers
-        .fetch_add(processed.cross_blend_contributing_layers, Ordering::Relaxed);
-    post_blur_ns.fetch_add(processed.post_blur_ns, Ordering::Relaxed);
-    support_merge_ns.fetch_add(processed.support_merge_ns, Ordering::Relaxed);
+        .fetch_add(done.cross_blend_contributing_layers, Ordering::Relaxed);
+    post_blur_ns.fetch_add(done.post_blur_ns, Ordering::Relaxed);
+    support_merge_ns.fetch_add(done.support_merge_ns, Ordering::Relaxed);
 
-    if let Some(out_pngs) = png_layers {
-        let png = if debug_color_overlay {
-            if let (Some(backward), Some(forward)) = (
-                processed.layer.backward_contrib.as_ref(),
-                processed.forward_contrib.as_ref(),
-            ) {
-                if debug_rgb_buffer.len() != pixels_per_layer * 3 {
-                    debug_rgb_buffer.resize(pixels_per_layer * 3, 0);
-                }
-                for i in 0..pixels_per_layer {
-                    debug_rgb_buffer[i * 3] = forward[i];
-                    debug_rgb_buffer[i * 3 + 1] = backward[i];
-                    debug_rgb_buffer[i * 3 + 2] = 0;
-                }
-                encode_rgb_png_8bit(
-                    width as u32,
-                    height as u32,
-                    debug_rgb_buffer,
-                    png_compression_strategy,
-                )?
-            } else {
-                encode_grayscale_png(
-                    width as u32,
-                    height as u32,
-                    &processed.layer.mask,
-                    png_compression_strategy,
-                    false,
-                )?
-            }
-        } else {
-            encode_grayscale_png(
-                width as u32,
-                height as u32,
-                &processed.layer.mask,
-                png_compression_strategy,
-                false,
-            )?
-        };
-        out_pngs.push(png);
-    }
-
-    if let Some(emit) = on_processed_mask {
-        emit(processed.layer.layer_index, processed.layer.mask)?;
-    } else if let Some(out_masks) = raw_mask_layers {
-        out_masks.push(processed.layer.mask);
-    }
-
+    // Topology window for future cross-blend priors (consumer-thread state).
     if keep_emitted_topologies {
-        emitted_topologies.push_back(Arc::clone(&processed.layer.topology));
+        emitted_topologies.push_back(Arc::clone(&done.layer.topology));
         while emitted_topologies.len() > look_back {
             emitted_topologies.pop_front();
         }
     }
-
-    // Return the topology buffer to the reuse pool when this is the sole
-    // remaining Arc owner.  If another owner exists (e.g. still in a worker's
-    // future_topologies or in emitted_topologies), the buffer will be freed
-    // naturally when the last Arc drops.
-    if let Ok(inner) = Arc::try_unwrap(processed.layer.topology) {
+    // Recycle the topology buffer when this is the sole remaining Arc owner.
+    if let Ok(inner) = Arc::try_unwrap(done.layer.topology) {
         topology_reuse_pool.push(inner);
     }
+
+    // Dispatch to the encode thread.  This may block briefly if the channel
+    // is at capacity, providing back-pressure on the 3DAA pipeline.
+    encode_tx
+        .send(EncodeTask {
+            layer_index: done.layer.layer_index,
+            mask: done.layer.mask,
+            backward_contrib: done.layer.backward_contrib,
+            forward_contrib: done.forward_contrib,
+        })
+        .map_err(|_| {
+            SlicerV3Error::LayerPreview("3DAA encode channel closed unexpectedly".to_string())
+        })?;
+    forwarded_layers.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }
 
@@ -977,19 +1009,26 @@ fn rasterize_vertical_aa_streaming_v3(
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
     let mut topology_reuse_pool: Vec<Vec<u8>> = Vec::with_capacity(look_back + 1);
-    let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
-    let mut debug_rgb_buffer: Vec<u8> = if debug_color_overlay {
+    // Lazily allocate consumer-thread post workspaces only if we actually run
+    // the non-overlap path. In normal overlap mode, post-processing happens on
+    // worker threads and these would otherwise be an unused extra ~884MB at 12K.
+    let mut workspace: Option<z_blend::ZBlendWorkspace> = None;
+    let mut cross_blend_ws: Option<cross_blend::CrossBlendWorkspace> = None;
+    let debug_rgb_buffer: Vec<u8> = if debug_color_overlay {
         vec![0u8; pixels_per_layer * 3]
     } else {
         Vec::new()
     };
-    let mut png_layers: Option<Vec<Vec<u8>>> =
+    let png_layers: Option<Vec<Vec<u8>>> =
         collect_png_layers.then(|| Vec::with_capacity(job.total_layers as usize));
     // When on_processed_mask is provided it owns the processed masks (streaming
     // to an RLE / raw-mask encoder); fall back to in-memory collection only
     // when the caller explicitly requests it AND no streaming callback exists.
     let use_callback = on_processed_mask.is_some();
-    let mut raw_mask_layers: Option<Vec<Vec<u8>>> = (collect_raw_mask_layers && !use_callback)
+    // RLE-first baseline: callback + no PNG + no raw-mask collection.
+    // This is the hottest path and should keep memory pressure minimal.
+    let rle_streaming_baseline = use_callback && !collect_png_layers && !collect_raw_mask_layers;
+    let raw_mask_layers: Option<Vec<Vec<u8>>> = (collect_raw_mask_layers && !use_callback)
         .then(|| Vec::with_capacity(job.total_layers as usize));
     let mut on_processed_mask = on_processed_mask; // move into local for closure capture
 
@@ -1001,9 +1040,171 @@ fn rasterize_vertical_aa_streaming_v3(
     let post_blur_ns = AtomicU64::new(0);
     let support_merge_ns = AtomicU64::new(0);
     // Fine-grained callback timing: identifies whether the consumer bottleneck
-    // is the topology sweep or the emit/drain path (CTB/LYS encode + emit overhead).
+    // is the topology sweep or the forward-to-encode dispatch path.
     let callback_sweep_ns = AtomicU64::new(0);
     let callback_drain_ns = AtomicU64::new(0);
+    let encode_progress_log_every =
+        env_override_usize("DF_3DAA_RATE_LOG_EVERY").unwrap_or(0) as u64;
+    let forwarded_layers = Arc::new(AtomicU64::new(0));
+    let encoded_layers = Arc::new(AtomicU64::new(0));
+
+    // ── Encode thread ──────────────────────────────────────────────────────────
+    // The consumer thread is the pipeline bottleneck: after the previous session's
+    // raster-concurrency fix, emit-drain (CTB/LYS encoding) consumes ~35ms/layer
+    // while EDT only takes ~18ms.  Moving encoding to a dedicated thread lets EDT
+    // and encoding overlap, targeting ~35ms/layer effective throughput instead of
+    // ~53ms/layer (EDT + encode serially).
+    //
+    // Drop-ordering is critical for safety with the raw `on_processed_mask`
+    // pointer: declare `encode_handle_guard` FIRST so it drops LAST (joins
+    // the thread), and `encode_tx` SECOND so it drops FIRST (closes the channel,
+    // letting the thread exit cleanly).  Rust's reverse-drop order ensures this
+    // even on early `?` returns.
+    let encode_handle_guard: EncodeThreadHandle;
+    // Encode channel capacity is intentionally conservative in the RLE baseline:
+    // one in-flight 12K layer is ~59 MB, so deep queues can quickly fragment or
+    // exhaust memory on debug/dev builds.
+    //
+    // Keep at least 2 slots for the streaming RLE baseline so the consumer can
+    // stay one layer ahead of the encoder; depth=1 over-throttles and makes
+    // forward-to-encode send time dominate wall throughput.
+    let encode_buffer_depth_default = if rle_streaming_baseline {
+        2
+    } else if pixels_per_layer >= 48 * 1024 * 1024 {
+        2
+    } else {
+        3
+    };
+    let encode_buffer_depth = std::env::var("DF_3DAA_ENCODE_BUFFER_DEPTH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= 1)
+        .unwrap_or(encode_buffer_depth_default);
+    let (encode_tx, encode_rx) = std::sync::mpsc::sync_channel::<EncodeTask>(encode_buffer_depth);
+    {
+        // Raw pointer for the FnMut callback — see SendMaskCallback for safety
+        // invariant documentation.
+        //
+        // `&mut dyn FnMut(...)` and `*mut (dyn FnMut(...) + 'static)` are both
+        // 2-word fat pointers with identical binary layouts; transmute is used
+        // to erase the compile-time lifetime (the actual lifetime is enforced
+        // by the join-before-return invariant upheld by EncodeThreadHandle).
+        let send_fn = SendMaskCallback(on_processed_mask.as_deref_mut().map(|f| unsafe {
+            std::mem::transmute::<
+                &mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
+                *mut (dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error> + 'static),
+            >(f)
+        }));
+        let enc_w = width as u32;
+        let enc_h = height as u32;
+        let enc_compress = raster_job.png_compression_strategy.clone();
+        let enc_debug = debug_color_overlay;
+        let enc_px = pixels_per_layer;
+        let enc_total_layers = job.total_layers as u64;
+        let enc_log_every = encode_progress_log_every;
+        let forwarded_layers_enc = Arc::clone(&forwarded_layers);
+        let encoded_layers_enc = Arc::clone(&encoded_layers);
+        let mut png_layers_enc = png_layers;
+        let mut raw_mask_layers_enc = raw_mask_layers;
+        let mut dbg_rgb_enc = debug_rgb_buffer;
+        let encode_thread = std::thread::Builder::new()
+            .name("3daa-encode".to_string())
+            .spawn(
+                move || -> Result<(Option<Vec<Vec<u8>>>, Option<Vec<Vec<u8>>>), SlicerV3Error> {
+                    let send_fn = send_fn;
+                    let encode_start = std::time::Instant::now();
+                    let mut window_start = encode_start;
+                    let mut window_layers_base = 0u64;
+                    for task in encode_rx {
+                        if let Some(out_pngs) = &mut png_layers_enc {
+                            let png = if enc_debug {
+                                if let (Some(bk), Some(fw)) = (
+                                    task.backward_contrib.as_ref(),
+                                    task.forward_contrib.as_ref(),
+                                ) {
+                                    if dbg_rgb_enc.len() != enc_px * 3 {
+                                        dbg_rgb_enc.resize(enc_px * 3, 0);
+                                    }
+                                    for i in 0..enc_px {
+                                        dbg_rgb_enc[i * 3] = fw[i];
+                                        dbg_rgb_enc[i * 3 + 1] = bk[i];
+                                        dbg_rgb_enc[i * 3 + 2] = 0;
+                                    }
+                                    encode_rgb_png_8bit(enc_w, enc_h, &dbg_rgb_enc, &enc_compress)?
+                                } else {
+                                    encode_grayscale_png(
+                                        enc_w,
+                                        enc_h,
+                                        &task.mask,
+                                        &enc_compress,
+                                        false,
+                                    )?
+                                }
+                            } else {
+                                encode_grayscale_png(
+                                    enc_w,
+                                    enc_h,
+                                    &task.mask,
+                                    &enc_compress,
+                                    false,
+                                )?
+                            };
+                            out_pngs.push(png);
+                        }
+                        // SAFETY: exclusive access guaranteed — only this thread calls the
+                        // fn, and it is joined before rasterize_vertical_aa_streaming_v3
+                        // returns (enforced by EncodeThreadHandle::Drop).
+                        if let Some(ptr) = send_fn.0 {
+                            unsafe { (*ptr)(task.layer_index, task.mask) }?;
+                        } else if let Some(out_masks) = &mut raw_mask_layers_enc {
+                            out_masks.push(task.mask);
+                        }
+
+                        let encoded = encoded_layers_enc.fetch_add(1, Ordering::Relaxed) + 1;
+                        if enc_log_every > 0 {
+                            if encoded == 1 {
+                                eprintln!(
+                                    "[3DAA]   progress first-encoded={:.3}s",
+                                    encode_start.elapsed().as_secs_f64(),
+                                );
+                                window_start = std::time::Instant::now();
+                                window_layers_base = encoded;
+                            }
+                            if encoded == enc_total_layers || encoded % enc_log_every == 0 {
+                                let total_elapsed = encode_start.elapsed().as_secs_f64().max(1e-9);
+                                let window_elapsed = window_start.elapsed().as_secs_f64().max(1e-9);
+                                let window_layers = encoded.saturating_sub(window_layers_base).max(1);
+                                let total_lps = encoded as f64 / total_elapsed;
+                                let window_lps = window_layers as f64 / window_elapsed;
+                                let forwarded = forwarded_layers_enc.load(Ordering::Relaxed);
+                                let backlog = forwarded.saturating_sub(encoded);
+                                eprintln!(
+                                    "[3DAA]   progress {}/{} | total={:.1} l/s window={:.1} l/s encode_backlog={}",
+                                    encoded,
+                                    enc_total_layers,
+                                    total_lps,
+                                    window_lps,
+                                    backlog,
+                                );
+                                window_start = std::time::Instant::now();
+                                window_layers_base = encoded;
+                            }
+                        }
+                    }
+                    Ok((png_layers_enc, raw_mask_layers_enc))
+                },
+            )
+            .map_err(|e| {
+                SlicerV3Error::LayerPreview(format!("failed to spawn 3DAA encode thread: {e}"))
+            })?;
+        encode_handle_guard = EncodeThreadHandle {
+            handle: Some(encode_thread),
+        };
+    }
+    // `png_layers`, `raw_mask_layers`, and `debug_rgb_buffer` are now owned by
+    // the encode thread.  They are recovered at the end via
+    // `encode_handle_guard.finish()`.
+    // ──────────────────────────────────────────────────────────────────────────
 
     let mut support_mask_context = SupportMaskContext::from_job(raster_job);
     let model_active_layer_window = resolve_model_active_layer_window(raster_job);
@@ -1023,7 +1224,9 @@ fn rasterize_vertical_aa_streaming_v3(
     // Print startup parameters so it's immediately clear what configuration is
     // being used.  Visible in `tauri:dev` console and cargo test output.
     {
-        let hw_diag = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let hw_diag = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         let layer_px = (width as u64).saturating_mul(height as u64);
         let expected_workers = if post_buffer_depth > 0 {
             post_threads.min(post_buffer_depth.max(1)).max(1)
@@ -1052,10 +1255,19 @@ fn rasterize_vertical_aa_streaming_v3(
         };
         eprintln!(
             "[3DAA] {}×{} layers={} hw={} raster_workers={} post_threads={} buffer_depth={} \
-             workers={} workspace≈{}MB/worker look_back={}",
-            width, height, job.total_layers,
-            hw_diag, raster_concurrent, post_threads, post_buffer_depth,
-            expected_workers, ws_mb, look_back,
+             workers={} workspace≈{}MB/worker look_back={} encode_buf={} rate_log_every={}",
+            width,
+            height,
+            job.total_layers,
+            hw_diag,
+            raster_concurrent,
+            post_threads,
+            post_buffer_depth,
+            expected_workers,
+            ws_mb,
+            look_back,
+            encode_buffer_depth,
+            encode_progress_log_every,
         );
     }
     let pipeline_wall_start = std::time::Instant::now();
@@ -1082,8 +1294,11 @@ fn rasterize_vertical_aa_streaming_v3(
                 let mut workspace = z_blend::ZBlendWorkspace::new(width, height);
                 let mut cross_blend_ws = cross_blend::CrossBlendWorkspace::new(width, height);
                 while let Ok(task) = task_rx.recv() {
-                    let backward_prior_slices: Vec<&[u8]> =
-                        task.backward_prior_topologies.iter().map(|v| v.as_slice()).collect();
+                    let backward_prior_slices: Vec<&[u8]> = task
+                        .backward_prior_topologies
+                        .iter()
+                        .map(|v| v.as_slice())
+                        .collect();
                     let prior_slices: Vec<&[u8]> =
                         task.prior_topologies.iter().map(|v| v.as_slice()).collect();
                     let future_slices: Vec<&[u8]> = task
@@ -1124,14 +1339,15 @@ fn rasterize_vertical_aa_streaming_v3(
         post_worker_rx = Some(done_rx);
     }
 
-    let mut cross_blend_ws = cross_blend::CrossBlendWorkspace::new(width, height);
-
     let mut on_raw_mask_layer = |layer_index: u32,
                                  mut raw_mask: Vec<u8>,
                                  raster_stats: LayerAreaStatsV3|
      -> Result<(), SlicerV3Error> {
         if raw_mask.is_empty() {
-            raw_mask = vec![0u8; pixels_per_layer];
+            // Streaming raster emits an empty Vec sentinel for guaranteed-black
+            // layers. Reuse a pooled full-size buffer instead of allocating a
+            // fresh 59MB Vec, which can fail under fragmentation on long 12K jobs.
+            raw_mask = crate::pipeline::get_recycled_mask(pixels_per_layer);
         }
         if raw_mask.len() != pixels_per_layer {
             return Err(SlicerV3Error::MissingRenderedLayerPayload(
@@ -1403,21 +1619,13 @@ fn rasterize_vertical_aa_streaming_v3(
                     while let Ok(done) = rx.try_recv() {
                         post_done_reorder.insert(done.seq, done);
                         while let Some(next_done) = post_done_reorder.remove(&post_next_emit_seq) {
-                            emit_post_processed_layer(
+                            forward_to_encode(
                                 next_done,
-                                &mut png_layers,
-                                debug_color_overlay,
-                                &mut debug_rgb_buffer,
-                                pixels_per_layer,
-                                width,
-                                height,
-                                &raster_job.png_compression_strategy,
-                                &mut on_processed_mask,
-                                &mut raw_mask_layers,
-                                &mut topology_reuse_pool,
                                 &mut emitted_topologies,
+                                &mut topology_reuse_pool,
                                 cross_blend_cfg.is_some(),
                                 look_back,
+                                &encode_tx,
                                 &z_blend_backward_ns,
                                 &z_blend_forward_ns,
                                 &cross_blend_ns,
@@ -1425,6 +1633,7 @@ fn rasterize_vertical_aa_streaming_v3(
                                 &cross_blend_contributing_layers,
                                 &post_blur_ns,
                                 &support_merge_ns,
+                                forwarded_layers.as_ref(),
                             )?;
                             post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
                         }
@@ -1447,8 +1656,7 @@ fn rasterize_vertical_aa_streaming_v3(
                     .map(|prior| prior.as_slice())
                     .collect();
                 // Take ownership of backward priors before moving `layer` into process_pending_layer_post.
-                let backward_prior_owned =
-                    std::mem::take(&mut layer.backward_prior_topologies);
+                let backward_prior_owned = std::mem::take(&mut layer.backward_prior_topologies);
                 let backward_prior_slices: Vec<&[u8]> =
                     backward_prior_owned.iter().map(|v| v.as_slice()).collect();
                 let future_bounds: Vec<TopologyBounds> = pending_layers
@@ -1460,6 +1668,10 @@ fn rasterize_vertical_aa_streaming_v3(
                     .iter()
                     .take(look_back)
                     .any(|future| future.topology_non_empty);
+                let workspace =
+                    workspace.get_or_insert_with(|| z_blend::ZBlendWorkspace::new(width, height));
+                let cross_blend_ws = cross_blend_ws
+                    .get_or_insert_with(|| cross_blend::CrossBlendWorkspace::new(width, height));
                 let processed = process_pending_layer_post(
                     layer,
                     &prior_topologies,
@@ -1476,25 +1688,17 @@ fn rasterize_vertical_aa_streaming_v3(
                     has_custom_lut,
                     debug_color_overlay,
                     &lut,
-                    &mut workspace,
+                    workspace,
                     cross_blend_cfg.as_ref(),
-                    &mut cross_blend_ws,
+                    cross_blend_ws,
                 );
-                emit_post_processed_layer(
+                forward_to_encode(
                     processed,
-                    &mut png_layers,
-                    debug_color_overlay,
-                    &mut debug_rgb_buffer,
-                    pixels_per_layer,
-                    width,
-                    height,
-                    &raster_job.png_compression_strategy,
-                    &mut on_processed_mask,
-                    &mut raw_mask_layers,
-                    &mut topology_reuse_pool,
                     &mut emitted_topologies,
+                    &mut topology_reuse_pool,
                     cross_blend_cfg.is_some(),
                     look_back,
+                    &encode_tx,
                     &z_blend_backward_ns,
                     &z_blend_forward_ns,
                     &cross_blend_ns,
@@ -1502,6 +1706,7 @@ fn rasterize_vertical_aa_streaming_v3(
                     &cross_blend_contributing_layers,
                     &post_blur_ns,
                     &support_merge_ns,
+                    forwarded_layers.as_ref(),
                 )?;
             }
         }
@@ -1547,8 +1752,7 @@ fn rasterize_vertical_aa_streaming_v3(
             post_rr_index = post_rr_index.wrapping_add(1);
             let seq = post_next_send_seq;
             post_next_send_seq = post_next_send_seq.wrapping_add(1);
-            let backward_prior_topologies =
-                std::mem::take(&mut layer.backward_prior_topologies);
+            let backward_prior_topologies = std::mem::take(&mut layer.backward_prior_topologies);
 
             post_worker_txs[worker_idx]
                 .send(PostWorkerTask {
@@ -1577,24 +1781,14 @@ fn rasterize_vertical_aa_streaming_v3(
             if let Some(rx) = post_worker_rx.as_ref() {
                 while let Ok(done) = rx.try_recv() {
                     post_done_reorder.insert(done.seq, done);
-                    while let Some(next_done) =
-                        post_done_reorder.remove(&post_next_emit_seq)
-                    {
-                        emit_post_processed_layer(
+                    while let Some(next_done) = post_done_reorder.remove(&post_next_emit_seq) {
+                        forward_to_encode(
                             next_done,
-                            &mut png_layers,
-                            debug_color_overlay,
-                            &mut debug_rgb_buffer,
-                            pixels_per_layer,
-                            width,
-                            height,
-                            &raster_job.png_compression_strategy,
-                            &mut on_processed_mask,
-                            &mut raw_mask_layers,
-                            &mut topology_reuse_pool,
                             &mut emitted_topologies,
+                            &mut topology_reuse_pool,
                             cross_blend_cfg.is_some(),
                             look_back,
+                            &encode_tx,
                             &z_blend_backward_ns,
                             &z_blend_forward_ns,
                             &cross_blend_ns,
@@ -1602,6 +1796,7 @@ fn rasterize_vertical_aa_streaming_v3(
                             &cross_blend_contributing_layers,
                             &post_blur_ns,
                             &support_merge_ns,
+                            forwarded_layers.as_ref(),
                         )?;
                         post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
                     }
@@ -1620,8 +1815,7 @@ fn rasterize_vertical_aa_streaming_v3(
                 .map(|prior| prior.as_slice())
                 .collect();
             // Take ownership of backward priors before moving `layer` into process_pending_layer_post.
-            let backward_prior_owned =
-                std::mem::take(&mut layer.backward_prior_topologies);
+            let backward_prior_owned = std::mem::take(&mut layer.backward_prior_topologies);
             let backward_prior_slices: Vec<&[u8]> =
                 backward_prior_owned.iter().map(|v| v.as_slice()).collect();
             let future_bounds: Vec<TopologyBounds> = pending_layers
@@ -1633,6 +1827,10 @@ fn rasterize_vertical_aa_streaming_v3(
                 .iter()
                 .take(look_back)
                 .any(|future| future.topology_non_empty);
+            let workspace =
+                workspace.get_or_insert_with(|| z_blend::ZBlendWorkspace::new(width, height));
+            let cross_blend_ws = cross_blend_ws
+                .get_or_insert_with(|| cross_blend::CrossBlendWorkspace::new(width, height));
             let processed = process_pending_layer_post(
                 layer,
                 &prior_topologies,
@@ -1649,25 +1847,17 @@ fn rasterize_vertical_aa_streaming_v3(
                 has_custom_lut,
                 debug_color_overlay,
                 &lut,
-                &mut workspace,
+                workspace,
                 cross_blend_cfg.as_ref(),
-                &mut cross_blend_ws,
+                cross_blend_ws,
             );
-            emit_post_processed_layer(
+            forward_to_encode(
                 processed,
-                &mut png_layers,
-                debug_color_overlay,
-                &mut debug_rgb_buffer,
-                pixels_per_layer,
-                width,
-                height,
-                &raster_job.png_compression_strategy,
-                &mut on_processed_mask,
-                &mut raw_mask_layers,
-                &mut topology_reuse_pool,
                 &mut emitted_topologies,
+                &mut topology_reuse_pool,
                 cross_blend_cfg.is_some(),
                 look_back,
+                &encode_tx,
                 &z_blend_backward_ns,
                 &z_blend_forward_ns,
                 &cross_blend_ns,
@@ -1675,6 +1865,7 @@ fn rasterize_vertical_aa_streaming_v3(
                 &cross_blend_contributing_layers,
                 &post_blur_ns,
                 &support_merge_ns,
+                forwarded_layers.as_ref(),
             )?;
         }
     }
@@ -1686,21 +1877,13 @@ fn rasterize_vertical_aa_streaming_v3(
         while let Ok(done) = rx.recv() {
             post_done_reorder.insert(done.seq, done);
             while let Some(next_done) = post_done_reorder.remove(&post_next_emit_seq) {
-                emit_post_processed_layer(
+                forward_to_encode(
                     next_done,
-                    &mut png_layers,
-                    debug_color_overlay,
-                    &mut debug_rgb_buffer,
-                    pixels_per_layer,
-                    width,
-                    height,
-                    &raster_job.png_compression_strategy,
-                    &mut on_processed_mask,
-                    &mut raw_mask_layers,
-                    &mut topology_reuse_pool,
                     &mut emitted_topologies,
+                    &mut topology_reuse_pool,
                     cross_blend_cfg.is_some(),
                     look_back,
+                    &encode_tx,
                     &z_blend_backward_ns,
                     &z_blend_forward_ns,
                     &cross_blend_ns,
@@ -1708,11 +1891,19 @@ fn rasterize_vertical_aa_streaming_v3(
                     &cross_blend_contributing_layers,
                     &post_blur_ns,
                     &support_merge_ns,
+                    forwarded_layers.as_ref(),
                 )?;
                 post_next_emit_seq = post_next_emit_seq.wrapping_add(1);
             }
         }
     }
+
+    // Close the encode channel so the encode thread's `for task in encode_rx`
+    // loop exits, then join it to recover png_layers / raw_mask_layers and
+    // propagate any encoding errors.  encode_tx must be dropped first so the
+    // thread can see channel-closed and return.
+    drop(encode_tx);
+    let (png_layers, raw_mask_layers) = encode_handle_guard.finish()?;
 
     perf.z_blend_backward_ns = z_blend_backward_ns.load(Ordering::Relaxed);
     perf.z_blend_forward_ns = z_blend_forward_ns.load(Ordering::Relaxed);
@@ -1731,9 +1922,9 @@ fn rasterize_vertical_aa_streaming_v3(
         let workers = perf.daa_post_threads.max(1) as f64;
         let ms = |ns: u64| ns as f64 / 1_000_000.0;
         let backward_ms = ms(perf.z_blend_backward_ns);
-        let forward_ms  = ms(perf.z_blend_forward_ns);
-        let blur_ms     = ms(perf.post_blur_ns);
-        let support_ms  = ms(perf.support_merge_ns);
+        let forward_ms = ms(perf.z_blend_forward_ns);
+        let blur_ms = ms(perf.post_blur_ns);
+        let support_ms = ms(perf.support_merge_ns);
         let wall_ms = elapsed_s * 1000.0;
         let wall_per_layer = wall_ms / n;
         // EDT CPU time accumulated across all workers (sum, not wall).
@@ -1743,11 +1934,16 @@ fn rasterize_vertical_aa_streaming_v3(
         let sched_overhead = wall_per_layer - edt_wall_per_layer - blur_ms / n - support_ms / n;
         eprintln!(
             "[3DAA] done {:.2}s | {:.1} l/s | {:.1}ms/layer (wall)",
-            elapsed_s, n / elapsed_s, wall_per_layer,
+            elapsed_s,
+            n / elapsed_s,
+            wall_per_layer,
         );
         eprintln!(
             "[3DAA]   cpu/layer → backward={:.1}ms fwd={:.1}ms blur={:.1}ms support={:.1}ms",
-            backward_ms / n, forward_ms / n, blur_ms / n, support_ms / n,
+            backward_ms / n,
+            forward_ms / n,
+            blur_ms / n,
+            support_ms / n,
         );
         eprintln!(
             "[3DAA]   workers={} | EDT wall≈{:.1}ms/layer | EDT cpu-util={:.0}% | \
@@ -1760,7 +1956,7 @@ fn rasterize_vertical_aa_streaming_v3(
         let sweep_ms = ms(callback_sweep_ns.load(Ordering::Relaxed));
         let drain_ms = ms(callback_drain_ns.load(Ordering::Relaxed));
         eprintln!(
-            "[3DAA]   callback/layer → topo-sweep={:.1}ms emit-drain={:.1}ms other={:.1}ms",
+            "[3DAA]   callback/layer → topo-sweep={:.1}ms fwd-to-enc={:.1}ms other={:.1}ms",
             sweep_ms / n,
             drain_ms / n,
             (sched_overhead - sweep_ms / n - drain_ms / n).max(0.0),
@@ -1842,7 +2038,9 @@ pub fn slice_with_progress_v3(
                 let height = raster_job.source_height_px as usize;
                 let mut on_mask = |idx: u32, mask: Vec<u8>| -> Result<(), SlicerV3Error> {
                     let runs = encode_mask_to_rle(&mask, width, height);
-                    rle_enc.consume_rle_layer(idx, runs)
+                    let res = rle_enc.consume_rle_layer(idx, runs);
+                    crate::pipeline::return_mask_to_pool(mask);
+                    res
                 };
                 rasterize_vertical_aa_streaming_v3(
                     job,
@@ -2275,7 +2473,9 @@ pub fn slice_with_progress_v3_to_path(
                 let height = raster_job.source_height_px as usize;
                 let mut on_mask = |idx: u32, mask: Vec<u8>| -> Result<(), SlicerV3Error> {
                     let runs = encode_mask_to_rle(&mask, width, height);
-                    rle_enc.consume_rle_layer(idx, runs)
+                    let res = rle_enc.consume_rle_layer(idx, runs);
+                    crate::pipeline::return_mask_to_pool(mask);
+                    res
                 };
                 rasterize_vertical_aa_streaming_v3(
                     job,
