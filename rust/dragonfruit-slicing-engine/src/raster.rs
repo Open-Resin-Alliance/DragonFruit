@@ -716,25 +716,6 @@ fn compute_component_area_stats_from_rle_8_connected(
     }
 }
 
-fn aa_subpixel_steps(level: &str) -> u8 {
-    let normalized = level.trim().to_ascii_lowercase();
-    if normalized == "off" {
-        return 0;
-    }
-
-    // Accept any "<n>x" AA level (e.g. 2x, 4x, 6x, 12x, 32x).
-    // Clamp to a sane upper bound so pathological values don't explode
-    // supersampling cost unexpectedly.
-    if let Some(raw_steps) = normalized.strip_suffix('x') {
-        if let Ok(parsed) = raw_steps.parse::<u16>() {
-            let clamped = parsed.clamp(1, 64);
-            return clamped as u8;
-        }
-    }
-
-    0
-}
-
 #[inline]
 fn blur_radius_px(radius_px: u32) -> usize {
     radius_px.max(1) as usize
@@ -751,8 +732,8 @@ fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
         return false;
     }
 
-    let aa_steps = (aa_subpixel_steps(job.anti_aliasing_level.trim()) as usize).max(1);
-    let blur_mode = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur");
+    let aa_steps = (job.effective_xy_aa_steps() as usize).max(1);
+    let blur_mode = job.anti_aliasing_mode_is_blur();
     let blur_radius = if blur_mode {
         blur_radius_px(job.blur_brush_radius_px)
     } else {
@@ -1326,11 +1307,13 @@ fn rasterize_layer_with_stats_impl(
         return (mask, stats);
     }
 
-    let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
+    let aa_level_steps = job.effective_xy_aa_steps();
     let aa_steps = (aa_level_steps as usize).max(1);
 
-    // 2D SSAA + optional blur path (single Z slice, aa_steps Y sub-rows, analytic X).
-    let blur_mode = job.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur");
+    // Coverage raster path with optional SSAA for Coverage mode only.
+    // Blur mode intentionally forces binary coverage rasterization, then applies
+    // ROI blur as the sole 2D AA step.
+    let blur_mode = job.anti_aliasing_mode_is_blur();
     let blur_radius = if blur_mode {
         blur_radius_px(job.blur_brush_radius_px)
     } else {
@@ -1830,16 +1813,16 @@ pub fn rasterize_layer_rle(
         return (runs, stats);
     }
 
-    let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
+    let aa_level_steps = job.effective_xy_aa_steps();
     let aa_steps = (aa_level_steps as usize).max(1);
-    let rle_mode = job.anti_aliasing_mode.trim();
-    let blur_mode = rle_mode.eq_ignore_ascii_case("blur");
+    let blur_mode = job.anti_aliasing_mode_is_blur();
     let blur_radius = if blur_mode {
         blur_radius_px(job.blur_brush_radius_px)
     } else {
         0
     };
-    // 2D-blur-SSAA and coverage-SSAA (aa_steps > 1) require the full mask path.
+    // Blur still needs the full-mask path so ROI blur can run, but Blur mode no
+    // longer enables SSAA. Coverage SSAA remains on the full-mask fallback path.
     if blur_radius > 0 || aa_steps > 1 {
         let (mask, stats) = rasterize_layer_with_stats(
             job,
@@ -2502,5 +2485,66 @@ mod tests {
             mask.iter().any(|&px| px == 255),
             "blur+SSAA mode should preserve fully solid interior pixels"
         );
+    }
+
+    #[test]
+    fn blur_mode_ignores_ssaa_level_in_mask_path() {
+        let mut base_job = job_for_single_layer();
+        base_job.blur_brush_radius_px = 2;
+        base_job.anti_aliasing_mode = "Blur".to_string();
+
+        let mut ssaa_job = base_job.clone();
+        ssaa_job.anti_aliasing_level = "4x".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &base_job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+
+        let (base_mask, base_stats) =
+            rasterize_layer_with_stats(&base_job, &triangles, &indices, 0, true);
+        let (ssaa_mask, ssaa_stats) =
+            rasterize_layer_with_stats(&ssaa_job, &triangles, &indices, 0, true);
+
+        assert_eq!(ssaa_mask, base_mask, "blur raster should ignore SSAA level");
+        assert_eq!(ssaa_stats.total_solid_pixels, base_stats.total_solid_pixels);
+        assert_eq!(ssaa_stats.area_count, base_stats.area_count);
+        assert_eq!(ssaa_stats.min_x, base_stats.min_x);
+        assert_eq!(ssaa_stats.max_x, base_stats.max_x);
+        assert_eq!(ssaa_stats.min_y, base_stats.min_y);
+        assert_eq!(ssaa_stats.max_y, base_stats.max_y);
+    }
+
+    #[test]
+    fn blur_mode_ignores_ssaa_level_in_rle_path() {
+        let mut base_job = job_for_single_layer();
+        base_job.blur_brush_radius_px = 2;
+        base_job.anti_aliasing_mode = "Blur".to_string();
+
+        let mut ssaa_job = base_job.clone();
+        ssaa_job.anti_aliasing_level = "4x".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &base_job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+
+        let (base_runs, base_stats) = rasterize_layer_rle(&base_job, &triangles, &indices, 0, true);
+        let (ssaa_runs, ssaa_stats) = rasterize_layer_rle(&ssaa_job, &triangles, &indices, 0, true);
+
+        assert_eq!(
+            ssaa_runs, base_runs,
+            "blur RLE path should ignore SSAA level"
+        );
+        assert_eq!(ssaa_stats.total_solid_pixels, base_stats.total_solid_pixels);
+        assert_eq!(ssaa_stats.area_count, base_stats.area_count);
+        assert_eq!(ssaa_stats.min_x, base_stats.min_x);
+        assert_eq!(ssaa_stats.max_x, base_stats.max_x);
+        assert_eq!(ssaa_stats.min_y, base_stats.min_y);
+        assert_eq!(ssaa_stats.max_y, base_stats.max_y);
     }
 }

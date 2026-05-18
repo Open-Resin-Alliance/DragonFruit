@@ -220,7 +220,7 @@ pub fn render_layers_bounded(
     let png_ns = AtomicU64::new(0);
     let layer_pixels_len =
         (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
-    let binary_png_expected = job.anti_aliasing_level.trim() == "Off";
+    let binary_png_expected = job.produces_binary_output();
 
     let empty_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
     let full_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));

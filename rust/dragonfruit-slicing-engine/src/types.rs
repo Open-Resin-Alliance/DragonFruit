@@ -65,6 +65,22 @@ fn default_model_triangle_count() -> u32 {
     0
 }
 
+fn anti_aliasing_level_steps(level: &str) -> u8 {
+    let normalized = level.trim().to_ascii_lowercase();
+    if normalized == "off" {
+        return 0;
+    }
+
+    if let Some(raw_steps) = normalized.strip_suffix('x') {
+        if let Ok(parsed) = raw_steps.parse::<u16>() {
+            let clamped = parsed.clamp(1, 64);
+            return clamped as u8;
+        }
+    }
+
+    0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -242,6 +258,54 @@ impl SliceJobV3 {
         } else {
             self.z_blend_fade_px.max(1)
         }
+    }
+
+    #[inline]
+    pub fn anti_aliasing_mode_is_blur(&self) -> bool {
+        self.anti_aliasing_mode.trim().eq_ignore_ascii_case("blur")
+    }
+
+    #[inline]
+    pub fn anti_aliasing_mode_is_vertical(&self) -> bool {
+        let mode = self.anti_aliasing_mode.trim();
+        mode.eq_ignore_ascii_case("3daa")
+            || mode.eq_ignore_ascii_case("vertical")
+            || mode.eq_ignore_ascii_case("vertical2")
+            || mode.eq_ignore_ascii_case("vertical3")
+            || mode.eq_ignore_ascii_case("crossblend")
+            || mode.eq_ignore_ascii_case("volumetric")
+    }
+
+    #[inline]
+    pub fn configured_xy_aa_steps(&self) -> u8 {
+        anti_aliasing_level_steps(&self.anti_aliasing_level)
+    }
+
+    #[inline]
+    pub fn effective_xy_aa_steps(&self) -> u8 {
+        if self.anti_aliasing_mode_is_blur() {
+            0
+        } else {
+            self.configured_xy_aa_steps()
+        }
+    }
+
+    #[inline]
+    pub fn produces_grayscale_output(&self) -> bool {
+        if self.anti_aliasing_mode_is_vertical() {
+            return true;
+        }
+
+        if self.anti_aliasing_mode_is_blur() {
+            return self.blur_brush_radius_px > 0;
+        }
+
+        self.effective_xy_aa_steps() > 1
+    }
+
+    #[inline]
+    pub fn produces_binary_output(&self) -> bool {
+        !self.produces_grayscale_output()
     }
 }
 
