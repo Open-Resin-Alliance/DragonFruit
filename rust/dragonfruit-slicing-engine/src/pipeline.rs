@@ -110,29 +110,27 @@ fn cap_concurrency_for_mask_bytes(
         capped = capped.min(allowed);
     }
 
-    // Safety-first caps for very large layers (e.g., 7,680x7,680 ~= 56.25 MB/mask).
-    // These avoid simultaneous large allocations across many workers.
+    // Concurrency caps for large raw-mask layers.  The goal is to keep peak
+    // raster-buffer memory (max_concurrent × bytes_per_mask) reasonable while
+    // still saturating available cores.
+    //
+    // In streaming 3DAA mode the consumer callback (topology sweep + EDT send)
+    // frees each mask quickly, so we can afford more concurrent raster workers.
+    // The sync_channel back-pressure ensures we never have more than
+    // (max_concurrent + buffer) masks alive at once.
+    //
+    // Rough peak: (max_concurrent + buffer) × bytes_per_mask
+    //   48 MB × (4+2) = 288 MB — fine for 16 GB+
+    //   59 MB × (4+2) = 354 MB — fine for 16 GB+
+    //   74 MB × (4+2) = 444 MB — fine for 16 GB+
     if budget_override.is_none() {
         if bytes_per_mask >= 48 * 1024 * 1024 {
-            capped = capped.min(1);
-        } else if bytes_per_mask >= 24 * 1024 * 1024 {
-            capped = capped.min(2);
-        } else if bytes_per_mask >= 12 * 1024 * 1024 {
+            // 8K–12K class: 4 workers keeps raster rate ≥ EDT rate (~18 ms/layer).
             capped = capped.min(4);
-        }
-    }
-
-    // In streaming mode, downstream encode work can also retain large buffers.
-    // Keep raster producers tighter to prevent queueing huge masks.
-    if streaming_raw_mask_sink {
-        if budget_override.is_none() {
-            if bytes_per_mask >= 48 * 1024 * 1024 {
-                capped = capped.min(2);
-            } else if bytes_per_mask >= 24 * 1024 * 1024 {
-                capped = capped.min(4);
-            } else if bytes_per_mask >= 12 * 1024 * 1024 {
-                capped = capped.min(8);
-            }
+        } else if bytes_per_mask >= 24 * 1024 * 1024 {
+            capped = capped.min(6);
+        } else if bytes_per_mask >= 12 * 1024 * 1024 {
+            capped = capped.min(8);
         }
     }
 
@@ -142,10 +140,12 @@ fn cap_concurrency_for_mask_bytes(
 fn choose_streaming_buffer_depth_for_mask_bytes(layer_pixels_len: usize) -> usize {
     let bytes_per_mask = layer_pixels_len;
     if bytes_per_mask >= 24 * 1024 * 1024 {
-        // For giant layers (e.g., 16K-class), keep exactly one queued mask.
-        1
-    } else {
+        // For giant layers (8K-12K-class): keep 2 masks queued so the consumer
+        // always has a pre-rasterized layer ready while it processes the current one.
+        // Extra memory: 2 × ~60 MB = ~120 MB — well within normal budgets.
         2
+    } else {
+        4
     }
 }
 
