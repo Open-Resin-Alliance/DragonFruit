@@ -219,22 +219,26 @@ impl SliceJobV3 {
     /// Effective z-blend fade distance in pixels, honouring `z_blend_auto_fade`.
     ///
     /// When auto-fade is enabled the fade is derived from physical printer
-    /// geometry so that the gradient spans exactly the XY distance that
-    /// corresponds to `look_back` layer-height steps on a 45° surface:
+    /// geometry so that the gradient is wide enough to smooth stair-stepping
+    /// on surfaces as shallow as 20° from horizontal:
     ///
     /// ```text
-    /// fade_px = ceil(layer_height_mm / xy_pixel_pitch_mm) × look_back
+    /// fade_px = ceil(layer_height_px / tan(20°)) × look_back
+    ///         = ceil(layer_height_px × 2.747) × look_back
     /// ```
     ///
-    /// This ensures the gradient falls off steeply within the physically
-    /// meaningful XY extent and does not bleed across unrelated features.
+    /// At 20° each layer's silhouette edge is displaced ~2.75 layer-heights
+    /// laterally from the next, so this ensures the gradient spans the full
+    /// XY extent of the stair-step zone across the entire look-back window.
     pub fn effective_z_blend_fade_px(&self) -> u32 {
         if self.z_blend_auto_fade && self.layer_height_mm > 0.0 {
             let pitch = self.xy_pixel_pitch_mm();
-            let layer_height_px = (self.layer_height_mm / pitch).ceil() as u32;
+            let layer_height_px = (self.layer_height_mm / pitch).ceil() as f32;
+            // 1/tan(20°) ≈ 2.747 — ensures smoothing at ≥20° surface angles.
+            let fade_per_layer = (layer_height_px * 2.747_f32).ceil() as u32;
             // Clamp to a reasonable maximum to prevent runaway on degenerate
             // input (e.g. very thick layers on a coarse-resolution printer).
-            (layer_height_px.max(1) * self.z_blend_look_back.max(1)).min(64)
+            (fade_per_layer.max(1) * self.z_blend_look_back.max(1)).min(256)
         } else {
             self.z_blend_fade_px.max(1)
         }

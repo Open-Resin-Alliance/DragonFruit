@@ -306,6 +306,11 @@ export function computePhysicalAaConfig(
     //
     //   tan(30°) ≈ 0.577 → 1/0.577 ≈ 1.73× more layers than 45° → rounded ↓
     //
+    // Note: the auto fade distance (computed separately by the Rust engine and
+    // mirrored in autoZBlendFadePx) targets an even shallower 20° surface angle
+    // — 1/tan(20°) ≈ 2.747 px per layer-height — providing spatial reach for
+    // each contributing layer beyond what the look-back window alone covers.
+    //
     const baseWindow = Math.max(1, Math.ceil(aspectRatio));
 
     switch (preset) {
