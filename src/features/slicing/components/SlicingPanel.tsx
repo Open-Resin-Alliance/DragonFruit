@@ -1087,10 +1087,12 @@ export function SlicingPanel({
     const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
 
     const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
-    // Calibrated style: ~4 px fade radius per receding layer at near-1:1
-    // voxel aspect, then scale with px/layer.
-    const AUTO_FADE_DISTANCE_GAIN = 4;
-    const base = Math.max(4, Math.ceil(lookBack * pxPerLayer * AUTO_FADE_DISTANCE_GAIN));
+    // Mirror the Rust engine formula (types.rs `effective_z_blend_fade_px`):
+    //   fade_per_layer = ceil(layer_height_px / tan(20°)) = ceil(layer_height_px × 2.747)
+    //   total = fade_per_layer × look_back, clamped to [1, 256]
+    // This ensures the displayed auto value matches what the engine actually uses.
+    const fadePerLayer = Math.ceil(pxPerLayer * 2.747);
+    const base = Math.max(1, fadePerLayer * lookBack);
     return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
   }, [
     autoLookBackForFade,
