@@ -1,6 +1,6 @@
 //! CLI entrypoint for quick local V3 benchmark runs.
 
-use dragonfruit_slicing_engine::benchmark::{BenchmarkConfigV3, run_benchmark_v3};
+use dragonfruit_slicing_engine::benchmark::{run_benchmark_v3, BenchmarkConfigV3};
 
 fn parse_arg_u32(args: &[String], name: &str, default: u32) -> u32 {
     args.iter()

@@ -1175,6 +1175,48 @@ pub(crate) fn encode_mask_to_rle(
     rle.finish()
 }
 
+pub(crate) fn encode_mask_to_rle_in_bounds(
+    mask: &[u8],
+    width: usize,
+    height: usize,
+    bounds: Option<(usize, usize, usize, usize)>,
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    let mut rle = RleAccum::new();
+    if width == 0 || height == 0 {
+        return rle.finish();
+    }
+    let Some((min_x, max_x, min_y, max_y)) = bounds else {
+        emit_zero_rows(&mut rle, height, width);
+        return rle.finish();
+    };
+
+    let min_x = min_x.min(width - 1);
+    let max_x = max_x.min(width - 1);
+    let min_y = min_y.min(height - 1);
+    let max_y = max_y.min(height - 1);
+    if min_x > max_x || min_y > max_y {
+        emit_zero_rows(&mut rle, height, width);
+        return rle.finish();
+    }
+
+    emit_zero_rows(&mut rle, min_y, width);
+    for row_index in min_y..=max_y {
+        let row_start = row_index * width;
+        if min_x > 0 {
+            rle.push_run(min_x as u32, 0);
+        }
+        emit_row(&mut rle, &mask[row_start + min_x..=row_start + max_x]);
+        let right = width - 1 - max_x;
+        if right > 0 {
+            rle.push_run(right as u32, 0);
+        }
+    }
+    emit_zero_rows(&mut rle, height - 1 - max_y, width);
+    rle.finish()
+}
+
 fn build_scanline_segment_index(
     segments: &[Segment],
     height: usize,
@@ -2076,9 +2118,13 @@ pub fn rasterize_layer_rle(
 
 #[cfg(test)]
 mod tests {
-    use super::{rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats};
+    use super::{
+        encode_mask_to_rle_in_bounds, rasterize_layer, rasterize_layer_rle,
+        rasterize_layer_with_stats,
+    };
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
+    use crate::rle::expand_rle_to_mask;
     use crate::types::SliceJobV3;
 
     fn push_box_triangles(
@@ -2183,6 +2229,22 @@ mod tests {
             }
         }
         runs
+    }
+
+    #[test]
+    fn bounded_rle_preserves_full_frame_coordinates() {
+        let width = 8usize;
+        let height = 5usize;
+        let mut mask = vec![0u8; width * height];
+        mask[1 * width + 2] = 10;
+        mask[1 * width + 3] = 10;
+        mask[2 * width + 4] = 20;
+        mask[3 * width + 5] = 30;
+
+        let runs = encode_mask_to_rle_in_bounds(&mask, width, height, Some((2, 5, 1, 3)));
+        let expanded = expand_rle_to_mask(&runs, width * height);
+
+        assert_eq!(expanded, mask);
     }
 
     #[test]

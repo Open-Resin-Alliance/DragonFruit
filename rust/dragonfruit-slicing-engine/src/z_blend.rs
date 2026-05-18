@@ -26,50 +26,65 @@ use rayon::prelude::*;
 
 /// Reusable working buffers for single-layer 3DAA z-blending.
 ///
-/// This enables streaming operation (bounded memory) by blending each layer
-/// against a look-back ring of prior layers without materializing all layers.
+/// Internal scratch buffers (`in_prior`, `dist`, `seeds`, `edt_g`, `labels_buf`)
+/// are sized to the **ROI** being processed, not the full image, and grow
+/// monotonically as larger ROIs are encountered.  For a 12K printer (11520×5120,
+/// ~59 M px) processing a typical model whose footprint is ~10–25% of the build
+/// area, this yields a ~4–10× reduction in per-worker workspace RAM compared to
+/// the previous W×H allocation.
 pub struct ZBlendWorkspace {
+    /// Backward/forward prior occupancy depth map. ROI-local, length ≥ roi_w*roi_h.
     in_prior: Vec<u8>,
-    /// Felzenszwalb EDT distance map (exact Euclidean, in pixels).
+    /// Felzenszwalb EDT distance map (exact Euclidean, in pixels). ROI-local.
     dist: Vec<f32>,
-    /// Temporary seed-marker buffer used during the EDT phase.
+    /// Temporary seed-marker buffer used during the EDT phase. ROI-local.
     seeds: Vec<bool>,
     /// Scratch buffer for felzenszwalb_edt_roi Phase-1 squared horizontal distances.
-    /// Preallocated to W×H to eliminate 82.9 MB/layer heap churn at 8K resolution.
     edt_g: Vec<f32>,
     /// Scratch buffer for label_receding_components output labels.
-    /// Preallocated to W×H to eliminate another 82.9 MB/layer heap churn.
     labels_buf: Vec<u32>,
     /// Reusable BFS queue for label_receding_components (avoids per-layer VecDeque alloc).
     bfs_queue: VecDeque<usize>,
 }
 
 impl ZBlendWorkspace {
-    pub fn new(width: usize, height: usize) -> Self {
-        let n = width.saturating_mul(height);
+    pub fn new(_width: usize, _height: usize) -> Self {
+        // Buffers grow on first use to the actual ROI size, not the full image.
+        // This avoids a ~826 MB up-front allocation per worker at 12K.
         Self {
-            in_prior: vec![0u8; n],
-            dist: vec![f32::INFINITY; n],
-            seeds: vec![false; n],
-            // Preallocate to full image capacity so per-layer EDT calls never
-            // hit the global allocator.  Both buffers are ~82.9 MB at 8K.
-            edt_g: Vec::with_capacity(n),
-            labels_buf: Vec::with_capacity(n),
+            in_prior: Vec::new(),
+            dist: Vec::new(),
+            seeds: Vec::new(),
+            edt_g: Vec::new(),
+            labels_buf: Vec::new(),
             bfs_queue: VecDeque::new(),
         }
     }
 
+    /// Ensure ROI-local scratch buffers can hold at least `n = roi_w * roi_h`
+    /// elements.  Grow-only: never shrinks, so worst-case ROI sets capacity.
     #[inline]
-    fn ensure_len(&mut self, n: usize) {
-        if self.in_prior.len() != n {
+    fn ensure_roi_capacity(&mut self, n: usize) {
+        if self.in_prior.len() < n {
             self.in_prior.resize(n, 0);
         }
-        if self.dist.len() != n {
+        if self.dist.len() < n {
             self.dist.resize(n, f32::INFINITY);
         }
-        if self.seeds.len() != n {
+        if self.seeds.len() < n {
             self.seeds.resize(n, false);
         }
+    }
+
+    /// Approximate resident byte size of all ROI-local scratch.  Used by the
+    /// engine's diagnostic to report actual (vs worst-case) workspace usage.
+    pub fn resident_bytes(&self) -> usize {
+        self.in_prior.capacity() * std::mem::size_of::<u8>()
+            + self.dist.capacity() * std::mem::size_of::<f32>()
+            + self.seeds.capacity() * std::mem::size_of::<bool>()
+            + self.edt_g.capacity() * std::mem::size_of::<f32>()
+            + self.labels_buf.capacity() * std::mem::size_of::<u32>()
+            + self.bfs_queue.capacity() * std::mem::size_of::<usize>()
     }
 
     pub fn blend_layer_inplace(
@@ -81,22 +96,12 @@ impl ZBlendWorkspace {
         fade_px: u32,
         lut: Option<&[u8; 256]>,
     ) {
-        let n = width.saturating_mul(height);
-        self.ensure_len(n);
-        z_blend_layer_inplace(
-            current,
-            priors,
-            width,
-            height,
-            fade_px,
-            lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.seeds,
-            &mut self.edt_g,
-            &mut self.labels_buf,
-            &mut self.bfs_queue,
-        );
+        if width == 0 || height == 0 {
+            return;
+        }
+        // Full-image ROI.
+        let roi = (0, width - 1, 0, height - 1);
+        self.blend_layer_inplace_with_roi(current, priors, width, height, fade_px, lut, roi);
     }
 
     pub fn blend_layer_inplace_with_roi(
@@ -109,8 +114,13 @@ impl ZBlendWorkspace {
         lut: Option<&[u8; 256]>,
         roi: (usize, usize, usize, usize),
     ) {
-        let n = width.saturating_mul(height);
-        self.ensure_len(n);
+        let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+        else {
+            return;
+        };
+        let roi_w = roi_max_x - roi_min_x + 1;
+        let roi_h = roi_max_y - roi_min_y + 1;
+        self.ensure_roi_capacity(roi_w * roi_h);
         z_blend_layer_inplace_with_roi(
             current,
             priors,
@@ -124,7 +134,7 @@ impl ZBlendWorkspace {
             &mut self.edt_g,
             &mut self.labels_buf,
             &mut self.bfs_queue,
-            roi,
+            (roi_min_x, roi_max_x, roi_min_y, roi_max_y),
         );
     }
 
@@ -154,31 +164,12 @@ impl ZBlendWorkspace {
         fade_px: u32,
         lut: Option<&[u8; 256]>,
     ) {
-        let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
+        if width == 0 || height == 0 {
+            return;
         }
-        if self.dist.len() != n {
-            self.dist.resize(n, f32::INFINITY);
-        }
-        if self.seeds.len() != n {
-            self.seeds.resize(n, false);
-        }
-        z_blend_forward_inplace(
-            mask,
-            topology,
-            futures,
-            look_back,
-            width,
-            height,
-            fade_px,
-            lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.seeds,
-            &mut self.edt_g,
-            &mut self.labels_buf,
-            &mut self.bfs_queue,
+        let roi = (0, width - 1, 0, height - 1);
+        self.blend_layer_forward_inplace_with_roi(
+            mask, topology, futures, look_back, width, height, fade_px, lut, roi,
         );
     }
 
@@ -194,16 +185,13 @@ impl ZBlendWorkspace {
         lut: Option<&[u8; 256]>,
         roi: (usize, usize, usize, usize),
     ) {
-        let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, f32::INFINITY);
-        }
-        if self.seeds.len() != n {
-            self.seeds.resize(n, false);
-        }
+        let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+        else {
+            return;
+        };
+        let roi_w = roi_max_x - roi_min_x + 1;
+        let roi_h = roi_max_y - roi_min_y + 1;
+        self.ensure_roi_capacity(roi_w * roi_h);
         z_blend_forward_inplace_with_roi(
             mask,
             topology,
@@ -219,7 +207,7 @@ impl ZBlendWorkspace {
             &mut self.edt_g,
             &mut self.labels_buf,
             &mut self.bfs_queue,
-            roi,
+            (roi_min_x, roi_max_x, roi_min_y, roi_max_y),
         );
     }
 }
@@ -267,40 +255,6 @@ pub fn z_blend_all_layers(
 // Core per-layer EDT blending
 // ---------------------------------------------------------------------------
 
-fn z_blend_layer_inplace(
-    current: &mut [u8],
-    priors: &[&[u8]],
-    width: usize,
-    height: usize,
-    fade_px: u32,
-    lut: Option<&[u8; 256]>,
-    in_prior: &mut [u8],
-    dist: &mut [f32],
-    seeds: &mut [bool],
-    edt_g: &mut Vec<f32>,
-    labels_buf: &mut Vec<u32>,
-    bfs_queue: &mut VecDeque<usize>,
-) {
-    if width == 0 || height == 0 {
-        return;
-    }
-    z_blend_layer_inplace_with_roi(
-        current,
-        priors,
-        width,
-        height,
-        fade_px,
-        lut,
-        in_prior,
-        dist,
-        seeds,
-        edt_g,
-        labels_buf,
-        bfs_queue,
-        (0, width - 1, 0, height - 1),
-    );
-}
-
 #[inline]
 fn normalize_roi(
     width: usize,
@@ -341,6 +295,14 @@ fn z_blend_layer_inplace_with_roi(
     else {
         return;
     };
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    // Caller is responsible for ensuring in_prior/dist/seeds are sized ≥ roi_len.
+    debug_assert!(in_prior.len() >= roi_len);
+    debug_assert!(dist.len() >= roi_len);
+    debug_assert!(seeds.len() >= roi_len);
+
     // Topology threshold used ONLY for occupancy/boundary detection.
     //
     // Using non-zero alpha here makes blur fringes count as "solid", which can
@@ -353,16 +315,16 @@ fn z_blend_layer_inplace_with_roi(
 
     // -- Step 1: build Z-depth map for prior-layer pixels. --
     //
-    // in_prior[idx] = 0  → pixel not in any prior layer
-    // in_prior[idx] = d  → pixel last present d layers ago
+    // in_prior[local] = 0  → pixel not in any prior layer
+    // in_prior[local] = d  → pixel last present d layers ago
     //                       (d=1 = most-recent prior N-1, d=2 = N-2, …)
     //
     // Iterating priors from most-recent to oldest means the FIRST write wins,
     // so in_prior always records the minimum (most-recent) depth.
-    for y in roi_min_y..=roi_max_y {
-        let row = y * width;
-        for x in roi_min_x..=roi_max_x {
-            in_prior[row + x] = 0;
+    for ly in 0..roi_h {
+        let local_row = ly * roi_w;
+        for lx in 0..roi_w {
+            in_prior[local_row + lx] = 0;
         }
     }
 
@@ -374,13 +336,17 @@ fn z_blend_layer_inplace_with_roi(
 
     for (depth_idx, prior) in priors.iter().rev().enumerate() {
         let depth_val = (depth_idx + 1) as u8; // 1 = most-recent, 2 = older …
-        for y in roi_min_y..=roi_max_y {
+        for ly in 0..roi_h {
+            let y = roi_min_y + ly;
             let row = y * width;
-            for x in roi_min_x..=roi_max_x {
-                let idx = row + x;
-                if prior[idx] > TOPO_THRESHOLD && in_prior[idx] == 0 {
-                    in_prior[idx] = depth_val;
-                    if current[idx] <= TOPO_THRESHOLD {
+            let local_row = ly * roi_w;
+            for lx in 0..roi_w {
+                let x = roi_min_x + lx;
+                let img_idx = row + x;
+                let loc_idx = local_row + lx;
+                if prior[img_idx] > TOPO_THRESHOLD && in_prior[loc_idx] == 0 {
+                    in_prior[loc_idx] = depth_val;
+                    if current[img_idx] <= TOPO_THRESHOLD {
                         receding_any = true;
                         rec_min_x = rec_min_x.min(x);
                         rec_max_x = rec_max_x.max(x);
@@ -398,35 +364,76 @@ fn z_blend_layer_inplace_with_roi(
     }
 
     // Seed scan needs one-pixel expansion around receding zone to find current
-    // boundary pixels adjacent to receding pixels.
-    let seed_min_x = rec_min_x.saturating_sub(1);
-    let seed_min_y = rec_min_y.saturating_sub(1);
-    let seed_max_x = (rec_max_x + 1).min(width - 1);
-    let seed_max_y = (rec_max_y + 1).min(height - 1);
+    // boundary pixels adjacent to receding pixels.  We clamp to the input ROI
+    // because the caller is expected to pre-pad ROI by `fade_px + 1`, which
+    // already covers the +1 halo.  This keeps everything within the
+    // ROI-local scratch buffers.
+    let seed_min_x = rec_min_x.saturating_sub(1).max(roi_min_x);
+    let seed_min_y = rec_min_y.saturating_sub(1).max(roi_min_y);
+    let seed_max_x = (rec_max_x + 1).min(roi_max_x);
+    let seed_max_y = (rec_max_y + 1).min(roi_max_y);
 
     // -- Step 2: Felzenszwalb exact Euclidean EDT. --
     //
     // Seeds are current-layer boundary pixels that border at least one
     // receding (non-current) pixel.  The EDT produces exact Euclidean
     // distances in pixels from those seeds outward into the receding zone.
+    //
+    // Note: `seeds` is ROI-local; `current` is full-image.  The
+    // `has_non_current_4neighbor` neighborhood check uses global coords.
     for y in seed_min_y..=seed_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         let row = y * width;
         for x in seed_min_x..=seed_max_x {
-            let idx = row + x;
-            seeds[idx] = current[idx] > TOPO_THRESHOLD
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = current[row + x] > TOPO_THRESHOLD
                 && has_non_current_4neighbor(current, x, y, width, height, TOPO_THRESHOLD);
         }
     }
 
-    felzenszwalb_edt_roi(
-        seeds, width, seed_min_x, seed_max_x, seed_min_y, seed_max_y, dist, edt_g,
-    );
+    // EDT operates on the full ROI-local plane; pixels outside the seed scan
+    // region were not initialised this layer but `seeds`/`dist` retain stale
+    // markers from the previous call.  Reset the active EDT region to a clean
+    // state covering the entire ROI for correctness.
+    //
+    // Cheaper than full-buffer clears because we only touch ROI×ROI.
+    // (Note: we keep `seeds` zeroed outside the seed scan to avoid spurious
+    // seeds from the previous call's stale `true` markers.)
+    if seed_min_x > roi_min_x
+        || seed_max_x < roi_max_x
+        || seed_min_y > roi_min_y
+        || seed_max_y < roi_max_y
+    {
+        // Zero the ROI portion outside the seed-scan rectangle so the EDT
+        // sees a clean ROI-local seed buffer.
+        for ly in 0..roi_h {
+            let y = roi_min_y + ly;
+            let local_row = ly * roi_w;
+            if y < seed_min_y || y > seed_max_y {
+                for lx in 0..roi_w {
+                    seeds[local_row + lx] = false;
+                }
+            } else {
+                for lx in 0..roi_w {
+                    let x = roi_min_x + lx;
+                    if x < seed_min_x || x > seed_max_x {
+                        seeds[local_row + lx] = false;
+                    }
+                }
+            }
+        }
+    }
 
-    // Clear seed markers for next call.
+    felzenszwalb_edt_roi_local(&seeds[..roi_len], roi_w, roi_h, &mut dist[..roi_len], edt_g);
+
+    // Clear seed markers for next call (keep buffer hot).
     for y in seed_min_y..=seed_max_y {
-        let row = y * width;
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         for x in seed_min_x..=seed_max_x {
-            seeds[row + x] = false;
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = false;
         }
     }
 
@@ -437,10 +444,13 @@ fn z_blend_layer_inplace_with_roi(
     // gradient automatically slope-adaptive: narrow (steep) islands produce
     // steep gradients; wide (shallow) islands produce gentle ones.
     let roi_w_rec = rec_max_x - rec_min_x + 1;
-    let num_labels = label_receding_components(
+    let num_labels = label_receding_components_local(
         in_prior,
         current,
         width,
+        roi_min_x,
+        roi_min_y,
+        roi_w,
         rec_min_x,
         rec_max_x,
         rec_min_y,
@@ -454,11 +464,15 @@ fn z_blend_layer_inplace_with_roi(
     // for normalization so the gradient is truly self-calibrating).
     let mut max_dist = vec![0.0f32; num_labels as usize + 1];
     for y in rec_min_y..=rec_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         let row = y * width;
         for x in rec_min_x..=rec_max_x {
-            let idx = row + x;
-            if in_prior[idx] > 0 && current[idx] <= TOPO_THRESHOLD {
-                let d = dist[idx];
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            let img_idx = row + x;
+            if in_prior[loc_idx] > 0 && current[img_idx] <= TOPO_THRESHOLD {
+                let d = dist[loc_idx];
                 if d.is_finite() {
                     let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
                     if d > max_dist[lbl] {
@@ -479,11 +493,15 @@ fn z_blend_layer_inplace_with_roi(
     // raw is then remapped through the cure-window LUT and max-merged.
     let fade_f = fade_px as f32;
     for y in rec_min_y..=rec_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         let row = y * width;
         for x in rec_min_x..=rec_max_x {
-            let idx = row + x;
-            if current[idx] <= TOPO_THRESHOLD && in_prior[idx] > 0 {
-                let d = dist[idx];
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            let img_idx = row + x;
+            if current[img_idx] <= TOPO_THRESHOLD && in_prior[loc_idx] > 0 {
+                let d = dist[loc_idx];
                 if !d.is_finite() || d > fade_f {
                     continue;
                 }
@@ -497,8 +515,8 @@ fn z_blend_layer_inplace_with_roi(
                     raw
                 };
                 // Max-merge: never reduce existing values.
-                if v > current[idx] {
-                    current[idx] = v;
+                if v > current[img_idx] {
+                    current[img_idx] = v;
                 }
             }
         }
@@ -509,46 +527,8 @@ fn z_blend_layer_inplace_with_roi(
 /// present in at least one of `futures`) into `mask` using a symmetric
 /// per-component-normalized Euclidean gradient.
 ///
-/// Mirrors `z_blend_layer_inplace` but operates on growing edges instead of
-/// shrinking ones.
-fn z_blend_forward_inplace(
-    mask: &mut [u8],
-    topology: &[u8],
-    futures: &[&[u8]],
-    look_back: usize,
-    width: usize,
-    height: usize,
-    fade_px: u32,
-    lut: Option<&[u8; 256]>,
-    in_forward: &mut [u8],
-    dist: &mut [f32],
-    seeds: &mut [bool],
-    edt_g: &mut Vec<f32>,
-    labels_buf: &mut Vec<u32>,
-    bfs_queue: &mut VecDeque<usize>,
-) {
-    if width == 0 || height == 0 {
-        return;
-    }
-    z_blend_forward_inplace_with_roi(
-        mask,
-        topology,
-        futures,
-        look_back,
-        width,
-        height,
-        fade_px,
-        lut,
-        in_forward,
-        dist,
-        seeds,
-        edt_g,
-        labels_buf,
-        bfs_queue,
-        (0, width - 1, 0, height - 1),
-    );
-}
-
+/// Mirrors `z_blend_layer_inplace_with_roi` but operates on growing edges
+/// instead of shrinking ones.
 fn z_blend_forward_inplace_with_roi(
     mask: &mut [u8],
     topology: &[u8],
@@ -573,14 +553,21 @@ fn z_blend_forward_inplace_with_roi(
     else {
         return;
     };
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    debug_assert!(in_forward.len() >= roi_len);
+    debug_assert!(dist.len() >= roi_len);
+    debug_assert!(seeds.len() >= roi_len);
+
     const TOPO_THRESHOLD: u8 = 127;
 
-    // Build forward depth map: in_forward[idx] = d → pixel first appears
+    // Build forward depth map: in_forward[local] = d → pixel first appears
     // d layers ahead (d=1 = next layer = most-recent future, d=2 = further…).
-    for y in roi_min_y..=roi_max_y {
-        let row = y * width;
-        for x in roi_min_x..=roi_max_x {
-            in_forward[row + x] = 0;
+    for ly in 0..roi_h {
+        let local_row = ly * roi_w;
+        for lx in 0..roi_w {
+            in_forward[local_row + lx] = 0;
         }
     }
 
@@ -592,13 +579,17 @@ fn z_blend_forward_inplace_with_roi(
 
     for (depth_idx, future) in futures.iter().enumerate() {
         let depth_val = (depth_idx + 1) as u8;
-        for y in roi_min_y..=roi_max_y {
+        for ly in 0..roi_h {
+            let y = roi_min_y + ly;
             let row = y * width;
-            for x in roi_min_x..=roi_max_x {
-                let idx = row + x;
-                if future[idx] > TOPO_THRESHOLD && in_forward[idx] == 0 {
-                    in_forward[idx] = depth_val;
-                    if topology[idx] <= TOPO_THRESHOLD {
+            let local_row = ly * roi_w;
+            for lx in 0..roi_w {
+                let x = roi_min_x + lx;
+                let img_idx = row + x;
+                let loc_idx = local_row + lx;
+                if future[img_idx] > TOPO_THRESHOLD && in_forward[loc_idx] == 0 {
+                    in_forward[loc_idx] = depth_val;
+                    if topology[img_idx] <= TOPO_THRESHOLD {
                         appearing_any = true;
                         app_min_x = app_min_x.min(x);
                         app_max_x = app_max_x.max(x);
@@ -615,39 +606,67 @@ fn z_blend_forward_inplace_with_roi(
         return;
     }
 
-    let seed_min_x = app_min_x.saturating_sub(1);
-    let seed_min_y = app_min_y.saturating_sub(1);
-    let seed_max_x = (app_max_x + 1).min(width - 1);
-    let seed_max_y = (app_max_y + 1).min(height - 1);
+    let seed_min_x = app_min_x.saturating_sub(1).max(roi_min_x);
+    let seed_min_y = app_min_y.saturating_sub(1).max(roi_min_y);
+    let seed_max_x = (app_max_x + 1).min(roi_max_x);
+    let seed_max_y = (app_max_y + 1).min(roi_max_y);
 
     // -- Step 2: Felzenszwalb exact Euclidean EDT. --
     for y in seed_min_y..=seed_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         let row = y * width;
         for x in seed_min_x..=seed_max_x {
-            let idx = row + x;
-            seeds[idx] = topology[idx] > TOPO_THRESHOLD
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = topology[row + x] > TOPO_THRESHOLD
                 && has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD);
         }
     }
 
-    felzenszwalb_edt_roi(
-        seeds, width, seed_min_x, seed_max_x, seed_min_y, seed_max_y, dist, edt_g,
-    );
+    if seed_min_x > roi_min_x
+        || seed_max_x < roi_max_x
+        || seed_min_y > roi_min_y
+        || seed_max_y < roi_max_y
+    {
+        for ly in 0..roi_h {
+            let y = roi_min_y + ly;
+            let local_row = ly * roi_w;
+            if y < seed_min_y || y > seed_max_y {
+                for lx in 0..roi_w {
+                    seeds[local_row + lx] = false;
+                }
+            } else {
+                for lx in 0..roi_w {
+                    let x = roi_min_x + lx;
+                    if x < seed_min_x || x > seed_max_x {
+                        seeds[local_row + lx] = false;
+                    }
+                }
+            }
+        }
+    }
+
+    felzenszwalb_edt_roi_local(&seeds[..roi_len], roi_w, roi_h, &mut dist[..roi_len], edt_g);
 
     // Clear seed markers.
     for y in seed_min_y..=seed_max_y {
-        let row = y * width;
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         for x in seed_min_x..=seed_max_x {
-            seeds[row + x] = false;
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = false;
         }
     }
 
     // -- Step 3: label connected components in the pre-appearing zone. --
     let roi_w_app = app_max_x - app_min_x + 1;
-    let num_labels = label_receding_components(
+    let num_labels = label_receding_components_local(
         in_forward,
         topology,
         width,
+        roi_min_x,
+        roi_min_y,
+        roi_w,
         app_min_x,
         app_max_x,
         app_min_y,
@@ -659,11 +678,15 @@ fn z_blend_forward_inplace_with_roi(
 
     let mut max_dist = vec![0.0f32; num_labels as usize + 1];
     for y in app_min_y..=app_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         let row = y * width;
         for x in app_min_x..=app_max_x {
-            let idx = row + x;
-            if in_forward[idx] > 0 && topology[idx] <= TOPO_THRESHOLD {
-                let d = dist[idx];
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            let img_idx = row + x;
+            if in_forward[loc_idx] > 0 && topology[img_idx] <= TOPO_THRESHOLD {
+                let d = dist[loc_idx];
                 if d.is_finite() {
                     let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
                     if d > max_dist[lbl] {
@@ -677,11 +700,15 @@ fn z_blend_forward_inplace_with_roi(
     // -- Step 4: convert distances → gradient, max-merge into mask. --
     let fade_f = fade_px as f32;
     for y in app_min_y..=app_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
         let row = y * width;
         for x in app_min_x..=app_max_x {
-            let idx = row + x;
-            if topology[idx] <= TOPO_THRESHOLD && in_forward[idx] > 0 {
-                let d = dist[idx];
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            let img_idx = row + x;
+            if topology[img_idx] <= TOPO_THRESHOLD && in_forward[loc_idx] > 0 {
+                let d = dist[loc_idx];
                 if !d.is_finite() || d > fade_f {
                     continue;
                 }
@@ -694,8 +721,8 @@ fn z_blend_forward_inplace_with_roi(
                 } else {
                     raw
                 };
-                if v > mask[idx] {
-                    mask[idx] = v;
+                if v > mask[img_idx] {
+                    mask[img_idx] = v;
                 }
             }
         }
@@ -703,67 +730,49 @@ fn z_blend_forward_inplace_with_roi(
 }
 
 // ---------------------------------------------------------------------------
-// Felzenszwalb exact Euclidean distance transform
+// Felzenszwalb exact Euclidean distance transform (ROI-local)
 // ---------------------------------------------------------------------------
 
-/// Compute an exact Euclidean distance transform (EDT) over a rectangular ROI.
+/// Compute an exact Euclidean distance transform (EDT) over a ROI-local plane.
 ///
-/// Uses the Felzenszwalb/Huttenlocher (2012) separable parabola lower-envelope
-/// algorithm: O(W×H) time, exact to floating-point precision.
+/// `seeds` and `dist` are both indexed as `roi_y * roi_w + roi_x` with shape
+/// `(roi_w, roi_h)` — no global image stride.  This makes per-worker scratch
+/// `O(roi_w · roi_h)` instead of `O(W · H)`.
 ///
-/// Seeds (`seeds[y*width+x] == true`) receive distance 0.  All other positions
-/// in the ROI receive the Euclidean distance to the nearest seed.  Positions
-/// with no reachable seed receive `f32::INFINITY`.
-///
-/// Results are written into `dist` (full-image indexed by `y * width + x`).
-fn felzenszwalb_edt_roi(
+/// Seeds (`seeds[idx] == true`) receive distance 0; all others receive the
+/// Euclidean distance to the nearest seed, or `f32::INFINITY` if unreachable.
+fn felzenszwalb_edt_roi_local(
     seeds: &[bool],
-    width: usize,
-    roi_min_x: usize,
-    roi_max_x: usize,
-    roi_min_y: usize,
-    roi_max_y: usize,
+    roi_w: usize,
+    roi_h: usize,
     dist: &mut [f32],
     scratch_g: &mut Vec<f32>,
 ) {
-    let roi_w = roi_max_x - roi_min_x + 1;
-    let roi_h = roi_max_y - roi_min_y + 1;
     if roi_w == 0 || roi_h == 0 {
         return;
     }
-
-    // Phase 1: for each row, compute squared horizontal distance to nearest seed.
-    // g[roi_y * roi_w + roi_x] = (horizontal pixel distance to nearest seed)²
-    //
-    // Phase 1 unconditionally overwrites every element in the left-to-right
-    // scan before any read, so no initialisation is required — just ensure the
-    // scratch buffer is large enough (will never reallocate after the first
-    // full-plate layer at a given resolution).
     let g_len = roi_w * roi_h;
+    debug_assert!(seeds.len() >= g_len);
+    debug_assert!(dist.len() >= g_len);
     if scratch_g.len() < g_len {
         scratch_g.resize(g_len, 0.0);
     }
 
-    // Parallel threshold for Phase-1 row scans.
-    // Use runtime threshold even in debug_assertions builds because this
-    // workspace compiles dev dependencies with opt-level=3.
+    // Phase 1: per-row horizontal squared-distance scan.  Each row is disjoint
+    // in both `seeds` (read-only) and `scratch_g` (write), so `par_chunks_mut`
+    // is safe.
     let par_thresh = std::env::var("DF_3DAA_EDT_PAR_THRESH")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(500_000); // ~700×700 pixels
     let use_par = g_len >= par_thresh;
 
-    // Phase 1 is parallelised over rows: each row's slice of scratch_g is a
-    // disjoint &mut [f32], so par_chunks_mut is unconditionally safe.
     if use_par {
         scratch_g[..g_len]
             .par_chunks_mut(roi_w)
             .enumerate()
             .for_each(|(roi_y, row)| {
-                let y = roi_min_y + roi_y;
-                let seed_row = y * width + roi_min_x;
-
-                // Left-to-right pass.
+                let seed_row = roi_y * roi_w;
                 let mut left_d = f32::INFINITY;
                 for roi_x in 0..roi_w {
                     if seeds[seed_row + roi_x] {
@@ -773,8 +782,6 @@ fn felzenszwalb_edt_roi(
                     }
                     row[roi_x] = left_d * left_d;
                 }
-
-                // Right-to-left pass: update with nearest seed to the right.
                 let mut right_d = f32::INFINITY;
                 for roi_x in (0..roi_w).rev() {
                     if seeds[seed_row + roi_x] {
@@ -791,9 +798,8 @@ fn felzenszwalb_edt_roi(
     } else {
         let g = &mut scratch_g[..g_len];
         for roi_y in 0..roi_h {
-            let y = roi_min_y + roi_y;
-            let seed_row = y * width + roi_min_x;
-
+            let seed_row = roi_y * roi_w;
+            let g_row = roi_y * roi_w;
             let mut left_d = f32::INFINITY;
             for roi_x in 0..roi_w {
                 if seeds[seed_row + roi_x] {
@@ -801,9 +807,8 @@ fn felzenszwalb_edt_roi(
                 } else if left_d < f32::INFINITY {
                     left_d += 1.0;
                 }
-                g[roi_y * roi_w + roi_x] = left_d * left_d;
+                g[g_row + roi_x] = left_d * left_d;
             }
-
             let mut right_d = f32::INFINITY;
             for roi_x in (0..roi_w).rev() {
                 if seeds[seed_row + roi_x] {
@@ -812,78 +817,121 @@ fn felzenszwalb_edt_roi(
                     right_d += 1.0;
                 }
                 let d2 = right_d * right_d;
-                if d2 < g[roi_y * roi_w + roi_x] {
-                    g[roi_y * roi_w + roi_x] = d2;
+                if d2 < g[g_row + roi_x] {
+                    g[g_row + roi_x] = d2;
                 }
             }
         }
     }
 
-    // Phase 2: for each column, 1D vertical DT using the parabola lower-envelope.
-    // dt[y] = min_{y'} { g[y'][x] + (y - y')² }
+    // Phase 2: per-column parabola lower-envelope.  Columns are independent,
+    // so this is parallelised with `for_each_init` (per-worker v/z scratch).
     //
-    // Always sequential: allocating the v/z scratch vectors inside a parallel
-    // closure would cost ~43 KB × roi_w = ~248 MB of heap churn for a full 8K
-    // plate.  A single sequential pass over all roi_w columns with reused
-    // pre-allocated scratch is far faster and cache-friendlier.
+    // Disjoint-write safety: each column `roi_x` writes only to local indices
+    // `roi_y * roi_w + roi_x` for roi_y in 0..roi_h — different columns differ
+    // in `roi_x`, so their target indices never alias.
     let g_read = &scratch_g[..g_len];
-    {
-        // Sequential Phase 2 with reused scratch.
+
+    let phase2_par_thresh = std::env::var("DF_3DAA_EDT_PHASE2_PAR_THRESH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(500_000);
+    let phase2_use_par = g_len >= phase2_par_thresh && roi_w >= 32;
+
+    if phase2_use_par {
+        // SAFETY: see disjoint-write argument above.  Carrying the pointer
+        // through the closure as a `usize` (Send + Sync) is well-defined.
+        let dist_addr = dist.as_mut_ptr() as usize;
+        (0..roi_w).into_par_iter().for_each_init(
+            || (vec![0usize; roi_h], vec![0.0f32; roi_h + 1]),
+            |(v, z), roi_x| {
+                let dist_ptr = dist_addr as *mut f32;
+                phase2_column_local(g_read, dist_ptr, roi_w, roi_h, roi_x, v, z);
+            },
+        );
+    } else {
         let mut v = vec![0usize; roi_h];
         let mut z = vec![0.0f32; roi_h + 1];
+        let dist_ptr = dist.as_mut_ptr();
         for roi_x in 0..roi_w {
-            let first = match (0..roi_h).find(|&ry| g_read[ry * roi_w + roi_x] < f32::INFINITY) {
-                None => {
-                    for roi_y in 0..roi_h {
-                        dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = f32::INFINITY;
-                    }
-                    continue;
-                }
-                Some(f) => f,
-            };
+            phase2_column_local(g_read, dist_ptr, roi_w, roi_h, roi_x, &mut v, &mut z);
+        }
+    }
+}
 
-            v[0] = first;
-            z[0] = f32::NEG_INFINITY;
-            z[1] = f32::INFINITY;
-            let mut k = 0usize;
-
-            for roi_y in (first + 1)..roi_h {
-                let fq = g_read[roi_y * roi_w + roi_x];
-                if fq == f32::INFINITY {
-                    continue;
-                }
-                let q = roi_y as f32;
-                loop {
-                    let vk = v[k] as f32;
-                    let fvk = g_read[v[k] * roi_w + roi_x];
-                    let s = ((fq + q * q) - (fvk + vk * vk)) / (2.0 * (q - vk));
-                    if s > z[k] {
-                        k += 1;
-                        v[k] = roi_y;
-                        z[k] = s;
-                        z[k + 1] = f32::INFINITY;
-                        break;
-                    }
-                    if k == 0 {
-                        v[0] = roi_y;
-                        z[0] = f32::NEG_INFINITY;
-                        z[1] = f32::INFINITY;
-                        break;
-                    }
-                    k -= 1;
-                }
-            }
-
-            let mut ki = 0;
+/// Per-column Phase-2 parabola lower-envelope computation (ROI-local).
+///
+/// Writes are confined to local indices `roi_y * roi_w + roi_x` for
+/// `roi_y in 0..roi_h`.  Caller must ensure concurrent calls use disjoint
+/// `roi_x` values.
+#[inline]
+fn phase2_column_local(
+    g_read: &[f32],
+    dist_ptr: *mut f32,
+    roi_w: usize,
+    roi_h: usize,
+    roi_x: usize,
+    v: &mut [usize],
+    z: &mut [f32],
+) {
+    let first = match (0..roi_h).find(|&ry| g_read[ry * roi_w + roi_x] < f32::INFINITY) {
+        None => {
             for roi_y in 0..roi_h {
-                while z[ki + 1] < roi_y as f32 {
-                    ki += 1;
+                let idx = roi_y * roi_w + roi_x;
+                // SAFETY: disjoint per-column write (see caller invariant).
+                unsafe {
+                    *dist_ptr.add(idx) = f32::INFINITY;
                 }
-                let vk = v[ki] as f32;
-                let diff = roi_y as f32 - vk;
-                let d2 = diff * diff + g_read[v[ki] * roi_w + roi_x];
-                dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = d2.sqrt();
             }
+            return;
+        }
+        Some(f) => f,
+    };
+
+    v[0] = first;
+    z[0] = f32::NEG_INFINITY;
+    z[1] = f32::INFINITY;
+    let mut k = 0usize;
+
+    for roi_y in (first + 1)..roi_h {
+        let fq = g_read[roi_y * roi_w + roi_x];
+        if fq == f32::INFINITY {
+            continue;
+        }
+        let q = roi_y as f32;
+        loop {
+            let vk = v[k] as f32;
+            let fvk = g_read[v[k] * roi_w + roi_x];
+            let s = ((fq + q * q) - (fvk + vk * vk)) / (2.0 * (q - vk));
+            if s > z[k] {
+                k += 1;
+                v[k] = roi_y;
+                z[k] = s;
+                z[k + 1] = f32::INFINITY;
+                break;
+            }
+            if k == 0 {
+                v[0] = roi_y;
+                z[0] = f32::NEG_INFINITY;
+                z[1] = f32::INFINITY;
+                break;
+            }
+            k -= 1;
+        }
+    }
+
+    let mut ki = 0;
+    for roi_y in 0..roi_h {
+        while z[ki + 1] < roi_y as f32 {
+            ki += 1;
+        }
+        let vk = v[ki] as f32;
+        let diff = roi_y as f32 - vk;
+        let d2 = diff * diff + g_read[v[ki] * roi_w + roi_x];
+        let idx = roi_y * roi_w + roi_x;
+        // SAFETY: disjoint per-column write (see caller invariant).
+        unsafe {
+            *dist_ptr.add(idx) = d2.sqrt();
         }
     }
 }
@@ -893,15 +941,23 @@ fn felzenszwalb_edt_roi(
 // ---------------------------------------------------------------------------
 
 /// 8-connected BFS connected-component labeling for a zone of pixels where
-/// `in_occupancy[idx] > 0` AND `current[idx] <= topo_threshold`.
+/// `in_occupancy[local] > 0` AND `current[global] <= topo_threshold`.
 ///
-/// Returns `(labels, num_labels)`:
-/// - `labels` is indexed by ROI position `(y - min_y) * roi_w + (x - min_x)`.
-/// - Label 0 = not part of the zone; labels 1..=num_labels are the components.
-fn label_receding_components(
+/// `in_occupancy` is **ROI-local** (workspace ROI shape `(ws_roi_w, _)` with
+/// origin `(ws_roi_min_x, ws_roi_min_y)`).  `current` is the **full-image**
+/// layer mask indexed by `y * width + x`.
+///
+/// Returns `num_labels`. `labels_buf` is indexed by *receding* ROI position
+/// `(y - rec_min_y) * roi_w_rec + (x - rec_min_x)` with `roi_w_rec = rec_max_x - rec_min_x + 1`.
+/// Label 0 = not part of the zone; labels 1..=num_labels are the components.
+#[allow(clippy::too_many_arguments)]
+fn label_receding_components_local(
     in_occupancy: &[u8],
     current: &[u8],
     width: usize,
+    ws_roi_min_x: usize,
+    ws_roi_min_y: usize,
+    ws_roi_w: usize,
     rec_min_x: usize,
     rec_max_x: usize,
     rec_min_y: usize,
@@ -913,9 +969,6 @@ fn label_receding_components(
     let roi_w = rec_max_x - rec_min_x + 1;
     let roi_h = rec_max_y - rec_min_y + 1;
     let roi_len = roi_w * roi_h;
-    // Reuse preallocated buffer; ensure it is large enough then zero the active
-    // portion.  After the first full-plate layer the capacity is sufficient and
-    // no heap allocation occurs.
     if labels_buf.len() < roi_len {
         labels_buf.resize(roi_len, 0);
     }
@@ -926,20 +979,21 @@ fn label_receding_components(
 
     for start_ry in 0..roi_h {
         let start_y = rec_min_y + start_ry;
+        let occ_row_local = (start_y - ws_roi_min_y) * ws_roi_w;
+        let cur_row = start_y * width;
         for start_rx in 0..roi_w {
             let start_x = rec_min_x + start_rx;
             let roi_idx = start_ry * roi_w + start_rx;
-            let img_idx = start_y * width + start_x;
+            let occ_idx = occ_row_local + (start_x - ws_roi_min_x);
+            let img_idx = cur_row + start_x;
 
-            // Must be in the receding zone and unlabelled.
-            if in_occupancy[img_idx] == 0
+            if in_occupancy[occ_idx] == 0
                 || current[img_idx] > topo_threshold
                 || labels_buf[roi_idx] != 0
             {
                 continue;
             }
 
-            // BFS flood-fill from this seed.
             let label = next_label;
             next_label += 1;
             labels_buf[roi_idx] = label;
@@ -968,9 +1022,11 @@ fn label_receding_components(
                         let nrx = nx as usize - rec_min_x;
                         let nry = ny as usize - rec_min_y;
                         let nri = nry * roi_w + nrx;
-                        let ni = ny as usize * width + nx as usize;
-                        if in_occupancy[ni] > 0
-                            && current[ni] <= topo_threshold
+                        let n_occ =
+                            (ny as usize - ws_roi_min_y) * ws_roi_w + (nx as usize - ws_roi_min_x);
+                        let n_img = ny as usize * width + nx as usize;
+                        if in_occupancy[n_occ] > 0
+                            && current[n_img] <= topo_threshold
                             && labels_buf[nri] == 0
                         {
                             labels_buf[nri] = label;

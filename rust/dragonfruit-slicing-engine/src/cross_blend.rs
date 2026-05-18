@@ -160,11 +160,7 @@ pub fn cross_blend_layer_inplace(
     let mut stats = CrossBlendStats::default();
     let width_i = inputs.width as isize;
     let height_i = inputs.height as isize;
-    let kernel_weight_sum: f32 = workspace
-        .neighbor_offsets
-        .iter()
-        .map(|(_, _, w)| *w)
-        .sum();
+    let kernel_weight_sum: f32 = workspace.neighbor_offsets.iter().map(|(_, _, w)| *w).sum();
     let mut z_weight_sum = 0.0f32;
 
     for neighbor in inputs.neighbors.iter() {
