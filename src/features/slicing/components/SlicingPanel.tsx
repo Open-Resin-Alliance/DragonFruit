@@ -2684,7 +2684,7 @@ export function SlicingPanel({
                         </>
                       )}
 
-                      {aaMode === '3DAA' && (
+                      {aaMode === '3DAA' && !(['custom', 'opaque', 'clear'].includes(zBlendResinType)) && (
                         <div
                           className="my-2.5 mx-1 h-px rounded-full"
                           style={{
@@ -2693,66 +2693,68 @@ export function SlicingPanel({
                         />
                       )}
 
-                      <div className="space-y-1">
-                        <SettingLabelWithHelp
-                          label="Minimum Grey Level"
-                          help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
-                        />
-                        {hasProfileMinimumAaAlpha && (
-                          <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={!enableMinimumAaAlphaOverride
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setEnableMinimumAaAlphaOverride(false)}
-                            >
-                              {`Profile (${profileMinimumAaAlphaPercent}%)`}
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={enableMinimumAaAlphaOverride
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setEnableMinimumAaAlphaOverride(true)}
-                            >
-                              Override
-                            </button>
-                          </div>
-                        )}
-                        {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
-                          <ScrollableNumberField
-                            className="mt-1"
-                            value={minimumAaAlphaPercent}
-                            onChange={setClampedMinimumAaAlphaPercent}
-                            min={0}
-                            max={100}
-                            step={1}
-                            unit="%"
-                            ariaLabel="Minimum alpha percent override"
-                            decreaseTitle="Decrease minimum alpha"
-                            increaseTitle="Increase minimum alpha"
+                      {aaMode === '3DAA' && !(['custom', 'opaque', 'clear'].includes(zBlendResinType)) && (
+                        <div className="space-y-1">
+                          <SettingLabelWithHelp
+                            label="Minimum Grey Level"
+                            help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
                           />
-                        )}
-                      </div>
+                          {hasProfileMinimumAaAlpha && (
+                            <div className="grid grid-cols-2 gap-1">
+                              <button
+                                type="button"
+                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                style={!enableMinimumAaAlphaOverride
+                                  ? {
+                                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                      color: 'var(--text-strong)',
+                                    }
+                                  : {
+                                      borderColor: 'var(--border-subtle)',
+                                      background: 'var(--surface-0)',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                onClick={() => setEnableMinimumAaAlphaOverride(false)}
+                              >
+                                {`Profile (${profileMinimumAaAlphaPercent}%)`}
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                style={enableMinimumAaAlphaOverride
+                                  ? {
+                                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                      color: 'var(--text-strong)',
+                                    }
+                                  : {
+                                      borderColor: 'var(--border-subtle)',
+                                      background: 'var(--surface-0)',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                onClick={() => setEnableMinimumAaAlphaOverride(true)}
+                              >
+                                Override
+                              </button>
+                            </div>
+                          )}
+                          {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
+                            <ScrollableNumberField
+                              className="mt-1"
+                              value={minimumAaAlphaPercent}
+                              onChange={setClampedMinimumAaAlphaPercent}
+                              min={0}
+                              max={100}
+                              step={1}
+                              unit="%"
+                              ariaLabel="Minimum alpha percent override"
+                              decreaseTitle="Decrease minimum alpha"
+                              increaseTitle="Increase minimum alpha"
+                            />
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                   </>}

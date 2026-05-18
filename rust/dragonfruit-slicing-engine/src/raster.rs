@@ -5,6 +5,7 @@
 
 use crate::geometry::Triangle;
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
+use rayon::prelude::*;
 
 #[inline]
 fn edge_x_cmp(a: f32, b: f32) -> std::cmp::Ordering {
@@ -874,31 +875,29 @@ fn apply_edge_box_blur_to_mask_in_roi(
         return;
     }
 
-    // Separable 2-D box blur on an 8-bit mask.
+    // Separable 2-D box blur.
     //
-    // The algorithm uses a single forward pass with a flat ring-buffer that
-    // holds at most (2*radius+1) rows of pre-computed horizontal sums.
-    // This avoids all per-row heap allocations (the old VecDeque<Vec<u16>>
-    // approach allocated one Vec per row, ~height allocations per layer).
+    // For large ROIs (>= 1 MP in release builds) we use a two-pass parallel
+    // H→V approach that saturates all cores via Rayon.  For smaller ROIs or
+    // debug builds the Rayon / hpass-allocation overhead dominates; we fall
+    // back to the classic single-pass ring-buffer algorithm which uses only
+    // O(radius × roi_w) extra memory and has better cache behaviour at small
+    // sizes.
     //
-    // Complexity: O(ROI_W × ROI_H) time regardless of radius.
-    // Extra allocations: 3 fixed-size Vecs — ring, col_sums, out.
+    // Denominator terms use global image coordinates so ROI border pixels
+    // receive the same implicit-zero attenuation in both paths.
 
     let roi_w = roi_max_x - roi_min_x + 1;
     let roi_h = roi_max_y - roi_min_y + 1;
 
-    // ring[slot * width .. (slot+1) * width] stores the horizontal sliding-
-    // window sum for each column in one source row. Values fit in u16 for
-    // our supported radii (worst case: 255 * (2r+1) where r<=32 => 16_575).
-    let ring_cap = 2 * radius + 1;
-    let mut ring = vec![0u16; ring_cap * roi_w];
-    // col_sums[x] = sum of ring[*][x] for all currently live rows.
-    let mut col_sums = vec![0u32; roi_w];
-    let mut ring_head = 0usize; // slot index of the oldest live row
-    let mut ring_len = 0usize; // number of rows currently live in the ring
+    // Parallel only for sufficiently large ROIs.  Keep runtime-configurable so
+    // optimized dev profiles can still leverage Rayon.
+    let par_thresh = std::env::var("DF_3DAA_BLUR_PAR_THRESH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1_000_000); // ~1 MP: ~1000×1000 pixels
+    let use_par = roi_w.saturating_mul(roi_h) >= par_thresh;
 
-    // Pre-compute denominator terms in global-image coordinates so ROI borders
-    // behave like implicit zeros (not image edges).
     let h_denom: Vec<u32> = (0..roi_w)
         .map(|ix| {
             let x = roi_min_x + ix;
@@ -912,81 +911,162 @@ fn apply_edge_box_blur_to_mask_in_roi(
         })
         .collect();
 
-    // Drive add_row from 0 to roi_h+radius-1 (inclusive).
-    //   output row = add_row - radius   (when in [0, roi_h))
+    if !use_par {
+        // ── Sequential ring-buffer path ───────────────────────────────────
+        // Single forward pass; ring holds at most (2r+1) rows of horizontal
+        // sums.  O(roi_w × roi_h) time, O(radius × roi_w) extra memory.
+        let ring_cap = 2 * radius + 1;
+        let mut ring = vec![0u16; ring_cap * roi_w];
+        let mut col_sums = vec![0u32; roi_w];
+        let mut ring_head = 0usize;
+        let mut ring_len = 0usize;
+
+        for add_row in 0..roi_h + radius {
+            if add_row < roi_h {
+                let new_slot = (ring_head + ring_len) % ring_cap;
+                let slot_start = new_slot * roi_w;
+                let src_y = roi_min_y + add_row;
+                let src_row_start = src_y * width + roi_min_x;
+                let src = &mask[src_row_start..src_row_start + roi_w];
+
+                let mut sum = 0u32;
+                let init_end = radius.min(roi_w - 1);
+                for &b in &src[0..=init_end] {
+                    sum += b as u32;
+                }
+                for ix in 0..roi_w {
+                    ring[slot_start + ix] = sum as u16;
+                    col_sums[ix] += sum;
+                    if ix >= radius {
+                        sum -= src[ix - radius] as u32;
+                    }
+                    let r1 = ix + radius + 1;
+                    if r1 < roi_w {
+                        sum += src[r1] as u32;
+                    }
+                }
+                ring_len += 1;
+            }
+
+            if add_row >= radius {
+                let out_row = add_row - radius;
+                let dst_y = roi_min_y + out_row;
+                let dst_row_start = dst_y * width + roi_min_x;
+                let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
+                for ix in 0..roi_w {
+                    let denom = (h_denom[ix] * v_denom[out_row]).max(1);
+                    let raw = (col_sums[ix] + denom / 2) / denom;
+                    let mut val = raw.min(255) as u8;
+                    if val < min_alpha_u8 {
+                        val = 0;
+                    }
+                    row_out[ix] = val;
+                }
+
+                if out_row >= radius {
+                    let evict_start = ring_head * roi_w;
+                    for ix in 0..roi_w {
+                        col_sums[ix] -= ring[evict_start + ix] as u32;
+                    }
+                    ring_head = (ring_head + 1) % ring_cap;
+                    ring_len -= 1;
+                }
+            }
+        }
+        return;
+    }
+
+    // ── Parallel H→V path (large ROIs, release builds) ───────────────────
+    // Thread-local buffer eliminates the ~41 MB per-call heap allocation.
+    // Capacity is retained across calls so only the first call per thread pays
+    // for OS page mapping; subsequent calls are essentially free.
     //
-    // In-place write strategy: the output row (add_row - radius) is always
-    // strictly above the source row (add_row) in the image, so by the time we
-    // write a blurred row we have already read it into the ring — no aliasing.
-    for add_row in 0..roi_h + radius {
-        // ── Phase 1: accumulate horizontal sums for source row `add_row` ──
-        // The immutable borrow of `mask` ends at the closing brace, before the
-        // mutable borrow in Phase 2 begins — NLL guarantees no overlap.
-        if add_row < roi_h {
-            let new_slot = (ring_head + ring_len) % ring_cap;
-            let slot_start = new_slot * roi_w;
-            let src_y = roi_min_y + add_row;
-            let src_row_start = src_y * width + roi_min_x;
-            let src = &mask[src_row_start..src_row_start + roi_w];
+    // SAFETY invariant: every element of hpass is written by the H-pass
+    // before the V-pass reads it, so set_len on uninitialized capacity is fine.
+    thread_local! {
+        static HPASS: std::cell::UnsafeCell<Vec<u16>> = std::cell::UnsafeCell::new(Vec::new());
+    }
 
-            // Horizontal sliding-window sum:
-            //   ring[slot][x] = sum of pixel values in src[x-r .. x+r]
-            // Simultaneously accumulate into col_sums so we skip a second pass.
-            let mut sum = 0u32;
-            let init_end = radius.min(roi_w - 1);
-            for &b in &src[0..=init_end] {
-                sum += b as u32;
-            }
-            for ix in 0..roi_w {
-                ring[slot_start + ix] = sum as u16;
-                col_sums[ix] += sum;
-                // Slide window right
-                if ix >= radius {
-                    sum -= src[ix - radius] as u32;
-                }
-                let r1 = ix + radius + 1;
-                if r1 < roi_w {
-                    sum += src[r1] as u32;
-                }
-            }
-            ring_len += 1;
-        } // immutable borrow of `mask` dropped here
+    let mask_read = mask.as_ptr() as usize;
+    let mask_ptr = mask.as_mut_ptr() as usize;
 
-        // ── Phase 2: emit blurred output row directly into mask ───────────
-        // out_row = add_row - radius is always < add_row (radius ≥ 1), so we
-        // write to a row we have already finished reading. Safe in-place.
-        if add_row >= radius {
-            let out_row = add_row - radius;
-            let dst_y = roi_min_y + out_row;
-            let dst_row_start = dst_y * width + roi_min_x;
-            let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
-            for ix in 0..roi_w {
-                let denom = (h_denom[ix] * v_denom[out_row]).max(1);
-                let raw = (col_sums[ix] + denom / 2) / denom;
+    HPASS.with(|cell| {
+        let needed = roi_w * roi_h;
+        // SAFETY: thread_local — only the owning thread accesses this cell.
+        let hpass: &mut Vec<u16> = unsafe { &mut *cell.get() };
+        if hpass.capacity() < needed {
+            hpass.reserve(needed - hpass.len());
+        }
+        // H-pass writes all elements before V-pass reads any; no need to zero-init.
+        unsafe { hpass.set_len(needed) };
+
+        // H-pass: parallel over rows.
+        hpass
+            .par_chunks_mut(roi_w)
+            .enumerate()
+            .for_each(|(roi_y, hrow)| {
+                // SAFETY: H-pass only reads `mask`; V-pass (which writes) starts
+                // only after par_chunks_mut returns — no concurrent read/write.
+                let src_start = (roi_min_y + roi_y) * width + roi_min_x;
+                let src = unsafe {
+                    std::slice::from_raw_parts((mask_read as *const u8).add(src_start), roi_w)
+                };
+                let mut sum = 0u32;
+                let init_end = radius.min(roi_w - 1);
+                for &b in &src[..=init_end] {
+                    sum += b as u32;
+                }
+                for roi_x in 0..roi_w {
+                    hrow[roi_x] = sum as u16;
+                    if roi_x >= radius {
+                        sum -= src[roi_x - radius] as u32;
+                    }
+                    let r1 = roi_x + radius + 1;
+                    if r1 < roi_w {
+                        sum += src[r1] as u32;
+                    }
+                }
+            });
+
+        let hpass_ptr = hpass.as_ptr() as usize;
+
+        // V-pass: parallel over columns.
+        // Safety: each parallel task writes to a distinct column of `mask`;
+        // writes at `(roi_min_y + roi_y) * width + roi_min_x + roi_x` are
+        // non-overlapping for different `roi_x` values.
+        (0..roi_w).into_par_iter().for_each(|roi_x| {
+            // SAFETY: see comment above.
+            let hp = hpass_ptr as *const u16;
+            let mp = mask_ptr as *mut u8;
+            let mut col_sum = 0u32;
+            let init_end = radius.min(roi_h - 1);
+            for roi_y in 0..=init_end {
+                col_sum += unsafe { *hp.add(roi_y * roi_w + roi_x) } as u32;
+            }
+            for roi_y in 0..roi_h {
+                let denom = (h_denom[roi_x] * v_denom[roi_y]).max(1);
+                let raw = (col_sum + denom / 2) / denom;
                 let mut val = raw.min(255) as u8;
                 // Zero out pixels below the min-alpha floor rather than clamping
-                // them up, which would create a flat "shelf" of uniform alpha
-                // around the model edge. The radius expansion at the call site
-                // ensures pixels within the user's target distance naturally
-                // exceed the floor; anything below is outside that zone → 0.
+                // them up — see original function for full rationale.
                 if val < min_alpha_u8 {
                     val = 0;
                 }
-                row_out[ix] = val;
-            }
-
-            // ── Evict the row that just left the vertical window ──────────
-            if out_row >= radius {
-                let evict_start = ring_head * roi_w;
-                for ix in 0..roi_w {
-                    col_sums[ix] -= ring[evict_start + ix] as u32;
+                // SAFETY: column roi_x, disjoint from all other parallel tasks.
+                unsafe {
+                    *mp.add((roi_min_y + roi_y) * width + roi_min_x + roi_x) = val;
                 }
-                ring_head = (ring_head + 1) % ring_cap;
-                ring_len -= 1;
+                // Slide vertical window down.
+                let bot = roi_y + radius + 1;
+                if bot < roi_h {
+                    col_sum += unsafe { *hp.add(bot * roi_w + roi_x) } as u32;
+                }
+                if roi_y >= radius {
+                    col_sum -= unsafe { *hp.add((roi_y - radius) * roi_w + roi_x) } as u32;
+                }
             }
-        }
-    }
-    // No copy-back needed: blurred values were written directly into `mask`.
+        });
+    }); // end HPASS.with
 }
 
 pub(crate) fn apply_blur_postprocess_inplace(

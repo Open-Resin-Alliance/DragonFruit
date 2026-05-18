@@ -10,7 +10,7 @@ use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
 use crate::raster::{
     apply_blur_postprocess_inplace, apply_blur_postprocess_inplace_with_roi, encode_mask_to_rle,
-    rasterize_layer,
+    rasterize_layer_with_stats,
 };
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
@@ -135,6 +135,11 @@ struct SupportMaskContext {
     support_candidates: Vec<usize>,
 }
 
+struct SupportMaskLayer {
+    mask: Vec<u8>,
+    bounds: (usize, usize, usize, usize),
+}
+
 impl SupportMaskContext {
     fn from_job(job: &SliceJobV3) -> Option<Self> {
         if job.aa_on_supports {
@@ -172,7 +177,7 @@ impl SupportMaskContext {
         })
     }
 
-    fn rasterize_support_mask(&mut self, layer: u32) -> Option<Vec<u8>> {
+    fn rasterize_support_mask(&mut self, layer: u32) -> Option<SupportMaskLayer> {
         self.support_candidates.clear();
         for &candidate in self.layer_index.candidates_for_layer(layer) {
             if candidate >= self.model_triangle_count {
@@ -184,18 +189,45 @@ impl SupportMaskContext {
             return None;
         }
 
-        Some(rasterize_layer(
+        let (mask, stats) = rasterize_layer_with_stats(
             &self.support_job,
             &self.triangles,
             &self.support_candidates,
             layer,
-        ))
+            false,
+        );
+
+        if stats.total_solid_pixels == 0 {
+            return None;
+        }
+
+        let min_x = stats.min_x.max(0) as usize;
+        let max_x = stats.max_x.max(stats.min_x).max(0) as usize;
+        let min_y = stats.min_y.max(0) as usize;
+        let max_y = stats.max_y.max(stats.min_y).max(0) as usize;
+
+        Some(SupportMaskLayer {
+            mask,
+            bounds: (min_x, max_x, min_y, max_y),
+        })
     }
 }
 
 #[inline]
-fn merge_support_mask_inplace(dst: &mut [u8], support: &[u8]) {
-    u8_max_inplace(dst, support);
+fn merge_support_mask_inplace(dst: &mut [u8], support: &SupportMaskLayer, width: usize) {
+    let (min_x, max_x, min_y, max_y) = support.bounds;
+    if width == 0 || min_x > max_x || min_y > max_y {
+        return;
+    }
+    let row_len = max_x - min_x + 1;
+    for y in min_y..=max_y {
+        let row_start = y * width + min_x;
+        let row_end = row_start + row_len;
+        u8_max_inplace(
+            &mut dst[row_start..row_end],
+            &support.mask[row_start..row_end],
+        );
+    }
 }
 
 #[inline]
@@ -386,10 +418,18 @@ fn choose_3daa_post_buffer_depth(
     let layer_pixels = (width as u64).saturating_mul(height as u64);
     let total_pixels = layer_pixels.saturating_mul(total_layers as u64);
 
-    // Current overlap implementation clones future topology masks into worker tasks.
-    // For very large layers this can balloon memory and bandwidth cost, so we
-    // auto-disable overlap until shared-topology task transport lands.
-    if layer_pixels >= 6_000_000 || total_layers < 96 || post_threads <= 1 || hw < 6 {
+    // Require at least 6 hardware threads and enough layers for the pipeline
+    // to matter.  The single-threaded fallback is used otherwise.
+    if total_layers < 96 || post_threads <= 1 || hw < 6 {
+        return 0;
+    }
+
+    // Current overlap transport clones future/prior topology masks into each
+    // worker task (`Vec<Vec<u8>>`). For very large layers this becomes a major
+    // per-layer memcpy tax (hundreds of MB/s to GB/s depending on look-back),
+    // which can erase all overlap gains. Keep overlap disabled for large masks
+    // until shared-topology transport lands.
+    if layer_pixels >= 6_000_000 {
         return 0;
     }
 
@@ -411,7 +451,7 @@ struct PendingLayer {
     model_non_empty: bool,
     backward_applied: bool,
     backward_seed_bounds: TopologyBounds,
-    support_mask: Option<Vec<u8>>,
+    support_mask: Option<SupportMaskLayer>,
     apply_model_aa: bool,
     backward_contrib: Option<Vec<u8>>,
 }
@@ -450,6 +490,7 @@ fn process_pending_layer_post(
     blur_radius: usize,
     min_aa_alpha_u8: u8,
     z_blend_min_alpha_u8: u8,
+    has_custom_lut: bool,
     debug_color_overlay: bool,
     lut: &[u8; 256],
     workspace: &mut z_blend::ZBlendWorkspace,
@@ -578,6 +619,7 @@ fn process_pending_layer_post(
         {
             // Run the blur without an inline min-alpha floor so we can apply
             // separate floors for topology pixels vs z-blend pixels below.
+            // When custom_lut is used, skip floors since the LUT fully defines cure behavior.
             apply_blur_postprocess_inplace_with_roi(
                 &mut layer.mask,
                 width,
@@ -593,6 +635,8 @@ fn process_pending_layer_post(
             apply_blur_postprocess_inplace(&mut layer.mask, width, height, blur_radius, 0);
         }
         // Apply topology-gated minimum alpha floors after blur:
+        // SKIP if custom_lut is used; the LUT fully defines cure behavior and
+        // additional floors would contradict the user's intent.
         //
         // Pixels inside the current layer's binary footprint (topology) received
         // their value from XY rasterization ± blur.  These are true XY AA pixels
@@ -604,44 +648,46 @@ fn process_pending_layer_post(
         // even faint gradient tails 100+ px from the edge get lifted to the cure
         // threshold.  The separate `z_blend_min_alpha_u8` (default 0) lets the
         // gradient taper naturally.
-        const TOPO_THRESHOLD: u8 = 127;
-        if min_aa_alpha_u8 > 0 || z_blend_min_alpha_u8 > 0 {
-            let topology = layer.topology.as_slice();
-            for (idx, px) in layer.mask.iter_mut().enumerate() {
-                if *px == 0 {
-                    continue;
-                }
-                if topology[idx] > TOPO_THRESHOLD {
-                    // XY AA pixel: floor up so it cures reliably.
-                    if *px < min_aa_alpha_u8 {
-                        *px = min_aa_alpha_u8;
+        if !has_custom_lut {
+            const TOPO_THRESHOLD: u8 = 127;
+            if min_aa_alpha_u8 > 0 || z_blend_min_alpha_u8 > 0 {
+                let topology = layer.topology.as_slice();
+                for (idx, px) in layer.mask.iter_mut().enumerate() {
+                    if *px == 0 {
+                        continue;
                     }
-                } else {
-                    // z-blend gradient pixel: zero out if below cure threshold
-                    // so the gradient fades to black rather than forming a hard
-                    // lifted ring (the "fat block" artefact).
-                    if *px < z_blend_min_alpha_u8 {
-                        *px = 0;
+                    if topology[idx] > TOPO_THRESHOLD {
+                        // XY AA pixel: floor up so it cures reliably.
+                        if *px < min_aa_alpha_u8 {
+                            *px = min_aa_alpha_u8;
+                        }
+                    } else {
+                        // z-blend gradient pixel: zero out if below cure threshold
+                        // so the gradient fades to black rather than forming a hard
+                        // lifted ring (the "fat block" artefact).
+                        if *px < z_blend_min_alpha_u8 {
+                            *px = 0;
+                        }
                     }
                 }
             }
-        }
-        if blur_radius == 0 {
-            // No blur ran; still need to apply XY AA floor to topology pixels
-            // and z-blend cutoff to gradient pixels.
-            const TOPO_THRESHOLD2: u8 = 127;
-            let topology = layer.topology.as_slice();
-            for (idx, px) in layer.mask.iter_mut().enumerate() {
-                if *px == 0 {
-                    continue;
-                }
-                if topology[idx] > TOPO_THRESHOLD2 {
-                    if *px < min_aa_alpha_u8 {
-                        *px = min_aa_alpha_u8;
+            if blur_radius == 0 {
+                // No blur ran; still need to apply XY AA floor to topology pixels
+                // and z-blend cutoff to gradient pixels.
+                const TOPO_THRESHOLD2: u8 = 127;
+                let topology = layer.topology.as_slice();
+                for (idx, px) in layer.mask.iter_mut().enumerate() {
+                    if *px == 0 {
+                        continue;
                     }
-                } else {
-                    if *px < z_blend_min_alpha_u8 {
-                        *px = 0;
+                    if topology[idx] > TOPO_THRESHOLD2 {
+                        if *px < min_aa_alpha_u8 {
+                            *px = min_aa_alpha_u8;
+                        }
+                    } else {
+                        if *px < z_blend_min_alpha_u8 {
+                            *px = 0;
+                        }
                     }
                 }
             }
@@ -671,7 +717,7 @@ fn process_pending_layer_post(
 
     if let Some(support_mask) = layer.support_mask.as_ref() {
         let merge_start = std::time::Instant::now();
-        merge_support_mask_inplace(&mut layer.mask, support_mask);
+        merge_support_mask_inplace(&mut layer.mask, support_mask, width);
         support_merge_ns = support_merge_ns
             .saturating_add(merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
@@ -835,6 +881,7 @@ fn rasterize_vertical_aa_streaming_v3(
     // overgrowth and the "wide flat top" stair-step artefact.
     let z_blend_min_alpha_u8 =
         ((job.z_blend_minimum_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let has_custom_lut = job.z_blend_custom_lut.is_some();
     let lut: [u8; 256] = if let Some(custom) = &job.z_blend_custom_lut {
         let mut arr = [0u8; 256];
         for (i, &v) in custom.iter().enumerate().take(256) {
@@ -895,10 +942,12 @@ fn rasterize_vertical_aa_streaming_v3(
     let mut post_next_emit_seq: u64 = 0;
     let mut post_rr_index: usize = 0;
     let mut post_done_reorder: BTreeMap<u64, PostProcessedLayer> = BTreeMap::new();
+    let mut post_worker_count: usize = 0;
 
     if overlap_enabled {
         let worker_depth = post_buffer_depth.max(1);
         let worker_count = post_threads.min(worker_depth).max(1);
+        post_worker_count = worker_count;
         let (done_tx, done_rx) = mpsc::sync_channel::<PostProcessedLayer>(worker_depth);
 
         for _ in 0..worker_count {
@@ -927,6 +976,7 @@ fn rasterize_vertical_aa_streaming_v3(
                         blur_radius,
                         min_aa_alpha_u8,
                         z_blend_min_alpha_u8,
+                        has_custom_lut,
                         debug_color_overlay,
                         &lut,
                         &mut workspace,
@@ -949,7 +999,8 @@ fn rasterize_vertical_aa_streaming_v3(
     let mut cross_blend_ws = cross_blend::CrossBlendWorkspace::new(width, height);
 
     let mut on_raw_mask_layer = |layer_index: u32,
-                                 mut raw_mask: Vec<u8>|
+                                 mut raw_mask: Vec<u8>,
+                                 raster_stats: LayerAreaStatsV3|
      -> Result<(), SlicerV3Error> {
         if raw_mask.is_empty() {
             raw_mask = vec![0u8; pixels_per_layer];
@@ -966,35 +1017,14 @@ fn rasterize_vertical_aa_streaming_v3(
 
         // Remove support/raft pixels from the AA processing path.
         // They are merged back after model-only z-blend + blur.
-        if let Some(ref support_mask) = support_mask_for_layer {
-            if use_parallel_sweeps {
-                if let Some(pool) = post_sweep_pool.as_ref() {
-                    pool.install(|| {
-                        raw_mask
-                            .par_chunks_mut(width)
-                            .zip(support_mask.par_chunks(width))
-                            .for_each(|(raw_row, support_row)| {
-                                for (px, s) in raw_row.iter_mut().zip(support_row.iter()) {
-                                    if *s > 0 {
-                                        *px = 0;
-                                    }
-                                }
-                            });
-                    });
-                } else {
-                    raw_mask
-                        .par_chunks_mut(width)
-                        .zip(support_mask.par_chunks(width))
-                        .for_each(|(raw_row, support_row)| {
-                            for (px, s) in raw_row.iter_mut().zip(support_row.iter()) {
-                                if *s > 0 {
-                                    *px = 0;
-                                }
-                            }
-                        });
-                }
-            } else {
-                for (px, s) in raw_mask.iter_mut().zip(support_mask.iter()) {
+        if let Some(ref support_layer) = support_mask_for_layer {
+            let support_mask = support_layer.mask.as_slice();
+            let (min_x, max_x, min_y, max_y) = support_layer.bounds;
+            for y in min_y..=max_y {
+                let row_start = y * width;
+                let raw_row = &mut raw_mask[row_start + min_x..=row_start + max_x];
+                let support_row = &support_mask[row_start + min_x..=row_start + max_x];
+                for (px, s) in raw_row.iter_mut().zip(support_row.iter()) {
                     if *s > 0 {
                         *px = 0;
                     }
@@ -1020,76 +1050,83 @@ fn rasterize_vertical_aa_streaming_v3(
         let mut topo_min_y = height;
         let mut topo_max_y = 0usize;
         if apply_model_aa {
-            #[derive(Clone, Copy)]
-            struct TopologySweepStats {
-                model_non_empty: bool,
-                topology_non_empty: bool,
-                min_x: usize,
-                max_x: usize,
-                min_y: usize,
-                max_y: usize,
-            }
+            // Reused buffers may contain stale bits from previous layers.
+            topology_mask.fill(0);
 
-            impl TopologySweepStats {
-                #[inline]
-                fn empty(width: usize, height: usize) -> Self {
-                    Self {
-                        model_non_empty: false,
-                        topology_non_empty: false,
-                        min_x: width,
-                        max_x: 0,
-                        min_y: height,
-                        max_y: 0,
-                    }
-                }
+            // Use rasterizer-provided non-zero bounds to avoid sweeping the
+            // entire 12K frame on every layer.
+            if raster_stats.total_solid_pixels > 0 {
+                model_non_empty = true;
 
-                #[inline]
-                fn merge(self, other: Self, width: usize, height: usize) -> Self {
-                    if !self.topology_non_empty && !other.topology_non_empty {
-                        return Self {
-                            model_non_empty: self.model_non_empty || other.model_non_empty,
-                            topology_non_empty: false,
-                            min_x: width,
-                            max_x: 0,
-                            min_y: height,
-                            max_y: 0,
-                        };
-                    }
-                    Self {
-                        model_non_empty: self.model_non_empty || other.model_non_empty,
-                        topology_non_empty: self.topology_non_empty || other.topology_non_empty,
-                        min_x: self.min_x.min(other.min_x),
-                        max_x: self.max_x.max(other.max_x),
-                        min_y: self.min_y.min(other.min_y),
-                        max_y: self.max_y.max(other.max_y),
-                    }
-                }
-            }
+                let bbox_min_x = (raster_stats.min_x.max(0) as usize).min(width - 1);
+                let bbox_max_x =
+                    (raster_stats.max_x.max(raster_stats.min_x).max(0) as usize).min(width - 1);
+                let bbox_min_y = (raster_stats.min_y.max(0) as usize).min(height - 1);
+                let bbox_max_y =
+                    (raster_stats.max_y.max(raster_stats.min_y).max(0) as usize).min(height - 1);
 
-            if use_parallel_sweeps {
-                let sweep = if let Some(pool) = post_sweep_pool.as_ref() {
-                    pool.install(|| {
-                        raw_mask
+                if bbox_min_x <= bbox_max_x && bbox_min_y <= bbox_max_y {
+                    #[derive(Clone, Copy)]
+                    struct TopologySweepStats {
+                        topology_non_empty: bool,
+                        min_x: usize,
+                        max_x: usize,
+                        min_y: usize,
+                        max_y: usize,
+                    }
+
+                    impl TopologySweepStats {
+                        #[inline]
+                        fn empty(width: usize, height: usize) -> Self {
+                            Self {
+                                topology_non_empty: false,
+                                min_x: width,
+                                max_x: 0,
+                                min_y: height,
+                                max_y: 0,
+                            }
+                        }
+
+                        #[inline]
+                        fn merge(self, other: Self, width: usize, height: usize) -> Self {
+                            if !self.topology_non_empty && !other.topology_non_empty {
+                                return Self::empty(width, height);
+                            }
+                            Self {
+                                topology_non_empty: self.topology_non_empty
+                                    || other.topology_non_empty,
+                                min_x: self.min_x.min(other.min_x),
+                                max_x: self.max_x.max(other.max_x),
+                                min_y: self.min_y.min(other.min_y),
+                                max_y: self.max_y.max(other.max_y),
+                            }
+                        }
+                    }
+
+                    let bbox_area =
+                        (bbox_max_x - bbox_min_x + 1).saturating_mul(bbox_max_y - bbox_min_y + 1);
+
+                    let run_sweep_parallel =
+                        use_parallel_sweeps && bbox_area >= PARALLEL_SWEEP_PIXEL_THRESHOLD;
+
+                    let mut sweep_parallel = || {
+                        let row_start = bbox_min_y * width;
+                        let row_end = (bbox_max_y + 1) * width;
+                        raw_mask[row_start..row_end]
                             .par_chunks(width)
-                            .zip(topology_mask.par_chunks_mut(width))
+                            .zip(topology_mask[row_start..row_end].par_chunks_mut(width))
                             .enumerate()
-                            .map(|(y, (raw_row, topo_row))| {
+                            .map(|(local_y, (raw_row, topo_row))| {
+                                let y = bbox_min_y + local_y;
                                 let mut local = TopologySweepStats::empty(width, height);
-                                for (x, (&src, dst)) in
-                                    raw_row.iter().zip(topo_row.iter_mut()).enumerate()
-                                {
-                                    if src > 0 {
-                                        local.model_non_empty = true;
-                                    }
-                                    if src > TOPOLOGY_ALPHA_THRESHOLD {
-                                        *dst = 255;
+                                for x in bbox_min_x..=bbox_max_x {
+                                    if raw_row[x] > TOPOLOGY_ALPHA_THRESHOLD {
+                                        topo_row[x] = 255;
                                         local.topology_non_empty = true;
                                         local.min_x = local.min_x.min(x);
                                         local.max_x = local.max_x.max(x);
                                         local.min_y = local.min_y.min(y);
                                         local.max_y = local.max_y.max(y);
-                                    } else {
-                                        *dst = 0;
                                     }
                                 }
                                 local
@@ -1098,66 +1135,38 @@ fn rasterize_vertical_aa_streaming_v3(
                                 || TopologySweepStats::empty(width, height),
                                 |a, b| a.merge(b, width, height),
                             )
-                    })
-                } else {
-                    raw_mask
-                        .par_chunks(width)
-                        .zip(topology_mask.par_chunks_mut(width))
-                        .enumerate()
-                        .map(|(y, (raw_row, topo_row))| {
-                            let mut local = TopologySweepStats::empty(width, height);
-                            for (x, (&src, dst)) in
-                                raw_row.iter().zip(topo_row.iter_mut()).enumerate()
-                            {
-                                if src > 0 {
-                                    local.model_non_empty = true;
-                                }
-                                if src > TOPOLOGY_ALPHA_THRESHOLD {
-                                    *dst = 255;
+                    };
+
+                    let sweep = if run_sweep_parallel {
+                        if let Some(pool) = post_sweep_pool.as_ref() {
+                            pool.install(sweep_parallel)
+                        } else {
+                            sweep_parallel()
+                        }
+                    } else {
+                        let mut local = TopologySweepStats::empty(width, height);
+                        for y in bbox_min_y..=bbox_max_y {
+                            let row = y * width;
+                            for x in bbox_min_x..=bbox_max_x {
+                                let idx = row + x;
+                                if raw_mask[idx] > TOPOLOGY_ALPHA_THRESHOLD {
+                                    topology_mask[idx] = 255;
                                     local.topology_non_empty = true;
                                     local.min_x = local.min_x.min(x);
                                     local.max_x = local.max_x.max(x);
                                     local.min_y = local.min_y.min(y);
                                     local.max_y = local.max_y.max(y);
-                                } else {
-                                    *dst = 0;
                                 }
                             }
-                            local
-                        })
-                        .reduce(
-                            || TopologySweepStats::empty(width, height),
-                            |a, b| a.merge(b, width, height),
-                        )
-                };
+                        }
+                        local
+                    };
 
-                model_non_empty = sweep.model_non_empty;
-                topology_non_empty = sweep.topology_non_empty;
-                topo_min_x = sweep.min_x;
-                topo_max_x = sweep.max_x;
-                topo_min_y = sweep.min_y;
-                topo_max_y = sweep.max_y;
-            } else {
-                for y in 0..height {
-                    let row = y * width;
-                    for x in 0..width {
-                        let idx = row + x;
-                        let src = raw_mask[idx];
-                        let dst = &mut topology_mask[idx];
-                        if src > 0 {
-                            model_non_empty = true;
-                        }
-                        if src > TOPOLOGY_ALPHA_THRESHOLD {
-                            *dst = 255;
-                            topology_non_empty = true;
-                            topo_min_x = topo_min_x.min(x);
-                            topo_max_x = topo_max_x.max(x);
-                            topo_min_y = topo_min_y.min(y);
-                            topo_max_y = topo_max_y.max(y);
-                        } else {
-                            *dst = 0;
-                        }
-                    }
+                    topology_non_empty = sweep.topology_non_empty;
+                    topo_min_x = sweep.min_x;
+                    topo_max_x = sweep.max_x;
+                    topo_min_y = sweep.min_y;
+                    topo_max_y = sweep.max_y;
                 }
             }
         } else {
@@ -1362,6 +1371,7 @@ fn rasterize_vertical_aa_streaming_v3(
                     blur_radius,
                     min_aa_alpha_u8,
                     z_blend_min_alpha_u8,
+                    has_custom_lut,
                     debug_color_overlay,
                     &lut,
                     &mut workspace,
@@ -1484,6 +1494,7 @@ fn rasterize_vertical_aa_streaming_v3(
                 blur_radius,
                 min_aa_alpha_u8,
                 z_blend_min_alpha_u8,
+                has_custom_lut,
                 debug_color_overlay,
                 &lut,
                 &mut workspace,
@@ -1556,7 +1567,7 @@ fn rasterize_vertical_aa_streaming_v3(
     perf.cross_blend_contributing_layers = cross_blend_contributing_layers.load(Ordering::Relaxed);
     perf.post_blur_ns = post_blur_ns.load(Ordering::Relaxed);
     perf.support_merge_ns = support_merge_ns.load(Ordering::Relaxed);
-    perf.daa_post_threads = post_threads as u32;
+    perf.daa_post_threads = post_worker_count as u32;
     perf.daa_post_buffer_depth = post_buffer_depth as u32;
 
     Ok((
@@ -1704,9 +1715,10 @@ pub fn slice_with_progress_v3(
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
             let progress_total = job_total_layers.saturating_add(1);
-            let mut raw_mask_sink = |layer_index: u32, raw_mask: Vec<u8>| {
-                stream_encoder.consume_raw_mask_layer(layer_index, raw_mask)
-            };
+            let mut raw_mask_sink =
+                |layer_index: u32, raw_mask: Vec<u8>, _stats: LayerAreaStatsV3| {
+                    stream_encoder.consume_raw_mask_layer(layer_index, raw_mask)
+                };
 
             let slicing_progress = on_progress.as_ref().map(|cb| {
                 let cb = cb.clone();
@@ -1895,7 +1907,9 @@ pub fn slice_and_rasterize_v3(
     requires_area_stats: bool,
     emit_png_layers: bool,
     emit_raw_mask_layers: bool,
-    on_raw_mask_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
+    on_raw_mask_layer: Option<
+        &mut dyn FnMut(u32, Vec<u8>, LayerAreaStatsV3) -> Result<(), SlicerV3Error>,
+    >,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -2134,9 +2148,10 @@ pub fn slice_with_progress_v3_to_path(
             let total_start = std::time::Instant::now();
             let job_total_layers = job.total_layers;
             let progress_total = job_total_layers.saturating_add(1);
-            let mut raw_mask_sink = |layer_index: u32, raw_mask: Vec<u8>| {
-                stream_encoder.consume_raw_mask_layer(layer_index, raw_mask)
-            };
+            let mut raw_mask_sink =
+                |layer_index: u32, raw_mask: Vec<u8>, _stats: LayerAreaStatsV3| {
+                    stream_encoder.consume_raw_mask_layer(layer_index, raw_mask)
+                };
 
             let slicing_progress = on_progress.as_ref().map(|cb| {
                 let cb = cb.clone();
