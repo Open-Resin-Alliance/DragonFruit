@@ -157,7 +157,9 @@ pub fn render_layers_bounded(
     compute_area_stats: bool,
     emit_png_layers: bool,
     emit_raw_mask_layers: bool,
-    mut on_raw_mask_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
+    mut on_raw_mask_layer: Option<
+        &mut dyn FnMut(u32, Vec<u8>, LayerAreaStatsV3) -> Result<(), SlicerV3Error>,
+    >,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -427,7 +429,7 @@ pub fn render_layers_bounded(
                             }
                             (None, Some(mask)) => {
                                 if let Some(ref mut sink) = on_raw_mask_layer {
-                                    if let Err(err) = sink(next, mask) {
+                                    if let Err(err) = sink(next, mask, stats.clone()) {
                                         pipeline_error = Err(err);
                                         break;
                                     }

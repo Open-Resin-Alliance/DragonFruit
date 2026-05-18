@@ -22,6 +22,8 @@
 
 use std::collections::VecDeque;
 
+use rayon::prelude::*;
+
 /// Reusable working buffers for single-layer 3DAA z-blending.
 ///
 /// This enables streaming operation (bounded memory) by blending each layer
@@ -57,6 +59,19 @@ impl ZBlendWorkspace {
         }
     }
 
+    #[inline]
+    fn ensure_len(&mut self, n: usize) {
+        if self.in_prior.len() != n {
+            self.in_prior.resize(n, 0);
+        }
+        if self.dist.len() != n {
+            self.dist.resize(n, f32::INFINITY);
+        }
+        if self.seeds.len() != n {
+            self.seeds.resize(n, false);
+        }
+    }
+
     pub fn blend_layer_inplace(
         &mut self,
         current: &mut [u8],
@@ -67,15 +82,7 @@ impl ZBlendWorkspace {
         lut: Option<&[u8; 256]>,
     ) {
         let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, f32::INFINITY);
-        }
-        if self.seeds.len() != n {
-            self.seeds.resize(n, false);
-        }
+        self.ensure_len(n);
         z_blend_layer_inplace(
             current,
             priors,
@@ -103,15 +110,7 @@ impl ZBlendWorkspace {
         roi: (usize, usize, usize, usize),
     ) {
         let n = width.saturating_mul(height);
-        if self.in_prior.len() != n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() != n {
-            self.dist.resize(n, f32::INFINITY);
-        }
-        if self.seeds.len() != n {
-            self.seeds.resize(n, false);
-        }
+        self.ensure_len(n);
         z_blend_layer_inplace_with_roi(
             current,
             priors,
@@ -744,101 +743,147 @@ fn felzenszwalb_edt_roi(
     if scratch_g.len() < g_len {
         scratch_g.resize(g_len, 0.0);
     }
-    let g = &mut scratch_g[..g_len];
-    for roi_y in 0..roi_h {
-        let y = roi_min_y + roi_y;
-        let row = y * width;
 
-        // Left-to-right pass.
-        let mut left_d = f32::INFINITY;
-        for roi_x in 0..roi_w {
-            if seeds[row + roi_min_x + roi_x] {
-                left_d = 0.0;
-            } else if left_d < f32::INFINITY {
-                left_d += 1.0;
-            }
-            g[roi_y * roi_w + roi_x] = left_d * left_d;
-        }
+    // Parallel threshold for Phase-1 row scans.
+    // Use runtime threshold even in debug_assertions builds because this
+    // workspace compiles dev dependencies with opt-level=3.
+    let par_thresh = std::env::var("DF_3DAA_EDT_PAR_THRESH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(500_000); // ~700×700 pixels
+    let use_par = g_len >= par_thresh;
 
-        // Right-to-left pass: update with nearest seed to the right.
-        let mut right_d = f32::INFINITY;
-        for roi_x in (0..roi_w).rev() {
-            if seeds[row + roi_min_x + roi_x] {
-                right_d = 0.0;
-            } else if right_d < f32::INFINITY {
-                right_d += 1.0;
+    // Phase 1 is parallelised over rows: each row's slice of scratch_g is a
+    // disjoint &mut [f32], so par_chunks_mut is unconditionally safe.
+    if use_par {
+        scratch_g[..g_len]
+            .par_chunks_mut(roi_w)
+            .enumerate()
+            .for_each(|(roi_y, row)| {
+                let y = roi_min_y + roi_y;
+                let seed_row = y * width + roi_min_x;
+
+                // Left-to-right pass.
+                let mut left_d = f32::INFINITY;
+                for roi_x in 0..roi_w {
+                    if seeds[seed_row + roi_x] {
+                        left_d = 0.0;
+                    } else if left_d < f32::INFINITY {
+                        left_d += 1.0;
+                    }
+                    row[roi_x] = left_d * left_d;
+                }
+
+                // Right-to-left pass: update with nearest seed to the right.
+                let mut right_d = f32::INFINITY;
+                for roi_x in (0..roi_w).rev() {
+                    if seeds[seed_row + roi_x] {
+                        right_d = 0.0;
+                    } else if right_d < f32::INFINITY {
+                        right_d += 1.0;
+                    }
+                    let d2 = right_d * right_d;
+                    if d2 < row[roi_x] {
+                        row[roi_x] = d2;
+                    }
+                }
+            });
+    } else {
+        let g = &mut scratch_g[..g_len];
+        for roi_y in 0..roi_h {
+            let y = roi_min_y + roi_y;
+            let seed_row = y * width + roi_min_x;
+
+            let mut left_d = f32::INFINITY;
+            for roi_x in 0..roi_w {
+                if seeds[seed_row + roi_x] {
+                    left_d = 0.0;
+                } else if left_d < f32::INFINITY {
+                    left_d += 1.0;
+                }
+                g[roi_y * roi_w + roi_x] = left_d * left_d;
             }
-            let d2 = right_d * right_d;
-            if d2 < g[roi_y * roi_w + roi_x] {
-                g[roi_y * roi_w + roi_x] = d2;
+
+            let mut right_d = f32::INFINITY;
+            for roi_x in (0..roi_w).rev() {
+                if seeds[seed_row + roi_x] {
+                    right_d = 0.0;
+                } else if right_d < f32::INFINITY {
+                    right_d += 1.0;
+                }
+                let d2 = right_d * right_d;
+                if d2 < g[roi_y * roi_w + roi_x] {
+                    g[roi_y * roi_w + roi_x] = d2;
+                }
             }
         }
     }
 
     // Phase 2: for each column, 1D vertical DT using the parabola lower-envelope.
     // dt[y] = min_{y'} { g[y'][x] + (y - y')² }
-    let mut v = vec![0usize; roi_h]; // centres of parabolas in the lower envelope
-    let mut z = vec![0.0f32; roi_h + 1]; // boundaries between parabola segments
-
-    for roi_x in 0..roi_w {
-        // Find the first row in this column with a finite g value.
-        let first = match (0..roi_h).find(|&ry| g[ry * roi_w + roi_x] < f32::INFINITY) {
-            None => {
-                // No seed visible in this column — distances stay INFINITY.
-                for roi_y in 0..roi_h {
-                    dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = f32::INFINITY;
+    //
+    // Always sequential: allocating the v/z scratch vectors inside a parallel
+    // closure would cost ~43 KB × roi_w = ~248 MB of heap churn for a full 8K
+    // plate.  A single sequential pass over all roi_w columns with reused
+    // pre-allocated scratch is far faster and cache-friendlier.
+    let g_read = &scratch_g[..g_len];
+    {
+        // Sequential Phase 2 with reused scratch.
+        let mut v = vec![0usize; roi_h];
+        let mut z = vec![0.0f32; roi_h + 1];
+        for roi_x in 0..roi_w {
+            let first = match (0..roi_h).find(|&ry| g_read[ry * roi_w + roi_x] < f32::INFINITY) {
+                None => {
+                    for roi_y in 0..roi_h {
+                        dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = f32::INFINITY;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            Some(f) => f,
-        };
+                Some(f) => f,
+            };
 
-        v[0] = first;
-        z[0] = f32::NEG_INFINITY;
-        z[1] = f32::INFINITY;
-        let mut k = 0usize;
+            v[0] = first;
+            z[0] = f32::NEG_INFINITY;
+            z[1] = f32::INFINITY;
+            let mut k = 0usize;
 
-        // Build lower envelope of parabolas.
-        for roi_y in (first + 1)..roi_h {
-            let fq = g[roi_y * roi_w + roi_x];
-            if fq == f32::INFINITY {
-                continue;
-            }
-            let q = roi_y as f32;
-            loop {
-                let vk = v[k] as f32;
-                let fvk = g[v[k] * roi_w + roi_x];
-                // Intersection of parabolas centred at vk and q.
-                let s = ((fq + q * q) - (fvk + vk * vk)) / (2.0 * (q - vk));
-                if s > z[k] {
-                    // New parabola extends the lower envelope.
-                    k += 1;
-                    v[k] = roi_y;
-                    z[k] = s;
-                    z[k + 1] = f32::INFINITY;
-                    break;
+            for roi_y in (first + 1)..roi_h {
+                let fq = g_read[roi_y * roi_w + roi_x];
+                if fq == f32::INFINITY {
+                    continue;
                 }
-                // New parabola dominates; remove the k-th and try again.
-                if k == 0 {
-                    v[0] = roi_y;
-                    z[0] = f32::NEG_INFINITY;
-                    z[1] = f32::INFINITY;
-                    break;
+                let q = roi_y as f32;
+                loop {
+                    let vk = v[k] as f32;
+                    let fvk = g_read[v[k] * roi_w + roi_x];
+                    let s = ((fq + q * q) - (fvk + vk * vk)) / (2.0 * (q - vk));
+                    if s > z[k] {
+                        k += 1;
+                        v[k] = roi_y;
+                        z[k] = s;
+                        z[k + 1] = f32::INFINITY;
+                        break;
+                    }
+                    if k == 0 {
+                        v[0] = roi_y;
+                        z[0] = f32::NEG_INFINITY;
+                        z[1] = f32::INFINITY;
+                        break;
+                    }
+                    k -= 1;
                 }
-                k -= 1;
             }
-        }
 
-        // Scan the column and write final distances.
-        let mut ki = 0;
-        for roi_y in 0..roi_h {
-            while z[ki + 1] < roi_y as f32 {
-                ki += 1;
+            let mut ki = 0;
+            for roi_y in 0..roi_h {
+                while z[ki + 1] < roi_y as f32 {
+                    ki += 1;
+                }
+                let vk = v[ki] as f32;
+                let diff = roi_y as f32 - vk;
+                let d2 = diff * diff + g_read[v[ki] * roi_w + roi_x];
+                dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = d2.sqrt();
             }
-            let vk = v[ki] as f32;
-            let diff = roi_y as f32 - vk;
-            let d2 = diff * diff + g[v[ki] * roi_w + roi_x];
-            dist[(roi_min_y + roi_y) * width + roi_min_x + roi_x] = d2.sqrt();
         }
     }
 }
