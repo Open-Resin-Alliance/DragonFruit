@@ -432,13 +432,16 @@ fn choose_3daa_post_buffer_depth(
     // single layer (see z_blend.rs::phase2_column).
     //
     // Since Phase 1.2 made `ZBlendWorkspace` ROI-local + lazy, each worker now
-    // resides in ~30–80 MB (down from ~880 MB at 12K), so we can afford more
-    // post-workers.  We still cap conservatively: too many workers split work
-    // smaller than the EDT Phase 2 tile size and lose to scheduling overhead.
+    // resides in ~30–80 MB in typical 12K jobs (down from ~880 MB worst-case),
+    // but 12K profiles showed that raising 16-core hosts from 4 → 6 workers
+    // regressed wall time and increased bandwidth pressure (higher backward/fwd
+    // CPU per layer, higher blur CPU, and much larger pending/raster memory).
+    // Keep the huge-layer default conservative here; the env override remains
+    // available for targeted experiments.
     //
     // Default for layer_pixels ≥ 6 M:
     //   hw ≥ 16 → 4 workers
-    //   hw ≥ 12 → 3 workers
+    //   hw ≥ 12 → 4 workers
     //   hw ≥ 6  → 2 workers
     //   else    → 1 worker
     // Override with `DF_3DAA_POST_BUFFER_DEPTH`.
@@ -448,7 +451,7 @@ fn choose_3daa_post_buffer_depth(
                 return 4;
             }
             if hw >= 12 {
-                return 3;
+                return 4;
             }
             return 2;
         }
