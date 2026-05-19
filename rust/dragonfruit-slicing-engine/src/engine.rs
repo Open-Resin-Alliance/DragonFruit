@@ -199,6 +199,10 @@ struct SupportMaskLayer {
 
 impl SupportMaskContext {
     fn from_job(job: &SliceJobV3) -> Option<Self> {
+        if job.aa_on_supports {
+            return None;
+        }
+
         let total_triangles = job.triangles_xyz.len() / 9;
         let model_triangle_count = (job.model_triangle_count as usize).min(total_triangles);
         if model_triangle_count == 0 || model_triangle_count >= total_triangles {
@@ -2636,13 +2640,14 @@ pub fn slice_and_rasterize_rle_v3(
 
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
-    let support_split_model_triangle_count = if ssaa_factor > 1 || blur_radius > 0 {
-        let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
-        (model_triangle_count > 0 && model_triangle_count < triangles.len())
-            .then_some(model_triangle_count)
-    } else {
-        None
-    };
+    let support_split_model_triangle_count =
+        if (ssaa_factor > 1 || blur_radius > 0) && !job.aa_on_supports {
+            let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+            (model_triangle_count > 0 && model_triangle_count < triangles.len())
+                .then_some(model_triangle_count)
+        } else {
+            None
+        };
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -2658,65 +2663,64 @@ pub fn slice_and_rasterize_rle_v3(
 
     // Wrap on_rle_layer to downsample (if ssaa_factor > 1) and/or blur before
     // forwarding.  When neither applies the closure is a thin pass-through.
-    let mut wrapped_on_rle = |
-        layer_idx: u32,
-        raster_runs: Vec<crate::rle::RleRun>,
-        support_raster_runs: Option<Vec<crate::rle::RleRun>>,
-    | {
-        let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
-        let gray_runs = if ssaa_factor > 1 {
-            downsample_binary_rle_to_gray_rle(
-                &raster_runs,
-                super_width,
-                super_height,
-                ssaa_factor,
-                downsample_min_alpha_u8,
-            )
-        } else {
-            raster_runs
-        };
-
-        let final_runs = if blur_radius > 0 {
-            // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
-            let blurred = blur_gray_rle_streaming(
-                &gray_runs,
-                out_width,
-                out_height,
-                blur_radius,
-                if blur_custom_lut.is_some() {
-                    0
-                } else {
-                    min_alpha_u8
-                },
-            );
-            if let Some(lut) = blur_custom_lut.as_ref() {
-                remap_gray_rle_with_lut(&blurred, lut)
-            } else {
-                blurred
-            }
-        } else {
-            gray_runs
-        };
-
-        let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
-            let support_runs = if ssaa_factor > 1 {
+    let mut wrapped_on_rle =
+        |layer_idx: u32,
+         raster_runs: Vec<crate::rle::RleRun>,
+         support_raster_runs: Option<Vec<crate::rle::RleRun>>| {
+            let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
+            let gray_runs = if ssaa_factor > 1 {
                 downsample_binary_rle_to_gray_rle(
-                    support_raster_runs,
+                    &raster_runs,
                     super_width,
                     super_height,
                     ssaa_factor,
-                    255,
+                    downsample_min_alpha_u8,
                 )
             } else {
-                support_raster_runs.clone()
+                raster_runs
             };
-            merge_rle_max(final_runs, &support_runs)
-        } else {
-            final_runs
-        };
 
-        on_rle_layer(layer_idx, final_runs)
-    };
+            let final_runs = if blur_radius > 0 {
+                // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
+                let blurred = blur_gray_rle_streaming(
+                    &gray_runs,
+                    out_width,
+                    out_height,
+                    blur_radius,
+                    if blur_custom_lut.is_some() {
+                        0
+                    } else {
+                        min_alpha_u8
+                    },
+                );
+                if let Some(lut) = blur_custom_lut.as_ref() {
+                    remap_gray_rle_with_lut(&blurred, lut)
+                } else {
+                    blurred
+                }
+            } else {
+                gray_runs
+            };
+
+            let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
+                let support_runs = if ssaa_factor > 1 {
+                    downsample_binary_rle_to_gray_rle(
+                        support_raster_runs,
+                        super_width,
+                        super_height,
+                        ssaa_factor,
+                        255,
+                    )
+                } else {
+                    support_raster_runs.clone()
+                };
+                merge_rle_max(final_runs, &support_runs)
+            } else {
+                final_runs
+            };
+
+            on_rle_layer(layer_idx, final_runs)
+        };
 
     let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle(
         raster_job,
@@ -2787,13 +2791,14 @@ pub fn slice_and_rasterize_rle_encoded_v3(
 
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
-    let support_split_model_triangle_count = if ssaa_factor > 1 || blur_radius > 0 {
-        let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
-        (model_triangle_count > 0 && model_triangle_count < triangles.len())
-            .then_some(model_triangle_count)
-    } else {
-        None
-    };
+    let support_split_model_triangle_count =
+        if (ssaa_factor > 1 || blur_radius > 0) && !job.aa_on_supports {
+            let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+            (model_triangle_count > 0 && model_triangle_count < triangles.len())
+                .then_some(model_triangle_count)
+        } else {
+            None
+        };
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -2807,7 +2812,11 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // clone is cheap (reference count bump); the heavy work happens per-layer
     // inside the rayon worker pool.
     let effective_encode_fn: Arc<
-        dyn Fn(u32, &[crate::rle::RleRun], Option<&[crate::rle::RleRun]>) -> Result<Vec<u8>, SlicerV3Error>
+        dyn Fn(
+                u32,
+                &[crate::rle::RleRun],
+                Option<&[crate::rle::RleRun]>,
+            ) -> Result<Vec<u8>, SlicerV3Error>
             + Send
             + Sync,
     > = if ssaa_factor > 1 || blur_radius > 0 {
@@ -2816,65 +2825,66 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         let out_width = job.effective_render_width_px() as usize;
         let out_height = job.source_height_px as usize;
         let inner = encode_fn.clone();
-        Arc::new(move |
-            layer_idx: u32,
-            super_runs: &[crate::rle::RleRun],
-            support_super_runs: Option<&[crate::rle::RleRun]>,
-        | {
-            let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
-            let gray_runs = if ssaa_factor > 1 {
-                downsample_binary_rle_to_gray_rle(
-                    super_runs,
-                    super_width,
-                    super_height,
-                    ssaa_factor,
-                    downsample_min_alpha_u8,
-                )
-            } else {
-                super_runs.to_vec()
-            };
-
-            let final_runs = if blur_radius > 0 {
-                // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
-                let blurred = blur_gray_rle_streaming(
-                    &gray_runs,
-                    out_width,
-                    out_height,
-                    blur_radius,
-                    if blur_custom_lut.is_some() {
-                        0
-                    } else {
-                        min_alpha_u8
-                    },
-                );
-                if let Some(lut) = blur_custom_lut.as_ref() {
-                    remap_gray_rle_with_lut(&blurred, lut)
-                } else {
-                    blurred
-                }
-            } else {
-                gray_runs
-            };
-
-            let final_runs = if let Some(support_super_runs) = support_super_runs {
-                let support_runs = if ssaa_factor > 1 {
+        Arc::new(
+            move |layer_idx: u32,
+                  super_runs: &[crate::rle::RleRun],
+                  support_super_runs: Option<&[crate::rle::RleRun]>| {
+                let downsample_min_alpha_u8 =
+                    ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
+                let gray_runs = if ssaa_factor > 1 {
                     downsample_binary_rle_to_gray_rle(
-                        support_super_runs,
+                        super_runs,
                         super_width,
                         super_height,
                         ssaa_factor,
-                        255,
+                        downsample_min_alpha_u8,
                     )
                 } else {
-                    support_super_runs.to_vec()
+                    super_runs.to_vec()
                 };
-                merge_rle_max(final_runs, &support_runs)
-            } else {
-                final_runs
-            };
 
-            inner(layer_idx, &final_runs)
-        })
+                let final_runs = if blur_radius > 0 {
+                    // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
+                    let blurred = blur_gray_rle_streaming(
+                        &gray_runs,
+                        out_width,
+                        out_height,
+                        blur_radius,
+                        if blur_custom_lut.is_some() {
+                            0
+                        } else {
+                            min_alpha_u8
+                        },
+                    );
+                    if let Some(lut) = blur_custom_lut.as_ref() {
+                        remap_gray_rle_with_lut(&blurred, lut)
+                    } else {
+                        blurred
+                    }
+                } else {
+                    gray_runs
+                };
+
+                let final_runs = if let Some(support_super_runs) = support_super_runs {
+                    let support_runs = if ssaa_factor > 1 {
+                        downsample_binary_rle_to_gray_rle(
+                            support_super_runs,
+                            super_width,
+                            super_height,
+                            ssaa_factor,
+                            255,
+                        )
+                    } else {
+                        support_super_runs.to_vec()
+                    };
+                    merge_rle_max(final_runs, &support_runs)
+                } else {
+                    final_runs
+                };
+
+                inner(layer_idx, &final_runs)
+            },
+        )
     } else {
         let inner = encode_fn.clone();
         Arc::new(move |layer_idx, runs, _support_runs| inner(layer_idx, runs))
@@ -3411,7 +3421,7 @@ mod tests {
     }
 
     #[test]
-    fn support_mask_context_stays_binary_even_when_support_aa_is_enabled() {
+    fn support_mask_context_stays_binary_when_support_aa_is_disabled() {
         let mut job = SliceJobV3 {
             output_format: ".png".to_string(),
             format_version: None,
@@ -3430,7 +3440,7 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
-            aa_on_supports: true,
+            aa_on_supports: false,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,
             mirror_x: false,
@@ -3452,11 +3462,12 @@ mod tests {
         push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
 
         job.triangles_xyz = flat;
-        let mut ctx = super::SupportMaskContext::from_job(&job)
-            .expect("split support metadata should still enable support masking");
+        let mut ctx = super::SupportMaskContext::from_job(&job).expect(
+            "split support metadata should enable support masking when support AA is disabled",
+        );
         let support_layer = ctx
             .rasterize_support_mask(0)
-            .expect("support layer should rasterize independently of the support AA toggle");
+            .expect("support layer should rasterize independently of model AA settings");
 
         assert!(
             support_layer.mask.iter().all(|&px| px == 0 || px == 255),
@@ -3465,7 +3476,7 @@ mod tests {
     }
 
     #[test]
-    fn rle_blur_path_keeps_support_only_layers_binary() {
+    fn rle_blur_path_keeps_support_only_layers_binary_when_support_aa_is_disabled() {
         let mut job = SliceJobV3 {
             output_format: ".png".to_string(),
             format_version: None,
@@ -3484,7 +3495,7 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
-            aa_on_supports: true,
+            aa_on_supports: false,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,
             mirror_x: false,
@@ -3527,6 +3538,71 @@ mod tests {
                 .iter()
                 .all(|run| run.value == 0 || run.value == 255),
             "support-only layers must not retain blur AA grayscale runs"
+        );
+    }
+
+    #[test]
+    fn rle_blur_path_allows_support_grayscale_when_support_aa_is_enabled() {
+        let mut job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            format_version: None,
+            source_width_px: 128,
+            source_height_px: 128,
+            width_px: 128,
+            height_px: 128,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 80.0,
+            build_depth_mm: 80.0,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 2,
+            aa_on_supports: true,
+            model_triangle_count: 12,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            z_blend_look_back: 2,
+            z_blend_fade_px: 20,
+            z_blend_auto_fade: false,
+            z_blend_minimum_alpha_percent: 0.0,
+            z_blend_max_alpha_percent: 90.0,
+            z_blend_custom_lut: None,
+            z_blend_debug_color_overlay: false,
+            triangles_xyz: Vec::new(),
+            metadata_json: "{}".to_string(),
+        };
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, 0.0, 0.0, 1.2, 1.8, 20.0, 20.0);
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
+        job.triangles_xyz = flat;
+
+        let mut support_layer_runs = None;
+        super::slice_and_rasterize_rle_v3(
+            &job,
+            false,
+            |layer_idx, runs| {
+                if layer_idx == 0 {
+                    support_layer_runs = Some(runs);
+                }
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("engine RLE blur path should render successfully");
+
+        let support_layer_runs = support_layer_runs.expect("layer 0 should be emitted");
+        assert!(
+            support_layer_runs
+                .iter()
+                .any(|run| run.value > 0 && run.value < 255),
+            "support-only layers should retain grayscale AA runs when support AA is enabled"
         );
     }
 }

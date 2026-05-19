@@ -28,7 +28,11 @@ import {
 import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
-import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
+import {
+  getSavedSlicingPerformanceSettings,
+  saveSlicingPerformanceSettings,
+  subscribeToSlicingPerformanceSettings,
+} from '@/components/settings/performancePreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { computePhysicalAaConfig, type AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
@@ -675,6 +679,11 @@ export function SlicingPanel({
   const hasSlicingProgressStartedRef = useRef(false);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const slicingPerformanceSettings = React.useSyncExternalStore(
+    subscribeToSlicingPerformanceSettings,
+    getSavedSlicingPerformanceSettings,
+    getSavedSlicingPerformanceSettings,
+  );
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
     subscribeToPrinterReachability,
     getPrinterReachabilitySnapshot,
@@ -686,6 +695,7 @@ export function SlicingPanel({
     [activePrinterProfile?.networkSupport],
   );
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const aaOnSupportsExperimental = slicingPerformanceSettings.aaOnSupportsExperimental === true;
   const effectiveMaterialProfile = useMemo(() => {
     if (!activeMaterialProfile) return null;
     if (!activePrinterProfile) return activeMaterialProfile;
@@ -1252,6 +1262,13 @@ export function SlicingPanel({
     setZBlendFadePx(Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, Math.round(next))));
   }, []);
 
+  const setAaOnSupportsExperimental = useCallback((enabled: boolean) => {
+    saveSlicingPerformanceSettings({
+      ...getSavedSlicingPerformanceSettings(),
+      aaOnSupportsExperimental: enabled,
+    });
+  }, []);
+
   useEffect(() => {
     if (useAutoFadeDistance) return;
     if (useCustomZBlendFadePx) return;
@@ -1653,7 +1670,8 @@ export function SlicingPanel({
       }
 
       const result = await runSliceExportOrchestrator({
-        zBlendDebugColorOverlay: getSavedSlicingPerformanceSettings().zBlendDebugColorOverlay,
+        aaOnSupports: aaOnSupportsExperimental,
+        zBlendDebugColorOverlay: slicingPerformanceSettings.zBlendDebugColorOverlay,
         models: visibleModels,
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
@@ -2417,6 +2435,49 @@ export function SlicingPanel({
 
                       {aaMode === 'Blur' && (
                         <>
+                          <SettingLabelWithHelp
+                            label="AA on Supports"
+                            help="Controls whether native support and raft geometry also receives 2D blur AA. Off keeps supports crisp and binary; On allows anti-aliased support edges too."
+                          />
+                          <div className="grid grid-cols-2 gap-1">
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={!aaOnSupportsExperimental
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setAaOnSupportsExperimental(false)}
+                            >
+                              Supports Off
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={aaOnSupportsExperimental
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setAaOnSupportsExperimental(true)}
+                            >
+                              Supports On
+                            </button>
+                          </div>
+
                           <div
                             className="my-2.5 mx-1 h-px rounded-full"
                             style={{

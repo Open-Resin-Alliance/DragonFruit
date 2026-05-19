@@ -723,6 +723,10 @@ fn blur_radius_px(radius_px: u32) -> usize {
 
 #[inline]
 fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
+    if job.aa_on_supports {
+        return false;
+    }
+
     let model_triangle_count = job.model_triangle_count as usize;
     if model_triangle_count == 0 || model_triangle_count >= triangle_count {
         return false;
@@ -2878,14 +2882,14 @@ mod tests {
     }
 
     #[test]
-    fn split_support_geometry_stays_binary_even_when_support_aa_is_enabled() {
+    fn split_support_geometry_stays_binary_when_support_aa_is_disabled() {
         let mut job = job_for_single_layer();
         job.total_layers = 2;
         job.anti_aliasing_level = "4x".to_string();
         job.anti_aliasing_mode = "Blur".to_string();
         job.blur_brush_radius_px = 2;
         job.minimum_aa_alpha_percent = 35.0;
-        job.aa_on_supports = true;
+        job.aa_on_supports = false;
         job.model_triangle_count = 12;
 
         let mut flat = Vec::<f32>::new();
@@ -2913,10 +2917,13 @@ mod tests {
             rasterize_layer_with_stats(&support_job, &triangles, &support_indices, 0, false);
 
         assert_eq!(split_mask, expected_support_mask);
-        assert_eq!(split_stats.total_solid_pixels, expected_stats.total_solid_pixels);
+        assert_eq!(
+            split_stats.total_solid_pixels,
+            expected_stats.total_solid_pixels
+        );
         assert!(
             split_mask.iter().all(|&px| px == 0 || px == 255),
-            "support geometry must remain binary even when support AA is enabled"
+            "support geometry must remain binary when support AA is disabled"
         );
     }
 
