@@ -27,11 +27,6 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use thiserror::Error;
 
-#[cfg(target_arch = "x86")]
-use std::arch::x86::{__m128i, _mm_loadu_si128, _mm_max_epu8, _mm_storeu_si128};
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::{__m128i, _mm_loadu_si128, _mm_max_epu8, _mm_storeu_si128};
-
 #[derive(Debug, Error)]
 pub enum SlicerV3Error {
     #[error("cancelled")]
@@ -140,6 +135,55 @@ fn ssaa_downsample_min_alpha_u8(blur_radius: usize, min_alpha_u8: u8) -> u8 {
     }
 }
 
+fn merge_rle_max(
+    lhs: Vec<crate::rle::RleRun>,
+    rhs: &[crate::rle::RleRun],
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{RleAccum, RleRun};
+
+    let mut out = RleAccum::new();
+    let mut lhs_index = 0usize;
+    let mut rhs_index = 0usize;
+    let mut lhs_remaining = 0u32;
+    let mut rhs_remaining = 0u32;
+    let mut lhs_value = 0u8;
+    let mut rhs_value = 0u8;
+
+    loop {
+        if lhs_remaining == 0 {
+            let Some(RleRun { length, value }) = lhs.get(lhs_index).copied() else {
+                break;
+            };
+            lhs_index += 1;
+            lhs_remaining = length;
+            lhs_value = value;
+        }
+
+        if rhs_remaining == 0 {
+            if let Some(RleRun { length, value }) = rhs.get(rhs_index).copied() {
+                rhs_index += 1;
+                rhs_remaining = length;
+                rhs_value = value;
+            } else {
+                rhs_value = 0;
+            }
+        }
+
+        let chunk = if rhs_remaining == 0 {
+            lhs_remaining
+        } else {
+            lhs_remaining.min(rhs_remaining)
+        };
+        out.push_run(chunk, lhs_value.max(rhs_value));
+        lhs_remaining -= chunk;
+        if rhs_remaining > 0 {
+            rhs_remaining -= chunk;
+        }
+    }
+
+    out.finish()
+}
+
 struct SupportMaskContext {
     support_job: SliceJobV3,
     triangles: Vec<crate::geometry::Triangle>,
@@ -155,10 +199,6 @@ struct SupportMaskLayer {
 
 impl SupportMaskContext {
     fn from_job(job: &SliceJobV3) -> Option<Self> {
-        if job.aa_on_supports {
-            return None;
-        }
-
         let total_triangles = job.triangles_xyz.len() / 9;
         let model_triangle_count = (job.model_triangle_count as usize).min(total_triangles);
         if model_triangle_count == 0 || model_triangle_count >= total_triangles {
@@ -169,7 +209,7 @@ impl SupportMaskContext {
         support_job.anti_aliasing_level = "Off".to_string();
         support_job.anti_aliasing_mode = "Coverage".to_string();
         support_job.blur_brush_radius_px = 0;
-        support_job.minimum_aa_alpha_percent = 0.0;
+        support_job.minimum_aa_alpha_percent = 100.0;
         support_job.aa_on_supports = true;
         support_job.model_triangle_count = 0;
 
@@ -236,60 +276,13 @@ fn merge_support_mask_inplace(dst: &mut [u8], support: &SupportMaskLayer, width:
     for y in min_y..=max_y {
         let row_start = y * width + min_x;
         let row_end = row_start + row_len;
-        u8_max_inplace(
-            &mut dst[row_start..row_end],
-            &support.mask[row_start..row_end],
-        );
-    }
-}
-
-#[inline]
-fn u8_max_inplace(dst: &mut [u8], src: &[u8]) {
-    let len = dst.len().min(src.len());
-    if len == 0 {
-        return;
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if std::is_x86_feature_detected!("sse2") {
-            // SAFETY: SSE2 is runtime-detected above. Pointers are valid for
-            // `len` bytes, and we use unaligned load/store intrinsics.
-            unsafe {
-                u8_max_inplace_sse2(&mut dst[..len], &src[..len]);
+        for (d, s) in dst[row_start..row_end]
+            .iter_mut()
+            .zip(support.mask[row_start..row_end].iter())
+        {
+            if *s > 0 {
+                *d = 255;
             }
-            return;
-        }
-    }
-
-    for (d, s) in dst.iter_mut().zip(src.iter()).take(len) {
-        if *s > *d {
-            *d = *s;
-        }
-    }
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "sse2")]
-unsafe fn u8_max_inplace_sse2(dst: &mut [u8], src: &[u8]) {
-    let len = dst.len().min(src.len());
-    let mut i = 0usize;
-
-    while i + 16 <= len {
-        // SAFETY: i..i+16 is in-bounds due to loop condition.
-        let a = unsafe { _mm_loadu_si128(dst.as_ptr().add(i) as *const __m128i) };
-        // SAFETY: i..i+16 is in-bounds due to loop condition.
-        let b = unsafe { _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i) };
-        let m = _mm_max_epu8(a, b);
-        // SAFETY: i..i+16 is in-bounds due to loop condition.
-        unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, m) };
-        i += 16;
-    }
-
-    for j in i..len {
-        let s = src[j];
-        if s > dst[j] {
-            dst[j] = s;
         }
     }
 }
@@ -2643,6 +2636,13 @@ pub fn slice_and_rasterize_rle_v3(
 
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
+    let support_split_model_triangle_count = if ssaa_factor > 1 || blur_radius > 0 {
+        let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+        (model_triangle_count > 0 && model_triangle_count < triangles.len())
+            .then_some(model_triangle_count)
+    } else {
+        None
+    };
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -2658,7 +2658,11 @@ pub fn slice_and_rasterize_rle_v3(
 
     // Wrap on_rle_layer to downsample (if ssaa_factor > 1) and/or blur before
     // forwarding.  When neither applies the closure is a thin pass-through.
-    let mut wrapped_on_rle = |layer_idx: u32, raster_runs: Vec<crate::rle::RleRun>| {
+    let mut wrapped_on_rle = |
+        layer_idx: u32,
+        raster_runs: Vec<crate::rle::RleRun>,
+        support_raster_runs: Option<Vec<crate::rle::RleRun>>,
+    | {
         let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
         let gray_runs = if ssaa_factor > 1 {
             downsample_binary_rle_to_gray_rle(
@@ -2694,6 +2698,23 @@ pub fn slice_and_rasterize_rle_v3(
             gray_runs
         };
 
+        let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
+            let support_runs = if ssaa_factor > 1 {
+                downsample_binary_rle_to_gray_rle(
+                    support_raster_runs,
+                    super_width,
+                    super_height,
+                    ssaa_factor,
+                    255,
+                )
+            } else {
+                support_raster_runs.clone()
+            };
+            merge_rle_max(final_runs, &support_runs)
+        } else {
+            final_runs
+        };
+
         on_rle_layer(layer_idx, final_runs)
     };
 
@@ -2702,6 +2723,7 @@ pub fn slice_and_rasterize_rle_v3(
         &triangles,
         &layer_index,
         compute_area_stats,
+        support_split_model_triangle_count,
         &mut wrapped_on_rle,
         on_progress,
         cancel_flag,
@@ -2765,6 +2787,13 @@ pub fn slice_and_rasterize_rle_encoded_v3(
 
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
+    let support_split_model_triangle_count = if ssaa_factor > 1 || blur_radius > 0 {
+        let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+        (model_triangle_count > 0 && model_triangle_count < triangles.len())
+            .then_some(model_triangle_count)
+    } else {
+        None
+    };
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -2778,14 +2807,20 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // clone is cheap (reference count bump); the heavy work happens per-layer
     // inside the rayon worker pool.
     let effective_encode_fn: Arc<
-        dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+        dyn Fn(u32, &[crate::rle::RleRun], Option<&[crate::rle::RleRun]>) -> Result<Vec<u8>, SlicerV3Error>
+            + Send
+            + Sync,
     > = if ssaa_factor > 1 || blur_radius > 0 {
         let super_width = raster_job.effective_render_width_px() as usize;
         let super_height = raster_job.source_height_px as usize;
         let out_width = job.effective_render_width_px() as usize;
         let out_height = job.source_height_px as usize;
         let inner = encode_fn.clone();
-        Arc::new(move |layer_idx: u32, super_runs: &[crate::rle::RleRun]| {
+        Arc::new(move |
+            layer_idx: u32,
+            super_runs: &[crate::rle::RleRun],
+            support_super_runs: Option<&[crate::rle::RleRun]>,
+        | {
             let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
             let gray_runs = if ssaa_factor > 1 {
                 downsample_binary_rle_to_gray_rle(
@@ -2821,10 +2856,28 @@ pub fn slice_and_rasterize_rle_encoded_v3(
                 gray_runs
             };
 
+            let final_runs = if let Some(support_super_runs) = support_super_runs {
+                let support_runs = if ssaa_factor > 1 {
+                    downsample_binary_rle_to_gray_rle(
+                        support_super_runs,
+                        super_width,
+                        super_height,
+                        ssaa_factor,
+                        255,
+                    )
+                } else {
+                    support_super_runs.to_vec()
+                };
+                merge_rle_max(final_runs, &support_runs)
+            } else {
+                final_runs
+            };
+
             inner(layer_idx, &final_runs)
         })
     } else {
-        encode_fn
+        let inner = encode_fn.clone();
+        Arc::new(move |layer_idx, runs, _support_runs| inner(layer_idx, runs))
     };
 
     let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle_encoded(
@@ -2832,6 +2885,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         &triangles,
         &layer_index,
         compute_area_stats,
+        support_split_model_triangle_count,
         effective_encode_fn,
         on_encoded_layer,
         on_progress,
@@ -3300,11 +3354,179 @@ fn _empty_perf() -> SlicingPerfV3 {
 #[cfg(test)]
 mod tests {
     use super::ssaa_downsample_min_alpha_u8;
+    use crate::types::SliceJobV3;
+
+    fn push_box_triangles(
+        out: &mut Vec<f32>,
+        cx: f32,
+        cy: f32,
+        z0: f32,
+        z1: f32,
+        sx: f32,
+        sy: f32,
+    ) {
+        let x0 = cx - sx * 0.5;
+        let x1 = cx + sx * 0.5;
+        let y0 = cy - sy * 0.5;
+        let y1 = cy + sy * 0.5;
+
+        let verts = [
+            [x0, y0, z0],
+            [x1, y0, z0],
+            [x1, y1, z0],
+            [x0, y1, z0],
+            [x0, y0, z1],
+            [x1, y0, z1],
+            [x1, y1, z1],
+            [x0, y1, z1],
+        ];
+
+        let faces = [
+            [0usize, 1usize, 2usize],
+            [0, 2, 3],
+            [4, 6, 5],
+            [4, 7, 6],
+            [0, 4, 5],
+            [0, 5, 1],
+            [1, 5, 6],
+            [1, 6, 2],
+            [2, 6, 7],
+            [2, 7, 3],
+            [3, 4, 7],
+            [3, 0, 4],
+        ];
+
+        for [a, b, c] in faces {
+            out.extend_from_slice(&verts[a]);
+            out.extend_from_slice(&verts[b]);
+            out.extend_from_slice(&verts[c]);
+        }
+    }
 
     #[test]
     fn ssaa_blur_defers_min_alpha_floor_until_after_blur() {
         assert_eq!(ssaa_downsample_min_alpha_u8(0, 89), 89);
         assert_eq!(ssaa_downsample_min_alpha_u8(2, 89), 0);
         assert_eq!(ssaa_downsample_min_alpha_u8(4, 255), 0);
+    }
+
+    #[test]
+    fn support_mask_context_stays_binary_even_when_support_aa_is_enabled() {
+        let mut job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            format_version: None,
+            source_width_px: 128,
+            source_height_px: 128,
+            width_px: 128,
+            height_px: 128,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 80.0,
+            build_depth_mm: 80.0,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 2,
+            aa_on_supports: true,
+            model_triangle_count: 12,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            z_blend_look_back: 2,
+            z_blend_fade_px: 20,
+            z_blend_auto_fade: false,
+            z_blend_minimum_alpha_percent: 0.0,
+            z_blend_max_alpha_percent: 90.0,
+            z_blend_custom_lut: None,
+            z_blend_debug_color_overlay: false,
+            triangles_xyz: Vec::new(),
+            metadata_json: "{}".to_string(),
+        };
+
+        let mut flat = Vec::<f32>::new();
+        // Model triangles live above the test layer; support triangles are on it.
+        push_box_triangles(&mut flat, 0.0, 0.0, 1.2, 1.8, 20.0, 20.0);
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
+
+        job.triangles_xyz = flat;
+        let mut ctx = super::SupportMaskContext::from_job(&job)
+            .expect("split support metadata should still enable support masking");
+        let support_layer = ctx
+            .rasterize_support_mask(0)
+            .expect("support layer should rasterize independently of the support AA toggle");
+
+        assert!(
+            support_layer.mask.iter().all(|&px| px == 0 || px == 255),
+            "support/raft mask pixels must stay binary"
+        );
+    }
+
+    #[test]
+    fn rle_blur_path_keeps_support_only_layers_binary() {
+        let mut job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            format_version: None,
+            source_width_px: 128,
+            source_height_px: 128,
+            width_px: 128,
+            height_px: 128,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 80.0,
+            build_depth_mm: 80.0,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 2,
+            aa_on_supports: true,
+            model_triangle_count: 12,
+            minimum_aa_alpha_percent: 35.0,
+            mirror_x: false,
+            mirror_y: false,
+            z_blend_look_back: 2,
+            z_blend_fade_px: 20,
+            z_blend_auto_fade: false,
+            z_blend_minimum_alpha_percent: 0.0,
+            z_blend_max_alpha_percent: 90.0,
+            z_blend_custom_lut: None,
+            z_blend_debug_color_overlay: false,
+            triangles_xyz: Vec::new(),
+            metadata_json: "{}".to_string(),
+        };
+
+        let mut flat = Vec::<f32>::new();
+        // Model triangles live above the first layer; support triangles occupy it.
+        push_box_triangles(&mut flat, 0.0, 0.0, 1.2, 1.8, 20.0, 20.0);
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
+        job.triangles_xyz = flat;
+
+        let mut support_layer_runs = None;
+        super::slice_and_rasterize_rle_v3(
+            &job,
+            false,
+            |layer_idx, runs| {
+                if layer_idx == 0 {
+                    support_layer_runs = Some(runs);
+                }
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("engine RLE blur path should render successfully");
+
+        let support_layer_runs = support_layer_runs.expect("layer 0 should be emitted");
+        assert!(
+            support_layer_runs
+                .iter()
+                .all(|run| run.value == 0 || run.value == 255),
+            "support-only layers must not retain blur AA grayscale runs"
+        );
     }
 }

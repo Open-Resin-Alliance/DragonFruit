@@ -128,7 +128,11 @@ pub struct SliceJobV3 {
     /// Blur brush radius in pixels for the blur AA mode.
     #[serde(default = "default_blur_brush_radius_px")]
     pub blur_brush_radius_px: u32,
-    /// Whether AA should apply to support geometry (reserved for future split masks).
+    /// Whether AA should apply to support geometry.
+    ///
+    /// Native support/raft geometry is currently forced back to binary output,
+    /// so this flag is retained for compatibility but does not re-enable gray
+    /// support pixels in the slicer pipeline.
     #[serde(default)]
     pub aa_on_supports: bool,
     /// Number of model triangles at the front of `triangles_xyz`.

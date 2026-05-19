@@ -723,10 +723,6 @@ fn blur_radius_px(radius_px: u32) -> usize {
 
 #[inline]
 fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
-    if job.aa_on_supports {
-        return false;
-    }
-
     let model_triangle_count = job.model_triangle_count as usize;
     if model_triangle_count == 0 || model_triangle_count >= triangle_count {
         return false;
@@ -1787,7 +1783,7 @@ pub fn rasterize_layer_with_stats(
     support_job.anti_aliasing_level = "Off".to_string();
     support_job.anti_aliasing_mode = "Coverage".to_string();
     support_job.blur_brush_radius_px = 0;
-    support_job.minimum_aa_alpha_percent = 0.0;
+    support_job.minimum_aa_alpha_percent = 100.0;
     support_job.aa_on_supports = true;
     support_job.model_triangle_count = 0;
 
@@ -2878,6 +2874,49 @@ mod tests {
         assert!(
             runs.iter().any(|run| run.value == 255),
             "blur mode should preserve fully solid interior runs"
+        );
+    }
+
+    #[test]
+    fn split_support_geometry_stays_binary_even_when_support_aa_is_enabled() {
+        let mut job = job_for_single_layer();
+        job.total_layers = 2;
+        job.anti_aliasing_level = "4x".to_string();
+        job.anti_aliasing_mode = "Blur".to_string();
+        job.blur_brush_radius_px = 2;
+        job.minimum_aa_alpha_percent = 35.0;
+        job.aa_on_supports = true;
+        job.model_triangle_count = 12;
+
+        let mut flat = Vec::<f32>::new();
+        // Model triangles live above the test layer so only the support half is active.
+        push_box_triangles(&mut flat, 0.0, 0.0, 1.2, 1.8, 20.0, 20.0);
+        push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let all_indices: Vec<usize> = (0..triangles.len()).collect();
+        let support_indices: Vec<usize> = (12..24).collect();
+
+        let (split_mask, split_stats) =
+            rasterize_layer_with_stats(&job, &triangles, &all_indices, 0, false);
+
+        let mut support_job = job.clone();
+        support_job.anti_aliasing_level = "Off".to_string();
+        support_job.anti_aliasing_mode = "Coverage".to_string();
+        support_job.blur_brush_radius_px = 0;
+        support_job.minimum_aa_alpha_percent = 100.0;
+        support_job.aa_on_supports = true;
+        support_job.model_triangle_count = 0;
+
+        let (expected_support_mask, expected_stats) =
+            rasterize_layer_with_stats(&support_job, &triangles, &support_indices, 0, false);
+
+        assert_eq!(split_mask, expected_support_mask);
+        assert_eq!(split_stats.total_solid_pixels, expected_stats.total_solid_pixels);
+        assert!(
+            split_mask.iter().all(|&px| px == 0 || px == 255),
+            "support geometry must remain binary even when support AA is enabled"
         );
     }
 
