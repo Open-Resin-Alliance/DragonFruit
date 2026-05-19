@@ -142,6 +142,7 @@ function formatProgressLayerLabel(done: number, total: number): string {
 }
 
 type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'encoding' | 'finalizing' | 'handoff' | 'other';
+type BlurGraySourceMode = 'minimum' | 'lut';
 
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
@@ -186,6 +187,7 @@ const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.aaLevelCustomEnabled';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
 const SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusCustomEnabled';
+const SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY = 'dragonfruit.slicing.blurGraySourceMode';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 const SLICING_3DAA_LOOK_BACK_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBack';
@@ -422,6 +424,14 @@ function resolveInitialMinimumAaAlphaOverrideEnabled(): boolean {
   return false;
 }
 
+function resolveInitialBlurGraySourceMode(): BlurGraySourceMode {
+  if (typeof window === 'undefined') return 'minimum';
+
+  const stored = window.localStorage.getItem(SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY);
+  return stored === 'lut' ? 'lut' : 'minimum';
+}
+
 function resolveInitialZBlendLookBack(): number {
   if (typeof window === 'undefined') return 2;
   const stored = window.localStorage.getItem(SLICING_3DAA_LOOK_BACK_STORAGE_KEY)
@@ -633,6 +643,7 @@ export function SlicingPanel({
   });
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
+  const [blurGraySourceMode, setBlurGraySourceMode] = useState<BlurGraySourceMode>(resolveInitialBlurGraySourceMode);
   const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
     if (typeof window === 'undefined') return 0.05;
     const raw = window.localStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
@@ -735,12 +746,18 @@ export function SlicingPanel({
 
   useEffect(() => {
     setZBlendResinType((current) => {
-      if (aaQualityMode === 'auto' || zBlendAutoMode) {
-        return autoDetectedResinType;
+      if (aaMode === '3DAA') {
+        if (aaQualityMode === 'auto' || zBlendAutoMode) {
+          return autoDetectedResinType;
+        }
+        return current === 'custom' ? 'custom' : autoDetectedResinType;
       }
-      return current === 'custom' ? 'custom' : autoDetectedResinType;
+      if (aaMode === 'Blur' && blurGraySourceMode === 'lut') {
+        return current === 'custom' ? 'custom' : autoDetectedResinType;
+      }
+      return current;
     });
-  }, [aaQualityMode, autoDetectedResinType, zBlendAutoMode]);
+  }, [aaMode, aaQualityMode, autoDetectedResinType, blurGraySourceMode, zBlendAutoMode]);
 
   const selectedLutCurveLabel = useMemo(() => {
     if (zBlendResinType === 'custom') {
@@ -758,6 +775,16 @@ export function SlicingPanel({
     () => sampleCurveToLut(DEFAULT_CLEAR_EXP_100_CURVE),
     [],
   );
+
+  const selectedSharedLut = useMemo(() => {
+    if (zBlendResinType === 'custom') {
+      return sampleCurveToLut(
+        (savedCurves.find((c) => c.id === selectedCurveId) ?? savedCurves[0])?.points
+        ?? DEFAULT_CUSTOM_CURVE,
+      );
+    }
+    return zBlendResinType === 'clear' ? clearDefaultLut : opaqueDefaultLut;
+  }, [clearDefaultLut, opaqueDefaultLut, savedCurves, selectedCurveId, zBlendResinType]);
 
   useEffect(() => {
     if (savedCurves.length === 0) {
@@ -1130,6 +1157,9 @@ export function SlicingPanel({
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Coverage' :
     resolvedAaMode === '3DAA' ? 'Vertical2' :
     'Blur';
+  const blurUsesLutCurve = aaMode === 'Blur' && blurGraySourceMode === 'lut';
+  const shouldUseLutCurveForExport = effectiveAntiAliasingMode === 'Vertical2'
+    || (effectiveAntiAliasingMode === 'Blur' && aaQualityMode === 'advanced' && blurGraySourceMode === 'lut');
 
   const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
@@ -1381,6 +1411,12 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY, serialized);
     window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY, serialized);
   }, [enableMinimumAaAlphaOverride]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY, blurGraySourceMode);
+    window.sessionStorage.setItem(SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY, blurGraySourceMode);
+  }, [blurGraySourceMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1637,21 +1673,14 @@ export function SlicingPanel({
         zBlendMaxAlphaPercent: resolvedAaMode === '3DAA' && zBlendResinType !== 'custom'
           ? Z_BLEND_MAX_ALPHA_BY_RESIN[zBlendResinType]
           : 90,
-        zBlendCustomLut: resolvedAaMode === '3DAA'
-          ? (zBlendResinType === 'custom'
-              ? sampleCurveToLut(
-                  (savedCurves.find((c) => c.id === selectedCurveId) ?? savedCurves[0])?.points
-                  ?? DEFAULT_CUSTOM_CURVE
-                )
-              : zBlendResinType === 'opaque'
-                ? opaqueDefaultLut
-                : zBlendResinType === 'clear'
-                  ? clearDefaultLut
-                : undefined)
+        zBlendCustomLut: shouldUseLutCurveForExport
+          ? selectedSharedLut
           : undefined,
-        minimumAaAlphaPercentOverride: (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
-          ? profileMinimumAaAlphaPercent
-          : minimumAaAlphaPercent,
+        minimumAaAlphaPercentOverride: shouldUseLutCurveForExport && effectiveAntiAliasingMode === 'Blur'
+          ? 0
+          : (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
+            ? profileMinimumAaAlphaPercent
+            : minimumAaAlphaPercent,
 
         outputMode: 'return',
         exportThumbnailPng,
@@ -2386,6 +2415,166 @@ export function SlicingPanel({
                         />
                       )}
 
+                      {aaMode === 'Blur' && (
+                        <>
+                          <div
+                            className="my-2.5 mx-1 h-px rounded-full"
+                            style={{
+                              background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
+                            }}
+                          />
+                          <SettingLabelWithHelp
+                            label="Grey Mapping"
+                            help="Choose whether 2D Blur AA uses a simple minimum grey threshold or remaps the post-blur grayscale output through a resin-calibrated LUT curve."
+                          />
+                          <div className="grid grid-cols-2 gap-1">
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={blurGraySourceMode === 'minimum'
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setBlurGraySourceMode('minimum')}
+                            >
+                              Minimum Grey
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={blurGraySourceMode === 'lut'
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setBlurGraySourceMode('lut')}
+                            >
+                              LUT Curve
+                            </button>
+                          </div>
+
+                          {blurUsesLutCurve && (
+                            <>
+                              <SettingLabelWithHelp
+                                label="LUT Curve"
+                                help="Remaps 2D blur grayscale output through the same resin-calibrated cure curve system used by 3DAA."
+                              />
+                              <div className="grid grid-cols-3 gap-1 pt-1">
+                                {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
+                                  const active = zBlendResinType === rtype;
+                                  const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
+                                  return (
+                                    <button
+                                      key={rtype}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      title={isAutoDetected ? 'Auto-detected from material name' : undefined}
+                                      onClick={() => setZBlendResinType(rtype)}
+                                    >
+                                      {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
+                                      {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {zBlendResinType === 'custom' && (
+                                <LutCurveSelector
+                                  savedCurves={savedCurves}
+                                  selectedCurveId={selectedCurveId}
+                                  onSelectCurve={setSelectedCurveId}
+                                  onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
+                                />
+                              )}
+                              <LutCurveEditorModal
+                                isOpen={editingTarget !== null}
+                                savedCurves={savedCurves}
+                                selectedCurveId={selectedCurveId}
+                                onSelectCurve={(id) => {
+                                  setSelectedCurveId(id);
+                                  setEditingTarget(id);
+                                }}
+                                onImportCurve={(curve) => {
+                                  const importedId = curve.id.trim() || crypto.randomUUID();
+                                  const normalizedName = curve.name.trim() || 'Imported Curve';
+                                  setSavedCurves((prev) => {
+                                    const lowerNames = new Set(prev.map((entry) => entry.name.trim().toLowerCase()));
+                                    let finalName = normalizedName;
+                                    let suffix = 2;
+                                    while (lowerNames.has(finalName.trim().toLowerCase())) {
+                                      finalName = `${normalizedName} (${suffix})`;
+                                      suffix += 1;
+                                    }
+                                    const importedCurve = {
+                                      ...curve,
+                                      id: importedId,
+                                      name: finalName,
+                                    };
+                                    return [...prev, importedCurve];
+                                  });
+                                  setSelectedCurveId(importedId);
+                                  setEditingTarget(importedId);
+                                }}
+                                editingCurve={
+                                  editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
+                                    ? null
+                                    : (savedCurves.find((c) => c.id === editingTarget) ?? null)
+                                }
+                                onSave={(curve) => {
+                                  if (savedCurves.some((c) => c.id === curve.id)) {
+                                    setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
+                                  } else {
+                                    setSavedCurves((prev) => [...prev, curve]);
+                                    setSelectedCurveId(curve.id);
+                                  }
+                                  setEditingTarget(null);
+                                }}
+                                onDelete={(id) => {
+                                  const next = savedCurves.filter((c) => c.id !== id);
+                                  const fallback = next.length > 0
+                                    ? next
+                                    : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
+
+                                  const nextSelectedId = selectedCurveId === id
+                                    ? fallback[0].id
+                                    : (fallback.some((curve) => curve.id === selectedCurveId)
+                                        ? selectedCurveId
+                                        : fallback[0].id);
+
+                                  setSavedCurves(fallback);
+                                  setSelectedCurveId(nextSelectedId);
+                                  setEditingTarget(nextSelectedId);
+                                }}
+                                onClose={() => setEditingTarget(null)}
+                              />
+                            </>
+                          )}
+                        </>
+                      )}
+
                       {aaMode === '3DAA' && (
                         <>
                           <div
@@ -2686,16 +2875,7 @@ export function SlicingPanel({
                         </>
                       )}
 
-                      {aaMode === '3DAA' && !(['custom', 'opaque', 'clear'].includes(zBlendResinType)) && (
-                        <div
-                          className="my-2.5 mx-1 h-px rounded-full"
-                          style={{
-                            background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
-                          }}
-                        />
-                      )}
-
-                      {aaMode === '3DAA' && !(['custom', 'opaque', 'clear'].includes(zBlendResinType)) && (
+                      {aaMode === 'Blur' && blurGraySourceMode === 'minimum' && (
                         <div className="space-y-1">
                           <SettingLabelWithHelp
                             label="Minimum Grey Level"

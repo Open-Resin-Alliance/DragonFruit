@@ -185,10 +185,15 @@ pub struct SliceJobV3 {
     /// (innermost receding pixel adjacent to solid).  Defaults to 90 %.
     #[serde(default = "default_z_blend_max_alpha_percent")]
     pub z_blend_max_alpha_percent: f32,
-    /// Optional custom cure-window LUT (256 u8 values).  When present, this
-    /// array is used directly in place of the linear ramp generated from
-    /// `z_blend_minimum_alpha_percent` / `z_blend_max_alpha_percent`.  The
-    /// engine always forces index 0 to 0 (void) and index 255 to 255 (solid).
+    /// Optional custom grayscale cure LUT (256 u8 values).
+    ///
+    /// - In 3DAA this overrides the linear cure-window ramp generated from
+    ///   `z_blend_minimum_alpha_percent` / `z_blend_max_alpha_percent`.
+    /// - In 2D Blur AA this remaps the post-blur grayscale output directly,
+    ///   replacing the simpler minimum-grey threshold workflow.
+    ///
+    /// The engine always forces index 0 to 0 (void) and index 255 to 255
+    /// (solid).
     #[serde(default)]
     pub z_blend_custom_lut: Option<Vec<u8>>,
     /// Debug-only visualization mode for 3DAA blending.
@@ -306,6 +311,19 @@ impl SliceJobV3 {
     #[inline]
     pub fn produces_binary_output(&self) -> bool {
         !self.produces_grayscale_output()
+    }
+
+    #[inline]
+    pub fn normalized_custom_cure_lut(&self) -> Option<[u8; 256]> {
+        let custom = self.z_blend_custom_lut.as_ref()?;
+        let mut lut = [0u8; 256];
+        for (idx, &value) in custom.iter().take(256).enumerate() {
+            lut[idx] = value;
+        }
+        // Preserve the invariant used throughout the engine: 0 = void, 255 = solid.
+        lut[0] = 0;
+        lut[255] = 255;
+        Some(lut)
     }
 }
 

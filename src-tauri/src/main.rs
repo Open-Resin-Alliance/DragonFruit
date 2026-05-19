@@ -389,7 +389,10 @@ struct SliceJobMetadata {
     /// Maximum gray level (0–100 %) for z-blend gradient pixels at the inner boundary.
     #[serde(default = "default_z_blend_max_alpha_percent")]
     z_blend_max_alpha_percent: f32,
-    /// Optional custom cure-window LUT (256 u8 values); overrides the linear ramp.
+    /// Optional custom grayscale cure LUT (256 u8 values).
+    ///
+    /// Used by 3DAA to override the linear cure-window ramp and by 2D Blur AA
+    /// to remap the post-blur grayscale output directly.
     #[serde(default)]
     z_blend_custom_lut: Option<Vec<u8>>,
     #[serde(default = "default_z_blend_debug_color_overlay")]

@@ -11,7 +11,7 @@ use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rl
 use crate::raster::{
     apply_blur_postprocess_inplace, apply_blur_postprocess_inplace_with_roi,
     blur_gray_rle_streaming, downsample_binary_rle_to_gray_rle, encode_mask_to_rle_in_bounds,
-    rasterize_layer_with_stats,
+    rasterize_layer_with_stats, remap_gray_rle_with_lut,
 };
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
@@ -125,6 +125,18 @@ fn apply_min_alpha_floor(mask: &mut [u8], min_aa_alpha_u8: u8) {
         if *px < min_aa_alpha_u8 {
             *px = 0;
         }
+    }
+}
+
+#[inline]
+fn ssaa_downsample_min_alpha_u8(blur_radius: usize, min_alpha_u8: u8) -> u8 {
+    // In SSAA + Blur mode we must preserve low-coverage grayscale edge pixels
+    // through the downsample step so they can participate in the blur kernel.
+    // Flooring here clips the edge back toward binary before blur runs.
+    if blur_radius > 0 {
+        0
+    } else {
+        min_alpha_u8
     }
 }
 
@@ -2598,6 +2610,11 @@ pub fn slice_and_rasterize_rle_v3(
     };
     let min_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let blur_custom_lut = if blur_radius > 0 {
+        job.normalized_custom_cure_lut()
+    } else {
+        None
+    };
 
     // Build the job that drives the rasterizer.  When SSAA is active we scale
     // the pixel dimensions up by `ssaa_factor` and force the rasterizer into
@@ -2642,13 +2659,14 @@ pub fn slice_and_rasterize_rle_v3(
     // Wrap on_rle_layer to downsample (if ssaa_factor > 1) and/or blur before
     // forwarding.  When neither applies the closure is a thin pass-through.
     let mut wrapped_on_rle = |layer_idx: u32, raster_runs: Vec<crate::rle::RleRun>| {
+        let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
         let gray_runs = if ssaa_factor > 1 {
             downsample_binary_rle_to_gray_rle(
                 &raster_runs,
                 super_width,
                 super_height,
                 ssaa_factor,
-                min_alpha_u8,
+                downsample_min_alpha_u8,
             )
         } else {
             raster_runs
@@ -2656,7 +2674,22 @@ pub fn slice_and_rasterize_rle_v3(
 
         let final_runs = if blur_radius > 0 {
             // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
-            blur_gray_rle_streaming(&gray_runs, out_width, out_height, blur_radius, min_alpha_u8)
+            let blurred = blur_gray_rle_streaming(
+                &gray_runs,
+                out_width,
+                out_height,
+                blur_radius,
+                if blur_custom_lut.is_some() {
+                    0
+                } else {
+                    min_alpha_u8
+                },
+            );
+            if let Some(lut) = blur_custom_lut.as_ref() {
+                remap_gray_rle_with_lut(&blurred, lut)
+            } else {
+                blurred
+            }
         } else {
             gray_runs
         };
@@ -2704,6 +2737,11 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     };
     let min_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let blur_custom_lut = if blur_radius > 0 {
+        job.normalized_custom_cure_lut()
+    } else {
+        None
+    };
 
     // Build super-resolution raster job when SSAA or blur is active.
     let raster_job_owned: Option<SliceJobV3> = if ssaa_factor > 1 || blur_radius > 0 {
@@ -2748,13 +2786,14 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         let out_height = job.source_height_px as usize;
         let inner = encode_fn.clone();
         Arc::new(move |layer_idx: u32, super_runs: &[crate::rle::RleRun]| {
+            let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, min_alpha_u8);
             let gray_runs = if ssaa_factor > 1 {
                 downsample_binary_rle_to_gray_rle(
                     super_runs,
                     super_width,
                     super_height,
                     ssaa_factor,
-                    min_alpha_u8,
+                    downsample_min_alpha_u8,
                 )
             } else {
                 super_runs.to_vec()
@@ -2762,13 +2801,22 @@ pub fn slice_and_rasterize_rle_encoded_v3(
 
             let final_runs = if blur_radius > 0 {
                 // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
-                blur_gray_rle_streaming(
+                let blurred = blur_gray_rle_streaming(
                     &gray_runs,
                     out_width,
                     out_height,
                     blur_radius,
-                    min_alpha_u8,
-                )
+                    if blur_custom_lut.is_some() {
+                        0
+                    } else {
+                        min_alpha_u8
+                    },
+                );
+                if let Some(lut) = blur_custom_lut.as_ref() {
+                    remap_gray_rle_with_lut(&blurred, lut)
+                } else {
+                    blurred
+                }
             } else {
                 gray_runs
             };
@@ -3247,4 +3295,16 @@ impl From<serde_json::Error> for SlicerV3Error {
 #[allow(dead_code)]
 fn _empty_perf() -> SlicingPerfV3 {
     SlicingPerfV3::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ssaa_downsample_min_alpha_u8;
+
+    #[test]
+    fn ssaa_blur_defers_min_alpha_floor_until_after_blur() {
+        assert_eq!(ssaa_downsample_min_alpha_u8(0, 89), 89);
+        assert_eq!(ssaa_downsample_min_alpha_u8(2, 89), 0);
+        assert_eq!(ssaa_downsample_min_alpha_u8(4, 255), 0);
+    }
 }

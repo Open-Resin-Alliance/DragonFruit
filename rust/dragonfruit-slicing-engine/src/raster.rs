@@ -1156,6 +1156,46 @@ pub(crate) fn encode_mask_to_rle(
     rle.finish()
 }
 
+#[inline]
+fn apply_lut_to_mask_in_bounds(
+    mask: &mut [u8],
+    width: usize,
+    min_x: usize,
+    max_x: usize,
+    min_y: usize,
+    max_y: usize,
+    lut: &[u8; 256],
+) {
+    if width == 0 || min_x > max_x || min_y > max_y {
+        return;
+    }
+
+    for y in min_y..=max_y {
+        let row_start = y * width;
+        for x in min_x..=max_x {
+            let idx = row_start + x;
+            mask[idx] = lut[mask[idx] as usize];
+        }
+    }
+}
+
+pub fn remap_gray_rle_with_lut(
+    runs: &[crate::rle::RleRun],
+    lut: &[u8; 256],
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::RleAccum;
+
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = RleAccum::new();
+    for run in runs {
+        out.push_run(run.length, lut[run.value as usize]);
+    }
+    out.finish()
+}
+
 pub(crate) fn encode_mask_to_rle_in_bounds(
     mask: &[u8],
     width: usize,
@@ -1324,6 +1364,11 @@ fn rasterize_layer_with_stats_impl(
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8
     } else {
         0
+    };
+    let blur_custom_lut = if blur_mode {
+        job.normalized_custom_cure_lut()
+    } else {
+        None
     };
     let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
     let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
@@ -1520,12 +1565,22 @@ fn rasterize_layer_with_stats_impl(
             width,
             height,
             effective_radius,
-            min_aa_alpha_u8,
+            if blur_custom_lut.is_some() {
+                0
+            } else {
+                min_aa_alpha_u8
+            },
             roi_min_x,
             roi_max_x,
             roi_min_y,
             roi_max_y,
         );
+
+        if let Some(lut) = blur_custom_lut.as_ref() {
+            apply_lut_to_mask_in_bounds(
+                &mut mask, width, roi_min_x, roi_max_x, roi_min_y, roi_max_y, lut,
+            );
+        }
 
         let mut total_solid_pixels = 0u32;
         let mut blur_min_x = i32::MAX;
@@ -2184,6 +2239,60 @@ pub fn downsample_binary_rle_to_gray_rle(
     out_rle.finish()
 }
 
+#[inline]
+fn compute_nonzero_bounds_from_rle(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    if width == 0 || height == 0 || runs.is_empty() {
+        return None;
+    }
+
+    let total_pixels = width.saturating_mul(height);
+    let mut pos = 0usize;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut any_non_zero = false;
+
+    for run in runs {
+        if pos >= total_pixels {
+            break;
+        }
+
+        let run_len = (run.length as usize).min(total_pixels - pos);
+        if run_len == 0 {
+            continue;
+        }
+
+        if run.value != 0 {
+            any_non_zero = true;
+            let mut cur = pos;
+            let end = pos + run_len;
+            while cur < end {
+                let row = cur / width;
+                let col = cur % width;
+                let take = (end - cur).min(width - col);
+                min_x = min_x.min(col);
+                max_x = max_x.max(col + take - 1);
+                min_y = min_y.min(row);
+                max_y = max_y.max(row);
+                cur += take;
+            }
+        }
+
+        pos += run_len;
+    }
+
+    if any_non_zero {
+        Some((min_x, max_x, min_y, max_y))
+    } else {
+        None
+    }
+}
+
 /// Streaming separable box blur operating directly on gray RLE runs.
 ///
 /// Matches the boundary-clamped denominator of `apply_blur_postprocess_inplace`
@@ -2210,27 +2319,43 @@ pub fn blur_gray_rle_streaming(
     if radius == 0 || width == 0 || height == 0 {
         return runs.to_vec();
     }
-    if runs.is_empty() {
+
+    let Some((min_x, max_x, min_y, max_y)) = compute_nonzero_bounds_from_rle(runs, width, height)
+    else {
         // All-zero image: blur of zero is zero.
         let mut out = RleAccum::new();
         emit_zero_rows(&mut out, height, width);
         return out.finish();
-    }
+    };
+
+    let roi_min_x = min_x.saturating_sub(radius);
+    let roi_max_x = max_x.saturating_add(radius).min(width - 1);
+    let roi_min_y = min_y.saturating_sub(radius);
+    let roi_max_y = max_y.saturating_add(radius).min(height - 1);
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let right_zeros = width - 1 - roi_max_x;
 
     let ring_cap = 2 * radius + 1;
     // Ring buffer: ring_cap rows × width u16 elements (raw horizontal box-blur sums).
     // Max per-element value = 255 × (2×radius+1). For radius ≤ 127 this fits u16.
-    let mut ring = vec![0u16; ring_cap * width];
+    let mut ring = vec![0u16; ring_cap * roi_w];
     // Vertical accumulator: sum of ring rows currently in the sliding window.
-    let mut col_sums = vec![0u32; width];
-    // Scratch buffer: one decoded or emitted row.
-    let mut row_buf = vec![0u8; width];
+    let mut col_sums = vec![0u32; roi_w];
+    // Scratch buffers: one decoded ROI row, one emitted ROI row.
+    let mut decode_buf = vec![0u8; roi_w];
+    let mut emit_buf = vec![0u8; roi_w];
     let mut out_rle = RleAccum::new();
+
+    emit_zero_rows(&mut out_rle, roi_min_y, width);
 
     // Pre-compute boundary-clamped horizontal denominator once per column.
     // This mirrors the h_denom formula in apply_edge_box_blur_to_mask_in_roi.
-    let h_denom: Vec<u32> = (0..width)
-        .map(|x| (1 + radius.min(x) + radius.min(width - 1 - x)) as u32)
+    let h_denom: Vec<u32> = (0..roi_w)
+        .map(|ix| {
+            let x = roi_min_x + ix;
+            (1 + radius.min(x) + radius.min(width - 1 - x)) as u32
+        })
         .collect();
 
     let mut ring_head = 0usize;
@@ -2239,25 +2364,63 @@ pub fn blur_gray_rle_streaming(
     // RLE decode state.
     let mut run_idx = 0usize;
     let mut run_pos = 0usize; // pixels consumed from runs[run_idx]
+    let mut abs_pos = 0usize;
+
+    let advance_to =
+        |target_abs: usize, run_idx: &mut usize, run_pos: &mut usize, abs_pos: &mut usize| {
+            while *abs_pos < target_abs {
+                if *run_idx >= runs.len() {
+                    *abs_pos = target_abs;
+                    break;
+                }
+
+                let run = &runs[*run_idx];
+                let avail = (run.length as usize).saturating_sub(*run_pos);
+                if avail == 0 {
+                    *run_idx += 1;
+                    *run_pos = 0;
+                    continue;
+                }
+
+                let take = (target_abs - *abs_pos).min(avail);
+                *abs_pos += take;
+                *run_pos += take;
+                if *run_pos >= run.length as usize {
+                    *run_idx += 1;
+                    *run_pos = 0;
+                }
+            }
+        };
 
     // The outer loop runs height + radius iterations:
-    //   - add_row 0..height  : decode + h-blur one input row, add to ring
-    //   - add_row 0..height  : if add_row >= radius, emit output row out_row = add_row - radius
-    //   - add_row height..height+radius : only emit (drain remaining ring rows)
-    for add_row in 0..height + radius {
-        if add_row < height {
-            // ── Decode one input row into row_buf ─────────────────────────
-            let mut col = 0;
-            while col < width {
+    //   - add_row 0..roi_h  : decode + h-blur one ROI row, add to ring
+    //   - add_row 0..roi_h  : if add_row >= radius, emit ROI row out_row = add_row - radius
+    //   - add_row roi_h..roi_h+radius : only emit (drain remaining ring rows)
+    for add_row in 0..roi_h + radius {
+        if add_row < roi_h {
+            // ── Decode one ROI slice into decode_buf ──────────────────────
+            let global_y = roi_min_y + add_row;
+            let row_abs_start = global_y * width + roi_min_x;
+            advance_to(row_abs_start, &mut run_idx, &mut run_pos, &mut abs_pos);
+
+            let mut written = 0usize;
+            while written < roi_w {
                 if run_idx >= runs.len() {
-                    row_buf[col..].fill(0);
+                    decode_buf[written..].fill(0);
+                    abs_pos += roi_w - written;
                     break;
                 }
                 let run = &runs[run_idx];
-                let avail = run.length as usize - run_pos;
-                let take = avail.min(width - col);
-                row_buf[col..col + take].fill(run.value);
-                col += take;
+                let avail = (run.length as usize).saturating_sub(run_pos);
+                if avail == 0 {
+                    run_idx += 1;
+                    run_pos = 0;
+                    continue;
+                }
+                let take = avail.min(roi_w - written);
+                decode_buf[written..written + take].fill(run.value);
+                written += take;
+                abs_pos += take;
                 run_pos += take;
                 if run_pos >= run.length as usize {
                     run_idx += 1;
@@ -2270,22 +2433,22 @@ pub fn blur_gray_rle_streaming(
             // so the final division can use the combined h_denom × v_denom in
             // one step (matching apply_edge_box_blur_to_mask_in_roi exactly).
             let new_slot = (ring_head + ring_len) % ring_cap;
-            let slot_start = new_slot * width;
+            let slot_start = new_slot * roi_w;
 
             let mut sum = 0u32;
-            let init_end = radius.min(width - 1);
-            for &b in &row_buf[..=init_end] {
+            let init_end = radius.min(roi_w - 1);
+            for &b in &decode_buf[..=init_end] {
                 sum += b as u32;
             }
-            for ix in 0..width {
+            for ix in 0..roi_w {
                 ring[slot_start + ix] = sum as u16; // safe: max = 255×(2r+1) ≤ u16::MAX for r≤127
                 col_sums[ix] += sum;
                 if ix >= radius {
-                    sum -= row_buf[ix - radius] as u32;
+                    sum -= decode_buf[ix - radius] as u32;
                 }
                 let r1 = ix + radius + 1;
-                if r1 < width {
-                    sum += row_buf[r1] as u32;
+                if r1 < roi_w {
+                    sum += decode_buf[r1] as u32;
                 }
             }
             ring_len += 1;
@@ -2294,19 +2457,21 @@ pub fn blur_gray_rle_streaming(
         // ── Emit output row once we have enough buffered rows ─────────────
         if add_row >= radius {
             let out_row = add_row - radius;
+            let global_out_y = roi_min_y + out_row;
             // Boundary-clamped vertical denominator: same formula as v_denom in
             // apply_edge_box_blur_to_mask_in_roi with roi_min_y = 0.
-            let v_denom_val = (1 + radius.min(out_row) + radius.min(height - 1 - out_row)) as u32;
+            let v_denom_val =
+                (1 + radius.min(global_out_y) + radius.min(height - 1 - global_out_y)) as u32;
 
             let mut all_zero = true;
-            for ix in 0..width {
+            for ix in 0..roi_w {
                 let denom = (h_denom[ix] * v_denom_val).max(1);
                 let raw = (col_sums[ix] + denom / 2) / denom;
                 let mut val = raw.min(255) as u8;
                 if val > 0 && val < min_alpha_u8 {
                     val = 0;
                 }
-                row_buf[ix] = val;
+                emit_buf[ix] = val;
                 if val > 0 {
                     all_zero = false;
                 }
@@ -2315,13 +2480,19 @@ pub fn blur_gray_rle_streaming(
             if all_zero {
                 emit_zero_rows(&mut out_rle, 1, width);
             } else {
-                emit_row(&mut out_rle, &row_buf);
+                if roi_min_x > 0 {
+                    out_rle.push_run(roi_min_x as u32, 0);
+                }
+                emit_row(&mut out_rle, &emit_buf);
+                if right_zeros > 0 {
+                    out_rle.push_run(right_zeros as u32, 0);
+                }
             }
 
             // Evict the oldest ring row once the full vertical window is in use.
             if out_row >= radius {
-                let evict_start = ring_head * width;
-                for ix in 0..width {
+                let evict_start = ring_head * roi_w;
+                for ix in 0..roi_w {
                     col_sums[ix] -= ring[evict_start + ix] as u32;
                 }
                 ring_head = (ring_head + 1) % ring_cap;
@@ -2330,14 +2501,17 @@ pub fn blur_gray_rle_streaming(
         }
     }
 
+    emit_zero_rows(&mut out_rle, height - 1 - roi_max_y, width);
+
     out_rle.finish()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_blur_postprocess_inplace, encode_mask_to_rle, encode_mask_to_rle_in_bounds,
-        rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats,
+        apply_blur_postprocess_inplace, blur_gray_rle_streaming, encode_mask_to_rle,
+        encode_mask_to_rle_in_bounds, rasterize_layer, rasterize_layer_rle,
+        rasterize_layer_with_stats, remap_gray_rle_with_lut,
     };
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
@@ -2704,6 +2878,133 @@ mod tests {
         assert!(
             runs.iter().any(|run| run.value == 255),
             "blur mode should preserve fully solid interior runs"
+        );
+    }
+
+    #[test]
+    fn streaming_rle_blur_matches_full_mask_blur() {
+        let mut job = job_for_single_layer();
+        job.blur_brush_radius_px = 2;
+        job.anti_aliasing_mode = "Blur".to_string();
+
+        let mut flat = Vec::<f32>::new();
+        push_box_triangles(&mut flat, -16.0, 8.0, 0.0, 1.0, 20.0, 12.0);
+        push_box_triangles(&mut flat, 18.0, -10.0, 0.0, 1.0, 10.0, 22.0);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+
+        let (binary_runs, _stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, false);
+
+        let width = job.effective_render_width_px() as usize;
+        let height = job.source_height_px as usize;
+        let blur_radius = job.blur_brush_radius_px.max(1) as usize;
+        let min_alpha_u8 =
+            ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+
+        let mut expected_mask = crate::rle::expand_rle_to_mask(&binary_runs, width * height);
+        apply_blur_postprocess_inplace(
+            &mut expected_mask,
+            width,
+            height,
+            blur_radius,
+            min_alpha_u8,
+        );
+        let actual_runs =
+            blur_gray_rle_streaming(&binary_runs, width, height, blur_radius, min_alpha_u8);
+        let actual_mask = crate::rle::expand_rle_to_mask(&actual_runs, width * height);
+
+        assert_eq!(
+            actual_mask, expected_mask,
+            "streaming RLE blur must match legacy full-mask blur exactly"
+        );
+    }
+
+    #[test]
+    fn streaming_rle_blur_matches_full_mask_blur_for_grayscale_input() {
+        let width = 12usize;
+        let height = 8usize;
+        let blur_radius = 2usize;
+        let min_alpha_u8 = 64u8;
+
+        let mut mask = vec![0u8; width * height];
+        // Handcrafted grayscale footprint with soft edges and asymmetric values
+        // to ensure the streaming path is validated on true grayscale input,
+        // not just binary 0/255 masks.
+        let rows: [&[u8]; 4] = [
+            &[0, 0, 0, 12, 44, 96, 128, 96, 44, 12, 0, 0],
+            &[0, 0, 18, 64, 140, 220, 255, 220, 140, 64, 18, 0],
+            &[0, 0, 24, 80, 168, 240, 255, 240, 168, 80, 24, 0],
+            &[0, 0, 12, 44, 96, 128, 180, 128, 96, 44, 12, 0],
+        ];
+        for (row_idx, row) in rows.iter().enumerate() {
+            let y = 2 + row_idx;
+            let start = y * width;
+            mask[start..start + width].copy_from_slice(row);
+        }
+
+        let runs = encode_mask_to_rle(&mask, width, height);
+
+        let mut expected_mask = mask.clone();
+        apply_blur_postprocess_inplace(
+            &mut expected_mask,
+            width,
+            height,
+            blur_radius,
+            min_alpha_u8,
+        );
+
+        let actual_runs = blur_gray_rle_streaming(&runs, width, height, blur_radius, min_alpha_u8);
+        let actual_mask = crate::rle::expand_rle_to_mask(&actual_runs, width * height);
+
+        assert_eq!(
+            actual_mask, expected_mask,
+            "streaming RLE blur must match legacy full-mask blur for grayscale input"
+        );
+    }
+
+    #[test]
+    fn streaming_rle_blur_with_lut_matches_full_mask_blur() {
+        let width = 12usize;
+        let height = 8usize;
+        let blur_radius = 2usize;
+
+        let mut mask = vec![0u8; width * height];
+        let rows: [&[u8]; 4] = [
+            &[0, 0, 0, 12, 44, 96, 128, 96, 44, 12, 0, 0],
+            &[0, 0, 18, 64, 140, 220, 255, 220, 140, 64, 18, 0],
+            &[0, 0, 24, 80, 168, 240, 255, 240, 168, 80, 24, 0],
+            &[0, 0, 12, 44, 96, 128, 180, 128, 96, 44, 12, 0],
+        ];
+        for (row_idx, row) in rows.iter().enumerate() {
+            let y = 2 + row_idx;
+            let start = y * width;
+            mask[start..start + width].copy_from_slice(row);
+        }
+
+        let mut lut = [0u8; 256];
+        for (idx, slot) in lut.iter_mut().enumerate() {
+            *slot = ((idx as f32 * 0.72).round() as u32).min(255) as u8;
+        }
+        lut[0] = 0;
+        lut[255] = 255;
+
+        let runs = encode_mask_to_rle(&mask, width, height);
+
+        let mut expected_mask = mask.clone();
+        apply_blur_postprocess_inplace(&mut expected_mask, width, height, blur_radius, 0);
+        for px in &mut expected_mask {
+            *px = lut[*px as usize];
+        }
+
+        let blurred_runs = blur_gray_rle_streaming(&runs, width, height, blur_radius, 0);
+        let remapped_runs = remap_gray_rle_with_lut(&blurred_runs, &lut);
+        let actual_mask = crate::rle::expand_rle_to_mask(&remapped_runs, width * height);
+
+        assert_eq!(
+            actual_mask, expected_mask,
+            "streaming RLE blur + LUT remap must match legacy full-mask blur + LUT"
         );
     }
 
