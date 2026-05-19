@@ -10,7 +10,8 @@ use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
 use crate::raster::{
     apply_blur_postprocess_inplace, apply_blur_postprocess_inplace_with_roi,
-    encode_mask_to_rle_in_bounds, rasterize_layer_with_stats,
+    blur_gray_rle_streaming, downsample_binary_rle_to_gray_rle, encode_mask_to_rle_in_bounds,
+    rasterize_layer_with_stats,
 };
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
@@ -2578,24 +2579,97 @@ pub fn slice_with_progress_v3(
 pub fn slice_and_rasterize_rle_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
-    on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
+    // 3DAA modes run their own vertical pipeline — no SSAA here.
+    let ssaa_factor = if is_vertical_aa_mode(&job.anti_aliasing_mode) {
+        1usize
+    } else {
+        (job.configured_xy_aa_steps() as usize).max(1)
+    };
+    let blur_radius = if job.anti_aliasing_mode_is_blur() && job.blur_brush_radius_px > 0 {
+        job.blur_brush_radius_px.max(1) as usize
+    } else {
+        0
+    };
+    let min_alpha_u8 =
+        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+
+    // Build the job that drives the rasterizer.  When SSAA is active we scale
+    // the pixel dimensions up by `ssaa_factor` and force the rasterizer into
+    // binary mode (AA settings cleared), so the ultra-fast streaming binary RLE
+    // engine is used unchanged.  Triangles are NOT copied here — they're parsed
+    // from the original `job` below and then projected at the (potentially
+    // super-resolved) raster dimensions.
+    let raster_job_owned: Option<SliceJobV3> = if ssaa_factor > 1 || blur_radius > 0 {
+        let mut j = job.clone();
+        j.triangles_xyz = Vec::new(); // avoid copying potentially-GB mesh data
+        j.anti_aliasing_level = "Off".to_string();
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.blur_brush_radius_px = 0;
+        j.minimum_aa_alpha_percent = 0.0;
+        if ssaa_factor > 1 {
+            j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
+            j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
+            j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
+            j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+        }
+        Some(j)
+    } else {
+        None
+    };
+    let raster_job = raster_job_owned.as_ref().unwrap_or(job);
+
     let mut triangles = parse_triangles(&job.triangles_xyz);
-    project_triangles_inplace(&mut triangles, job);
+    project_triangles_inplace(&mut triangles, raster_job);
     let index_start = std::time::Instant::now();
-    let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
+    let layer_index = build_layer_index(
+        &triangles,
+        raster_job.total_layers,
+        raster_job.layer_height_mm,
+    );
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
+    let super_width = raster_job.effective_render_width_px() as usize;
+    let super_height = raster_job.source_height_px as usize;
+    let out_width = job.effective_render_width_px() as usize;
+    let out_height = job.source_height_px as usize;
+
+    // Wrap on_rle_layer to downsample (if ssaa_factor > 1) and/or blur before
+    // forwarding.  When neither applies the closure is a thin pass-through.
+    let mut wrapped_on_rle = |layer_idx: u32, raster_runs: Vec<crate::rle::RleRun>| {
+        let gray_runs = if ssaa_factor > 1 {
+            downsample_binary_rle_to_gray_rle(
+                &raster_runs,
+                super_width,
+                super_height,
+                ssaa_factor,
+                min_alpha_u8,
+            )
+        } else {
+            raster_runs
+        };
+
+        let final_runs = if blur_radius > 0 {
+            // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
+            blur_gray_rle_streaming(&gray_runs, out_width, out_height, blur_radius, min_alpha_u8)
+        } else {
+            gray_runs
+        };
+
+        on_rle_layer(layer_idx, final_runs)
+    };
+
     let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle(
-        job,
+        raster_job,
         &triangles,
         &layer_index,
         compute_area_stats,
-        on_rle_layer,
+        &mut wrapped_on_rle,
         on_progress,
         cancel_flag,
     )?;
@@ -2617,18 +2691,100 @@ pub fn slice_and_rasterize_rle_encoded_v3(
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
+    // 3DAA modes run their own vertical pipeline — no SSAA here.
+    let ssaa_factor = if is_vertical_aa_mode(&job.anti_aliasing_mode) {
+        1usize
+    } else {
+        (job.configured_xy_aa_steps() as usize).max(1)
+    };
+    let blur_radius = if job.anti_aliasing_mode_is_blur() && job.blur_brush_radius_px > 0 {
+        job.blur_brush_radius_px.max(1) as usize
+    } else {
+        0
+    };
+    let min_alpha_u8 =
+        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+
+    // Build super-resolution raster job when SSAA or blur is active.
+    let raster_job_owned: Option<SliceJobV3> = if ssaa_factor > 1 || blur_radius > 0 {
+        let mut j = job.clone();
+        j.triangles_xyz = Vec::new();
+        j.anti_aliasing_level = "Off".to_string();
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.blur_brush_radius_px = 0;
+        j.minimum_aa_alpha_percent = 0.0;
+        if ssaa_factor > 1 {
+            j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
+            j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
+            j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
+            j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+        }
+        Some(j)
+    } else {
+        None
+    };
+    let raster_job = raster_job_owned.as_ref().unwrap_or(job);
+
     let mut triangles = parse_triangles(&job.triangles_xyz);
-    project_triangles_inplace(&mut triangles, job);
+    project_triangles_inplace(&mut triangles, raster_job);
     let index_start = std::time::Instant::now();
-    let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
+    let layer_index = build_layer_index(
+        &triangles,
+        raster_job.total_layers,
+        raster_job.layer_height_mm,
+    );
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
+    // When SSAA or blur is active, wrap encode_fn to downsample + blur the
+    // super-resolution binary RLE before forwarding to the encoder.  The Arc
+    // clone is cheap (reference count bump); the heavy work happens per-layer
+    // inside the rayon worker pool.
+    let effective_encode_fn: Arc<
+        dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+    > = if ssaa_factor > 1 || blur_radius > 0 {
+        let super_width = raster_job.effective_render_width_px() as usize;
+        let super_height = raster_job.source_height_px as usize;
+        let out_width = job.effective_render_width_px() as usize;
+        let out_height = job.source_height_px as usize;
+        let inner = encode_fn.clone();
+        Arc::new(move |layer_idx: u32, super_runs: &[crate::rle::RleRun]| {
+            let gray_runs = if ssaa_factor > 1 {
+                downsample_binary_rle_to_gray_rle(
+                    super_runs,
+                    super_width,
+                    super_height,
+                    ssaa_factor,
+                    min_alpha_u8,
+                )
+            } else {
+                super_runs.to_vec()
+            };
+
+            let final_runs = if blur_radius > 0 {
+                // Streaming separable box blur: O((2r+1)×width) memory, no full-image allocation.
+                blur_gray_rle_streaming(
+                    &gray_runs,
+                    out_width,
+                    out_height,
+                    blur_radius,
+                    min_alpha_u8,
+                )
+            } else {
+                gray_runs
+            };
+
+            inner(layer_idx, &final_runs)
+        })
+    } else {
+        encode_fn
+    };
+
     let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle_encoded(
-        job,
+        raster_job,
         &triangles,
         &layer_index,
         compute_area_stats,
-        encode_fn,
+        effective_encode_fn,
         on_encoded_layer,
         on_progress,
         cancel_flag,

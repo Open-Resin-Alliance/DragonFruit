@@ -1813,29 +1813,9 @@ pub fn rasterize_layer_rle(
         return (runs, stats);
     }
 
-    let aa_level_steps = job.effective_xy_aa_steps();
-    let aa_steps = (aa_level_steps as usize).max(1);
-    let blur_mode = job.anti_aliasing_mode_is_blur();
-    let blur_radius = if blur_mode {
-        blur_radius_px(job.blur_brush_radius_px)
-    } else {
-        0
-    };
-    // Blur still needs the full-mask path so ROI blur can run, but Blur mode no
-    // longer enables SSAA. Coverage SSAA remains on the full-mask fallback path.
-    if blur_radius > 0 || aa_steps > 1 {
-        let (mask, stats) = rasterize_layer_with_stats(
-            job,
-            triangles,
-            layer_indices,
-            layer_index,
-            compute_area_stats,
-        );
-        let runs = encode_mask_to_rle(&mask, width, height);
-        return (runs, stats);
-    }
-
-    // Binary single-Z streaming path (no AA, no blur).
+    // Binary single-Z streaming path.
+    // AA (SSAA supersampling + optional blur) is applied at the engine level
+    // before this function is called — the rasterizer always sees a binary job.
     let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
     let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
     if segments.is_empty() {
@@ -1843,15 +1823,7 @@ pub fn rasterize_layer_rle(
         return (rle.finish(), stats);
     }
 
-    let aa_enabled = aa_steps > 1; // always false here; retained for code-path gating below
-    let min_aa_alpha_u8 = if aa_enabled {
-        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8
-    } else {
-        0
-    };
-
-    let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps, 0.5)
-    else {
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
         emit_zero_rows(&mut rle, height, width);
         return (rle.finish(), stats);
     };
@@ -1859,14 +1831,7 @@ pub fn rasterize_layer_rle(
     let scanline_row_offsets = scanline_index.row_offsets;
     let y_start = scanline_index.y_start;
     let y_end_exclusive = scanline_index.y_end_exclusive;
-    let track_aa_components = compute_area_stats && aa_enabled;
-    let mut aa_component_tracker = if track_aa_components {
-        Some(ComponentSpanTracker::new())
-    } else {
-        None
-    };
-
-    let first_physical_y = y_start / aa_steps;
+    let first_physical_y = y_start;
     // Emit zero rows before the rasterized region.
     emit_zero_rows(&mut rle, first_physical_y, width);
 
@@ -1884,17 +1849,6 @@ pub fn rasterize_layer_rle(
 
     // Single-row scratch buffer — width bytes max (7680 at 8 K).
     let mut row_buf = vec![0u8; width];
-    let mut row_accum = vec![0u32; width];
-    let mut row_delta = if aa_enabled {
-        vec![0i32; width + 1]
-    } else {
-        Vec::new()
-    };
-    let mut row_hit_delta = if track_aa_components {
-        vec![0i32; width + 1]
-    } else {
-        Vec::new()
-    };
     let mut current_physical_y = first_physical_y;
     // last_emitted_py: the most recent physical row fully committed to `rle`.
     // Starts at first_physical_y - 1 (we just emitted zeros 0..first_physical_y).
@@ -1905,55 +1859,6 @@ pub fn rasterize_layer_rle(
     // zero-rows for any skipped rows up to (but not including) `next_py`.
     macro_rules! flush_up_to {
         ($next_py:expr) => {{
-            // Resolve AA accumulator into row_buf for the row being flushed.
-            if aa_enabled {
-                let mut coverage = 0i32;
-                let mut occupied = 0i32;
-                let mut run_start: Option<usize> = None;
-
-                for x in 0..width {
-                    coverage += row_delta[x];
-                    let acc = if coverage > 0 {
-                        row_accum[x].saturating_add(coverage as u32)
-                    } else {
-                        row_accum[x]
-                    };
-                    if acc > 0 {
-                        let resolved = (acc / (aa_steps as u32)).min(255) as u8;
-                        row_buf[x] = resolved.max(min_aa_alpha_u8);
-                    }
-                    row_accum[x] = 0;
-                    row_delta[x] = 0;
-
-                    if track_aa_components {
-                        occupied += row_hit_delta[x];
-                        let is_occupied = occupied > 0;
-                        if is_occupied {
-                            if run_start.is_none() {
-                                run_start = Some(x);
-                            }
-                        } else if let Some(start) = run_start.take() {
-                            if let Some(ref mut tracker) = aa_component_tracker {
-                                tracker.push_span(start, x - 1);
-                            }
-                        }
-                        row_hit_delta[x] = 0;
-                    }
-                }
-
-                row_delta[width] = 0;
-                if track_aa_components {
-                    if let Some(start) = run_start {
-                        if let Some(ref mut tracker) = aa_component_tracker {
-                            tracker.push_span(start, width - 1);
-                        }
-                    }
-                    row_hit_delta[width] = 0;
-                    if let Some(ref mut tracker) = aa_component_tracker {
-                        tracker.finish_row();
-                    }
-                }
-            }
             emit_row(&mut rle, &row_buf);
             row_buf.fill(0);
             last_emitted_py = current_physical_y;
@@ -1968,7 +1873,7 @@ pub fn rasterize_layer_rle(
     }
 
     for y in y_start..y_end_exclusive {
-        let physical_y = y / aa_steps;
+        let physical_y = y;
 
         if physical_y != current_physical_y {
             flush_up_to!(physical_y);
@@ -1989,47 +1894,10 @@ pub fn rasterize_layer_rle(
             continue;
         }
 
-        let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
+        let spans = build_row_spans_nonzero(&active_edges, width, true);
 
         for span in spans {
-            if !aa_enabled {
-                row_buf[span.start..=span.end].fill(255);
-            } else {
-                let left_i = span.a.floor() as i32;
-                let right_i = span.b.ceil() as i32 - 1;
-
-                if left_i <= right_i {
-                    if left_i == right_i {
-                        if left_i >= 0 && left_i < width as i32 {
-                            let cov = (span.b - span.a).clamp(0.0, 1.0) * 255.0;
-                            row_accum[left_i as usize] += cov as u32;
-                        }
-                    } else {
-                        let left_cov = ((left_i as f32 + 1.0) - span.a).clamp(0.0, 1.0) * 255.0;
-                        let right_cov = (span.b - right_i as f32).clamp(0.0, 1.0) * 255.0;
-
-                        if left_i >= 0 && left_i < width as i32 {
-                            row_accum[left_i as usize] += left_cov as u32;
-                        }
-
-                        let interior_start = (left_i + 1).max(0) as usize;
-                        let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
-                        if interior_end >= interior_start {
-                            row_delta[interior_start] += 255;
-                            row_delta[interior_end + 1] -= 255;
-                        }
-
-                        if right_i >= 0 && right_i < width as i32 {
-                            row_accum[right_i as usize] += right_cov as u32;
-                        }
-                    }
-                }
-
-                if track_aa_components {
-                    row_hit_delta[span.start] += 1;
-                    row_hit_delta[span.end + 1] -= 1;
-                }
-            }
+            row_buf[span.start..=span.end].fill(255);
 
             let filled = (span.end - span.start + 1) as u32;
             stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
@@ -2054,10 +1922,6 @@ pub fn rasterize_layer_rle(
         emit_zero_rows(&mut rle, height - rows_emitted, width);
     }
 
-    if aa_enabled {
-        stats.total_solid_pixels /= aa_steps as u32;
-    }
-
     let runs = rle.finish();
 
     if stats.total_solid_pixels > 0 {
@@ -2067,19 +1931,13 @@ pub fn rasterize_layer_rle(
         stats.max_y = max_y;
 
         if compute_area_stats {
-            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) = if aa_enabled {
-                aa_component_tracker
-                    .take()
-                    .map(|tracker| tracker.finalize(pixel_area_mm2))
-                    .unwrap_or((0, 0.0, 0.0, 0))
-            } else {
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
                 compute_component_area_stats_from_rle_8_connected(
                     &runs,
                     width,
                     height,
                     pixel_area_mm2,
-                )
-            };
+                );
 
             stats.total_solid_pixels = total_pixels;
             let total_area = (total_pixels as f64) * pixel_area_mm2;
@@ -2099,11 +1957,387 @@ pub fn rasterize_layer_rle(
     (runs, stats)
 }
 
+// ── Resolution-scaling supersampler ───────────────────────────────────────────
+//
+// The approach:
+//   1. Rasterize at Nx resolution using the ultra-fast binary RLE engine.
+//   2. Call `downsample_binary_rle_to_gray_rle` to collapse every NxN
+//      super-pixel block into one output pixel whose gray value is the
+//      fraction of lit super-pixels (0–255).
+//   3. Optionally apply `apply_blur_postprocess_inplace` post-downsample.
+//
+// No full-image pixel buffer is ever allocated at either resolution.
+
+/// Accumulate a lit span [sx_start, sx_start + len) of super-pixels into
+/// per-output-column count arrays using a difference-array trick so that
+/// fully-covered interior columns are O(1) instead of O(out_width).
+#[inline]
+fn accumulate_lit_span(
+    sx_start: usize,
+    len: usize,
+    factor: usize,
+    out_width: usize,
+    col_lit: &mut [u32],
+    col_delta: &mut [i32],
+) {
+    debug_assert_eq!(col_lit.len(), out_width);
+    debug_assert_eq!(col_delta.len(), out_width + 1);
+
+    if len == 0 || out_width == 0 {
+        return;
+    }
+
+    let sx_end = sx_start + len;
+    let out_left = sx_start / factor;
+    let out_right_ceil = sx_end.div_ceil(factor);
+    let out_right = out_right_ceil.min(out_width); // exclusive
+
+    if out_left >= out_width || out_left >= out_right {
+        return;
+    }
+
+    // Fast path: entire span fits within one output column.
+    if out_right == out_left + 1 {
+        col_lit[out_left] += len as u32;
+        return;
+    }
+
+    // Left partial column: super-pixels from sx_start up to the right edge of out_left.
+    let left_boundary = (out_left + 1) * factor; // exclusive right edge of out_left column
+    let left_partial = left_boundary - sx_start;
+    col_lit[out_left] += left_partial as u32;
+
+    // Fully covered interior columns: each has exactly `factor` lit super-pixels.
+    // Use difference-array so this is O(1) regardless of the run length.
+    let full_start = out_left + 1;
+    let full_end = (sx_end / factor).min(out_width); // exclusive
+    if full_start < full_end {
+        col_delta[full_start] += factor as i32;
+        col_delta[full_end] -= factor as i32;
+    }
+
+    // Right partial column: super-pixels from its left edge up to sx_end.
+    let right_col = sx_end / factor;
+    if right_col < out_width && sx_end % factor != 0 {
+        let right_partial = sx_end - right_col * factor;
+        col_lit[right_col] += right_partial as u32;
+    }
+}
+
+/// Downsample a super-resolution binary RLE layer to output resolution.
+///
+/// `runs` must cover exactly `super_width × super_height` pixels in row-major
+/// order with binary values (0 or 255).  `factor` must divide both dimensions
+/// evenly; the output covers `(super_width/factor) × (super_height/factor)`
+/// pixels.
+///
+/// Each `factor × factor` block of super-pixels collapses into one output
+/// pixel with gray value proportional to the lit fraction:
+///
+/// ```text
+/// gray = (lit_count * 255 + max_count/2) / max_count   (rounded)
+/// ```
+///
+/// Pixels below `min_alpha_u8` after rounding are clamped to zero.
+///
+/// No full-image buffer is allocated at any point — the downsampler works
+/// entirely in O(out_width) per output row.
+pub fn downsample_binary_rle_to_gray_rle(
+    runs: &[crate::rle::RleRun],
+    super_width: usize,
+    super_height: usize,
+    factor: usize,
+    min_alpha_u8: u8,
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    debug_assert!(factor >= 1, "SSAA factor must be >= 1");
+    debug_assert_eq!(
+        super_width % factor,
+        0,
+        "super_width must be divisible by factor"
+    );
+    debug_assert_eq!(
+        super_height % factor,
+        0,
+        "super_height must be divisible by factor"
+    );
+
+    if factor <= 1 || runs.is_empty() {
+        return runs.to_vec();
+    }
+
+    let out_width = super_width / factor;
+    let out_height = super_height / factor;
+    let max_count = (factor * factor) as u32;
+
+    // col_lit[ox]: accumulated lit super-pixel count for output column ox over
+    // the current block of `factor` super-rows.
+    let mut col_lit: Vec<u32> = vec![0; out_width];
+    // Difference array for fully-covered interior spans (O(1) per run, O(out_width) flush).
+    let mut col_delta: Vec<i32> = vec![0; out_width + 1];
+
+    let mut out_rle = RleAccum::new();
+    // Scratch buffer for one output row — reused to avoid per-row allocation.
+    let mut row_buf = vec![0u8; out_width];
+    // Track whether any lit span was accumulated in the current factor-row group.
+    // If false at flush time, the entire group is blank → emit_zero_rows (O(1)).
+    let mut has_any_lit = false;
+    let mut super_col: usize = 0;
+    let mut super_row: usize = 0;
+    let mut output_rows_emitted = 0usize;
+
+    for run in runs {
+        let lit = run.value >= 128;
+        let mut remaining = run.length as usize;
+
+        while remaining > 0 {
+            // Pixels left in the current super-row.
+            let row_remaining = super_width - super_col;
+            let take = remaining.min(row_remaining);
+
+            if lit {
+                accumulate_lit_span(
+                    super_col,
+                    take,
+                    factor,
+                    out_width,
+                    &mut col_lit,
+                    &mut col_delta,
+                );
+                has_any_lit = true;
+            }
+
+            super_col += take;
+            remaining -= take;
+
+            if super_col >= super_width {
+                super_col = 0;
+                super_row += 1;
+
+                // Every `factor` super-rows complete one output row.
+                if super_row % factor == 0 {
+                    if !has_any_lit {
+                        // Fast path: entire factor-row group was blank — O(1).
+                        emit_zero_rows(&mut out_rle, 1, out_width);
+                    } else {
+                        has_any_lit = false;
+                        // Apply the difference array to col_lit.
+                        let mut delta_accum = 0i32;
+                        for ox in 0..out_width {
+                            delta_accum += col_delta[ox];
+                            col_lit[ox] = col_lit[ox].saturating_add(delta_accum.max(0) as u32);
+                            col_delta[ox] = 0;
+                        }
+                        col_delta[out_width] = 0;
+                        // Compute gray values into scratch buffer, emit as a single batched RLE row.
+                        for ox in 0..out_width {
+                            let lit_count = col_lit[ox];
+                            col_lit[ox] = 0;
+                            let raw =
+                                ((lit_count * 255 + max_count / 2) / max_count).min(255) as u8;
+                            row_buf[ox] = if raw > 0 && raw < min_alpha_u8 {
+                                0u8
+                            } else {
+                                raw
+                            };
+                        }
+                        emit_row(&mut out_rle, &row_buf);
+                    }
+                    output_rows_emitted += 1;
+                }
+            }
+        }
+    }
+
+    // Emit any trailing partial output row (edge case with incomplete input).
+    if output_rows_emitted < out_height {
+        if !has_any_lit {
+            // Entire remaining tail is blank.
+            emit_zero_rows(&mut out_rle, out_height - output_rows_emitted, out_width);
+        } else {
+            // Apply the difference array once for the partial group.
+            let mut delta_accum = 0i32;
+            for ox in 0..out_width {
+                delta_accum += col_delta[ox];
+                col_lit[ox] = col_lit[ox].saturating_add(delta_accum.max(0) as u32);
+            }
+            for ox in 0..out_width {
+                let lit_count = col_lit[ox];
+                col_lit[ox] = 0;
+                let raw = ((lit_count * 255 + max_count / 2) / max_count).min(255) as u8;
+                row_buf[ox] = if raw > 0 && raw < min_alpha_u8 {
+                    0u8
+                } else {
+                    raw
+                };
+            }
+            emit_row(&mut out_rle, &row_buf);
+            output_rows_emitted += 1;
+            // Any remaining rows are all zeros.
+            if output_rows_emitted < out_height {
+                emit_zero_rows(&mut out_rle, out_height - output_rows_emitted, out_width);
+            }
+        }
+    }
+
+    out_rle.finish()
+}
+
+/// Streaming separable box blur operating directly on gray RLE runs.
+///
+/// Matches the boundary-clamped denominator of `apply_blur_postprocess_inplace`
+/// but uses only `O((2×radius+1) × width × 2)` bytes of working memory
+/// (≈69 KB for radius=1, width=11520) instead of a full-image mask (≈60 MB).
+///
+/// # Algorithm
+/// 1. Decode the gray RLE row by row into a `width`-element scratch buffer.
+/// 2. Apply a horizontal box blur via a running sum → store raw (un-divided)
+///    horizontal sums in a `(2×radius+1)`-slot ring buffer of `u16` rows.
+/// 3. Accumulate the ring rows into `col_sums: Vec<u32>`.
+/// 4. Once enough rows are buffered, compute the boundary-clamped 2D average
+///    and emit the output row via `emit_row` / `emit_zero_rows` — zero heap
+///    allocation beyond the fixed-size ring.
+pub fn blur_gray_rle_streaming(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    radius: usize,
+    min_alpha_u8: u8,
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    if radius == 0 || width == 0 || height == 0 {
+        return runs.to_vec();
+    }
+    if runs.is_empty() {
+        // All-zero image: blur of zero is zero.
+        let mut out = RleAccum::new();
+        emit_zero_rows(&mut out, height, width);
+        return out.finish();
+    }
+
+    let ring_cap = 2 * radius + 1;
+    // Ring buffer: ring_cap rows × width u16 elements (raw horizontal box-blur sums).
+    // Max per-element value = 255 × (2×radius+1). For radius ≤ 127 this fits u16.
+    let mut ring = vec![0u16; ring_cap * width];
+    // Vertical accumulator: sum of ring rows currently in the sliding window.
+    let mut col_sums = vec![0u32; width];
+    // Scratch buffer: one decoded or emitted row.
+    let mut row_buf = vec![0u8; width];
+    let mut out_rle = RleAccum::new();
+
+    // Pre-compute boundary-clamped horizontal denominator once per column.
+    // This mirrors the h_denom formula in apply_edge_box_blur_to_mask_in_roi.
+    let h_denom: Vec<u32> = (0..width)
+        .map(|x| (1 + radius.min(x) + radius.min(width - 1 - x)) as u32)
+        .collect();
+
+    let mut ring_head = 0usize;
+    let mut ring_len = 0usize;
+
+    // RLE decode state.
+    let mut run_idx = 0usize;
+    let mut run_pos = 0usize; // pixels consumed from runs[run_idx]
+
+    // The outer loop runs height + radius iterations:
+    //   - add_row 0..height  : decode + h-blur one input row, add to ring
+    //   - add_row 0..height  : if add_row >= radius, emit output row out_row = add_row - radius
+    //   - add_row height..height+radius : only emit (drain remaining ring rows)
+    for add_row in 0..height + radius {
+        if add_row < height {
+            // ── Decode one input row into row_buf ─────────────────────────
+            let mut col = 0;
+            while col < width {
+                if run_idx >= runs.len() {
+                    row_buf[col..].fill(0);
+                    break;
+                }
+                let run = &runs[run_idx];
+                let avail = run.length as usize - run_pos;
+                let take = avail.min(width - col);
+                row_buf[col..col + take].fill(run.value);
+                col += take;
+                run_pos += take;
+                if run_pos >= run.length as usize {
+                    run_idx += 1;
+                    run_pos = 0;
+                }
+            }
+
+            // ── Horizontal box blur → store raw sum in ring ───────────────
+            // `sum` slides across the row; the raw (un-divided) sum is stored
+            // so the final division can use the combined h_denom × v_denom in
+            // one step (matching apply_edge_box_blur_to_mask_in_roi exactly).
+            let new_slot = (ring_head + ring_len) % ring_cap;
+            let slot_start = new_slot * width;
+
+            let mut sum = 0u32;
+            let init_end = radius.min(width - 1);
+            for &b in &row_buf[..=init_end] {
+                sum += b as u32;
+            }
+            for ix in 0..width {
+                ring[slot_start + ix] = sum as u16; // safe: max = 255×(2r+1) ≤ u16::MAX for r≤127
+                col_sums[ix] += sum;
+                if ix >= radius {
+                    sum -= row_buf[ix - radius] as u32;
+                }
+                let r1 = ix + radius + 1;
+                if r1 < width {
+                    sum += row_buf[r1] as u32;
+                }
+            }
+            ring_len += 1;
+        }
+
+        // ── Emit output row once we have enough buffered rows ─────────────
+        if add_row >= radius {
+            let out_row = add_row - radius;
+            // Boundary-clamped vertical denominator: same formula as v_denom in
+            // apply_edge_box_blur_to_mask_in_roi with roi_min_y = 0.
+            let v_denom_val = (1 + radius.min(out_row) + radius.min(height - 1 - out_row)) as u32;
+
+            let mut all_zero = true;
+            for ix in 0..width {
+                let denom = (h_denom[ix] * v_denom_val).max(1);
+                let raw = (col_sums[ix] + denom / 2) / denom;
+                let mut val = raw.min(255) as u8;
+                if val > 0 && val < min_alpha_u8 {
+                    val = 0;
+                }
+                row_buf[ix] = val;
+                if val > 0 {
+                    all_zero = false;
+                }
+            }
+
+            if all_zero {
+                emit_zero_rows(&mut out_rle, 1, width);
+            } else {
+                emit_row(&mut out_rle, &row_buf);
+            }
+
+            // Evict the oldest ring row once the full vertical window is in use.
+            if out_row >= radius {
+                let evict_start = ring_head * width;
+                for ix in 0..width {
+                    col_sums[ix] -= ring[evict_start + ix] as u32;
+                }
+                ring_head = (ring_head + 1) % ring_cap;
+                ring_len -= 1;
+            }
+        }
+    }
+
+    out_rle.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_mask_to_rle_in_bounds, rasterize_layer, rasterize_layer_rle,
-        rasterize_layer_with_stats,
+        apply_blur_postprocess_inplace, encode_mask_to_rle, encode_mask_to_rle_in_bounds,
+        rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats,
     };
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
@@ -2432,6 +2666,9 @@ mod tests {
 
     #[test]
     fn blur_mode_produces_grayscale_edge_pixels_in_rle_path() {
+        // Blur post-processing now happens at the engine level, not inside the
+        // rasterizer.  Simulate the engine pipeline: binary RLE rasterize →
+        // expand to mask → apply blur → re-encode to RLE.
         let mut job = job_for_single_layer();
         job.blur_brush_radius_px = 2;
         job.anti_aliasing_mode = "Blur".to_string();
@@ -2442,7 +2679,19 @@ mod tests {
         let mut triangles = parse_triangles(&flat);
         project_triangles_inplace(&mut triangles, &job);
         let indices: Vec<usize> = (0..triangles.len()).collect();
-        let (runs, stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+
+        // Rasterizer now always returns binary runs.
+        let (binary_runs, stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, true);
+
+        // Engine-level blur post-process.
+        let width = job.effective_render_width_px() as usize;
+        let height = job.source_height_px as usize;
+        let blur_radius = job.blur_brush_radius_px.max(1) as usize;
+        let min_alpha_u8 =
+            ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+        let mut mask = crate::rle::expand_rle_to_mask(&binary_runs, width * height);
+        apply_blur_postprocess_inplace(&mut mask, width, height, blur_radius, min_alpha_u8);
+        let runs = encode_mask_to_rle(&mask, width, height);
 
         assert!(
             stats.total_solid_pixels > 0,
