@@ -2293,6 +2293,89 @@ fn compute_nonzero_bounds_from_rle(
     }
 }
 
+pub(crate) fn recompute_layer_stats_from_rle(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    pixel_area_mm2: f64,
+    compute_area_stats: bool,
+) -> LayerAreaStatsV3 {
+    let mut stats = LayerAreaStatsV3::default();
+
+    if width == 0 || height == 0 || runs.is_empty() {
+        return stats;
+    }
+
+    let total_pixels = width.saturating_mul(height);
+    let mut pos = 0usize;
+    let mut solid_pixels = 0u32;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut any_non_zero = false;
+
+    for run in runs {
+        if pos >= total_pixels {
+            break;
+        }
+
+        let run_len = (run.length as usize).min(total_pixels - pos);
+        if run_len == 0 {
+            continue;
+        }
+
+        if run.value != 0 {
+            any_non_zero = true;
+            solid_pixels = solid_pixels.saturating_add(run_len as u32);
+
+            let mut cur = pos;
+            let end = pos + run_len;
+            while cur < end {
+                let row = cur / width;
+                let col = cur % width;
+                let take = (end - cur).min(width - col);
+                min_x = min_x.min(col);
+                max_x = max_x.max(col + take - 1);
+                min_y = min_y.min(row);
+                max_y = max_y.max(row);
+                cur += take;
+            }
+        }
+
+        pos += run_len;
+    }
+
+    if !any_non_zero {
+        return stats;
+    }
+
+    stats.total_solid_pixels = solid_pixels;
+    stats.min_x = min_x as i32;
+    stats.min_y = min_y as i32;
+    stats.max_x = max_x as i32;
+    stats.max_y = max_y as i32;
+
+    if compute_area_stats {
+        let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+            compute_component_area_stats_from_rle_8_connected(runs, width, height, pixel_area_mm2);
+        stats.total_solid_pixels = total_pixels;
+        let total_area = (total_pixels as f64) * pixel_area_mm2;
+        stats.total_solid_area_mm2 = total_area;
+        stats.largest_area_mm2 = largest_area_mm2;
+        stats.smallest_area_mm2 = smallest_area_mm2;
+        stats.area_count = area_count;
+    } else {
+        let total_area = (solid_pixels as f64) * pixel_area_mm2;
+        stats.total_solid_area_mm2 = total_area;
+        stats.largest_area_mm2 = total_area;
+        stats.smallest_area_mm2 = total_area;
+        stats.area_count = 1;
+    }
+
+    stats
+}
+
 /// Streaming separable box blur operating directly on gray RLE runs.
 ///
 /// Matches the boundary-clamped denominator of `apply_blur_postprocess_inplace`

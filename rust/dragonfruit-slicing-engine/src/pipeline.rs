@@ -9,7 +9,9 @@ use crate::engine::SlicerV3Error;
 use crate::geometry::Triangle;
 use crate::index::LayerIndex;
 use crate::metrics::SlicingPerfV3;
-use crate::raster::{rasterize_layer_rle, rasterize_layer_with_stats};
+use crate::raster::{
+    rasterize_layer_rle, rasterize_layer_with_stats, recompute_layer_stats_from_rle,
+};
 use crate::rle::{RleAccum, RleRun};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3, SliceProgressPhaseV3,
@@ -46,54 +48,227 @@ pub fn get_recycled_mask(size: usize) -> Vec<u8> {
     vec![0u8; size]
 }
 
-fn subtract_rle_mask(full_runs: &[RleRun], subtract_runs: &[RleRun]) -> Vec<RleRun> {
+fn merge_rle_max(lhs_runs: &[RleRun], rhs_runs: &[RleRun]) -> Vec<RleRun> {
     let mut out = RleAccum::new();
-    let mut full_index = 0usize;
-    let mut sub_index = 0usize;
-    let mut full_remaining = 0u32;
-    let mut sub_remaining = 0u32;
-    let mut full_value = 0u8;
-    let mut sub_value = 0u8;
+    let mut lhs_index = 0usize;
+    let mut rhs_index = 0usize;
+    let mut lhs_remaining = 0u32;
+    let mut rhs_remaining = 0u32;
+    let mut lhs_value = 0u8;
+    let mut rhs_value = 0u8;
 
     loop {
-        if full_remaining == 0 {
-            let Some(run) = full_runs.get(full_index) else {
-                break;
-            };
-            full_remaining = run.length;
-            full_value = run.value;
-            full_index += 1;
-        }
-
-        if sub_remaining == 0 {
-            if let Some(run) = subtract_runs.get(sub_index) {
-                sub_remaining = run.length;
-                sub_value = run.value;
-                sub_index += 1;
-            } else {
-                sub_value = 0;
+        if lhs_remaining == 0 {
+            if let Some(run) = lhs_runs.get(lhs_index) {
+                lhs_remaining = run.length;
+                lhs_value = run.value;
+                lhs_index += 1;
             }
         }
 
-        let chunk = if sub_remaining == 0 {
-            full_remaining
-        } else {
-            full_remaining.min(sub_remaining)
-        };
-        let out_value = if full_value > 0 && sub_value == 0 {
-            full_value
-        } else {
-            0
-        };
-        out.push_run(chunk, out_value);
+        if rhs_remaining == 0 {
+            if let Some(run) = rhs_runs.get(rhs_index) {
+                rhs_remaining = run.length;
+                rhs_value = run.value;
+                rhs_index += 1;
+            }
+        }
 
-        full_remaining -= chunk;
-        if sub_remaining > 0 {
-            sub_remaining -= chunk;
+        if lhs_remaining == 0 && rhs_remaining == 0 {
+            break;
+        }
+
+        let chunk = match (lhs_remaining, rhs_remaining) {
+            (0, rhs) => rhs,
+            (lhs, 0) => lhs,
+            (lhs, rhs) => lhs.min(rhs),
+        };
+        out.push_run(chunk, lhs_value.max(rhs_value));
+
+        if lhs_remaining > 0 {
+            lhs_remaining -= chunk;
+            if lhs_remaining == 0 {
+                lhs_value = 0;
+            }
+        }
+        if rhs_remaining > 0 {
+            rhs_remaining -= chunk;
+            if rhs_remaining == 0 {
+                rhs_value = 0;
+            }
         }
     }
 
     out.finish()
+}
+
+fn compute_rle_max_basic_stats(
+    lhs_runs: &[RleRun],
+    rhs_runs: &[RleRun],
+    width: usize,
+    height: usize,
+    pixel_area_mm2: f64,
+) -> LayerAreaStatsV3 {
+    let mut stats = LayerAreaStatsV3::default();
+    if width == 0 || height == 0 {
+        return stats;
+    }
+
+    let total_pixels = width.saturating_mul(height);
+    let mut lhs_index = 0usize;
+    let mut rhs_index = 0usize;
+    let mut lhs_remaining = 0u32;
+    let mut rhs_remaining = 0u32;
+    let mut lhs_value = 0u8;
+    let mut rhs_value = 0u8;
+    let mut pos = 0usize;
+    let mut any_non_zero = false;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+
+    loop {
+        if lhs_remaining == 0 {
+            if let Some(run) = lhs_runs.get(lhs_index) {
+                lhs_remaining = run.length;
+                lhs_value = run.value;
+                lhs_index += 1;
+            }
+        }
+
+        if rhs_remaining == 0 {
+            if let Some(run) = rhs_runs.get(rhs_index) {
+                rhs_remaining = run.length;
+                rhs_value = run.value;
+                rhs_index += 1;
+            }
+        }
+
+        if lhs_remaining == 0 && rhs_remaining == 0 {
+            break;
+        }
+
+        let chunk = match (lhs_remaining, rhs_remaining) {
+            (0, rhs) => rhs,
+            (lhs, 0) => lhs,
+            (lhs, rhs) => lhs.min(rhs),
+        };
+        let out_value = lhs_value.max(rhs_value);
+
+        if out_value > 0 {
+            any_non_zero = true;
+            let chunk_len = (chunk as usize).min(total_pixels.saturating_sub(pos));
+            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(chunk_len as u32);
+
+            let mut cur = pos;
+            let end = pos + chunk_len;
+            while cur < end {
+                let row = cur / width;
+                let col = cur % width;
+                let take = (end - cur).min(width - col);
+                min_x = min_x.min(col);
+                max_x = max_x.max(col + take - 1);
+                min_y = min_y.min(row);
+                max_y = max_y.max(row);
+                cur += take;
+            }
+        }
+
+        pos = pos.saturating_add(chunk as usize);
+
+        if lhs_remaining > 0 {
+            lhs_remaining -= chunk;
+            if lhs_remaining == 0 {
+                lhs_value = 0;
+            }
+        }
+        if rhs_remaining > 0 {
+            rhs_remaining -= chunk;
+            if rhs_remaining == 0 {
+                rhs_value = 0;
+            }
+        }
+    }
+
+    if !any_non_zero {
+        return stats;
+    }
+
+    let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+    stats.total_solid_area_mm2 = total_area;
+    stats.largest_area_mm2 = total_area;
+    stats.smallest_area_mm2 = total_area;
+    stats.area_count = 1;
+    stats.min_x = min_x as i32;
+    stats.min_y = min_y as i32;
+    stats.max_x = max_x as i32;
+    stats.max_y = max_y as i32;
+    stats
+}
+
+fn encode_zero_rle(width: usize, height: usize) -> Vec<RleRun> {
+    let mut out = RleAccum::new();
+    crate::rle::emit_zero_rows(&mut out, height, width);
+    out.finish()
+}
+
+fn rasterize_layer_rle_with_support_split(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_candidates: &[usize],
+    layer: u32,
+    compute_area_stats: bool,
+    model_triangle_count: usize,
+) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
+    let mut model_layer_indices = Vec::with_capacity(layer_candidates.len());
+    let mut support_layer_indices = Vec::with_capacity(layer_candidates.len());
+    for &candidate in layer_candidates {
+        if candidate < model_triangle_count {
+            model_layer_indices.push(candidate);
+        } else {
+            support_layer_indices.push(candidate);
+        }
+    }
+
+    if support_layer_indices.is_empty() {
+        let (runs, stats) =
+            rasterize_layer_rle(job, triangles, layer_candidates, layer, compute_area_stats);
+        return (runs, None, stats);
+    }
+
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let pixel_area_mm2 = ((job.build_width_mm as f64)
+        / (job.effective_render_width_px().max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+
+    let model_runs = if model_layer_indices.is_empty() {
+        encode_zero_rle(width, height)
+    } else {
+        rasterize_layer_rle(job, triangles, &model_layer_indices, layer, false).0
+    };
+
+    let (support_runs, support_stats) = rasterize_layer_rle(
+        job,
+        triangles,
+        &support_layer_indices,
+        layer,
+        compute_area_stats,
+    );
+
+    if model_layer_indices.is_empty() {
+        return (model_runs, Some(support_runs), support_stats);
+    }
+
+    let stats = if compute_area_stats {
+        let merged_runs = merge_rle_max(&model_runs, &support_runs);
+        recompute_layer_stats_from_rle(&merged_runs, width, height, pixel_area_mm2, true)
+    } else {
+        compute_rle_max_basic_stats(&model_runs, &support_runs, width, height, pixel_area_mm2)
+    };
+
+    (model_runs, Some(support_runs), stats)
 }
 
 fn encode_uniform_png_cached(
@@ -570,8 +745,8 @@ pub fn render_layers_rle(
 
     let raster_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
-    let support_split_model_triangle_count = support_split_model_triangle_count
-        .filter(|&count| count > 0 && count < triangles.len());
+    let support_split_model_triangle_count =
+        support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
@@ -606,44 +781,14 @@ pub fn render_layers_rle(
                                     if let Some(model_triangle_count) =
                                         support_split_model_triangle_count
                                     {
-                                        let mut support_layer_indices =
-                                            Vec::with_capacity(layer_candidates.len());
-                                        for &candidate in layer_candidates {
-                                            if candidate >= model_triangle_count {
-                                                support_layer_indices.push(candidate);
-                                            }
-                                        }
-
-                                        if support_layer_indices.is_empty() {
-                                            let (runs, stats) = rasterize_layer_rle(
-                                                job,
-                                                triangles,
-                                                layer_candidates,
-                                                layer,
-                                                compute_area_stats,
-                                            );
-                                            (runs, None, stats)
-                                        } else {
-                                            let (full_runs, stats) = rasterize_layer_rle(
-                                                job,
-                                                triangles,
-                                                layer_candidates,
-                                                layer,
-                                                compute_area_stats,
-                                            );
-                                            let (support_runs, _support_stats) = rasterize_layer_rle(
-                                                job,
-                                                triangles,
-                                                &support_layer_indices,
-                                                layer,
-                                                false,
-                                            );
-                                            (
-                                                subtract_rle_mask(&full_runs, &support_runs),
-                                                Some(support_runs),
-                                                stats,
-                                            )
-                                        }
+                                        rasterize_layer_rle_with_support_split(
+                                            job,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                            model_triangle_count,
+                                        )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
                                             job,
@@ -696,7 +841,8 @@ pub fn render_layers_rle(
                     }
 
                     while next < total_layers {
-                        let Some((runs, support_runs, stats)) = pending[next as usize].take() else {
+                        let Some((runs, support_runs, stats)) = pending[next as usize].take()
+                        else {
                             break;
                         };
                         if let Err(e) = on_rle_layer(next, runs, support_runs) {
@@ -761,8 +907,8 @@ pub fn render_layers_rle_encoded(
     let raster_ns = AtomicU64::new(0);
     let encode_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
-    let support_split_model_triangle_count = support_split_model_triangle_count
-        .filter(|&count| count > 0 && count < triangles.len());
+    let support_split_model_triangle_count =
+        support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
@@ -795,44 +941,14 @@ pub fn render_layers_rle_encoded(
                                     if let Some(model_triangle_count) =
                                         support_split_model_triangle_count
                                     {
-                                        let mut support_layer_indices =
-                                            Vec::with_capacity(layer_candidates.len());
-                                        for &candidate in layer_candidates {
-                                            if candidate >= model_triangle_count {
-                                                support_layer_indices.push(candidate);
-                                            }
-                                        }
-
-                                        if support_layer_indices.is_empty() {
-                                            let (runs, stats) = rasterize_layer_rle(
-                                                job,
-                                                triangles,
-                                                layer_candidates,
-                                                layer,
-                                                compute_area_stats,
-                                            );
-                                            (runs, None, stats)
-                                        } else {
-                                            let (full_runs, stats) = rasterize_layer_rle(
-                                                job,
-                                                triangles,
-                                                layer_candidates,
-                                                layer,
-                                                compute_area_stats,
-                                            );
-                                            let (support_runs, _support_stats) = rasterize_layer_rle(
-                                                job,
-                                                triangles,
-                                                &support_layer_indices,
-                                                layer,
-                                                false,
-                                            );
-                                            (
-                                                subtract_rle_mask(&full_runs, &support_runs),
-                                                Some(support_runs),
-                                                stats,
-                                            )
-                                        }
+                                        rasterize_layer_rle_with_support_split(
+                                            job,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                            model_triangle_count,
+                                        )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
                                             job,
