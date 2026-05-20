@@ -13,8 +13,7 @@ use crate::metrics::SlicingPerfV3;
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
 use crate::raster::{
     apply_blur_postprocess_inplace_with_roi, blur_gray_rle_streaming,
-    downsample_binary_rle_to_gray_rle, encode_bounded_gray_mask_to_rle, rasterize_layer_with_stats,
-    remap_gray_rle_with_lut,
+    downsample_binary_rle_to_gray_rle, rasterize_layer_with_stats, remap_gray_rle_with_lut,
 };
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
@@ -1376,7 +1375,9 @@ fn rasterize_vertical_aa_streaming_v3(
             if let Some(budget) = budget_override {
                 hw_diag.min(budget).max(1)
             } else if pixels_per_layer >= 48 * 1024 * 1024 {
-                hw_diag.min(8)
+                // 8K–12K class: pump is the bottleneck; avg-parallelism is ~2–3×
+                // even with 8 workers, so cap at 4 to halve raster-phase mask RAM.
+                hw_diag.min(4)
             } else if pixels_per_layer >= 24 * 1024 * 1024 {
                 hw_diag.min(6)
             } else if pixels_per_layer >= 12 * 1024 * 1024 {
@@ -1388,7 +1389,8 @@ fn rasterize_vertical_aa_streaming_v3(
         let streaming_buffer_depth = if let Ok(v) = std::env::var("DF_V3_STREAMING_BUFFER_DEPTH") {
             v.parse::<usize>().ok().map(|n| n.clamp(1, 32)).unwrap_or(4)
         } else if pixels_per_layer >= 48 * 1024 * 1024 {
-            raster_concurrent.clamp(4, 8)
+            // Mirror choose_streaming_buffer_depth_for_mask_bytes: clamp(2,4) for 8K-12K.
+            raster_concurrent.clamp(2, 4)
         } else if pixels_per_layer >= 24 * 1024 * 1024 {
             4
         } else {
@@ -2429,34 +2431,14 @@ pub fn slice_with_progress_v3(
 
             // Parallel-encode path: rasterize + encode PNG in rayon workers.
             let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
-                // Vertical2 streaming: z-blend + XY blur per layer, then
-                // immediately encode to RLE.  This avoids materializing all
-                // layers in memory simultaneously.
-                let width = raster_job.effective_render_width_px() as usize;
-                let height = raster_job.source_height_px as usize;
-                let mut on_mask = |idx: u32,
-                                   mask: BoundedGrayMask,
-                                   _bounds: TopologyBounds|
-                 -> Result<(), SlicerV3Error> {
-                    let runs = encode_bounded_gray_mask_to_rle(&mask, width, height);
-                    rle_enc.consume_rle_layer(idx, runs)
-                };
-                rasterize_vertical_aa_streaming_v3(
+                // RLE-native 3DAA: z-blend via sliding binary topology window.
+                // No pixel buffers — O(look_back × intervals) working memory.
+                let mut rle_sink =
+                    |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
+                slice_and_rasterize_3daa_rle_v3(
                     job,
-                    raster_job,
-                    job.triangles_xyz.clone(),
                     requires_area_stats,
-                    false,
-                    false,
-                    Some(
-                        &mut on_mask
-                            as &mut dyn FnMut(
-                                u32,
-                                BoundedGrayMask,
-                                TopologyBounds,
-                            )
-                                -> Result<(), SlicerV3Error>,
-                    ),
+                    &mut rle_sink,
                     slicing_progress,
                     cancel_flag,
                 )?
@@ -2792,6 +2774,159 @@ pub fn slice_and_rasterize_rle_v3(
     )?;
     perf.index_build_ns = index_ns;
 
+    Ok((rendered_layers, layer_area_stats, perf))
+}
+
+/// Streaming 3DAA RLE pipeline: z-blend each layer using a sliding window of
+/// binary topologies, then optionally blur. No full-image pixel buffer is
+/// allocated — working memory is O(look_back × intervals_per_row) ≈ 1–2 MB
+/// for a 12K print with look_back=4, versus ~472 MB for the old BFS approach.
+pub fn slice_and_rasterize_3daa_rle_v3(
+    job: &SliceJobV3,
+    compute_area_stats: bool,
+    mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    use crate::rle_3daa::{blend_3daa_rle, RleTopology};
+
+    validate_job(job)?;
+
+    // Build a raster job that produces binary layers for the sliding-window
+    // z-blend. The 3DAA settings are stripped so the inner rasterizer stays fast.
+    let mut raster_job = job.clone();
+    raster_job.triangles_xyz = Vec::new();
+    raster_job.anti_aliasing_level = "Off".to_string();
+    raster_job.anti_aliasing_mode = "Coverage".to_string();
+    raster_job.blur_brush_radius_px = 0;
+    raster_job.minimum_aa_alpha_percent = 0.0;
+
+    // 3DAA blend parameters extracted from the original job.
+    let look_back = (job.z_blend_look_back as usize).max(1);
+    let blur_radius = job.blur_brush_radius_px as usize;
+    let min_alpha_u8 =
+        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let z_blend_min_alpha_u8 =
+        ((job.z_blend_minimum_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let lut: [u8; 256] = if let Some(custom) = &job.z_blend_custom_lut {
+        let mut arr = [0u8; 256];
+        for (i, &v) in custom.iter().enumerate().take(256) {
+            arr[i] = v;
+        }
+        arr[0] = 0;
+        arr[255] = 255;
+        arr
+    } else {
+        let z_blend_max_alpha_u8 =
+            ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+        z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8)
+    };
+
+    let mut triangles = parse_triangles(&job.triangles_xyz);
+    project_triangles_inplace(&mut triangles, &raster_job);
+
+    // Separate support from model geometry so supports stay binary (unblended).
+    let support_split_model_triangle_count = if !job.aa_on_supports {
+        let model_count = (job.model_triangle_count as usize).min(triangles.len());
+        (model_count > 0 && model_count < triangles.len()).then_some(model_count)
+    } else {
+        None
+    };
+
+    let index_start = std::time::Instant::now();
+    let layer_index = build_layer_index(
+        &triangles,
+        raster_job.total_layers,
+        raster_job.layer_height_mm,
+    );
+    let index_ns = index_start.elapsed().as_nanos() as u64;
+
+    let width = raster_job.effective_render_width_px() as usize;
+    let height = raster_job.source_height_px as usize;
+
+    // Sliding window of prior topologies (oldest first).
+    let mut prior_topos: VecDeque<RleTopology> = VecDeque::with_capacity(look_back + 1);
+    // Pending queue: layers waiting for sufficient future context before emit.
+    let mut pending: VecDeque<(u32, RleTopology, Option<Vec<crate::rle::RleRun>>)> =
+        VecDeque::new();
+
+    // Helper: emit one layer from the front of `pending`, apply z-blend + blur + support merge.
+    // Returns Err if the on_rle_layer callback fails.
+    let do_emit = |pending: &mut VecDeque<(u32, RleTopology, Option<Vec<crate::rle::RleRun>>)>,
+                   prior_topos: &mut VecDeque<RleTopology>,
+                   on_rle_layer: &mut dyn FnMut(
+        u32,
+        Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error>|
+     -> Result<(), SlicerV3Error> {
+        let (emit_layer, emit_topo, emit_support) = pending.pop_front().unwrap();
+        let prior_refs: Vec<&RleTopology> = prior_topos.iter().rev().take(look_back).collect();
+        let future_refs: Vec<&RleTopology> = pending.iter().take(look_back).map(|e| &e.1).collect();
+
+        let blended = blend_3daa_rle(
+            &emit_topo,
+            &prior_refs,
+            &future_refs,
+            width,
+            height,
+            look_back as u32,
+            Some(&lut),
+        );
+
+        let blurred = if blur_radius > 0 {
+            blur_gray_rle_streaming(&blended, width, height, blur_radius, min_alpha_u8)
+        } else {
+            blended
+        };
+
+        let final_runs = if let Some(ref support) = emit_support {
+            merge_rle_max(blurred, support)
+        } else {
+            blurred
+        };
+
+        on_rle_layer(emit_layer, final_runs)?;
+
+        prior_topos.push_back(emit_topo);
+        if prior_topos.len() > look_back {
+            prior_topos.pop_front();
+        }
+        Ok(())
+    };
+
+    // Wrapper callback: buffers layers and emits once look_back future layers are known.
+    let mut wrapped = |layer_idx: u32,
+                       model_runs: Vec<crate::rle::RleRun>,
+                       support_runs: Option<Vec<crate::rle::RleRun>>|
+     -> Result<(), SlicerV3Error> {
+        let topo = RleTopology::from_binary_rle(&model_runs, width, height);
+        drop(model_runs); // topology is all we need; free the binary mask
+        pending.push_back((layer_idx, topo, support_runs));
+
+        while pending.len() > look_back {
+            do_emit(&mut pending, &mut prior_topos, &mut on_rle_layer)?;
+        }
+        Ok(())
+    };
+
+    let (rendered_layers, layer_area_stats, mut perf) = render_layers_rle(
+        &raster_job,
+        &triangles,
+        &layer_index,
+        compute_area_stats,
+        support_split_model_triangle_count,
+        &mut wrapped,
+        on_progress,
+        cancel_flag,
+    )?;
+    // wrapped is dropped here, releasing its borrows on pending, prior_topos, on_rle_layer.
+
+    // Tail flush: emit remaining pending layers with a shrinking future window.
+    while !pending.is_empty() {
+        do_emit(&mut pending, &mut prior_topos, &mut on_rle_layer)?;
+    }
+
+    perf.index_build_ns = index_ns;
     Ok((rendered_layers, layer_area_stats, perf))
 }
 
@@ -3181,33 +3316,14 @@ pub fn slice_with_progress_v3_to_path(
             });
 
             let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
-                // Vertical2 streaming: z-blend + XY blur per layer, then
-                // immediately encode to RLE.
-                let width = raster_job.effective_render_width_px() as usize;
-                let height = raster_job.source_height_px as usize;
-                let mut on_mask = |idx: u32,
-                                   mask: BoundedGrayMask,
-                                   _bounds: TopologyBounds|
-                 -> Result<(), SlicerV3Error> {
-                    let runs = encode_bounded_gray_mask_to_rle(&mask, width, height);
-                    rle_enc.consume_rle_layer(idx, runs)
-                };
-                rasterize_vertical_aa_streaming_v3(
+                // RLE-native 3DAA: z-blend via sliding binary topology window.
+                // No pixel buffers — O(look_back × intervals) working memory.
+                let mut rle_sink =
+                    |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
+                slice_and_rasterize_3daa_rle_v3(
                     job,
-                    raster_job,
-                    job.triangles_xyz.clone(),
                     requires_area_stats,
-                    false,
-                    false,
-                    Some(
-                        &mut on_mask
-                            as &mut dyn FnMut(
-                                u32,
-                                BoundedGrayMask,
-                                TopologyBounds,
-                            )
-                                -> Result<(), SlicerV3Error>,
-                    ),
+                    &mut rle_sink,
                     slicing_progress,
                     cancel_flag,
                 )?

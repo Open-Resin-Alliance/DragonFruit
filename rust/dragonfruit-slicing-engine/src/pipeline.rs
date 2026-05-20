@@ -28,8 +28,19 @@ pub fn return_mask_to_pool(mask: Vec<u8>) {
     if mask.is_empty() {
         return;
     }
+    // Large masks (≥32 MB, i.e. full-frame 8K–12K layers) are allocated via OS
+    // mmap and their physical pages are returned to the OS promptly when the Vec
+    // is dropped. Capping the pool at 4 for these prevents the pool from holding
+    // 16 × 59 MB = 944 MB of idle buffers for the lifetime of a job. A pool of
+    // 4 is still enough to satisfy raster worker recycling (effective parallelism
+    // at 12K is ~2–3×, so at most 2–3 masks are recycled per cycle).
+    let max_pool = if mask.len() >= 32 * 1024 * 1024 {
+        4
+    } else {
+        16
+    };
     if let Ok(mut pool) = MASK_POOL.get_or_init(|| Mutex::new(Vec::new())).lock() {
-        if pool.len() < 16 {
+        if pool.len() < max_pool {
             // Keep the capacity, don't drop
             pool.push(mask);
         }
@@ -340,22 +351,22 @@ fn cap_concurrency_for_mask_bytes(
     // raster-buffer memory (max_concurrent × bytes_per_mask) reasonable while
     // still saturating available cores.
     //
-    // In streaming 3DAA mode the consumer callback (topology sweep + EDT send)
-    // frees each mask quickly, so we can afford more concurrent raster workers.
-    // The sync_channel back-pressure ensures we never have more than
-    // (max_concurrent + buffer) masks alive at once.
+    // In streaming 3DAA mode the consumer callback (topology sweep + BFS dispatch)
+    // frees each mask quickly, but the pump processes layers sequentially, so
+    // measured avg-parallelism at 8K–12K is typically 2–3× even with 8 workers.
+    // Capping at 4 for the largest frames captures the same effective throughput
+    // while halving the peak in-flight mask memory:
     //
     // Rough peak: (max_concurrent + buffer) × bytes_per_mask
-    //   48 MB × (8+8) = 768 MB — fine for 16 GB+
-    //   59 MB × (8+8) = 944 MB — fine for 16 GB+
-    //   74 MB × (8+8) = 1184 MB — fine for 32 GB+
+    //   48 MB × (4+4) = 384 MB  (was 8+8 = 768 MB)
+    //   59 MB × (4+4) = 472 MB  (was 8+8 = 944 MB)
+    //   74 MB × (4+4) = 592 MB  (was 8+8 = 1184 MB)
     if budget_override.is_none() {
         if bytes_per_mask >= 48 * 1024 * 1024 {
-            // 8K–12K class: after 3DAA pump/encode decoupling and ROI-RLE,
-            // raster supply is the limiter on 16-core hosts.  Allow up to 8
-            // streaming workers by default; memory remains bounded by the raw
-            // mask channel and streaming buffer below.
-            capped = capped.min(8);
+            // 8K–12K class: pump-bound pipeline makes avg effective parallelism
+            // ~2–3×, so 4 workers is more than enough to saturate the rasteriser.
+            // This halves the raster-phase mask memory (was 8+8=16 masks × 59 MB).
+            capped = capped.min(4);
         } else if bytes_per_mask >= 24 * 1024 * 1024 {
             capped = capped.min(6);
         } else if bytes_per_mask >= 12 * 1024 * 1024 {
@@ -377,12 +388,10 @@ fn choose_streaming_buffer_depth_for_mask_bytes(
         }
     }
     if bytes_per_mask >= 48 * 1024 * 1024 {
-        // 8K-12K-class: with 8 raster workers, a 2-slot result channel caused
-        // out-of-order completed layers to block workers before the ordered
-        // drain could advance, limiting measured raster parallelism to ~4.4×.
-        // Match worker count by default to keep producers fed while preserving
-        // a hard, predictable memory bound.
-        max_concurrent.clamp(4, 8)
+        // 8K-12K-class: cap at 4 to match the reduced raster_concurrent cap.
+        // With raster_concurrent=4 and buffer=4, peak = 8 × 59 MB = 472 MB
+        // (down from 8+8=16 × 59 MB = 944 MB with the old caps).
+        max_concurrent.clamp(2, 4)
     } else if bytes_per_mask >= 24 * 1024 * 1024 {
         4
     } else {

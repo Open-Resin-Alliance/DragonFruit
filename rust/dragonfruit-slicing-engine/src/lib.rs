@@ -20,6 +20,7 @@ pub mod metrics;
 pub mod pipeline;
 pub mod raster;
 pub mod rle;
+pub mod rle_3daa;
 pub mod types;
 pub mod z_blend;
 
