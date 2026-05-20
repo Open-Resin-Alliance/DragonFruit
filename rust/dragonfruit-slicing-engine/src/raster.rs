@@ -1050,6 +1050,7 @@ fn apply_edge_box_blur_to_mask_in_roi(
     }); // end HPASS.with
 }
 
+#[cfg(test)]
 pub(crate) fn apply_blur_postprocess_inplace(
     mask: &mut [u8],
     width: usize,
@@ -1239,6 +1240,7 @@ pub(crate) fn encode_mask_to_rle_in_bounds(
     rle.finish()
 }
 
+#[cfg(test)]
 pub(crate) fn encode_bounded_gray_mask_to_rle(
     mask: &crate::binary_mask::BoundedGrayMask,
     width: usize,

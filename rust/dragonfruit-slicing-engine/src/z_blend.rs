@@ -379,6 +379,7 @@ fn local_mask_set_max(
 }
 
 #[inline]
+#[allow(dead_code)]
 fn has_non_current_4neighbor_local(
     mask: &[u8],
     bounds: (usize, usize, usize, usize),
@@ -613,7 +614,11 @@ fn z_blend_bfs_backward_local(
             let max_d = max_dist[lbl].max(1) as f32;
             let t = (d as f32 / max_d).clamp(0.0, 1.0);
             let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
-            let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+            let v = if let Some(lut) = lut {
+                lut[raw as usize]
+            } else {
+                raw
+            };
             local_mask_set_max(current, current_bounds, x, y, v);
         }
     }
@@ -799,12 +804,17 @@ fn z_blend_bfs_forward_local(
             let max_d = max_dist[lbl].max(1) as f32;
             let t = (d as f32 / max_d).clamp(0.0, 1.0);
             let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
-            let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+            let v = if let Some(lut) = lut {
+                lut[raw as usize]
+            } else {
+                raw
+            };
             local_mask_set_max(mask, mask_bounds, x, y, v);
         }
     }
 }
 
+#[allow(dead_code)]
 fn z_blend_local_layer_inplace_with_roi(
     current: &mut [u8],
     current_bounds: (usize, usize, usize, usize),
@@ -896,7 +906,8 @@ fn z_blend_local_layer_inplace_with_roi(
         let local_row = ly * roi_w;
         for x in seed_min_x..=seed_max_x {
             let lx = x - roi_min_x;
-            seeds[local_row + lx] = local_mask_sample(current, current_bounds, x, y) > TOPO_THRESHOLD
+            seeds[local_row + lx] = local_mask_sample(current, current_bounds, x, y)
+                > TOPO_THRESHOLD
                 && has_non_current_4neighbor_local(
                     current,
                     current_bounds,
@@ -967,7 +978,9 @@ fn z_blend_local_layer_inplace_with_roi(
         for x in rec_min_x..=rec_max_x {
             let lx = x - roi_min_x;
             let loc_idx = local_row + lx;
-            if in_prior[loc_idx] > 0 && local_mask_sample(current, current_bounds, x, y) <= TOPO_THRESHOLD {
+            if in_prior[loc_idx] > 0
+                && local_mask_sample(current, current_bounds, x, y) <= TOPO_THRESHOLD
+            {
                 let d = dist[loc_idx];
                 if d.is_finite() {
                     let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
@@ -997,7 +1010,11 @@ fn z_blend_local_layer_inplace_with_roi(
                 let max_d = max_dist[lbl].max(1.0);
                 let t = (d / max_d).clamp(0.0, 1.0);
                 let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
-                let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
                 local_mask_set_max(current, current_bounds, x, y, v);
             }
         }
@@ -1093,6 +1110,7 @@ fn label_receding_components_local_bounded_current(
     next_label - 1
 }
 
+#[allow(dead_code)]
 fn z_blend_forward_local_inplace_with_roi(
     mask: &mut [u8],
     mask_bounds: (usize, usize, usize, usize),
@@ -1142,7 +1160,8 @@ fn z_blend_forward_local_inplace_with_roi(
 
     for (depth_idx, future) in futures.iter().enumerate() {
         let depth_val = (depth_idx + 1) as u8;
-        let Some((_future_min_x, _future_max_x, future_min_y, future_max_y)) = future.bounds() else {
+        let Some((_future_min_x, _future_max_x, future_min_y, future_max_y)) = future.bounds()
+        else {
             continue;
         };
         let y_start = roi_min_y.max(future_min_y);
@@ -1279,7 +1298,11 @@ fn z_blend_forward_local_inplace_with_roi(
                 let max_d = max_dist[lbl].max(1.0);
                 let t = (d / max_d).clamp(0.0, 1.0);
                 let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
-                let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+                let v = if let Some(lut) = lut {
+                    lut[raw as usize]
+                } else {
+                    raw
+                };
                 local_mask_set_max(mask, mask_bounds, x, y, v);
             }
         }
