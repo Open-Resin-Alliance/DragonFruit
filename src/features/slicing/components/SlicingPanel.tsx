@@ -1274,11 +1274,10 @@ export function SlicingPanel({
     if (useAutoFadeDistance) return;
     if (useCustomZBlendFadePx) return;
     if (isPresetValue(fadeDistancePresets, zBlendFadePx)) return;
-    const fallback = fadeDistancePresets[Math.min(1, fadeDistancePresets.length - 1)]
-      ?? fadeDistancePresets[0]
-      ?? 8;
-    setClampedZBlendFadePx(fallback);
-  }, [fadeDistancePresets, setClampedZBlendFadePx, useAutoFadeDistance, useCustomZBlendFadePx, zBlendFadePx]);
+    // Preserve the user-selected value instead of snapping to a fallback preset.
+    // If current value no longer maps to the dynamic preset set, move to Custom.
+    setUseCustomZBlendFadePx(true);
+  }, [fadeDistancePresets, useAutoFadeDistance, useCustomZBlendFadePx, zBlendFadePx]);
 
   useEffect(() => {
     if (aaQualityMode !== 'advanced' || aaMode !== '3DAA') return;
@@ -2527,13 +2526,16 @@ export function SlicingPanel({
                             </button>
                           </div>
 
-                          {aaMode === 'Blur' && blurUsesLutCurve && (
-                            <>
+                          {((aaMode === 'Blur' && blurUsesLutCurve)
+                            || (aaMode === '3DAA' && blurGraySourceMode === 'lut' && !zBlendAutoMode)) && (
+                            <div className="space-y-1">
                               <SettingLabelWithHelp
                                 label="LUT Curve"
-                                help="Remaps the final grayscale output through the shared resin-calibrated cure curve system used by both Blur AA and 3DAA."
+                                help={aaMode === '3DAA'
+                                  ? 'Chooses the cure-window LUT profile for 3DAA blending. Opaque uses a stronger EXP curve (~47%→90%) for standard resins, Clear uses a gentler EXP curve (~39%→65%) for translucent materials, and Custom lets you import or tune your own curve.'
+                                  : 'Remaps the final grayscale output through the shared resin-calibrated cure curve system used by both Blur AA and 3DAA.'}
                               />
-                              <div className="grid grid-cols-3 gap-1 pt-1">
+                              <div className="grid grid-cols-3 gap-1">
                                 {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
                                   const active = zBlendResinType === rtype;
                                   const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
@@ -2631,7 +2633,70 @@ export function SlicingPanel({
                                 }}
                                 onClose={() => setEditingTarget(null)}
                               />
-                            </>
+                            </div>
+                          )}
+
+                          {(aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'minimum' && (
+                            <div className="space-y-1">
+                              <SettingLabelWithHelp
+                                label="Minimum Grey Level"
+                                help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
+                              />
+                              {hasProfileMinimumAaAlpha && (
+                                <div className="grid grid-cols-2 gap-1">
+                                  <button
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={!enableMinimumAaAlphaOverride
+                                      ? {
+                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                          color: 'var(--text-strong)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setEnableMinimumAaAlphaOverride(false)}
+                                  >
+                                    {`Profile (${profileMinimumAaAlphaPercent}%)`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={enableMinimumAaAlphaOverride
+                                      ? {
+                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                          color: 'var(--text-strong)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setEnableMinimumAaAlphaOverride(true)}
+                                  >
+                                    Override
+                                  </button>
+                                </div>
+                              )}
+                              {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
+                                <ScrollableNumberField
+                                  className="mt-1"
+                                  value={minimumAaAlphaPercent}
+                                  onChange={setClampedMinimumAaAlphaPercent}
+                                  min={0}
+                                  max={100}
+                                  step={1}
+                                  unit="%"
+                                  ariaLabel="Minimum alpha percent override"
+                                  decreaseTitle="Decrease minimum alpha"
+                                  increaseTitle="Increase minimum alpha"
+                                />
+                              )}
+                            </div>
                           )}
                         </>
                       )}
@@ -2686,113 +2751,6 @@ export function SlicingPanel({
                               Advanced
                             </button>
                           </div>
-
-                          {!zBlendAutoMode && blurGraySourceMode === 'lut' && (
-                            <>
-                              <SettingLabelWithHelp
-                                label="LUT Curve"
-                                help="Chooses the cure-window LUT profile for 3DAA blending. Opaque uses a stronger EXP curve (~47%→90%) for standard resins, Clear uses a gentler EXP curve (~39%→65%) for translucent materials, and Custom lets you import or tune your own curve."
-                              />
-                              <div className="grid grid-cols-3 gap-1 pt-1">
-                                {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
-                                  const active = zBlendResinType === rtype;
-                                  const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
-                                  return (
-                                    <button
-                                      key={rtype}
-                                      type="button"
-                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                      style={active
-                                        ? {
-                                            borderColor: 'var(--accent-secondary-action-border)',
-                                            background: 'var(--accent-secondary-action-bg-92)',
-                                            color: 'var(--accent-secondary-action-color)',
-                                          }
-                                        : {
-                                            borderColor: 'var(--border-subtle)',
-                                            background: 'var(--surface-0)',
-                                            color: 'var(--text-muted)',
-                                          }}
-                                      title={isAutoDetected ? 'Auto-detected from material name' : undefined}
-                                      onClick={() => setZBlendResinType(rtype)}
-                                    >
-                                      {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
-                                      {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                              {zBlendResinType === 'custom' && (
-                                <LutCurveSelector
-                                  savedCurves={savedCurves}
-                                  selectedCurveId={selectedCurveId}
-                                  onSelectCurve={setSelectedCurveId}
-                                  onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
-                                />
-                              )}
-                              <LutCurveEditorModal
-                                isOpen={editingTarget !== null}
-                                savedCurves={savedCurves}
-                                selectedCurveId={selectedCurveId}
-                                onSelectCurve={(id) => {
-                                  setSelectedCurveId(id);
-                                  setEditingTarget(id);
-                                }}
-                                onImportCurve={(curve) => {
-                                  const importedId = curve.id.trim() || crypto.randomUUID();
-                                  const normalizedName = curve.name.trim() || 'Imported Curve';
-                                  setSavedCurves((prev) => {
-                                    const lowerNames = new Set(prev.map((entry) => entry.name.trim().toLowerCase()));
-                                    let finalName = normalizedName;
-                                    let suffix = 2;
-                                    while (lowerNames.has(finalName.trim().toLowerCase())) {
-                                      finalName = `${normalizedName} (${suffix})`;
-                                      suffix += 1;
-                                    }
-                                    const importedCurve = {
-                                      ...curve,
-                                      id: importedId,
-                                      name: finalName,
-                                    };
-                                    return [...prev, importedCurve];
-                                  });
-                                  setSelectedCurveId(importedId);
-                                  setEditingTarget(importedId);
-                                }}
-                                editingCurve={
-                                  editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
-                                    ? null
-                                    : (savedCurves.find((c) => c.id === editingTarget) ?? null)
-                                }
-                                onSave={(curve) => {
-                                  if (savedCurves.some((c) => c.id === curve.id)) {
-                                    setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
-                                  } else {
-                                    setSavedCurves((prev) => [...prev, curve]);
-                                    setSelectedCurveId(curve.id);
-                                  }
-                                  setEditingTarget(null);
-                                }}
-                                onDelete={(id) => {
-                                  const next = savedCurves.filter((c) => c.id !== id);
-                                  const fallback = next.length > 0
-                                    ? next
-                                    : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
-
-                                  const nextSelectedId = selectedCurveId === id
-                                    ? fallback[0].id
-                                    : (fallback.some((curve) => curve.id === selectedCurveId)
-                                        ? selectedCurveId
-                                        : fallback[0].id);
-
-                                  setSavedCurves(fallback);
-                                  setSelectedCurveId(nextSelectedId);
-                                  setEditingTarget(nextSelectedId);
-                                }}
-                                onClose={() => setEditingTarget(null)}
-                              />
-                            </>
-                          )}
 
                           {!zBlendAutoMode && (
                             <>
@@ -2936,68 +2894,6 @@ export function SlicingPanel({
                         </>
                       )}
 
-                      {(aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'minimum' && (
-                        <div className="space-y-1">
-                          <SettingLabelWithHelp
-                            label="Minimum Grey Level"
-                            help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
-                          />
-                          {hasProfileMinimumAaAlpha && (
-                            <div className="grid grid-cols-2 gap-1">
-                              <button
-                                type="button"
-                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                style={!enableMinimumAaAlphaOverride
-                                  ? {
-                                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                      color: 'var(--text-strong)',
-                                    }
-                                  : {
-                                      borderColor: 'var(--border-subtle)',
-                                      background: 'var(--surface-0)',
-                                      color: 'var(--text-muted)',
-                                    }}
-                                onClick={() => setEnableMinimumAaAlphaOverride(false)}
-                              >
-                                {`Profile (${profileMinimumAaAlphaPercent}%)`}
-                              </button>
-                              <button
-                                type="button"
-                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                style={enableMinimumAaAlphaOverride
-                                  ? {
-                                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                      color: 'var(--text-strong)',
-                                    }
-                                  : {
-                                      borderColor: 'var(--border-subtle)',
-                                      background: 'var(--surface-0)',
-                                      color: 'var(--text-muted)',
-                                    }}
-                                onClick={() => setEnableMinimumAaAlphaOverride(true)}
-                              >
-                                Override
-                              </button>
-                            </div>
-                          )}
-                          {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
-                            <ScrollableNumberField
-                              className="mt-1"
-                              value={minimumAaAlphaPercent}
-                              onChange={setClampedMinimumAaAlphaPercent}
-                              min={0}
-                              max={100}
-                              step={1}
-                              unit="%"
-                              ariaLabel="Minimum alpha percent override"
-                              decreaseTitle="Decrease minimum alpha"
-                              increaseTitle="Increase minimum alpha"
-                            />
-                          )}
-                        </div>
-                      )}
                     </>
                   )}
                   </>}
