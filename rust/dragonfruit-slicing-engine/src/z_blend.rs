@@ -20,69 +20,56 @@
 //! re-rasterization, and naturally skips pixels where adjacent layers are
 //! identical (vertical walls produce zero receding area → no blending).
 
+use crate::binary_mask::BoundedBinaryMaskRef;
 use std::collections::VecDeque;
 
 use rayon::prelude::*;
 
 /// Reusable working buffers for single-layer 3DAA z-blending.
 ///
-/// Internal scratch buffers (`in_prior`, `dist`, `seeds`, `edt_g`, `labels_buf`)
-/// are sized to the **ROI** being processed, not the full image, and grow
-/// monotonically as larger ROIs are encountered.  For a 12K printer (11520×5120,
-/// ~59 M px) processing a typical model whose footprint is ~10–25% of the build
-/// area, this yields a ~4–10× reduction in per-worker workspace RAM compared to
-/// the previous W×H allocation.
+/// The scratch buffers grow monotonically to the largest ROI seen so far.
+/// The BFS-based algorithm replaces the previous Felzenszwalb EDT, reducing
+/// the per-worker workspace from ~300–570 MB (4×f32 arrays at ROI scale) to
+/// ~37 MB (a single u8 array at ROI scale) for a 12K full-plate job.
 pub struct ZBlendWorkspace {
-    /// Backward/forward prior occupancy depth map. ROI-local, length ≥ roi_w*roi_h.
-    in_prior: Vec<u8>,
-    /// Felzenszwalb EDT distance map (exact Euclidean, in pixels). ROI-local.
-    dist: Vec<f32>,
-    /// Temporary seed-marker buffer used during the EDT phase. ROI-local.
-    seeds: Vec<bool>,
-    /// Scratch buffer for felzenszwalb_edt_roi Phase-1 squared horizontal distances.
-    edt_g: Vec<f32>,
-    /// Scratch buffer for label_receding_components output labels.
+    /// BFS hop-count distance map for receding/appearing pixels.
+    /// ROI-local, indexed by `(y - roi_min_y) * roi_w + (x - roi_min_x)`.
+    /// 0 = not in receding/appearing zone or not yet visited;
+    /// d > 0 = BFS hop distance from the current-topology inner boundary.
+    /// u8 is sufficient because fade_px ≤ 255 in practice.
+    dist_u8: Vec<u8>,
+    /// Connected-component label buffer. Sized to the receding-zone bounding
+    /// box; grows monotonically.
     labels_buf: Vec<u32>,
-    /// Reusable BFS queue for label_receding_components (avoids per-layer VecDeque alloc).
+    /// Reusable BFS queue (ROI-local indices). Shared between the main BFS
+    /// expansion pass and the component-labeling pass (queue is empty between
+    /// the two uses).
     bfs_queue: VecDeque<usize>,
 }
 
 impl ZBlendWorkspace {
     pub fn new(_width: usize, _height: usize) -> Self {
         // Buffers grow on first use to the actual ROI size, not the full image.
-        // This avoids a ~826 MB up-front allocation per worker at 12K.
         Self {
-            in_prior: Vec::new(),
-            dist: Vec::new(),
-            seeds: Vec::new(),
-            edt_g: Vec::new(),
+            dist_u8: Vec::new(),
             labels_buf: Vec::new(),
             bfs_queue: VecDeque::new(),
         }
     }
 
-    /// Ensure ROI-local scratch buffers can hold at least `n = roi_w * roi_h`
-    /// elements.  Grow-only: never shrinks, so worst-case ROI sets capacity.
+    /// Ensure the BFS distance buffer can hold at least `n = roi_w * roi_h`
+    /// elements.  Grow-only; never shrinks.
     #[inline]
     fn ensure_roi_capacity(&mut self, n: usize) {
-        if self.in_prior.len() < n {
-            self.in_prior.resize(n, 0);
-        }
-        if self.dist.len() < n {
-            self.dist.resize(n, f32::INFINITY);
-        }
-        if self.seeds.len() < n {
-            self.seeds.resize(n, false);
+        if self.dist_u8.len() < n {
+            self.dist_u8.resize(n, 0);
         }
     }
 
-    /// Approximate resident byte size of all ROI-local scratch.  Used by the
+    /// Approximate resident byte size of all scratch buffers.  Used by the
     /// engine's diagnostic to report actual (vs worst-case) workspace usage.
     pub fn resident_bytes(&self) -> usize {
-        self.in_prior.capacity() * std::mem::size_of::<u8>()
-            + self.dist.capacity() * std::mem::size_of::<f32>()
-            + self.seeds.capacity() * std::mem::size_of::<bool>()
-            + self.edt_g.capacity() * std::mem::size_of::<f32>()
+        self.dist_u8.capacity() * std::mem::size_of::<u8>()
             + self.labels_buf.capacity() * std::mem::size_of::<u32>()
             + self.bfs_queue.capacity() * std::mem::size_of::<usize>()
     }
@@ -90,7 +77,7 @@ impl ZBlendWorkspace {
     pub fn blend_layer_inplace(
         &mut self,
         current: &mut [u8],
-        priors: &[&[u8]],
+        priors: &[BoundedBinaryMaskRef<'_>],
         width: usize,
         height: usize,
         fade_px: u32,
@@ -107,7 +94,48 @@ impl ZBlendWorkspace {
     pub fn blend_layer_inplace_with_roi(
         &mut self,
         current: &mut [u8],
-        priors: &[&[u8]],
+        priors: &[BoundedBinaryMaskRef<'_>],
+        width: usize,
+        height: usize,
+        fade_px: u32,
+        lut: Option<&[u8; 256]>,
+        roi: (usize, usize, usize, usize),
+    ) {
+        let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+        else {
+            return;
+        };
+        let roi_w = roi_max_x - roi_min_x + 1;
+        let roi_h = roi_max_y - roi_min_y + 1;
+        let roi_len = roi_w * roi_h;
+        // Full-frame path: allocate EDT buffers locally.  This path is used only
+        // by z_blend_all_layers (tests); workers use blend_layer_local_inplace_with_roi.
+        let mut in_prior = vec![0u8; roi_len];
+        let mut dist = vec![f32::INFINITY; roi_len];
+        let mut seeds = vec![false; roi_len];
+        let mut edt_g = Vec::new();
+        z_blend_layer_inplace_with_roi(
+            current,
+            priors,
+            width,
+            height,
+            fade_px,
+            lut,
+            &mut in_prior,
+            &mut dist,
+            &mut seeds,
+            &mut edt_g,
+            &mut self.labels_buf,
+            &mut self.bfs_queue,
+            (roi_min_x, roi_max_x, roi_min_y, roi_max_y),
+        );
+    }
+
+    pub fn blend_layer_local_inplace_with_roi(
+        &mut self,
+        current: &mut [u8],
+        current_bounds: (usize, usize, usize, usize),
+        priors: &[BoundedBinaryMaskRef<'_>],
         width: usize,
         height: usize,
         fade_px: u32,
@@ -121,17 +149,15 @@ impl ZBlendWorkspace {
         let roi_w = roi_max_x - roi_min_x + 1;
         let roi_h = roi_max_y - roi_min_y + 1;
         self.ensure_roi_capacity(roi_w * roi_h);
-        z_blend_layer_inplace_with_roi(
+        z_blend_bfs_backward_local(
             current,
+            current_bounds,
             priors,
             width,
             height,
             fade_px,
             lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.seeds,
-            &mut self.edt_g,
+            &mut self.dist_u8,
             &mut self.labels_buf,
             &mut self.bfs_queue,
             (roi_min_x, roi_max_x, roi_min_y, roi_max_y),
@@ -156,8 +182,8 @@ impl ZBlendWorkspace {
     pub fn blend_layer_forward_inplace(
         &mut self,
         mask: &mut [u8],
-        topology: &[u8],
-        futures: &[&[u8]],
+        topology: BoundedBinaryMaskRef<'_>,
+        futures: &[BoundedBinaryMaskRef<'_>],
         look_back: usize,
         width: usize,
         height: usize,
@@ -176,8 +202,52 @@ impl ZBlendWorkspace {
     pub fn blend_layer_forward_inplace_with_roi(
         &mut self,
         mask: &mut [u8],
-        topology: &[u8],
-        futures: &[&[u8]],
+        topology: BoundedBinaryMaskRef<'_>,
+        futures: &[BoundedBinaryMaskRef<'_>],
+        look_back: usize,
+        width: usize,
+        height: usize,
+        fade_px: u32,
+        lut: Option<&[u8; 256]>,
+        roi: (usize, usize, usize, usize),
+    ) {
+        let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+        else {
+            return;
+        };
+        let roi_w = roi_max_x - roi_min_x + 1;
+        let roi_h = roi_max_y - roi_min_y + 1;
+        let roi_len = roi_w * roi_h;
+        // Full-frame path: allocate EDT buffers locally (tests / non-worker path only).
+        let mut in_forward = vec![0u8; roi_len];
+        let mut dist = vec![f32::INFINITY; roi_len];
+        let mut seeds = vec![false; roi_len];
+        let mut edt_g = Vec::new();
+        z_blend_forward_inplace_with_roi(
+            mask,
+            topology,
+            futures,
+            look_back,
+            width,
+            height,
+            fade_px,
+            lut,
+            &mut in_forward,
+            &mut dist,
+            &mut seeds,
+            &mut edt_g,
+            &mut self.labels_buf,
+            &mut self.bfs_queue,
+            (roi_min_x, roi_max_x, roi_min_y, roi_max_y),
+        );
+    }
+
+    pub fn blend_layer_forward_local_inplace_with_roi(
+        &mut self,
+        mask: &mut [u8],
+        mask_bounds: (usize, usize, usize, usize),
+        topology: BoundedBinaryMaskRef<'_>,
+        futures: &[BoundedBinaryMaskRef<'_>],
         look_back: usize,
         width: usize,
         height: usize,
@@ -192,8 +262,9 @@ impl ZBlendWorkspace {
         let roi_w = roi_max_x - roi_min_x + 1;
         let roi_h = roi_max_y - roi_min_y + 1;
         self.ensure_roi_capacity(roi_w * roi_h);
-        z_blend_forward_inplace_with_roi(
+        z_blend_bfs_forward_local(
             mask,
+            mask_bounds,
             topology,
             futures,
             look_back,
@@ -201,10 +272,7 @@ impl ZBlendWorkspace {
             height,
             fade_px,
             lut,
-            &mut self.in_prior,
-            &mut self.dist,
-            &mut self.seeds,
-            &mut self.edt_g,
+            &mut self.dist_u8,
             &mut self.labels_buf,
             &mut self.bfs_queue,
             (roi_min_x, roi_max_x, roi_min_y, roi_max_y),
@@ -243,9 +311,9 @@ pub fn z_blend_all_layers(
         let (priors_slice, rest) = masks.split_at_mut(i);
         let current = &mut rest[0];
 
-        let priors: Vec<&[u8]> = priors_slice[start..]
+        let priors: Vec<BoundedBinaryMaskRef<'_>> = priors_slice[start..]
             .iter()
-            .map(|layer| layer.as_slice())
+            .map(|layer| BoundedBinaryMaskRef::from_full_frame(layer.as_slice(), width, height))
             .collect();
         workspace.blend_layer_inplace(current, &priors, width, height, fade_px, lut);
     }
@@ -276,9 +344,951 @@ fn normalize_roi(
     Some((min_x, clamped_max_x, min_y, clamped_max_y))
 }
 
+#[inline]
+fn local_mask_width(bounds: (usize, usize, usize, usize)) -> usize {
+    bounds.1 - bounds.0 + 1
+}
+
+#[inline]
+fn local_mask_index(bounds: (usize, usize, usize, usize), x: usize, y: usize) -> usize {
+    let row_width = local_mask_width(bounds);
+    (y - bounds.2) * row_width + (x - bounds.0)
+}
+
+#[inline]
+fn local_mask_sample(mask: &[u8], bounds: (usize, usize, usize, usize), x: usize, y: usize) -> u8 {
+    let (min_x, max_x, min_y, max_y) = bounds;
+    if x < min_x || x > max_x || y < min_y || y > max_y {
+        return 0;
+    }
+    mask[local_mask_index(bounds, x, y)]
+}
+
+#[inline]
+fn local_mask_set_max(
+    mask: &mut [u8],
+    bounds: (usize, usize, usize, usize),
+    x: usize,
+    y: usize,
+    value: u8,
+) {
+    let idx = local_mask_index(bounds, x, y);
+    if value > mask[idx] {
+        mask[idx] = value;
+    }
+}
+
+#[inline]
+fn has_non_current_4neighbor_local(
+    mask: &[u8],
+    bounds: (usize, usize, usize, usize),
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    threshold: u8,
+) -> bool {
+    if x > 0 && local_mask_sample(mask, bounds, x - 1, y) <= threshold {
+        return true;
+    }
+    if x + 1 < width && local_mask_sample(mask, bounds, x + 1, y) <= threshold {
+        return true;
+    }
+    if y > 0 && local_mask_sample(mask, bounds, x, y - 1) <= threshold {
+        return true;
+    }
+    if y + 1 < height && local_mask_sample(mask, bounds, x, y + 1) <= threshold {
+        return true;
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// BFS-based backward and forward local z-blend (replaces EDT in worker path)
+// ---------------------------------------------------------------------------
+
+/// BFS-based backward z-blend for compact local-coordinate buffers.
+///
+/// Replaces `z_blend_local_layer_inplace_with_roi` (Felzenszwalb EDT) in the
+/// post-worker hot path.  Memory cost is O(roi_area × 1 B) for `dist_u8`
+/// instead of O(roi_area × 10 B) for the EDT buffers, a ~10× reduction that
+/// saves ~300–570 MB per worker at 12K full-plate jobs.
+///
+/// Algorithm (identical result structure to EDT, different distance metric):
+///   1. Seed BFS from current-topology inner boundary into the receding zone.
+///      Receding pixels = in ≥1 prior, not in current. Seeded at d=1.
+///   2. BFS expands through the full connected receding zone (no fade_px cap)
+///      so every component's true extent is known for normalization.
+///   3. Label connected receding components via BFS (reuses `bfs_queue`).
+///   4. Compute max BFS depth per component.
+///   5. Apply gradient t = d/max_d; raw = round((1-t)×255).
+///      Skip pixels with d > fade_px (same hard cutoff as EDT path).
+///   6. Max-merge gradient through LUT into `current`.
+///
+/// The BFS hop count is a Chebyshev/Manhattan approximation of Euclidean
+/// distance.  For the small fade_px values used in practice (2–12 px) the
+/// difference is imperceptible.
+#[allow(clippy::too_many_arguments)]
+fn z_blend_bfs_backward_local(
+    current: &mut [u8],
+    current_bounds: (usize, usize, usize, usize),
+    priors: &[BoundedBinaryMaskRef<'_>],
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    dist_u8: &mut Vec<u8>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
+    if priors.is_empty() || fade_px == 0 {
+        return;
+    }
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    if dist_u8.len() < roi_len {
+        dist_u8.resize(roi_len, 0);
+    }
+    dist_u8[..roi_len].fill(0);
+    bfs_queue.clear();
+
+    const TOPO_THRESHOLD: u8 = 127;
+    let (cb_min_x, cb_max_x, cb_min_y, cb_max_y) = current_bounds;
+    let cb_row_w = cb_max_x - cb_min_x + 1;
+
+    // Receding-zone bounding box (for component labeler).
+    let mut rec_min_x = width;
+    let mut rec_max_x = 0usize;
+    let mut rec_min_y = height;
+    let mut rec_max_y = 0usize;
+
+    // --- Pass 1: seed BFS ---
+    // Iterate pixels within current_bounds that are inside the ROI.  For each
+    // solid current-topology pixel, check its 4-neighbors: if a neighbor is
+    // NOT in current topology AND is in ≥1 prior → seed it at BFS distance 1.
+    let y_start = cb_min_y.max(roi_min_y);
+    let y_end = cb_max_y.min(roi_max_y);
+    if y_start <= y_end {
+        for y in y_start..=y_end {
+            let cb_row = (y - cb_min_y) * cb_row_w;
+            let x_start = cb_min_x.max(roi_min_x);
+            let x_end = cb_max_x.min(roi_max_x);
+            for x in x_start..=x_end {
+                let cb_idx = cb_row + (x - cb_min_x);
+                if current[cb_idx] <= TOPO_THRESHOLD {
+                    continue; // not in current topology
+                }
+                // Check 4-neighbors for receding pixels.
+                for (nx, ny) in [
+                    (x.wrapping_sub(1), y),
+                    (x + 1, y),
+                    (x, y.wrapping_sub(1)),
+                    (x, y + 1),
+                ] {
+                    if nx < roi_min_x || nx > roi_max_x || ny < roi_min_y || ny > roi_max_y {
+                        continue;
+                    }
+                    let nroi = (ny - roi_min_y) * roi_w + (nx - roi_min_x);
+                    if dist_u8[nroi] != 0 {
+                        continue; // already seeded
+                    }
+                    let n_in_current = nx >= cb_min_x
+                        && nx <= cb_max_x
+                        && ny >= cb_min_y
+                        && ny <= cb_max_y
+                        && current[(ny - cb_min_y) * cb_row_w + (nx - cb_min_x)] > TOPO_THRESHOLD;
+                    if n_in_current {
+                        continue; // neighbor is in current topology, not receding
+                    }
+                    if priors.iter().any(|p| p.is_set(nx, ny, TOPO_THRESHOLD)) {
+                        dist_u8[nroi] = 1;
+                        bfs_queue.push_back(nroi);
+                        rec_min_x = rec_min_x.min(nx);
+                        rec_max_x = rec_max_x.max(nx);
+                        rec_min_y = rec_min_y.min(ny);
+                        rec_max_y = rec_max_y.max(ny);
+                    }
+                }
+            }
+        }
+    }
+
+    if bfs_queue.is_empty() {
+        return; // no receding pixels touching the current boundary
+    }
+
+    // --- Pass 2: BFS expansion (no fade_px cap — need full component extent) ---
+    while let Some(roi_idx) = bfs_queue.pop_front() {
+        let roi_y = roi_idx / roi_w;
+        let roi_x = roi_idx % roi_w;
+        let y = roi_min_y + roi_y;
+        let x = roi_min_x + roi_x;
+        let d = dist_u8[roi_idx];
+        let next_d = d.saturating_add(1);
+
+        for (nx, ny) in [
+            (x.wrapping_sub(1), y),
+            (x + 1, y),
+            (x, y.wrapping_sub(1)),
+            (x, y + 1),
+        ] {
+            if nx < roi_min_x || nx > roi_max_x || ny < roi_min_y || ny > roi_max_y {
+                continue;
+            }
+            let nroi = (ny - roi_min_y) * roi_w + (nx - roi_min_x);
+            if dist_u8[nroi] != 0 {
+                continue;
+            }
+            let n_in_current = nx >= cb_min_x
+                && nx <= cb_max_x
+                && ny >= cb_min_y
+                && ny <= cb_max_y
+                && current[(ny - cb_min_y) * cb_row_w + (nx - cb_min_x)] > TOPO_THRESHOLD;
+            if n_in_current {
+                continue;
+            }
+            if priors.iter().any(|p| p.is_set(nx, ny, TOPO_THRESHOLD)) {
+                dist_u8[nroi] = next_d;
+                bfs_queue.push_back(nroi);
+                rec_min_x = rec_min_x.min(nx);
+                rec_max_x = rec_max_x.max(nx);
+                rec_min_y = rec_min_y.min(ny);
+                rec_max_y = rec_max_y.max(ny);
+            }
+        }
+    }
+
+    // --- Pass 3: label connected receding components ---
+    // `dist_u8` doubles as the occupancy map (nonzero = in receding zone).
+    let num_labels = label_receding_components_local_bounded_current(
+        dist_u8,
+        current,
+        current_bounds,
+        roi_min_x,
+        roi_min_y,
+        roi_w,
+        rec_min_x,
+        rec_max_x,
+        rec_min_y,
+        rec_max_y,
+        TOPO_THRESHOLD,
+        labels_buf,
+        bfs_queue,
+    );
+
+    // --- Pass 4: per-component max BFS depth ---
+    let roi_w_rec = rec_max_x - rec_min_x + 1;
+    let mut max_dist = vec![0u8; num_labels as usize + 1];
+    for y in rec_min_y..=rec_max_y {
+        let roi_row = (y - roi_min_y) * roi_w;
+        for x in rec_min_x..=rec_max_x {
+            let roi_idx = roi_row + (x - roi_min_x);
+            let d = dist_u8[roi_idx];
+            if d > 0 {
+                let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                if d > max_dist[lbl] {
+                    max_dist[lbl] = d;
+                }
+            }
+        }
+    }
+
+    // --- Pass 5: apply per-component-normalized gradient ---
+    let fade = fade_px.min(255) as u8;
+    for y in rec_min_y..=rec_max_y {
+        let roi_row = (y - roi_min_y) * roi_w;
+        for x in rec_min_x..=rec_max_x {
+            let roi_idx = roi_row + (x - roi_min_x);
+            let d = dist_u8[roi_idx];
+            if d == 0 || d > fade {
+                continue; // not receding, or beyond the hard fade cutoff
+            }
+            let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+            let max_d = max_dist[lbl].max(1) as f32;
+            let t = (d as f32 / max_d).clamp(0.0, 1.0);
+            let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
+            let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+            local_mask_set_max(current, current_bounds, x, y, v);
+        }
+    }
+}
+
+/// BFS-based forward z-blend for compact local-coordinate buffers.
+///
+/// Mirror of `z_blend_bfs_backward_local` for the appearing (growing-edge)
+/// direction.  Applies a pre-appearing gradient to `mask` at pixels that are
+/// absent from `topology` (current layer) but present in ≥1 `futures`.
+#[allow(clippy::too_many_arguments)]
+fn z_blend_bfs_forward_local(
+    mask: &mut [u8],
+    mask_bounds: (usize, usize, usize, usize),
+    topology: BoundedBinaryMaskRef<'_>,
+    futures: &[BoundedBinaryMaskRef<'_>],
+    look_back: usize,
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    dist_u8: &mut Vec<u8>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
+    if futures.is_empty() || fade_px == 0 || look_back == 0 {
+        return;
+    }
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    if dist_u8.len() < roi_len {
+        dist_u8.resize(roi_len, 0);
+    }
+    dist_u8[..roi_len].fill(0);
+    bfs_queue.clear();
+
+    const TOPO_THRESHOLD: u8 = 127;
+
+    // Appearing-zone bounding box.
+    let mut app_min_x = width;
+    let mut app_max_x = 0usize;
+    let mut app_min_y = height;
+    let mut app_max_y = 0usize;
+
+    // --- Pass 1: seed BFS ---
+    // Find topology boundary pixels (in current, adjacent to non-current), then
+    // seed their non-current 4-neighbors that appear in ≥1 future at d=1.
+    //
+    // We iterate via topology bounds to avoid a full ROI scan.
+    let Some((topo_min_x, topo_max_x, topo_min_y, topo_max_y)) = topology.bounds() else {
+        return; // empty current topology → no appearing boundary to seed from
+    };
+    let y_start = topo_min_y.max(roi_min_y);
+    let y_end = topo_max_y.min(roi_max_y);
+    if y_start > y_end {
+        return;
+    }
+    for y in y_start..=y_end {
+        let x_start = topo_min_x.max(roi_min_x);
+        let x_end = topo_max_x.min(roi_max_x);
+        for x in x_start..=x_end {
+            if !topology.is_set(x, y, TOPO_THRESHOLD) {
+                continue; // not in current topology
+            }
+            for (nx, ny) in [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+            ] {
+                if nx < roi_min_x || nx > roi_max_x || ny < roi_min_y || ny > roi_max_y {
+                    continue;
+                }
+                let nroi = (ny - roi_min_y) * roi_w + (nx - roi_min_x);
+                if dist_u8[nroi] != 0 {
+                    continue;
+                }
+                if topology.is_set(nx, ny, TOPO_THRESHOLD) {
+                    continue; // neighbor is in current topology
+                }
+                if futures.iter().any(|f| f.is_set(nx, ny, TOPO_THRESHOLD)) {
+                    dist_u8[nroi] = 1;
+                    bfs_queue.push_back(nroi);
+                    app_min_x = app_min_x.min(nx);
+                    app_max_x = app_max_x.max(nx);
+                    app_min_y = app_min_y.min(ny);
+                    app_max_y = app_max_y.max(ny);
+                }
+            }
+        }
+    }
+
+    if bfs_queue.is_empty() {
+        return;
+    }
+
+    // --- Pass 2: BFS expansion (no fade_px cap) ---
+    while let Some(roi_idx) = bfs_queue.pop_front() {
+        let roi_y = roi_idx / roi_w;
+        let roi_x = roi_idx % roi_w;
+        let y = roi_min_y + roi_y;
+        let x = roi_min_x + roi_x;
+        let d = dist_u8[roi_idx];
+        let next_d = d.saturating_add(1);
+
+        for (nx, ny) in [
+            (x.wrapping_sub(1), y),
+            (x + 1, y),
+            (x, y.wrapping_sub(1)),
+            (x, y + 1),
+        ] {
+            if nx < roi_min_x || nx > roi_max_x || ny < roi_min_y || ny > roi_max_y {
+                continue;
+            }
+            let nroi = (ny - roi_min_y) * roi_w + (nx - roi_min_x);
+            if dist_u8[nroi] != 0 {
+                continue;
+            }
+            if topology.is_set(nx, ny, TOPO_THRESHOLD) {
+                continue;
+            }
+            if futures.iter().any(|f| f.is_set(nx, ny, TOPO_THRESHOLD)) {
+                dist_u8[nroi] = next_d;
+                bfs_queue.push_back(nroi);
+                app_min_x = app_min_x.min(nx);
+                app_max_x = app_max_x.max(nx);
+                app_min_y = app_min_y.min(ny);
+                app_max_y = app_max_y.max(ny);
+            }
+        }
+    }
+
+    // --- Pass 3: label connected appearing components ---
+    let num_labels = label_receding_components_bounded_local(
+        dist_u8,
+        topology,
+        roi_min_x,
+        roi_min_y,
+        roi_w,
+        app_min_x,
+        app_max_x,
+        app_min_y,
+        app_max_y,
+        TOPO_THRESHOLD,
+        labels_buf,
+        bfs_queue,
+    );
+
+    // --- Pass 4: per-component max BFS depth ---
+    let roi_w_app = app_max_x - app_min_x + 1;
+    let mut max_dist = vec![0u8; num_labels as usize + 1];
+    for y in app_min_y..=app_max_y {
+        let roi_row = (y - roi_min_y) * roi_w;
+        for x in app_min_x..=app_max_x {
+            let roi_idx = roi_row + (x - roi_min_x);
+            let d = dist_u8[roi_idx];
+            if d > 0 {
+                let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                if d > max_dist[lbl] {
+                    max_dist[lbl] = d;
+                }
+            }
+        }
+    }
+
+    // --- Pass 5: apply gradient to mask ---
+    let fade = fade_px.min(255) as u8;
+    for y in app_min_y..=app_max_y {
+        let roi_row = (y - roi_min_y) * roi_w;
+        for x in app_min_x..=app_max_x {
+            let roi_idx = roi_row + (x - roi_min_x);
+            let d = dist_u8[roi_idx];
+            if d == 0 || d > fade {
+                continue;
+            }
+            let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+            let max_d = max_dist[lbl].max(1) as f32;
+            let t = (d as f32 / max_d).clamp(0.0, 1.0);
+            let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
+            let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+            local_mask_set_max(mask, mask_bounds, x, y, v);
+        }
+    }
+}
+
+fn z_blend_local_layer_inplace_with_roi(
+    current: &mut [u8],
+    current_bounds: (usize, usize, usize, usize),
+    priors: &[BoundedBinaryMaskRef<'_>],
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    in_prior: &mut [u8],
+    dist: &mut [f32],
+    seeds: &mut [bool],
+    edt_g: &mut Vec<f32>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    debug_assert!(in_prior.len() >= roi_len);
+    debug_assert!(dist.len() >= roi_len);
+    debug_assert!(seeds.len() >= roi_len);
+
+    const TOPO_THRESHOLD: u8 = 127;
+
+    for ly in 0..roi_h {
+        let local_row = ly * roi_w;
+        for lx in 0..roi_w {
+            in_prior[local_row + lx] = 0;
+        }
+    }
+
+    let mut receding_any = false;
+    let mut rec_min_x = width;
+    let mut rec_max_x = 0usize;
+    let mut rec_min_y = height;
+    let mut rec_max_y = 0usize;
+
+    for (depth_idx, prior) in priors.iter().rev().enumerate() {
+        let depth_val = (depth_idx + 1) as u8;
+        let Some((_prior_min_x, _prior_max_x, prior_min_y, prior_max_y)) = prior.bounds() else {
+            continue;
+        };
+        let y_start = roi_min_y.max(prior_min_y);
+        let y_end = roi_max_y.min(prior_max_y);
+        if y_start > y_end {
+            continue;
+        }
+        for y in y_start..=y_end {
+            let local_row = (y - roi_min_y) * roi_w;
+            let Some((prior_row, start_x)) = prior.row_span(y, roi_min_x, roi_max_x) else {
+                continue;
+            };
+            for (dx, &px) in prior_row.iter().enumerate() {
+                if px <= TOPO_THRESHOLD {
+                    continue;
+                }
+                let x = start_x + dx;
+                let loc_idx = local_row + (x - roi_min_x);
+                if in_prior[loc_idx] == 0 {
+                    in_prior[loc_idx] = depth_val;
+                    if local_mask_sample(current, current_bounds, x, y) <= TOPO_THRESHOLD {
+                        receding_any = true;
+                        rec_min_x = rec_min_x.min(x);
+                        rec_max_x = rec_max_x.max(x);
+                        rec_min_y = rec_min_y.min(y);
+                        rec_max_y = rec_max_y.max(y);
+                    }
+                }
+            }
+        }
+    }
+
+    if !receding_any {
+        return;
+    }
+
+    let seed_min_x = rec_min_x.saturating_sub(1).max(roi_min_x);
+    let seed_min_y = rec_min_y.saturating_sub(1).max(roi_min_y);
+    let seed_max_x = (rec_max_x + 1).min(roi_max_x);
+    let seed_max_y = (rec_max_y + 1).min(roi_max_y);
+
+    for y in seed_min_y..=seed_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in seed_min_x..=seed_max_x {
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = local_mask_sample(current, current_bounds, x, y) > TOPO_THRESHOLD
+                && has_non_current_4neighbor_local(
+                    current,
+                    current_bounds,
+                    x,
+                    y,
+                    width,
+                    height,
+                    TOPO_THRESHOLD,
+                );
+        }
+    }
+
+    if seed_min_x > roi_min_x
+        || seed_max_x < roi_max_x
+        || seed_min_y > roi_min_y
+        || seed_max_y < roi_max_y
+    {
+        for ly in 0..roi_h {
+            let y = roi_min_y + ly;
+            let local_row = ly * roi_w;
+            if y < seed_min_y || y > seed_max_y {
+                for lx in 0..roi_w {
+                    seeds[local_row + lx] = false;
+                }
+            } else {
+                for lx in 0..roi_w {
+                    let x = roi_min_x + lx;
+                    if x < seed_min_x || x > seed_max_x {
+                        seeds[local_row + lx] = false;
+                    }
+                }
+            }
+        }
+    }
+
+    felzenszwalb_edt_roi_local(&seeds[..roi_len], roi_w, roi_h, &mut dist[..roi_len], edt_g);
+
+    for y in seed_min_y..=seed_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in seed_min_x..=seed_max_x {
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = false;
+        }
+    }
+
+    let roi_w_rec = rec_max_x - rec_min_x + 1;
+    let num_labels = label_receding_components_local_bounded_current(
+        in_prior,
+        current,
+        current_bounds,
+        roi_min_x,
+        roi_min_y,
+        roi_w,
+        rec_min_x,
+        rec_max_x,
+        rec_min_y,
+        rec_max_y,
+        TOPO_THRESHOLD,
+        labels_buf,
+        bfs_queue,
+    );
+
+    let mut max_dist = vec![0.0f32; num_labels as usize + 1];
+    for y in rec_min_y..=rec_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in rec_min_x..=rec_max_x {
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            if in_prior[loc_idx] > 0 && local_mask_sample(current, current_bounds, x, y) <= TOPO_THRESHOLD {
+                let d = dist[loc_idx];
+                if d.is_finite() {
+                    let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                    if d > max_dist[lbl] {
+                        max_dist[lbl] = d;
+                    }
+                }
+            }
+        }
+    }
+
+    let fade_f = fade_px as f32;
+    for y in rec_min_y..=rec_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in rec_min_x..=rec_max_x {
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            if local_mask_sample(current, current_bounds, x, y) <= TOPO_THRESHOLD
+                && in_prior[loc_idx] > 0
+            {
+                let d = dist[loc_idx];
+                if !d.is_finite() || d > fade_f {
+                    continue;
+                }
+                let lbl = labels_buf[(y - rec_min_y) * roi_w_rec + (x - rec_min_x)] as usize;
+                let max_d = max_dist[lbl].max(1.0);
+                let t = (d / max_d).clamp(0.0, 1.0);
+                let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
+                let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+                local_mask_set_max(current, current_bounds, x, y, v);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn label_receding_components_local_bounded_current(
+    in_occupancy: &[u8],
+    current: &[u8],
+    current_bounds: (usize, usize, usize, usize),
+    ws_roi_min_x: usize,
+    ws_roi_min_y: usize,
+    ws_roi_w: usize,
+    rec_min_x: usize,
+    rec_max_x: usize,
+    rec_min_y: usize,
+    rec_max_y: usize,
+    topo_threshold: u8,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+) -> u32 {
+    let roi_w = rec_max_x - rec_min_x + 1;
+    let roi_h = rec_max_y - rec_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    if labels_buf.len() < roi_len {
+        labels_buf.resize(roi_len, 0);
+    }
+    labels_buf[..roi_len].fill(0);
+    bfs_queue.clear();
+
+    let mut next_label = 1u32;
+
+    for start_ry in 0..roi_h {
+        let start_y = rec_min_y + start_ry;
+        let occ_row_local = (start_y - ws_roi_min_y) * ws_roi_w;
+        for start_rx in 0..roi_w {
+            let start_x = rec_min_x + start_rx;
+            let roi_idx = start_ry * roi_w + start_rx;
+            let occ_idx = occ_row_local + (start_x - ws_roi_min_x);
+
+            if in_occupancy[occ_idx] == 0
+                || local_mask_sample(current, current_bounds, start_x, start_y) > topo_threshold
+                || labels_buf[roi_idx] != 0
+            {
+                continue;
+            }
+
+            let label = next_label;
+            next_label += 1;
+            labels_buf[roi_idx] = label;
+            bfs_queue.push_back(roi_idx);
+
+            while let Some(ri) = bfs_queue.pop_front() {
+                let ry = ri / roi_w;
+                let rx = ri % roi_w;
+                let y = rec_min_y + ry;
+                let x = rec_min_x + rx;
+
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let ny = y as i32 + dy;
+                        let nx = x as i32 + dx;
+                        if nx < rec_min_x as i32
+                            || nx > rec_max_x as i32
+                            || ny < rec_min_y as i32
+                            || ny > rec_max_y as i32
+                        {
+                            continue;
+                        }
+                        let nrx = nx as usize - rec_min_x;
+                        let nry = ny as usize - rec_min_y;
+                        let nri = nry * roi_w + nrx;
+                        let n_occ =
+                            (ny as usize - ws_roi_min_y) * ws_roi_w + (nx as usize - ws_roi_min_x);
+                        if in_occupancy[n_occ] > 0
+                            && local_mask_sample(current, current_bounds, nx as usize, ny as usize)
+                                <= topo_threshold
+                            && labels_buf[nri] == 0
+                        {
+                            labels_buf[nri] = label;
+                            bfs_queue.push_back(nri);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    next_label - 1
+}
+
+fn z_blend_forward_local_inplace_with_roi(
+    mask: &mut [u8],
+    mask_bounds: (usize, usize, usize, usize),
+    topology: BoundedBinaryMaskRef<'_>,
+    futures: &[BoundedBinaryMaskRef<'_>],
+    look_back: usize,
+    width: usize,
+    height: usize,
+    fade_px: u32,
+    lut: Option<&[u8; 256]>,
+    in_forward: &mut [u8],
+    dist: &mut [f32],
+    seeds: &mut [bool],
+    edt_g: &mut Vec<f32>,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+    roi: (usize, usize, usize, usize),
+) {
+    if futures.is_empty() || fade_px == 0 || look_back == 0 {
+        return;
+    }
+    let Some((roi_min_x, roi_max_x, roi_min_y, roi_max_y)) = normalize_roi(width, height, roi)
+    else {
+        return;
+    };
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    debug_assert!(in_forward.len() >= roi_len);
+    debug_assert!(dist.len() >= roi_len);
+    debug_assert!(seeds.len() >= roi_len);
+
+    const TOPO_THRESHOLD: u8 = 127;
+
+    for ly in 0..roi_h {
+        let local_row = ly * roi_w;
+        for lx in 0..roi_w {
+            in_forward[local_row + lx] = 0;
+        }
+    }
+
+    let mut appearing_any = false;
+    let mut app_min_x = width;
+    let mut app_max_x = 0usize;
+    let mut app_min_y = height;
+    let mut app_max_y = 0usize;
+
+    for (depth_idx, future) in futures.iter().enumerate() {
+        let depth_val = (depth_idx + 1) as u8;
+        let Some((_future_min_x, _future_max_x, future_min_y, future_max_y)) = future.bounds() else {
+            continue;
+        };
+        let y_start = roi_min_y.max(future_min_y);
+        let y_end = roi_max_y.min(future_max_y);
+        if y_start > y_end {
+            continue;
+        }
+        for y in y_start..=y_end {
+            let local_row = (y - roi_min_y) * roi_w;
+            let Some((future_row, start_x)) = future.row_span(y, roi_min_x, roi_max_x) else {
+                continue;
+            };
+            for (dx, &px) in future_row.iter().enumerate() {
+                if px <= TOPO_THRESHOLD {
+                    continue;
+                }
+                let x = start_x + dx;
+                let loc_idx = local_row + (x - roi_min_x);
+                if in_forward[loc_idx] == 0 {
+                    in_forward[loc_idx] = depth_val;
+                    if !topology.is_set(x, y, TOPO_THRESHOLD) {
+                        appearing_any = true;
+                        app_min_x = app_min_x.min(x);
+                        app_max_x = app_max_x.max(x);
+                        app_min_y = app_min_y.min(y);
+                        app_max_y = app_max_y.max(y);
+                    }
+                }
+            }
+        }
+    }
+
+    if !appearing_any {
+        return;
+    }
+
+    let seed_min_x = app_min_x.saturating_sub(1).max(roi_min_x);
+    let seed_min_y = app_min_y.saturating_sub(1).max(roi_min_y);
+    let seed_max_x = (app_max_x + 1).min(roi_max_x);
+    let seed_max_y = (app_max_y + 1).min(roi_max_y);
+
+    for y in seed_min_y..=seed_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in seed_min_x..=seed_max_x {
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = topology.is_set(x, y, TOPO_THRESHOLD)
+                && has_non_current_4neighbor_bounded(topology, x, y, width, height, TOPO_THRESHOLD);
+        }
+    }
+
+    if seed_min_x > roi_min_x
+        || seed_max_x < roi_max_x
+        || seed_min_y > roi_min_y
+        || seed_max_y < roi_max_y
+    {
+        for ly in 0..roi_h {
+            let y = roi_min_y + ly;
+            let local_row = ly * roi_w;
+            if y < seed_min_y || y > seed_max_y {
+                for lx in 0..roi_w {
+                    seeds[local_row + lx] = false;
+                }
+            } else {
+                for lx in 0..roi_w {
+                    let x = roi_min_x + lx;
+                    if x < seed_min_x || x > seed_max_x {
+                        seeds[local_row + lx] = false;
+                    }
+                }
+            }
+        }
+    }
+
+    felzenszwalb_edt_roi_local(&seeds[..roi_len], roi_w, roi_h, &mut dist[..roi_len], edt_g);
+
+    for y in seed_min_y..=seed_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in seed_min_x..=seed_max_x {
+            let lx = x - roi_min_x;
+            seeds[local_row + lx] = false;
+        }
+    }
+
+    let roi_w_app = app_max_x - app_min_x + 1;
+    let num_labels = label_receding_components_bounded_local(
+        in_forward,
+        topology,
+        roi_min_x,
+        roi_min_y,
+        roi_w,
+        app_min_x,
+        app_max_x,
+        app_min_y,
+        app_max_y,
+        TOPO_THRESHOLD,
+        labels_buf,
+        bfs_queue,
+    );
+
+    let mut max_dist = vec![0.0f32; num_labels as usize + 1];
+    for y in app_min_y..=app_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in app_min_x..=app_max_x {
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            if in_forward[loc_idx] > 0 && !topology.is_set(x, y, TOPO_THRESHOLD) {
+                let d = dist[loc_idx];
+                if d.is_finite() {
+                    let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                    if d > max_dist[lbl] {
+                        max_dist[lbl] = d;
+                    }
+                }
+            }
+        }
+    }
+
+    let fade_f = fade_px as f32;
+    for y in app_min_y..=app_max_y {
+        let ly = y - roi_min_y;
+        let local_row = ly * roi_w;
+        for x in app_min_x..=app_max_x {
+            let lx = x - roi_min_x;
+            let loc_idx = local_row + lx;
+            if !topology.is_set(x, y, TOPO_THRESHOLD) && in_forward[loc_idx] > 0 {
+                let d = dist[loc_idx];
+                if !d.is_finite() || d > fade_f {
+                    continue;
+                }
+                let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
+                let max_d = max_dist[lbl].max(1.0);
+                let t = (d / max_d).clamp(0.0, 1.0);
+                let raw = ((1.0 - t) * 255.0 + 0.5) as u8;
+                let v = if let Some(lut) = lut { lut[raw as usize] } else { raw };
+                local_mask_set_max(mask, mask_bounds, x, y, v);
+            }
+        }
+    }
+}
+
 fn z_blend_layer_inplace_with_roi(
     current: &mut [u8],
-    priors: &[&[u8]],
+    priors: &[BoundedBinaryMaskRef<'_>],
     width: usize,
     height: usize,
     fade_px: u32,
@@ -336,15 +1346,29 @@ fn z_blend_layer_inplace_with_roi(
 
     for (depth_idx, prior) in priors.iter().rev().enumerate() {
         let depth_val = (depth_idx + 1) as u8; // 1 = most-recent, 2 = older …
-        for ly in 0..roi_h {
-            let y = roi_min_y + ly;
+        let Some((prior_min_x, prior_max_x, prior_min_y, prior_max_y)) = prior.bounds() else {
+            continue;
+        };
+        let y_start = roi_min_y.max(prior_min_y);
+        let y_end = roi_max_y.min(prior_max_y);
+        if y_start > y_end {
+            continue;
+        }
+        for y in y_start..=y_end {
             let row = y * width;
-            let local_row = ly * roi_w;
-            for lx in 0..roi_w {
-                let x = roi_min_x + lx;
+            let local_row = (y - roi_min_y) * roi_w;
+            let Some((prior_row, start_x)) = prior.row_span(y, roi_min_x, roi_max_x) else {
+                continue;
+            };
+            debug_assert!(start_x >= prior_min_x && start_x <= prior_max_x);
+            for (dx, &px) in prior_row.iter().enumerate() {
+                if px <= TOPO_THRESHOLD {
+                    continue;
+                }
+                let x = start_x + dx;
                 let img_idx = row + x;
-                let loc_idx = local_row + lx;
-                if prior[img_idx] > TOPO_THRESHOLD && in_prior[loc_idx] == 0 {
+                let loc_idx = local_row + (x - roi_min_x);
+                if in_prior[loc_idx] == 0 {
                     in_prior[loc_idx] = depth_val;
                     if current[img_idx] <= TOPO_THRESHOLD {
                         receding_any = true;
@@ -364,10 +1388,10 @@ fn z_blend_layer_inplace_with_roi(
     }
 
     // Seed scan needs one-pixel expansion around receding zone to find current
-    // boundary pixels adjacent to receding pixels.  We clamp to the input ROI
-    // because the caller is expected to pre-pad ROI by `fade_px + 1`, which
-    // already covers the +1 halo.  This keeps everything within the
-    // ROI-local scratch buffers.
+    // boundary pixels adjacent to receding pixels. We clamp to the input ROI;
+    // the caller provides the union of current/prior topology bounds, which is
+    // sufficient to include the needed one-pixel boundary halo without any
+    // additional `fade_px` padding.
     let seed_min_x = rec_min_x.saturating_sub(1).max(roi_min_x);
     let seed_min_y = rec_min_y.saturating_sub(1).max(roi_min_y);
     let seed_max_x = (rec_max_x + 1).min(roi_max_x);
@@ -531,8 +1555,8 @@ fn z_blend_layer_inplace_with_roi(
 /// instead of shrinking ones.
 fn z_blend_forward_inplace_with_roi(
     mask: &mut [u8],
-    topology: &[u8],
-    futures: &[&[u8]],
+    topology: BoundedBinaryMaskRef<'_>,
+    futures: &[BoundedBinaryMaskRef<'_>],
     look_back: usize,
     width: usize,
     height: usize,
@@ -579,17 +1603,29 @@ fn z_blend_forward_inplace_with_roi(
 
     for (depth_idx, future) in futures.iter().enumerate() {
         let depth_val = (depth_idx + 1) as u8;
-        for ly in 0..roi_h {
-            let y = roi_min_y + ly;
-            let row = y * width;
-            let local_row = ly * roi_w;
-            for lx in 0..roi_w {
-                let x = roi_min_x + lx;
-                let img_idx = row + x;
-                let loc_idx = local_row + lx;
-                if future[img_idx] > TOPO_THRESHOLD && in_forward[loc_idx] == 0 {
+        let Some((future_min_x, future_max_x, future_min_y, future_max_y)) = future.bounds() else {
+            continue;
+        };
+        let y_start = roi_min_y.max(future_min_y);
+        let y_end = roi_max_y.min(future_max_y);
+        if y_start > y_end {
+            continue;
+        }
+        for y in y_start..=y_end {
+            let local_row = (y - roi_min_y) * roi_w;
+            let Some((future_row, start_x)) = future.row_span(y, roi_min_x, roi_max_x) else {
+                continue;
+            };
+            debug_assert!(start_x >= future_min_x && start_x <= future_max_x);
+            for (dx, &px) in future_row.iter().enumerate() {
+                if px <= TOPO_THRESHOLD {
+                    continue;
+                }
+                let x = start_x + dx;
+                let loc_idx = local_row + (x - roi_min_x);
+                if in_forward[loc_idx] == 0 {
                     in_forward[loc_idx] = depth_val;
-                    if topology[img_idx] <= TOPO_THRESHOLD {
+                    if !topology.is_set(x, y, TOPO_THRESHOLD) {
                         appearing_any = true;
                         app_min_x = app_min_x.min(x);
                         app_max_x = app_max_x.max(x);
@@ -618,8 +1654,9 @@ fn z_blend_forward_inplace_with_roi(
         let row = y * width;
         for x in seed_min_x..=seed_max_x {
             let lx = x - roi_min_x;
-            seeds[local_row + lx] = topology[row + x] > TOPO_THRESHOLD
-                && has_non_current_4neighbor(topology, x, y, width, height, TOPO_THRESHOLD);
+            let _ = row;
+            seeds[local_row + lx] = topology.is_set(x, y, TOPO_THRESHOLD)
+                && has_non_current_4neighbor_bounded(topology, x, y, width, height, TOPO_THRESHOLD);
         }
     }
 
@@ -660,10 +1697,9 @@ fn z_blend_forward_inplace_with_roi(
 
     // -- Step 3: label connected components in the pre-appearing zone. --
     let roi_w_app = app_max_x - app_min_x + 1;
-    let num_labels = label_receding_components_local(
+    let num_labels = label_receding_components_bounded_local(
         in_forward,
         topology,
-        width,
         roi_min_x,
         roi_min_y,
         roi_w,
@@ -680,12 +1716,10 @@ fn z_blend_forward_inplace_with_roi(
     for y in app_min_y..=app_max_y {
         let ly = y - roi_min_y;
         let local_row = ly * roi_w;
-        let row = y * width;
         for x in app_min_x..=app_max_x {
             let lx = x - roi_min_x;
             let loc_idx = local_row + lx;
-            let img_idx = row + x;
-            if in_forward[loc_idx] > 0 && topology[img_idx] <= TOPO_THRESHOLD {
+            if in_forward[loc_idx] > 0 && !topology.is_set(x, y, TOPO_THRESHOLD) {
                 let d = dist[loc_idx];
                 if d.is_finite() {
                     let lbl = labels_buf[(y - app_min_y) * roi_w_app + (x - app_min_x)] as usize;
@@ -707,7 +1741,7 @@ fn z_blend_forward_inplace_with_roi(
             let lx = x - roi_min_x;
             let loc_idx = local_row + lx;
             let img_idx = row + x;
-            if topology[img_idx] <= TOPO_THRESHOLD && in_forward[loc_idx] > 0 {
+            if !topology.is_set(x, y, TOPO_THRESHOLD) && in_forward[loc_idx] > 0 {
                 let d = dist[loc_idx];
                 if !d.is_finite() || d > fade_f {
                     continue;
@@ -1066,6 +2100,117 @@ fn has_non_current_4neighbor(
         return true;
     }
     false
+}
+
+#[inline]
+fn has_non_current_4neighbor_bounded(
+    mask: BoundedBinaryMaskRef<'_>,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    threshold: u8,
+) -> bool {
+    if x > 0 && !mask.is_set(x - 1, y, threshold) {
+        return true;
+    }
+    if x + 1 < width && !mask.is_set(x + 1, y, threshold) {
+        return true;
+    }
+    if y > 0 && !mask.is_set(x, y - 1, threshold) {
+        return true;
+    }
+    if y + 1 < height && !mask.is_set(x, y + 1, threshold) {
+        return true;
+    }
+    false
+}
+
+#[allow(clippy::too_many_arguments)]
+fn label_receding_components_bounded_local(
+    in_occupancy: &[u8],
+    current: BoundedBinaryMaskRef<'_>,
+    ws_roi_min_x: usize,
+    ws_roi_min_y: usize,
+    ws_roi_w: usize,
+    rec_min_x: usize,
+    rec_max_x: usize,
+    rec_min_y: usize,
+    rec_max_y: usize,
+    topo_threshold: u8,
+    labels_buf: &mut Vec<u32>,
+    bfs_queue: &mut VecDeque<usize>,
+) -> u32 {
+    let roi_w = rec_max_x - rec_min_x + 1;
+    let roi_h = rec_max_y - rec_min_y + 1;
+    let roi_len = roi_w * roi_h;
+    if labels_buf.len() < roi_len {
+        labels_buf.resize(roi_len, 0);
+    }
+    labels_buf[..roi_len].fill(0);
+    bfs_queue.clear();
+
+    let mut next_label = 1u32;
+
+    for start_ry in 0..roi_h {
+        let start_y = rec_min_y + start_ry;
+        let occ_row_local = (start_y - ws_roi_min_y) * ws_roi_w;
+        for start_rx in 0..roi_w {
+            let start_x = rec_min_x + start_rx;
+            let roi_idx = start_ry * roi_w + start_rx;
+            let occ_idx = occ_row_local + (start_x - ws_roi_min_x);
+
+            if in_occupancy[occ_idx] == 0
+                || current.is_set(start_x, start_y, topo_threshold)
+                || labels_buf[roi_idx] != 0
+            {
+                continue;
+            }
+
+            let label = next_label;
+            next_label += 1;
+            labels_buf[roi_idx] = label;
+            bfs_queue.push_back(roi_idx);
+
+            while let Some(ri) = bfs_queue.pop_front() {
+                let ry = ri / roi_w;
+                let rx = ri % roi_w;
+                let y = rec_min_y + ry;
+                let x = rec_min_x + rx;
+
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let ny = y as i32 + dy;
+                        let nx = x as i32 + dx;
+                        if nx < rec_min_x as i32
+                            || nx > rec_max_x as i32
+                            || ny < rec_min_y as i32
+                            || ny > rec_max_y as i32
+                        {
+                            continue;
+                        }
+                        let nrx = nx as usize - rec_min_x;
+                        let nry = ny as usize - rec_min_y;
+                        let nri = nry * roi_w + nrx;
+                        let n_occ =
+                            (ny as usize - ws_roi_min_y) * ws_roi_w + (nx as usize - ws_roi_min_x);
+                        if in_occupancy[n_occ] > 0
+                            && !current.is_set(nx as usize, ny as usize, topo_threshold)
+                            && labels_buf[nri] == 0
+                        {
+                            labels_buf[nri] = label;
+                            bfs_queue.push_back(nri);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    next_label - 1
 }
 
 // ---------------------------------------------------------------------------

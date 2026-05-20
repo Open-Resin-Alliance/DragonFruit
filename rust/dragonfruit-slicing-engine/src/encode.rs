@@ -188,66 +188,6 @@ pub fn encode_truecolor_rgb_png_8bit(
     Ok(out)
 }
 
-/// Encode an interleaved RGB8 buffer (`R,G,B` per pixel) to a Truecolor PNG.
-pub fn encode_rgb_png_8bit(
-    width: u32,
-    height: u32,
-    rgb_pixels: &[u8],
-    png_compression_strategy: &str,
-) -> Result<Vec<u8>, SlicerV3Error> {
-    let w = width as usize;
-    let h = height as usize;
-    let expected = w.saturating_mul(h).saturating_mul(3);
-    if rgb_pixels.len() != expected {
-        return Err(SlicerV3Error::Png(format!(
-            "RGB buffer size mismatch: expected {expected} bytes, got {}",
-            rgb_pixels.len()
-        )));
-    }
-
-    let use_sub = !matches!(png_compression_strategy, "fastest");
-    let channels = 3usize;
-    let row_bytes = 1 + w * channels;
-    let mut filtered = vec![0u8; row_bytes * h];
-
-    for y in 0..h {
-        let src = &rgb_pixels[y * w * channels..(y + 1) * w * channels];
-        let dst = &mut filtered[y * row_bytes..(y + 1) * row_bytes];
-        if use_sub {
-            dst[0] = 1;
-            dst[1] = src[0];
-            dst[2] = src[1];
-            dst[3] = src[2];
-            for i in 1..w {
-                let src_off = i * channels;
-                let prev_off = (i - 1) * channels;
-                dst[src_off + 1] = src[src_off].wrapping_sub(src[prev_off]);
-                dst[src_off + 2] = src[src_off + 1].wrapping_sub(src[prev_off + 1]);
-                dst[src_off + 3] = src[src_off + 2].wrapping_sub(src[prev_off + 2]);
-            }
-        } else {
-            dst[0] = 0;
-            dst[1..].copy_from_slice(src);
-        }
-    }
-
-    let level = png_compression_level(png_compression_strategy);
-    let compressed = zlib_compress(&filtered, level)?;
-
-    let mut ihdr = [0u8; 13];
-    ihdr[0..4].copy_from_slice(&width.to_be_bytes());
-    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
-    ihdr[8] = 8;
-    ihdr[9] = 2; // Truecolor
-
-    let mut out = Vec::with_capacity(8 + 12 + 13 + 12 + compressed.len() + 12);
-    out.extend_from_slice(&PNG_SIG);
-    write_chunk(&mut out, b"IHDR", &ihdr);
-    write_chunk(&mut out, b"IDAT", &compressed);
-    write_chunk(&mut out, b"IEND", &[]);
-    Ok(out)
-}
-
 /// Encode a binary (all-0/all-255) grayscale mask as a compact 1-bit PNG.
 pub fn encode_binary_grayscale_png_1bit(
     width: u32,

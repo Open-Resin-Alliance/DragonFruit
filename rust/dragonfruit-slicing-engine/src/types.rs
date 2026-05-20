@@ -57,10 +57,6 @@ fn default_z_blend_max_alpha_percent() -> f32 {
     90.0
 }
 
-fn default_z_blend_debug_color_overlay() -> bool {
-    false
-}
-
 fn default_model_triangle_count() -> u32 {
     0
 }
@@ -197,15 +193,6 @@ pub struct SliceJobV3 {
     /// (solid).
     #[serde(default)]
     pub z_blend_custom_lut: Option<Vec<u8>>,
-    /// Debug-only visualization mode for 3DAA blending.
-    ///
-    /// When enabled, generated PNG layer previews color-code blend direction:
-    /// - Green = look-behind contribution
-    /// - Red = look-ahead contribution
-    ///
-    /// Intended for diagnostics only.
-    #[serde(default = "default_z_blend_debug_color_overlay")]
-    pub z_blend_debug_color_overlay: bool,
     /// Flat triangle buffer (`x,y,z` * 3 vertices per triangle).
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.

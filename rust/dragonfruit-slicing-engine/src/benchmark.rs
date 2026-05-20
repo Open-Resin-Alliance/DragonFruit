@@ -158,7 +158,6 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         z_blend_minimum_alpha_percent: 0.0,
         z_blend_max_alpha_percent: 90.0,
         z_blend_custom_lut: None,
-        z_blend_debug_color_overlay: false,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
         x_packing_mode: "none".to_string(),

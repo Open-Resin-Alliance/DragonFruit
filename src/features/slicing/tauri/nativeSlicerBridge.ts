@@ -33,7 +33,6 @@ export type NativeSolidSliceJobEnvelope = {
   zBlendMinimumAlphaPercent?: number;
   zBlendMaxAlphaPercent?: number;
   zBlendCustomLut?: number[];
-  zBlendDebugColorOverlay?: boolean;
   modelTriangleCount: number;
   containerCompressionLevel?: number;
   buildWidthMm: number;
@@ -78,7 +77,6 @@ type NativeSolidSlicePayload = {
   z_blend_minimum_alpha_percent?: number;
   z_blend_max_alpha_percent?: number;
   z_blend_custom_lut?: number[];
-  z_blend_debug_color_overlay?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
@@ -123,7 +121,6 @@ type NativeSolidSliceMetadataPayload = {
   z_blend_minimum_alpha_percent?: number;
   z_blend_max_alpha_percent?: number;
   z_blend_custom_lut?: number[];
-  z_blend_debug_color_overlay?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
@@ -214,7 +211,6 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     z_blend_minimum_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMinimumAlphaPercent ?? 0))),
     z_blend_max_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMaxAlphaPercent ?? 90))),
     z_blend_custom_lut: job.zBlendCustomLut,
-    z_blend_debug_color_overlay: job.zBlendDebugColorOverlay === true,
     model_triangle_count: job.modelTriangleCount,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
@@ -262,7 +258,6 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     z_blend_minimum_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMinimumAlphaPercent ?? 0))),
     z_blend_max_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMaxAlphaPercent ?? 90))),
     z_blend_custom_lut: job.zBlendCustomLut,
-    z_blend_debug_color_overlay: job.zBlendDebugColorOverlay === true,
     model_triangle_count: Math.max(0, Math.floor(job.modelTriangleCount ?? 0)),
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,

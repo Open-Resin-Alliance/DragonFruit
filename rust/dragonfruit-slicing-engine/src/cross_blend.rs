@@ -8,6 +8,8 @@
 //! Unlike the older 2.5D pass, this performs true 3D neighborhood accumulation
 //! over (x, y, z) samples (bounded by configured windows/radii).
 
+use crate::binary_mask::BoundedBinaryMaskRef;
+
 /// Configuration for volumetric-style cross-layer blending.
 #[derive(Debug, Clone, Copy)]
 pub struct CrossBlendKernelConfig {
@@ -46,10 +48,10 @@ impl Default for CrossBlendKernelConfig {
 pub struct CrossBlendNeighbor<'a> {
     /// Signed layer offset relative to center (`-1`, `+1`, ...).
     pub z_offset: i32,
-    /// 8-bit grayscale mask for the neighbor layer.
-    pub mask: &'a [u8],
+    /// Binary-ish occupancy/intensity field for the neighbor layer.
+    pub mask: BoundedBinaryMaskRef<'a>,
     /// Binary-ish topology/occupancy mask for the neighbor layer.
-    pub topology: &'a [u8],
+    pub topology: BoundedBinaryMaskRef<'a>,
 }
 
 /// Input bundle for a center-layer cross-blend operation.
@@ -58,9 +60,12 @@ pub struct CrossBlendLayerInputs<'a> {
     /// Center mask to blend into.
     pub center_mask: &'a mut [u8],
     /// Center topology used for local gating.
-    pub center_topology: &'a [u8],
+    pub center_topology: BoundedBinaryMaskRef<'a>,
     /// Neighbor layer samples within configured Z window.
     pub neighbors: &'a [CrossBlendNeighbor<'a>],
+    /// Global origin of the local center mask buffer.
+    pub origin_x: usize,
+    pub origin_y: usize,
     /// Layer dimensions.
     pub width: usize,
     pub height: usize,
@@ -143,7 +148,7 @@ pub fn cross_blend_layer_inplace(
     workspace: &mut CrossBlendWorkspace,
 ) -> CrossBlendStats {
     let n = inputs.width.saturating_mul(inputs.height);
-    if n == 0 || inputs.center_mask.len() != n || inputs.center_topology.len() != n {
+    if n == 0 || inputs.center_mask.len() != n {
         return CrossBlendStats::default();
     }
 
@@ -158,15 +163,14 @@ pub fn cross_blend_layer_inplace(
     }
 
     let mut stats = CrossBlendStats::default();
-    let width_i = inputs.width as isize;
-    let height_i = inputs.height as isize;
+    let min_x_i = inputs.origin_x as isize;
+    let min_y_i = inputs.origin_y as isize;
+    let max_x_i = (inputs.origin_x + inputs.width) as isize;
+    let max_y_i = (inputs.origin_y + inputs.height) as isize;
     let kernel_weight_sum: f32 = workspace.neighbor_offsets.iter().map(|(_, _, w)| *w).sum();
     let mut z_weight_sum = 0.0f32;
 
     for neighbor in inputs.neighbors.iter() {
-        if neighbor.mask.len() != n || neighbor.topology.len() != n {
-            continue;
-        }
         let dz = neighbor.z_offset.unsigned_abs() as usize;
         if dz == 0 || dz > cfg.window_layers {
             continue;
@@ -180,14 +184,19 @@ pub fn cross_blend_layer_inplace(
         let mut layer_contributed = false;
 
         for y in 0..inputs.height {
-            let y_i = y as isize;
+            let global_y = inputs.origin_y + y;
+            let y_i = global_y as isize;
             let row = y * inputs.width;
             for x in 0..inputs.width {
-                let x_i = x as isize;
+                let global_x = inputs.origin_x + x;
+                let x_i = global_x as isize;
                 let center_idx = row + x;
 
                 // Keep the blend field local to current geometry to avoid distant haloing.
-                let center_gate = if inputs.center_topology[center_idx] > cfg.topo_threshold {
+                let center_gate = if inputs
+                    .center_topology
+                    .is_set(global_x, global_y, cfg.topo_threshold)
+                {
                     1.0
                 } else {
                     0.7
@@ -199,16 +208,18 @@ pub fn cross_blend_layer_inplace(
                 for (dx, dy, xy_w) in workspace.neighbor_offsets.iter().copied() {
                     let nx = x_i + dx;
                     let ny = y_i + dy;
-                    if nx < 0 || ny < 0 || nx >= width_i || ny >= height_i {
+                    if nx < min_x_i || ny < min_y_i || nx >= max_x_i || ny >= max_y_i {
                         continue;
                     }
-                    let nidx = ny as usize * inputs.width + nx as usize;
-                    if neighbor.topology[nidx] <= cfg.topo_threshold {
+                    if !neighbor
+                        .topology
+                        .is_set(nx as usize, ny as usize, cfg.topo_threshold)
+                    {
                         continue;
                     }
 
                     let w = zw * xy_w * center_gate;
-                    local_accum += neighbor.mask[nidx] as f32 * w;
+                    local_accum += neighbor.mask.sample(nx as usize, ny as usize) as f32 * w;
                     local_weight += w;
                 }
 
@@ -247,28 +258,31 @@ pub fn cross_blend_layer_inplace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binary_mask::BoundedBinaryMask;
 
     #[test]
     fn cross_blend_respects_max_merge() {
         let width = 4;
         let height = 1;
         let mut center = vec![200u8, 10, 10, 200];
-        let center_topo = vec![255u8, 0, 0, 255];
+        let center_topo = BoundedBinaryMask::from_full_frame(vec![255u8, 0, 0, 255], width, height);
 
-        let n1_mask = vec![100u8, 220, 220, 100];
-        let n1_topo = vec![255u8; 4];
+        let n1_mask = BoundedBinaryMask::from_full_frame(vec![100u8, 220, 220, 100], width, height);
+        let n1_topo = BoundedBinaryMask::from_full_frame(vec![255u8; 4], width, height);
         let neighbors = [CrossBlendNeighbor {
             z_offset: 1,
-            mask: &n1_mask,
-            topology: &n1_topo,
+            mask: n1_mask.as_view(),
+            topology: n1_topo.as_view(),
         }];
 
         let mut ws = CrossBlendWorkspace::new(width, height);
         let _stats = cross_blend_layer_inplace(
             CrossBlendLayerInputs {
                 center_mask: &mut center,
-                center_topology: &center_topo,
+                center_topology: center_topo.as_view(),
                 neighbors: &neighbors,
+                origin_x: 0,
+                origin_y: 0,
                 width,
                 height,
             },
@@ -289,23 +303,25 @@ mod tests {
         let width = 5;
         let height = 1;
         let mut center = vec![0u8, 0, 0, 0, 0];
-        let center_topo = vec![0u8; 5];
+        let center_topo = BoundedBinaryMask::from_full_frame(vec![0u8; 5], width, height);
 
         // Occupancy only at center pixel in +1 layer.
-        let n1_mask = vec![0u8, 0, 255, 0, 0];
-        let n1_topo = vec![0u8, 0, 255, 0, 0];
+        let n1_mask = BoundedBinaryMask::from_full_frame(vec![0u8, 0, 255, 0, 0], width, height);
+        let n1_topo = BoundedBinaryMask::from_full_frame(vec![0u8, 0, 255, 0, 0], width, height);
         let neighbors = [CrossBlendNeighbor {
             z_offset: 1,
-            mask: &n1_mask,
-            topology: &n1_topo,
+            mask: n1_mask.as_view(),
+            topology: n1_topo.as_view(),
         }];
 
         let mut ws = CrossBlendWorkspace::new(width, height);
         let _stats = cross_blend_layer_inplace(
             CrossBlendLayerInputs {
                 center_mask: &mut center,
-                center_topology: &center_topo,
+                center_topology: center_topo.as_view(),
                 neighbors: &neighbors,
+                origin_x: 0,
+                origin_y: 0,
                 width,
                 height,
             },
