@@ -42,7 +42,7 @@ The keywords MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be interpreted a
 ### 3.1 Extension and Media Type
 
 - Extension: `.voxl`
-- Media type: `application/vnd.dragonfruit.voxl`
+- Media type: `model/vnd.dragonfruit.voxl`
 
 ### 3.2 Units and Coordinate Basis
 
