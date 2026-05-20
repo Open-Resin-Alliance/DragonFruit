@@ -2634,12 +2634,14 @@ pub fn slice_and_rasterize_rle_v3(
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
-    // 3DAA modes run their own vertical pipeline — no SSAA here.
-    let ssaa_factor = if is_vertical_aa_mode(&job.anti_aliasing_mode) {
-        1usize
-    } else {
-        (job.configured_xy_aa_steps() as usize).max(1)
-    };
+    // Vertical AA and Blur AA both own antialiasing in post-process, so keep
+    // rasterization at native resolution and skip SSAA upscaling.
+    let ssaa_factor =
+        if is_vertical_aa_mode(&job.anti_aliasing_mode) || job.anti_aliasing_mode_is_blur() {
+            1usize
+        } else {
+            (job.configured_xy_aa_steps() as usize).max(1)
+        };
     let blur_radius = if job.anti_aliasing_mode_is_blur() && job.blur_brush_radius_px > 0 {
         job.blur_brush_radius_px.max(1) as usize
     } else {
@@ -2947,12 +2949,14 @@ pub fn slice_and_rasterize_rle_encoded_v3(
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
-    // 3DAA modes run their own vertical pipeline — no SSAA here.
-    let ssaa_factor = if is_vertical_aa_mode(&job.anti_aliasing_mode) {
-        1usize
-    } else {
-        (job.configured_xy_aa_steps() as usize).max(1)
-    };
+    // Vertical AA and Blur AA both own antialiasing in post-process, so keep
+    // rasterization at native resolution and skip SSAA upscaling.
+    let ssaa_factor =
+        if is_vertical_aa_mode(&job.anti_aliasing_mode) || job.anti_aliasing_mode_is_blur() {
+            1usize
+        } else {
+            (job.configured_xy_aa_steps() as usize).max(1)
+        };
     let blur_radius = if job.anti_aliasing_mode_is_blur() && job.blur_brush_radius_px > 0 {
         job.blur_brush_radius_px.max(1) as usize
     } else {
