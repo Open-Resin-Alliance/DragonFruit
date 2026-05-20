@@ -875,8 +875,15 @@ export function SlicingPanel({
 
   const progressPercent = useMemo(() => {
     const total = Math.max(1, progressTotal);
-    return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
+    return Math.max(0, Math.min(100, (progressDone / total) * 100));
   }, [progressDone, progressTotal]);
+  const progressPercentLabel = useMemo(() => {
+    const rounded = Math.round(displayProgressPercent);
+    if (slicingModalStage === 'running' && progressDone < progressTotal) {
+      return Math.min(99, rounded);
+    }
+    return Math.max(0, Math.min(100, rounded));
+  }, [displayProgressPercent, progressDone, progressTotal, slicingModalStage]);
 
   const phaseKind = useMemo(() => resolveSlicingPhaseKind(currentPhase), [currentPhase]);
   const encodeUnitTotal = Math.max(1, progressTotal - slicingLayerTotal);
@@ -1705,6 +1712,7 @@ export function SlicingPanel({
         onProgress: (done, total, phase) => {
           const phaseKind = resolveSlicingPhaseKind(phase);
           const isSlicingPhase = phaseKind === 'slicing';
+          const isPreSlicingPhase = phaseKind === 'preparing' || phaseKind === 'staging';
           const safeTotal = Math.max(1, total);
           const safeDone = Math.max(0, Math.min(done, safeTotal));
           setCurrentPhase(phase);
@@ -1712,12 +1720,17 @@ export function SlicingPanel({
 
           if (isSlicingPhase) {
             hasSlicingProgressStartedRef.current = true;
-            setProgressDone(safeDone);
-            setProgressTotal(safeTotal);
-          } else if (!hasSlicingProgressStartedRef.current) {
+          }
+
+          if (!hasSlicingProgressStartedRef.current && isPreSlicingPhase) {
             // Keep pre-slice phases (Preparing / Staging) at zero progress.
             setProgressDone(0);
             setProgressTotal(1);
+          } else {
+            // Once slicing begins, keep progress in sync across Encoding/Finalizing/Handoff
+            // so the bar and counter don't appear to stall near completion.
+            setProgressDone(safeDone);
+            setProgressTotal(safeTotal);
           }
 
           if (typeof window !== 'undefined') {
@@ -3080,7 +3093,7 @@ export function SlicingPanel({
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Progress</div>
-                  <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{Math.round(displayProgressPercent)}%</div>
+                  <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{progressPercentLabel}%</div>
                 </div>
                 {slicingModalStage === 'running' && liveLayersPerSec != null && (
                   <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

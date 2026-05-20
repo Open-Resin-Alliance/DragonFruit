@@ -1825,7 +1825,7 @@ fn rasterize_vertical_aa_streaming_v3(
                     // Flush once the oldest pending layer has a full future window plus
                     // optional extra buffering depth for post-stage scheduling experiments.
                     if pending_layers.len() > look_back + post_buffer_depth {
-                        let mut layer = pending_layers.pop_front().expect("pending layer exists");
+                        let layer = pending_layers.pop_front().expect("pending layer exists");
 
                         if !post_worker_txs.is_empty() {
                             let prior_topologies: Vec<BoundedBinaryMask> = emitted_topologies
@@ -2035,7 +2035,7 @@ fn rasterize_vertical_aa_streaming_v3(
             // ── Tail flush ─────────────────────────────────────────────────────────
             // raw_pump_rx has closed (rasterizer finished); flush any layers still
             // in the pending queue with a shrinking future window.
-            while let Some(mut layer) = pending_layers.pop_front() {
+            while let Some(layer) = pending_layers.pop_front() {
                 if !post_worker_txs.is_empty() {
                     let prior_topologies: Vec<BoundedBinaryMask> = emitted_topologies
                         .iter()
@@ -2855,50 +2855,62 @@ pub fn slice_and_rasterize_3daa_rle_v3(
     // Pending queue: layers waiting for sufficient future context before emit.
     let mut pending: VecDeque<(u32, RleTopology, Option<Vec<crate::rle::RleRun>>)> =
         VecDeque::new();
+    let mut emitted_progress_layers: u32 = 0;
 
     // Helper: emit one layer from the front of `pending`, apply z-blend + blur + support merge.
     // Returns Err if the on_rle_layer callback fails.
-    let do_emit = |pending: &mut VecDeque<(u32, RleTopology, Option<Vec<crate::rle::RleRun>>)>,
-                   prior_topos: &mut VecDeque<RleTopology>,
-                   on_rle_layer: &mut dyn FnMut(
-        u32,
-        Vec<crate::rle::RleRun>,
-    ) -> Result<(), SlicerV3Error>|
-     -> Result<(), SlicerV3Error> {
-        let (emit_layer, emit_topo, emit_support) = pending.pop_front().unwrap();
-        let prior_refs: Vec<&RleTopology> = prior_topos.iter().rev().take(look_back).collect();
-        let future_refs: Vec<&RleTopology> = pending.iter().take(look_back).map(|e| &e.1).collect();
+    let mut do_emit =
+        |pending: &mut VecDeque<(u32, RleTopology, Option<Vec<crate::rle::RleRun>>)>,
+         prior_topos: &mut VecDeque<RleTopology>,
+         on_rle_layer: &mut dyn FnMut(
+            u32,
+            Vec<crate::rle::RleRun>,
+        ) -> Result<(), SlicerV3Error>|
+         -> Result<(), SlicerV3Error> {
+            let (emit_layer, emit_topo, emit_support) = pending.pop_front().unwrap();
+            let prior_refs: Vec<&RleTopology> = prior_topos.iter().rev().take(look_back).collect();
+            let future_refs: Vec<&RleTopology> =
+                pending.iter().take(look_back).map(|e| &e.1).collect();
 
-        let blended = blend_3daa_rle(
-            &emit_topo,
-            &prior_refs,
-            &future_refs,
-            width,
-            height,
-            fade_px,
-            Some(&lut),
-        );
+            let blended = blend_3daa_rle(
+                &emit_topo,
+                &prior_refs,
+                &future_refs,
+                width,
+                height,
+                fade_px,
+                Some(&lut),
+            );
 
-        let blurred = if blur_radius > 0 {
-            blur_gray_rle_streaming(&blended, width, height, blur_radius, min_alpha_u8)
-        } else {
-            blended
+            let blurred = if blur_radius > 0 {
+                blur_gray_rle_streaming(&blended, width, height, blur_radius, min_alpha_u8)
+            } else {
+                blended
+            };
+
+            let final_runs = if let Some(ref support) = emit_support {
+                merge_rle_max(blurred, support)
+            } else {
+                blurred
+            };
+
+            on_rle_layer(emit_layer, final_runs)?;
+
+            emitted_progress_layers = emitted_progress_layers.saturating_add(1);
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: emitted_progress_layers.min(job.total_layers),
+                    total: job.total_layers,
+                    phase: SliceProgressPhaseV3::Slicing,
+                });
+            }
+
+            prior_topos.push_back(emit_topo);
+            if prior_topos.len() > look_back {
+                prior_topos.pop_front();
+            }
+            Ok(())
         };
-
-        let final_runs = if let Some(ref support) = emit_support {
-            merge_rle_max(blurred, support)
-        } else {
-            blurred
-        };
-
-        on_rle_layer(emit_layer, final_runs)?;
-
-        prior_topos.push_back(emit_topo);
-        if prior_topos.len() > look_back {
-            prior_topos.pop_front();
-        }
-        Ok(())
-    };
 
     // Wrapper callback: buffers layers and emits once look_back future layers are known.
     let mut wrapped = |layer_idx: u32,
@@ -2922,7 +2934,7 @@ pub fn slice_and_rasterize_3daa_rle_v3(
         compute_area_stats,
         support_split_model_triangle_count,
         &mut wrapped,
-        on_progress,
+        None,
         cancel_flag,
     )?;
     // wrapped is dropped here, releasing its borrows on pending, prior_topos, on_rle_layer.
