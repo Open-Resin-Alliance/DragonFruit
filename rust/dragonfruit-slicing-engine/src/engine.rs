@@ -2803,6 +2803,10 @@ pub fn slice_and_rasterize_3daa_rle_v3(
 
     // 3DAA blend parameters extracted from the original job.
     let look_back = (job.z_blend_look_back as usize).max(1);
+    // See `SliceJobV3::effective_z_blend_fade_px` for the derivation.
+    let fade_px = job.effective_z_blend_fade_px();
+    // Optional post-blur only (user-controlled). 3DAA itself is handled by the
+    // 2-D distance blend in `blend_3daa_rle`.
     let blur_radius = job.blur_brush_radius_px as usize;
     let min_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
@@ -2869,7 +2873,7 @@ pub fn slice_and_rasterize_3daa_rle_v3(
             &future_refs,
             width,
             height,
-            look_back as u32,
+            fade_px,
             Some(&lut),
         );
 

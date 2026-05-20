@@ -13,8 +13,8 @@
 //! 3. Compute the union of all future layers' solid intervals at `y`.
 //! 4. "Blend zone" = (prior_union ∪ future_union) − current.
 //!    These are pixels that appear in adjacent layers but not the current one.
-//! 5. For each blend-zone pixel compute the 1-D horizontal distance to the
-//!    nearest current-layer solid pixel on the same scanline.
+//! 5. For each blend-zone pixel compute the 2-D Euclidean distance to the
+//!    nearest current-layer solid pixel (across nearby rows).
 //! 6. Convert distance → alpha through the cure-window LUT.
 //! 7. Emit a grayscale RLE row:  current pixels → 255, blend pixels → alpha,
 //!    all others → 0.
@@ -48,7 +48,12 @@ impl RleTopology {
     pub fn from_binary_rle(runs: &[RleRun], width: usize, height: usize) -> Self {
         if width == 0 || height == 0 {
             let row_offsets = vec![0u32; height + 1];
-            return Self { width, height, row_offsets, intervals: Vec::new() };
+            return Self {
+                width,
+                height,
+                row_offsets,
+                intervals: Vec::new(),
+            };
         }
 
         let total = width.saturating_mul(height);
@@ -120,7 +125,12 @@ impl RleTopology {
             row_offsets.push(intervals.len() as u32);
         }
 
-        Self { width, height, row_offsets, intervals }
+        Self {
+            width,
+            height,
+            row_offsets,
+            intervals,
+        }
     }
 
     /// Solid intervals for row `y`, sorted by start_x.
@@ -225,11 +235,12 @@ fn subtract_intervals(a: &[(u32, u32)], b: &[(u32, u32)], output: &mut Vec<(u32,
 // Distance → alpha
 // ---------------------------------------------------------------------------
 
-/// Convert a horizontal pixel distance (0 = at boundary, ≥ fade_px → 0) to alpha.
+/// Convert a pixel distance (0 = at boundary, ≥ fade_px → 0) to alpha.
 ///
 /// Formula: `raw = (fade_px − dist) * 255 / fade_px`, then optionally remapped
 /// through `lut`. This matches the cure-window LUT convention used by the rest
 /// of the z-blend pipeline.
+#[cfg(test)]
 #[inline]
 fn dist_to_alpha(dist: u32, fade_px: u32, lut: Option<&[u8; 256]>) -> u8 {
     if dist >= fade_px {
@@ -249,28 +260,29 @@ fn dist_to_alpha(dist: u32, fade_px: u32, lut: Option<&[u8; 256]>) -> u8 {
 
 /// Apply 3DAA z-blend to `current_topo`, returning a grayscale RLE.
 ///
-/// Alpha is assigned by **Z-layer distance**, not horizontal XY distance.
-/// A blend pixel first appearing in an adjacent layer at distance `d` receives
-/// `alpha ∝ (fade_layers + 1 − d) / (fade_layers + 1)`, optionally remapped
-/// through `lut`. This correctly handles curved/sloped surfaces where adjacent
-/// layer footprints extend far beyond the current-layer boundary in XY;
-/// the subsequent XY blur provides spatial gradient smoothing.
+/// EDT-like blend over adjacent-layer occupancy.
 ///
-/// - `prior_topos[i]` = topology of the layer `i + 1` steps **before** current.
-/// - `future_topos[i]` = topology of the layer `i + 1` steps **after** current.
+/// - `prior_topos` and `future_topos` are adjacent layers inside the caller's
+///   z-window (e.g. `look_back`). Their per-row union defines where blend is
+///   allowed.
 /// - Solid current-layer pixels → 255.
-/// - Pixels in adjacent layers (within `fade_layers` Z-steps) but not in
-///   current → alpha scaled by nearest-layer distance, through `lut`.
+/// - Pixels in adjacent-layer union but not in current are flood-filled from
+///   current-boundary seeds (4-neighbor), then graded per connected component
+///   using normalized distance `t = d / max_d_component` (same style as the
+///   EDT-era component normalization).
+/// - `fade_px` remains a hard cutoff (`d > fade_px` => 0).
 /// - All other pixels → 0.
 pub fn blend_3daa_rle(
     current_topo: &RleTopology,
-    prior_topos: &[&RleTopology],   // [0]=1 layer ago, [1]=2 layers ago, …
-    future_topos: &[&RleTopology],  // [0]=1 layer ahead, [1]=2 ahead, …
+    prior_topos: &[&RleTopology],
+    future_topos: &[&RleTopology],
     width: usize,
     height: usize,
-    fade_layers: u32,
+    fade_px: u32,
     lut: Option<&[u8; 256]>,
 ) -> Vec<RleRun> {
+    use std::collections::VecDeque;
+
     let mut out = RleAccum::new();
 
     if prior_topos.is_empty() && future_topos.is_empty() {
@@ -281,83 +293,284 @@ pub fn blend_3daa_rle(
         return out.finish();
     }
 
-    let max_depth = prior_topos.len()
-        .max(future_topos.len())
-        .min(fade_layers as usize);
-
-    // Per-row scratch buffers reused across all scanlines.
-    let mut adj_src: Vec<&[(u32, u32)]> = Vec::with_capacity(2);
+    // Build blend-zone intervals for all rows first. We need full 2D
+    // connectivity (components can span rows) before emitting final alphas.
+    let mut row_blend: Vec<Vec<(u32, u32)>> = vec![Vec::new(); height];
+    let mut adj_src: Vec<&[(u32, u32)]> =
+        Vec::with_capacity(prior_topos.len() + future_topos.len());
     let mut adj_union: Vec<(u32, u32)> = Vec::new();
-    let mut blend_minus_cur: Vec<(u32, u32)> = Vec::new();
-    let mut new_at_d: Vec<(u32, u32)> = Vec::new();
-    let mut covered: Vec<(u32, u32)> = Vec::new();
-    let mut covered_next: Vec<(u32, u32)> = Vec::new();
-    let mut all_segs: Vec<(u32, u32, u8)> = Vec::new();
+    let mut has_blend = false;
+    let mut blend_min_x = width;
+    let mut blend_max_x = 0usize;
+    let mut blend_min_y = height;
+    let mut blend_max_y = 0usize;
 
     for y in 0..height {
         let cur = current_topo.row_intervals(y);
-        all_segs.clear();
-        covered.clear();
 
-        // Process adjacent layers from nearest (d=1) to farthest (d=max_depth).
-        // Each blend pixel receives the alpha of the closest layer containing it.
-        for d in 1..=max_depth {
-            // dist_to_alpha with fade = fade_layers+1 gives:
-            //   d=1           → (fade_layers)*255/(fade_layers+1)  — near-maximum
-            //   d=fade_layers → 255/(fade_layers+1)                — small but nonzero
-            let alpha_d = dist_to_alpha(d as u32, fade_layers + 1, lut);
-            if alpha_d == 0 {
-                break;
+        // Union all adjacent occupancy at this row (caller already restricts
+        // how many layers are included in `prior_topos` / `future_topos`).
+        adj_src.clear();
+        for t in prior_topos {
+            let iv = t.row_intervals(y);
+            if !iv.is_empty() {
+                adj_src.push(iv);
             }
-
-            adj_src.clear();
-            if d <= prior_topos.len() {
-                let iv = prior_topos[d - 1].row_intervals(y);
-                if !iv.is_empty() { adj_src.push(iv); }
-            }
-            if d <= future_topos.len() {
-                let iv = future_topos[d - 1].row_intervals(y);
-                if !iv.is_empty() { adj_src.push(iv); }
-            }
-            if adj_src.is_empty() { continue; }
-
-            union_intervals_into(&adj_src, &mut adj_union);
-
-            // Pixels in adjacent footprint but absent from the current layer.
-            subtract_intervals(&adj_union, cur, &mut blend_minus_cur);
-            if blend_minus_cur.is_empty() { continue; }
-
-            // Exclude pixels already assigned a closer-layer alpha.
-            subtract_intervals(&blend_minus_cur, &covered, &mut new_at_d);
-            for &(s, e) in &new_at_d {
-                all_segs.push((s, e, alpha_d));
-            }
-
-            // Expand the covered set.
-            let srcs = [covered.as_slice(), blend_minus_cur.as_slice()];
-            union_intervals_into(&srcs, &mut covered_next);
-            std::mem::swap(&mut covered, &mut covered_next);
         }
-
-        // Current pixels always at full exposure.
-        for &(s, e) in cur {
-            all_segs.push((s, e, 255u8));
+        for t in future_topos {
+            let iv = t.row_intervals(y);
+            if !iv.is_empty() {
+                adj_src.push(iv);
+            }
         }
-
-        if all_segs.is_empty() {
-            out.push_run(width as u32, 0);
+        if adj_src.is_empty() {
             continue;
         }
 
-        // Sort by start position then sweep-emit.
-        all_segs.sort_unstable_by_key(|&(s, _, _)| s);
+        union_intervals_into(&adj_src, &mut adj_union);
+        subtract_intervals(&adj_union, cur, &mut row_blend[y]);
+
+        if !row_blend[y].is_empty() {
+            has_blend = true;
+            blend_min_y = blend_min_y.min(y);
+            blend_max_y = blend_max_y.max(y);
+            for &(s, e) in &row_blend[y] {
+                blend_min_x = blend_min_x.min(s as usize);
+                blend_max_x = blend_max_x.max(e as usize);
+            }
+        }
+    }
+
+    if !has_blend {
+        for y in 0..height {
+            emit_row_binary(current_topo.row_intervals(y), width, &mut out);
+        }
+        return out.finish();
+    }
+
+    // ROI around blend zone, expanded by one pixel for seed-neighbor checks.
+    let roi_min_x = blend_min_x.saturating_sub(1);
+    let roi_max_x = (blend_max_x + 1).min(width.saturating_sub(1));
+    let roi_min_y = blend_min_y.saturating_sub(1);
+    let roi_max_y = (blend_max_y + 1).min(height.saturating_sub(1));
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let roi_len = roi_w * roi_h;
+
+    // ROI-local masks.
+    let mut zone = vec![0u8; roi_len];
+    let mut cur_mask = vec![0u8; roi_len];
+
+    // Fill current mask in ROI.
+    for y in roi_min_y..=roi_max_y {
+        let ry = y - roi_min_y;
+        let row_off = ry * roi_w;
+        for &(s, e) in current_topo.row_intervals(y) {
+            let s = s as usize;
+            let e = e as usize;
+            if e < roi_min_x || s > roi_max_x {
+                continue;
+            }
+            let cs = s.max(roi_min_x);
+            let ce = e.min(roi_max_x);
+            for x in cs..=ce {
+                cur_mask[row_off + (x - roi_min_x)] = 1;
+            }
+        }
+    }
+
+    // Fill blend-zone mask in ROI.
+    for y in blend_min_y..=blend_max_y {
+        let ry = y - roi_min_y;
+        let row_off = ry * roi_w;
+        for &(s, e) in &row_blend[y] {
+            let s = s as usize;
+            let e = e as usize;
+            if e < roi_min_x || s > roi_max_x {
+                continue;
+            }
+            let zs = s.max(roi_min_x);
+            let ze = e.min(roi_max_x);
+            for x in zs..=ze {
+                zone[row_off + (x - roi_min_x)] = 1;
+            }
+        }
+    }
+
+    // Seeded BFS distance through blend zone.
+    let mut dist = vec![0u16; roi_len];
+    let mut queue: VecDeque<usize> = VecDeque::new();
+
+    for y in blend_min_y..=blend_max_y {
+        let ry = y - roi_min_y;
+        let row_off = ry * roi_w;
+        for &(s, e) in &row_blend[y] {
+            for x in (s as usize)..=(e as usize) {
+                let rx = x - roi_min_x;
+                let idx = row_off + rx;
+                if zone[idx] == 0 {
+                    continue;
+                }
+                let left = rx > 0 && cur_mask[idx - 1] != 0;
+                let right = rx + 1 < roi_w && cur_mask[idx + 1] != 0;
+                let up = ry > 0 && cur_mask[idx - roi_w] != 0;
+                let down = ry + 1 < roi_h && cur_mask[idx + roi_w] != 0;
+                if left || right || up || down {
+                    dist[idx] = 1;
+                    queue.push_back(idx);
+                }
+            }
+        }
+    }
+
+    // Expand through the full connected blend zone to obtain component extent.
+    while let Some(idx) = queue.pop_front() {
+        let d = dist[idx];
+        let nd = d.saturating_add(1);
+        let ry = idx / roi_w;
+        let rx = idx % roi_w;
+
+        if rx > 0 {
+            let n = idx - 1;
+            if zone[n] != 0 && dist[n] == 0 {
+                dist[n] = nd;
+                queue.push_back(n);
+            }
+        }
+        if rx + 1 < roi_w {
+            let n = idx + 1;
+            if zone[n] != 0 && dist[n] == 0 {
+                dist[n] = nd;
+                queue.push_back(n);
+            }
+        }
+        if ry > 0 {
+            let n = idx - roi_w;
+            if zone[n] != 0 && dist[n] == 0 {
+                dist[n] = nd;
+                queue.push_back(n);
+            }
+        }
+        if ry + 1 < roi_h {
+            let n = idx + roi_w;
+            if zone[n] != 0 && dist[n] == 0 {
+                dist[n] = nd;
+                queue.push_back(n);
+            }
+        }
+    }
+
+    // Connected-component labels on reachable blend pixels (dist > 0).
+    let mut labels = vec![0u32; roi_len];
+    let mut comp_max_dist: Vec<u16> = vec![0u16]; // index 0 unused
+    let mut next_label: u32 = 0;
+
+    for idx in 0..roi_len {
+        if dist[idx] == 0 || labels[idx] != 0 {
+            continue;
+        }
+        next_label += 1;
+        let label = next_label;
+        labels[idx] = label;
+        queue.push_back(idx);
+        let mut max_d = dist[idx];
+
+        while let Some(p) = queue.pop_front() {
+            let d = dist[p];
+            if d > max_d {
+                max_d = d;
+            }
+
+            let ry = p / roi_w;
+            let rx = p % roi_w;
+            if rx > 0 {
+                let n = p - 1;
+                if dist[n] > 0 && labels[n] == 0 {
+                    labels[n] = label;
+                    queue.push_back(n);
+                }
+            }
+            if rx + 1 < roi_w {
+                let n = p + 1;
+                if dist[n] > 0 && labels[n] == 0 {
+                    labels[n] = label;
+                    queue.push_back(n);
+                }
+            }
+            if ry > 0 {
+                let n = p - roi_w;
+                if dist[n] > 0 && labels[n] == 0 {
+                    labels[n] = label;
+                    queue.push_back(n);
+                }
+            }
+            if ry + 1 < roi_h {
+                let n = p + roi_w;
+                if dist[n] > 0 && labels[n] == 0 {
+                    labels[n] = label;
+                    queue.push_back(n);
+                }
+            }
+        }
+
+        comp_max_dist.push(max_d);
+    }
+
+    // Sweep-emit this row by interleaving current solids (255), blend-zone
+    // pixels (component-normalized gradient), and zero gaps.
+    for y in 0..height {
+        let cur = current_topo.row_intervals(y);
+        let blend_zone = &row_blend[y];
         let mut col = 0u32;
         let w = width as u32;
-        for &(s, e, alpha) in &all_segs {
-            if s > col { out.push_run(s - col, 0); }
-            out.push_run(e - s + 1, alpha);
-            col = e + 1;
+        let mut ci = 0usize;
+        let mut bi = 0usize;
+
+        while col < w {
+            let nc = cur.get(ci).map(|&(s, _)| s).unwrap_or(w);
+            let nb = blend_zone.get(bi).map(|&(s, _)| s).unwrap_or(w);
+            let next_start = nc.min(nb);
+
+            if next_start >= w {
+                break;
+            }
+
+            if next_start > col {
+                out.push_run(next_start - col, 0);
+                col = next_start;
+            }
+
+            if nc <= nb {
+                let (s, e) = cur[ci];
+                debug_assert_eq!(s, col);
+                out.push_run(e - s + 1, 255);
+                col = e + 1;
+                ci += 1;
+            } else {
+                let (s, e) = blend_zone[bi];
+                debug_assert_eq!(s, col);
+                for x in s..=e {
+                    let idx = (y - roi_min_y) * roi_w + (x as usize - roi_min_x);
+                    let d = dist[idx] as u32;
+                    let alpha = if d == 0 || d > fade_px {
+                        0
+                    } else {
+                        let lbl = labels[idx] as usize;
+                        let max_d = comp_max_dist.get(lbl).copied().unwrap_or(1).max(1) as f32;
+                        let t = (d as f32 / max_d).clamp(0.0, 1.0);
+                        let raw = ((1.0 - t) * 255.0 + 0.5) as usize;
+                        match lut {
+                            Some(l) => l[raw.min(255)],
+                            None => raw.min(255) as u8,
+                        }
+                    };
+                    out.push_run(1, alpha);
+                }
+                col = e + 1;
+                bi += 1;
+            }
         }
+
         if col < w {
             out.push_run(w - col, 0);
         }
@@ -395,7 +608,10 @@ mod tests {
     use super::*;
 
     fn make_runs(pairs: &[(u32, u8)]) -> Vec<RleRun> {
-        pairs.iter().map(|&(length, value)| RleRun { length, value }).collect()
+        pairs
+            .iter()
+            .map(|&(length, value)| RleRun { length, value })
+            .collect()
     }
 
     // ── RleTopology::from_binary_rle ─────────────────────────────────────────
@@ -572,8 +788,8 @@ mod tests {
     #[test]
     fn blend_receding_geometry_right_edge() {
         // Prior has solid x=0..3 (whole row); current has solid x=0..1.
-        // Blend zone: x=2..3 (receding pixels, both from prior at d=1).
-        // With Z-layer-distance alpha: both x=2 and x=3 come from d=1 → same alpha.
+        // Blend zone: x=2..3. 2-D distance to current edge x=1 gives:
+        // x=2 => dist=1 (higher alpha), x=3 => dist=2 (lower alpha).
         let prior_runs = make_runs(&[(4, 255)]);
         let cur_runs = make_runs(&[(2, 255), (2, 0)]);
         let prior_topo = RleTopology::from_binary_rle(&prior_runs, 4, 1);
@@ -582,41 +798,42 @@ mod tests {
         let px = rle_to_pixels(&result);
         assert_eq!(px[0], 255); // current solid
         assert_eq!(px[1], 255); // current solid
-        // Both blend-zone pixels come from d=1 → identical alpha.
-        assert_eq!(px[2], px[3]);
+        assert!(px[2] > px[3]);
         assert!(px[2] > 0);
-        assert!(px[2] < 255);
+        assert_eq!(px[3], 0);
     }
 
     #[test]
-    fn blend_zone_all_pixels_get_layer_based_alpha() {
-        // Prior has solid x=0..3; current has only x=0..0 (width=10, fade_layers=4).
-        // Blend zone: x=1..3 — these are far from the horizontal boundary but
-        // adjacent at d=1. With Z-layer-distance they must all get nonzero alpha.
+    fn blend_zone_respects_fade_distance() {
+        // Prior has solid x=0..3; current has only x=0..0.
+        // With fade_px=2:
+        // component-normalized distances are [1,2,3] over x=[1,2,3], so
+        // x=1 has higher alpha than x=2, and x=3 is cut by fade.
         let w = 10usize;
         let prior_runs = make_runs(&[(4, 255), (6, 0)]);
         let cur_runs = make_runs(&[(1, 255), (9, 0)]);
         let prior_topo = RleTopology::from_binary_rle(&prior_runs, w, 1);
         let cur_topo = RleTopology::from_binary_rle(&cur_runs, w, 1);
-        let result = blend_3daa_rle(&cur_topo, &[&prior_topo], &[], w, 1, 4, None);
+        let result = blend_3daa_rle(&cur_topo, &[&prior_topo], &[], w, 1, 2, None);
         let px = rle_to_pixels(&result);
         assert_eq!(px[0], 255); // current solid
-        // All blend-zone pixels (x=1..3) come from d=1 → same nonzero alpha.
-        assert!(px[1] > 0);
-        assert_eq!(px[1], px[2]);
-        assert_eq!(px[2], px[3]);
-        // Pixels beyond prior (x=4..9) → 0.
-        for &v in &px[4..] { assert_eq!(v, 0); }
+        assert!(px[1] > px[2]);
+        assert!(px[2] > 0);
+        assert_eq!(px[3], 0);
+        for &v in &px[4..] {
+            assert_eq!(v, 0);
+        }
     }
 
     #[test]
-    fn blend_z_layer_gradient_priority() {
-        // Validate that pixels closer in Z get higher alpha.
+    fn blend_union_across_depth_is_xy_blended() {
+        // Adjacent layers are unioned first, then per-component normalization
+        // controls alpha (so different connected components can have different
+        // slopes even for equal geometric distance to current).
         // width=8, height=1, current: x=4 only.
-        // prior[0] (d=1): x=3..5  → blend zone x=3, x=5
-        // prior[1] (d=2): x=1..6  → blend zone x=1..2, x=6 (x=3,x=5 already covered)
-        // Expected: px[3]==px[5] (alpha_d1), px[1]==px[2]==px[6] (alpha_d2),
-        //           alpha_d1 > alpha_d2 > 0, px[4]==255.
+        // prior[0]: x=3..5, prior[1]: x=1..6.
+        // Distances to current x=4 become:
+        // x=3/5 => 1, x=2/6 => 2, x=1 => 3.
         let w = 8usize;
         let cur_runs = make_runs(&[(4, 0), (1, 255), (3, 0)]);
         let prior_d1_runs = make_runs(&[(3, 0), (3, 255), (2, 0)]);
@@ -627,12 +844,32 @@ mod tests {
         let result = blend_3daa_rle(&cur_topo, &[&prior_d1, &prior_d2], &[], w, 1, 4, None);
         let px = rle_to_pixels(&result);
         assert_eq!(px[4], 255); // current solid
-        assert_eq!(px[0], 0);   // not in any adjacent
-        assert_eq!(px[7], 0);   // not in any adjacent
-        assert_eq!(px[3], px[5]); // both from d=1
-        assert_eq!(px[1], px[2]); // both from d=2
-        assert_eq!(px[1], px[6]); // both from d=2
-        assert!(px[3] > px[1]);   // d=1 alpha > d=2 alpha
-        assert!(px[1] > 0);       // d=2 still nonzero
+        assert_eq!(px[0], 0); // not in any adjacent
+        assert_eq!(px[7], 0); // not in any adjacent
+        assert!(px[3] > px[2]); // left component drops with distance
+        assert!(px[5] > px[6]); // right component drops with distance
+        assert!(px[3] > px[5]); // component-normalized slopes may differ
+        assert!(px[2] > px[6]);
+        assert_eq!(px[1], 0);
+        assert_eq!(px[6], 0);
+    }
+
+    #[test]
+    fn blend_uses_vertical_distance_not_just_horizontal() {
+        // Current has one pixel at (x=2,y=1). Prior has two pixels at row 0:
+        // x=2 and x=3. Seed enters via vertical adjacency at (2,0), then
+        // propagates horizontally to (3,0), proving vertical coupling.
+        let w = 5usize;
+        let h = 3usize;
+        let cur_runs = make_runs(&[(7, 0), (1, 255), (7, 0)]);
+        let prior_runs = make_runs(&[(2, 0), (2, 255), (11, 0)]);
+        let cur_topo = RleTopology::from_binary_rle(&cur_runs, w, h);
+        let prior_topo = RleTopology::from_binary_rle(&prior_runs, w, h);
+        let result = blend_3daa_rle(&cur_topo, &[&prior_topo], &[], w, h, 3, None);
+        let px = rle_to_pixels(&result);
+        assert_eq!(px.len(), w * h);
+        assert_eq!(px[7], 255); // current pixel at row1,col2
+        assert!(px[2] > 0); // row0,col2 gets blend via vertical proximity
+        assert_eq!(px[3], 0); // row0,col3 is farther in same component
     }
 }
