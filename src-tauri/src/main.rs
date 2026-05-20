@@ -22,10 +22,6 @@ fn default_z_blend_fade_px() -> u32 {
     20
 }
 
-fn default_z_blend_debug_color_overlay() -> bool {
-    false
-}
-
 fn default_z_blend_max_alpha_percent() -> f32 {
     90.0
 }
@@ -395,8 +391,6 @@ struct SliceJobMetadata {
     /// to remap the post-blur grayscale output directly.
     #[serde(default)]
     z_blend_custom_lut: Option<Vec<u8>>,
-    #[serde(default = "default_z_blend_debug_color_overlay")]
-    z_blend_debug_color_overlay: bool,
     #[serde(default)]
     model_triangle_count: u32,
     container_compression_level: u8,
@@ -1328,7 +1322,6 @@ async fn slice_solid_native_to_temp_path(
             z_blend_minimum_alpha_percent: meta.z_blend_minimum_alpha_percent,
             z_blend_max_alpha_percent: meta.z_blend_max_alpha_percent,
             z_blend_custom_lut: meta.z_blend_custom_lut,
-            z_blend_debug_color_overlay: meta.z_blend_debug_color_overlay,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,
             build_depth_mm: meta.build_depth_mm,

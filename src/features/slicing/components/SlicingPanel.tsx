@@ -1167,9 +1167,10 @@ export function SlicingPanel({
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Coverage' :
     resolvedAaMode === '3DAA' ? 'Vertical2' :
     'Blur';
-  const blurUsesLutCurve = aaMode === 'Blur' && blurGraySourceMode === 'lut';
-  const shouldUseLutCurveForExport = effectiveAntiAliasingMode === 'Vertical2'
-    || (effectiveAntiAliasingMode === 'Blur' && aaQualityMode === 'advanced' && blurGraySourceMode === 'lut');
+  const blurUsesLutCurve = (aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'lut';
+  const shouldUseLutCurveForExport =
+    (effectiveAntiAliasingMode === 'Vertical2' || effectiveAntiAliasingMode === 'Blur')
+    && blurGraySourceMode === 'lut';
 
   const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
@@ -1671,7 +1672,6 @@ export function SlicingPanel({
 
       const result = await runSliceExportOrchestrator({
         aaOnSupports: aaOnSupportsExperimental,
-        zBlendDebugColorOverlay: slicingPerformanceSettings.zBlendDebugColorOverlay,
         models: visibleModels,
         printerProfile: activePrinterProfile,
         materialProfile: materialProfileForSlicing,
@@ -2433,11 +2433,11 @@ export function SlicingPanel({
                         />
                       )}
 
-                      {aaMode === 'Blur' && (
+                      {(aaMode === 'Blur' || aaMode === '3DAA') && (
                         <>
                           <SettingLabelWithHelp
                             label="AA on Supports"
-                            help="Controls whether native support and raft geometry also receives 2D blur AA. Off keeps supports crisp and binary; On allows anti-aliased support edges too."
+                            help="Controls whether native support and raft geometry also receives grayscale AA in the selected mode. Off keeps supports crisp and binary; On allows anti-aliased support edges too."
                           />
                           <div className="grid grid-cols-2 gap-1">
                             <button
@@ -2486,7 +2486,7 @@ export function SlicingPanel({
                           />
                           <SettingLabelWithHelp
                             label="Grey Mapping"
-                            help="Choose whether 2D Blur AA uses a simple minimum grey threshold or remaps the post-blur grayscale output through a resin-calibrated LUT curve."
+                            help="Choose whether the selected grayscale AA mode uses a simple minimum grey threshold or remaps the finished grayscale output through a resin-calibrated LUT curve."
                           />
                           <div className="grid grid-cols-2 gap-1">
                             <button
@@ -2527,11 +2527,11 @@ export function SlicingPanel({
                             </button>
                           </div>
 
-                          {blurUsesLutCurve && (
+                          {aaMode === 'Blur' && blurUsesLutCurve && (
                             <>
                               <SettingLabelWithHelp
                                 label="LUT Curve"
-                                help="Remaps 2D blur grayscale output through the same resin-calibrated cure curve system used by 3DAA."
+                                help="Remaps the final grayscale output through the shared resin-calibrated cure curve system used by both Blur AA and 3DAA."
                               />
                               <div className="grid grid-cols-3 gap-1 pt-1">
                                 {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
@@ -2687,7 +2687,7 @@ export function SlicingPanel({
                             </button>
                           </div>
 
-                          {!zBlendAutoMode && (
+                          {!zBlendAutoMode && blurGraySourceMode === 'lut' && (
                             <>
                               <SettingLabelWithHelp
                                 label="LUT Curve"
@@ -2936,7 +2936,7 @@ export function SlicingPanel({
                         </>
                       )}
 
-                      {aaMode === 'Blur' && blurGraySourceMode === 'minimum' && (
+                      {(aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'minimum' && (
                         <div className="space-y-1">
                           <SettingLabelWithHelp
                             label="Minimum Grey Level"

@@ -173,7 +173,6 @@ export type SliceExportOrchestratorOptions = {
   zBlendCustomLut?: number[];
   minimumAaAlphaPercentOverride?: number;
   aaOnSupports?: boolean;
-  zBlendDebugColorOverlay?: boolean;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
   abortSignal?: AbortSignal;
@@ -675,7 +674,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
           ?? 50,
       ),
     ),
-    zBlendDebugColorOverlay: options.zBlendDebugColorOverlay === true,
     mirrorX: solidMesh.mirrorX,
     mirrorY: solidMesh.mirrorY,
     modelTriangleCount: solidMesh.modelTriangleCount,

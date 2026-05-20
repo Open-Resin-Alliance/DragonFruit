@@ -1196,6 +1196,7 @@ pub fn remap_gray_rle_with_lut(
     out.finish()
 }
 
+#[cfg(test)]
 pub(crate) fn encode_mask_to_rle_in_bounds(
     mask: &[u8],
     width: usize,
@@ -1229,6 +1230,52 @@ pub(crate) fn encode_mask_to_rle_in_bounds(
             rle.push_run(min_x as u32, 0);
         }
         emit_row(&mut rle, &mask[row_start + min_x..=row_start + max_x]);
+        let right = width - 1 - max_x;
+        if right > 0 {
+            rle.push_run(right as u32, 0);
+        }
+    }
+    emit_zero_rows(&mut rle, height - 1 - max_y, width);
+    rle.finish()
+}
+
+pub(crate) fn encode_bounded_gray_mask_to_rle(
+    mask: &crate::binary_mask::BoundedGrayMask,
+    width: usize,
+    height: usize,
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    let mut rle = RleAccum::new();
+    if width == 0 || height == 0 {
+        return rle.finish();
+    }
+
+    let view = mask.as_view();
+    let Some((min_x, max_x, min_y, max_y)) = view.bounds() else {
+        emit_zero_rows(&mut rle, height, width);
+        return rle.finish();
+    };
+
+    let min_x = min_x.min(width - 1);
+    let max_x = max_x.min(width - 1);
+    let min_y = min_y.min(height - 1);
+    let max_y = max_y.min(height - 1);
+    if min_x > max_x || min_y > max_y {
+        emit_zero_rows(&mut rle, height, width);
+        return rle.finish();
+    }
+
+    emit_zero_rows(&mut rle, min_y, width);
+    for row_index in min_y..=max_y {
+        if min_x > 0 {
+            rle.push_run(min_x as u32, 0);
+        }
+        if let Some(row) = view.row(row_index) {
+            emit_row(&mut rle, row);
+        } else {
+            rle.push_run((max_x - min_x + 1) as u32, 0);
+        }
         let right = width - 1 - max_x;
         if right > 0 {
             rle.push_run(right as u32, 0);
@@ -2592,10 +2639,11 @@ pub fn blur_gray_rle_streaming(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_blur_postprocess_inplace, blur_gray_rle_streaming, encode_mask_to_rle,
-        encode_mask_to_rle_in_bounds, rasterize_layer, rasterize_layer_rle,
+        apply_blur_postprocess_inplace, blur_gray_rle_streaming, encode_bounded_gray_mask_to_rle,
+        encode_mask_to_rle, encode_mask_to_rle_in_bounds, rasterize_layer, rasterize_layer_rle,
         rasterize_layer_with_stats, remap_gray_rle_with_lut,
     };
+    use crate::binary_mask::BoundedGrayMask;
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
     use crate::rle::expand_rle_to_mask;
@@ -2682,7 +2730,6 @@ mod tests {
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
-            z_blend_debug_color_overlay: false,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
@@ -2716,6 +2763,29 @@ mod tests {
         mask[3 * width + 5] = 30;
 
         let runs = encode_mask_to_rle_in_bounds(&mask, width, height, Some((2, 5, 1, 3)));
+        let expanded = expand_rle_to_mask(&runs, width * height);
+
+        assert_eq!(expanded, mask);
+    }
+
+    #[test]
+    fn bounded_gray_rle_matches_full_frame_bounds_encoder() {
+        let width = 8usize;
+        let height = 5usize;
+        let mut mask = vec![0u8; width * height];
+        mask[1 * width + 2] = 10;
+        mask[1 * width + 3] = 10;
+        mask[2 * width + 4] = 20;
+        mask[3 * width + 5] = 30;
+
+        let bounded = BoundedGrayMask::from_full_frame_in_bounds(
+            mask.clone(),
+            width,
+            height,
+            Some((2, 5, 1, 3)),
+        );
+
+        let runs = encode_bounded_gray_mask_to_rle(&bounded, width, height);
         let expanded = expand_rle_to_mask(&runs, width * height);
 
         assert_eq!(expanded, mask);
