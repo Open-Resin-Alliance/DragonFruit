@@ -4,7 +4,6 @@ export type SlicingPerformanceSettings = {
   pngCompressionStrategy: PngCompressionStrategy;
   bvhAccelerationEnabled: boolean;
   aaOnSupportsExperimental: boolean;
-  zBlendDebugColorOverlay: boolean;
 };
 
 export const SLICING_PERFORMANCE_SETTINGS_STORAGE_KEY = 'app-slicing-performance-settings';
@@ -14,7 +13,6 @@ export const DEFAULT_SLICING_PERFORMANCE_SETTINGS: SlicingPerformanceSettings = 
   pngCompressionStrategy: 'auto',
   bvhAccelerationEnabled: true,
   aaOnSupportsExperimental: false,
-  zBlendDebugColorOverlay: false,
 };
 
 let cachedSlicingPerformanceSettingsRaw: string | null | undefined;
@@ -36,13 +34,11 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
 
   const bvhAccelerationEnabled = candidate.bvhAccelerationEnabled !== false;
   const aaOnSupportsExperimental = candidate.aaOnSupportsExperimental === true;
-  const zBlendDebugColorOverlay = candidate.zBlendDebugColorOverlay === true;
 
   return {
     pngCompressionStrategy,
     bvhAccelerationEnabled,
     aaOnSupportsExperimental,
-    zBlendDebugColorOverlay,
   };
 }
 
