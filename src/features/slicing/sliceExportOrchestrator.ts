@@ -347,6 +347,7 @@ function mergeMetadataOverridesIntoMetadata(
   outputFormat: string,
   materialProfile: MaterialProfile,
   settingsMode?: string,
+  printerOutputFormat?: string,
 ): string {
   try {
     const parsed = JSON.parse(metadataJson) as Record<string, unknown>;
@@ -368,10 +369,13 @@ function mergeMetadataOverridesIntoMetadata(
       parsed.export = exportNode;
     }
 
-    const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
+    const adapter = getProfileLocalMaterialSettingsAdapter(printerOutputFormat ?? outputFormat, settingsMode)
+      ?? getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
     const fieldSchema = adapter?.fields ?? [];
     if (fieldSchema.length > 0) {
-      const localForOutput = materialProfile.localSettingsByOutput?.[outputFormat] ?? {};
+      const localForOutput = materialProfile.localSettingsByOutput?.[printerOutputFormat ?? outputFormat]
+        ?? materialProfile.localSettingsByOutput?.[outputFormat]
+        ?? {};
 
       fieldSchema.forEach((field) => {
         const fieldValue = Object.prototype.hasOwnProperty.call(localForOutput, field.key)
@@ -672,6 +676,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       format.outputFormat,
       options.materialProfile,
       resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
+      options.printerProfile.display.outputFormat,
     ),
   };
 
@@ -707,8 +712,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   throwIfAborted(options.abortSignal);
   options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
-  const outputExt = format.outputFormat.replace(/^\./, '') || 'slice';
-  const outputName = `${safeFilenameBase(options.filenameBase)}.${outputExt}`;
+  const printerExt = options.printerProfile.display.outputFormat.replace(/^\./, '') || format.outputFormat.replace(/^\./, '') || 'slice';
+  const outputName = `${safeFilenameBase(options.filenameBase)}.${printerExt}`;
 
   const totalElapsedMs = performance.now() - orchestratorStartMs;
   options.onProgress?.(progressTotal, progressTotal, 'Handoff');
