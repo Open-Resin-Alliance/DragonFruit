@@ -3258,22 +3258,22 @@ export function ProfileSettingsModal({
         type="button"
         disabled={isAlreadyAdded}
         onClick={handleToggle}
-        className="rounded-lg border p-2.5 text-left disabled:opacity-55 transition-colors"
+        className="rounded-lg border p-2.5 text-left disabled:opacity-55 transition-[background-color,box-shadow,opacity] duration-150"
         style={{
-          borderColor: isAlreadyAdded
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-            : isSelected
-              ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 20%)'
-              : 'var(--border-subtle)',
+          borderColor: 'var(--border-subtle)',
           background: isAlreadyAdded
             ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
             : isSelected
               ? 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)'
               : 'var(--surface-1)',
-          outline: isSelected ? '1.5px solid color-mix(in srgb, var(--accent), transparent 40%)' : 'none',
+          boxShadow: isAlreadyAdded
+            ? 'inset 0 0 0 1px color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
+            : isSelected
+              ? 'inset 0 0 0 1.5px color-mix(in srgb, var(--accent), transparent 40%)'
+              : 'inset 0 0 0 0 transparent',
         }}
       >
-        <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
+        <div className="h-[132px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
           {preset.imageAssetPath ? (
             <img
               src={preset.imageAssetPath}
@@ -3330,18 +3330,28 @@ export function ProfileSettingsModal({
             </span>
           )}
         </div>
-        <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
-          <span className="truncate">{preset.name}</span>
-          <span className="shrink-0 inline-flex items-center gap-1">
-            {isAlreadyAdded && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
+        <div className="mt-1.5 min-w-0">
+          <div className="truncate text-[12px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+            {preset.name}
+          </div>
+          <div className="mt-0.5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+            <div className="min-w-0 truncate text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              {preset.manufacturer}
+            </div>
+            <span className="shrink-0 inline-flex min-w-[52px] items-center justify-end">
+              <span
+                className="inline-flex h-[18px] min-w-[44px] items-center justify-center rounded border px-1.5 text-[10px]"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
+                  color: 'var(--accent-secondary)',
+                  visibility: isAlreadyAdded ? 'visible' : 'hidden',
+                }}
+                aria-hidden={!isAlreadyAdded}
+              >
                 Added
               </span>
-            )}
-          </span>
-        </div>
-        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          {preset.manufacturer}
+            </span>
+          </div>
         </div>
       </button>
     );
@@ -4555,19 +4565,30 @@ export function ProfileSettingsModal({
                       {filteredPrinterPresets.map(renderPresetLibraryCard)}
                     </div>
                   ) : (
-                    <div className="space-y-0">
-                      {groupedFilteredPrinterPresets.map((group, groupIndex) => (
+                    <div className="space-y-2">
+                      {groupedFilteredPrinterPresets.map((group) => (
                         <section key={`${selectedPresetManufacturer}-${group.family}`}>
-                          {groupIndex > 0 && (
-                            <div className="my-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
-                          )}
-                          <div className="mb-2 flex items-center gap-2">
+                          <div className="mb-2 flex items-center gap-3">
+                            <div
+                              className="h-px flex-1"
+                              style={{
+                                background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), transparent 52%) 18%, color-mix(in srgb, var(--text-muted), white 28%) 100%)',
+                              }}
+                              aria-hidden="true"
+                            />
                             <span
-                              className="text-[11px] font-bold uppercase tracking-widest"
-                              style={{ color: 'var(--accent-secondary)' }}
+                              className="shrink-0 text-[11px] font-semibold tracking-[0.08em]"
+                              style={{ color: 'var(--text-muted)' }}
                             >
                               {group.family}
                             </span>
+                            <div
+                              className="h-px flex-1"
+                              style={{
+                                background: 'linear-gradient(90deg, color-mix(in srgb, var(--text-muted), white 28%) 0%, color-mix(in srgb, var(--border-subtle), transparent 52%) 82%, transparent 100%)',
+                              }}
+                              aria-hidden="true"
+                            />
                           </div>
                           <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
                             {group.presets.map(renderPresetLibraryCard)}
