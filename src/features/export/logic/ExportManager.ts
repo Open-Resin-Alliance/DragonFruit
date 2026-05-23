@@ -3,6 +3,7 @@ import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
+import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
@@ -901,13 +902,15 @@ export class ExportManager {
 
     // Supports: use the live R3F ref directly — its matrixWorld is already current.
     // Hitbox meshes are filtered per-node inside the serializers via isMaterialHitbox().
-    if (options.includeSupports && supportsGroup) {
+    if (options.includeSupports) {
       if (hasScopedModelFilter) {
-        const scopedSupports = this.buildScopedSupportsGroup(supportsGroup, scopedModelIds);
-        if (scopedSupports) {
+        const supportSnapshot = getSnapshot();
+        const kickstandSnapshot = getKickstandSnapshot();
+        const scopedSupports = buildScopedSupportGeometryGroup(supportSnapshot, kickstandSnapshot, scopedModelIds);
+        if (scopedSupports.children.length > 0) {
           exportObjects.push(scopedSupports);
         }
-      } else {
+      } else if (supportsGroup) {
         supportsGroup.updateMatrixWorld(true);
         exportObjects.push(supportsGroup);
       }
@@ -1068,21 +1071,22 @@ export class ExportManager {
 
     const supportSnapshot = getSnapshot();
     const kickstandSnapshot = getKickstandSnapshot();
-    const supports = buildSupportExportFromStores(
-      supportSnapshot,
-      kickstandSnapshot,
-      'dragonfruit-voxl-export',
-    );
 
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
 
-    const belongsToScopedModel = (candidate: unknown): boolean => {
-      if (!hasScopedModelFilter) return true;
-      if (!candidate || typeof candidate !== 'object') return false;
-      const modelId = (candidate as { modelId?: unknown }).modelId;
-      return typeof modelId === 'string' && scopedModelIds.has(modelId);
-    };
+    const supports = hasScopedModelFilter
+      ? buildScopedSupportExportDocument(
+          supportSnapshot,
+          kickstandSnapshot,
+          scopedModelIds,
+          'dragonfruit-voxl-export',
+        )
+      : buildSupportExportFromStores(
+          supportSnapshot,
+          kickstandSnapshot,
+          'dragonfruit-voxl-export',
+        );
 
     if (!options.includeSupports) {
       supports.roots = [];
@@ -1094,16 +1098,6 @@ export class ExportManager {
       supports.braces = [];
       supports.knots = [];
       supports.kickstands = [];
-    } else if (hasScopedModelFilter) {
-      supports.roots = (supports.roots ?? []).filter((item) => belongsToScopedModel(item));
-      supports.trunks = (supports.trunks ?? []).filter((item) => belongsToScopedModel(item));
-      supports.branches = (supports.branches ?? []).filter((item) => belongsToScopedModel(item));
-      supports.leaves = (supports.leaves ?? []).filter((item) => belongsToScopedModel(item));
-      supports.twigs = (supports.twigs ?? []).filter((item) => belongsToScopedModel(item));
-      supports.sticks = (supports.sticks ?? []).filter((item) => belongsToScopedModel(item));
-      supports.braces = (supports.braces ?? []).filter((item) => belongsToScopedModel(item));
-      supports.knots = (supports.knots ?? []).filter((item) => belongsToScopedModel(item));
-      supports.kickstands = (supports.kickstands ?? []).filter((item) => belongsToScopedModel(item));
     }
 
     const meshBytesMap = new Map<number, Uint8Array>();
