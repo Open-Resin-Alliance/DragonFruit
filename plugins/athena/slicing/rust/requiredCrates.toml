@@ -1,9 +1,9 @@
-# Athena Plugin Cargo Dependencies for Slicer V3
+# Athena Plugin Cargo Dependencies for dragonfruit-slicing-engine
 #
 # This file declares any additional Rust crates required by the Athena encoder.
-# The generator will merge these into dragonfruit-slicer-v3/Cargo.toml during build.
+# The generator will merge these into dragonfruit-slicing-engine/Cargo.toml during build.
 #
-# Currently, Athena's encoder uses only core dragonfruit-slicer-v3 dependencies
+# Currently, Athena's encoder uses only core dragonfruit-slicing-engine dependencies
 # (serde, zip, base64, etc.), so this file is minimal.
 #
 # If additional crates are needed in the future, declare them below.
