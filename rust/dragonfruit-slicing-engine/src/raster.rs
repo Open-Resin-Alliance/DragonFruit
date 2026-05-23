@@ -132,6 +132,41 @@ fn make_row_span(x0: f32, x1: f32, width: usize) -> Option<RowSpan> {
 }
 
 #[inline]
+fn build_row_spans_even_odd(
+    active_edges: &[ActiveEdge],
+    width: usize,
+    snap_to_integer: bool,
+) -> Vec<RowSpan> {
+    let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
+    let mut i = 0usize;
+
+    while i + 1 < active_edges.len() {
+        let x_left = active_edges[i].x;
+        let x_right = active_edges[i + 1].x;
+
+        if !x_left.is_finite() || !x_right.is_finite() {
+            break;
+        }
+
+        if snap_to_integer {
+            let a = x_left.round() as i64;
+            let b = x_right.round() as i64;
+            if a < b {
+                if let Some(span) = make_row_span(x_left, x_right, width) {
+                    spans.push(span);
+                }
+            }
+        } else if let Some(span) = make_row_span(x_left, x_right, width) {
+            spans.push(span);
+        }
+
+        i += 2;
+    }
+
+    spans
+}
+
+#[inline]
 fn edge_plane_intersection_t(az: f32, bz: f32, z: f32) -> Option<f32> {
     let dz1 = az - z;
     let dz2 = bz - z;
@@ -174,9 +209,14 @@ fn build_row_spans_nonzero(
     width: usize,
     snap_to_integer: bool,
 ) -> Vec<RowSpan> {
+    if active_edges.len() < 2 {
+        return Vec::new();
+    }
+
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
     let n = active_edges.len();
+    let mut closure_winding = 0i32;
 
     for i in 0..n.saturating_sub(1) {
         let x_left = active_edges[i].x;
@@ -185,6 +225,7 @@ fn build_row_spans_nonzero(
         }
 
         winding += active_edges[i].wind;
+        closure_winding += active_edges[i].wind;
         if winding == 0 {
             continue;
         }
@@ -205,6 +246,16 @@ fn build_row_spans_nonzero(
         if let Some(span) = make_row_span(x_left, x_right, width) {
             spans.push(span);
         }
+    }
+
+    if let Some(last_edge) = active_edges.last() {
+        if last_edge.x.is_finite() {
+            closure_winding += last_edge.wind;
+        }
+    }
+
+    if closure_winding != 0 {
+        return build_row_spans_even_odd(active_edges, width, snap_to_integer);
     }
 
     spans
@@ -1384,6 +1435,7 @@ pub fn rasterize_layer_rle(
 
 #[cfg(test)]
 mod tests {
+    use super::{build_row_spans_nonzero, ActiveEdge};
     use super::{rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats};
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::{parse_triangles, project_triangles_inplace};
@@ -1481,6 +1533,110 @@ mod tests {
             }
         }
         runs
+    }
+
+    fn max_run_length(mask: &[u8], width: usize) -> usize {
+        mask.chunks_exact(width)
+            .map(|row| {
+                let mut best = 0usize;
+                let mut current = 0usize;
+                for &px in row {
+                    if px > 0 {
+                        current += 1;
+                        best = best.max(current);
+                    } else {
+                        current = 0;
+                    }
+                }
+                best
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn push_open_wall_triangle(
+        out: &mut Vec<f32>,
+        x: f32,
+        y0: f32,
+        y1: f32,
+        z0: f32,
+        z1: f32,
+        negative_x_normal: bool,
+    ) {
+        let a = [x, y0, z0];
+        let b = [x, y1, z1];
+        let c = [x, y1, z0];
+
+        if negative_x_normal {
+            out.extend_from_slice(&a);
+            out.extend_from_slice(&b);
+            out.extend_from_slice(&c);
+        } else {
+            out.extend_from_slice(&a);
+            out.extend_from_slice(&c);
+            out.extend_from_slice(&b);
+        }
+    }
+
+    #[test]
+    fn unbalanced_crossings_fall_back_to_even_odd_pairs() {
+        let spans = build_row_spans_nonzero(
+            &[
+                ActiveEdge {
+                    x: 40.0,
+                    dx_dy: 0.0,
+                    wind: 1,
+                    end_exclusive: 10,
+                },
+                ActiveEdge {
+                    x: 64.0,
+                    dx_dy: 0.0,
+                    wind: 1,
+                    end_exclusive: 10,
+                },
+                ActiveEdge {
+                    x: 220.0,
+                    dx_dy: 0.0,
+                    wind: -1,
+                    end_exclusive: 10,
+                },
+            ],
+            256,
+            true,
+        );
+
+        assert_eq!(
+            spans.len(),
+            1,
+            "malformed rows should collapse to one safe paired span"
+        );
+        assert_eq!(spans[0].start, 40);
+        assert_eq!(spans[0].end, 63);
+    }
+
+    #[test]
+    fn open_wall_rows_do_not_leak_across_remaining_crossings() {
+        let job = job_for_single_layer();
+
+        let mut flat = Vec::<f32>::new();
+        push_open_wall_triangle(&mut flat, -24.0, -18.0, 18.0, 0.0, 1.0, true);
+        push_open_wall_triangle(&mut flat, -8.0, -18.0, 18.0, 0.0, 1.0, true);
+        push_open_wall_triangle(&mut flat, 22.0, -18.0, 18.0, 0.0, 1.0, false);
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let mask = rasterize_layer(&job, &triangles, &indices, 0);
+
+        let longest_run = max_run_length(&mask, job.source_width_px as usize);
+        assert!(
+            longest_run < 80,
+            "malformed open rows should not flood-fill across the remaining crossings (longest_run={longest_run})"
+        );
+        assert!(
+            longest_run > 5,
+            "the regression mesh should still produce a small filled span so the test is meaningful"
+        );
     }
 
     #[test]
