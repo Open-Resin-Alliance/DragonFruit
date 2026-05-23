@@ -92,7 +92,7 @@ Generated outputs:
 - `src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts`
 - `src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts`
 - `src-tauri/src/generated_builtin_plugins.rs`
-- `rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs`
+- `rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs`
 
 Integrity hardening:
 
@@ -170,7 +170,7 @@ CI guardrail workflow:
 - Network handler registry: `src/features/plugins/networkPluginRegistry.ts`
 - Generic network API route: `src/app/api/network/plugin/route.ts`
 - Tauri plugin registry: `src-tauri/src/plugin_registry.rs`
-- Native encoder registry: `rust/dragonfruit-slicer-v3/src/encoders/registry.rs`
+- Native encoder registry: `rust/dragonfruit-slicing-engine/src/encoders/registry.rs`
 - Plugin settings UI: `src/components/settings/PluginsSettingsTab.tsx`
 
 ---

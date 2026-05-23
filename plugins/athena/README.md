@@ -82,7 +82,7 @@ Athena is wired through **generated registries** (not manual core registration):
 - `src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts`
 - `src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts`
 - `src-tauri/src/generated_builtin_plugins.rs`
-- `rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs`
+- `rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs`
 
 Core consumers:
 
@@ -90,7 +90,7 @@ Core consumers:
 - `src/features/plugins/networkPluginRegistry.ts`
 - `src/app/api/network/plugin/route.ts`
 - `src-tauri/src/plugin_registry.rs`
-- `rust/dragonfruit-slicer-v3/src/encoders/registry.rs`
+- `rust/dragonfruit-slicing-engine/src/encoders/registry.rs`
 
 ---
 

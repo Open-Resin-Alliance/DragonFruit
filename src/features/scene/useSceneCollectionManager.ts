@@ -3329,6 +3329,11 @@ export function useSceneCollectionManager() {
     sourcePaths?: Array<string | null | undefined>;
   };
 
+  const shouldAutoRepairSceneImports = useCallback((options?: SceneImportRunOptions): boolean => {
+    if (options?.suppressRepair) return false;
+    return getSavedImportDefaultsSettings().autoRepairScenes;
+  }, []);
+
   const handleImportPluginSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
     if (!extension || extension === '.voxl') {
@@ -3367,6 +3372,7 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
+      const autoRepairScenes = shouldAutoRepairSceneImports(options);
       const importResult = await pluginImport.handler(file, pluginImport.fileType);
 
       if (!importResult.success) {
@@ -3394,7 +3400,48 @@ export function useSceneCollectionManager() {
       for (const normalized of normalizedPayloads) {
         const processed = await processGeometry(normalized.geometry, {
           center: false,
-          nativeProcessingMode: 'none',
+          nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+          onNativeProcessingStage: (stage) => {
+            if (options?.suppressProgress) return;
+
+            if (stage === 'repairing') {
+              setImportProgress({
+                active: true,
+                type: 'scene',
+                label: `Importing ${pluginImport.fileType.displayName}…`,
+                detail: normalizedPayloads.length > 1
+                  ? `Auto-Repairing Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
+                  : `Auto-Repairing ${file.name}`,
+                progress: null,
+              });
+              return;
+            }
+
+            if (stage === 'analyzing') {
+              setImportProgress({
+                active: true,
+                type: 'scene',
+                label: `Importing ${pluginImport.fileType.displayName}…`,
+                detail: normalizedPayloads.length > 1
+                  ? `Inspecting Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
+                  : `Inspecting ${file.name}`,
+                progress: null,
+              });
+              return;
+            }
+
+            if (stage === 'classifying') {
+              setImportProgress({
+                active: true,
+                type: 'scene',
+                label: `Importing ${pluginImport.fileType.displayName}…`,
+                detail: normalizedPayloads.length > 1
+                  ? `Classifying Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
+                  : `Classifying ${file.name}`,
+                progress: null,
+              });
+            }
+          },
         });
         processedItems.push({ normalized, processed });
       }
@@ -3546,7 +3593,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -3566,6 +3613,7 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
+      const autoRepairScenes = shouldAutoRepairSceneImports(options);
       // Peek at the first 6 bytes to detect format.
       // V2 binary starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2.
       // V1 JSON starts with '{' (0x7B).
@@ -3648,7 +3696,7 @@ export function useSceneCollectionManager() {
           url = URL.createObjectURL(blob);
 
           const geometry = await loadMeshGeometry(url, embeddedName, {
-            nativeProcessingMode: options?.suppressRepair ? 'none' : 'auto',
+            nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
             onNativeProcessingStage: (stage) => {
               if (stage === 'repairing') {
                 setImportProgress({
@@ -3828,7 +3876,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);

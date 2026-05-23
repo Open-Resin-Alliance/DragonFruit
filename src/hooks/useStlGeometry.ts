@@ -110,6 +110,59 @@ const IN_PLACE_PROCESSING_VERTEX_THRESHOLD = 12_000_000;
 // beyond this size and let users opt-in via manual Repair.
 const AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD = 3_000_000;
 
+type NativeRepairQualityGateDecision = {
+  reject: boolean;
+  reason?: string;
+};
+
+function computeReductionRatio(before: number, after: number): number {
+  if (!Number.isFinite(before) || before <= 0) return 1;
+  if (!Number.isFinite(after)) return 0;
+  return Math.max(0, (before - after) / before);
+}
+
+/**
+ * Guardrail against "repairs" that introduce large open boundaries with little
+ * meaningful reduction in severe defects. These cases can visibly shred side
+ * walls/rims while only nudging self-intersection counts.
+ */
+export function evaluateNativeRepairQualityGate(report: MeshHealthReport): NativeRepairQualityGateDecision {
+  const pre = report.pre;
+  const post = report.post;
+
+  if (post.vertex_count <= 0 || post.triangle_count <= 0) {
+    return {
+      reject: true,
+      reason: `invalid repaired topology size (triangles=${post.triangle_count}, vertices=${post.vertex_count})`,
+    };
+  }
+
+  const boundaryIncrease = Math.max(0, post.boundary_edges - pre.boundary_edges);
+  const selfIntersectionReduction = computeReductionRatio(pre.self_intersections, post.self_intersections);
+
+  const introducedLargeBoundaryFromClosedMesh = pre.boundary_edges === 0
+    && post.boundary_edges >= 64
+    && post.boundary_loops > 0;
+
+  if (introducedLargeBoundaryFromClosedMesh && selfIntersectionReduction < 0.35) {
+    return {
+      reject: true,
+      reason: `introduced large boundary on previously closed mesh (${pre.boundary_edges}→${post.boundary_edges}) with low self-intersection reduction (${(selfIntersectionReduction * 100).toFixed(1)}%)`,
+    };
+  }
+
+  const explosiveBoundaryIncrease = boundaryIncrease >= 256
+    && post.boundary_edges >= Math.max(128, pre.boundary_edges * 4);
+  if (explosiveBoundaryIncrease && selfIntersectionReduction < 0.2) {
+    return {
+      reject: true,
+      reason: `boundary edges increased too aggressively (${pre.boundary_edges}→${post.boundary_edges}) without enough self-intersection relief (${(selfIntersectionReduction * 100).toFixed(1)}%)`,
+    };
+  }
+
+  return { reject: false };
+}
+
 function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
   // DragonFruit controls model tinting centrally via mesh settings.
   // Ignore per-file embedded colors (e.g. binary STL color extension).
@@ -230,10 +283,60 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         ? await classifyFromGeometry(geometry)
         : await repairFromGeometry(geometry);
       if (result) {
-        applyRepairedPositions(geometry, result.positions);
-        const { report } = result;
+        let effectiveResult = result;
+        let usedFallbackClassification = false;
+        let shouldApplyPositions = true;
+
+        if (!classifyOnly) {
+          const qualityGate = evaluateNativeRepairQualityGate(result.report);
+          if (qualityGate.reject) {
+            console.warn(`[processGeometry] Rejecting native auto-repair result: ${qualityGate.reason}. Falling back to classify-only pass.`);
+            try {
+              options.onNativeProcessingStage?.('classifying');
+              const fallbackClassification = await classifyFromGeometry(geometry);
+              if (fallbackClassification) {
+                effectiveResult = fallbackClassification;
+                usedFallbackClassification = true;
+              } else {
+                effectiveResult = {
+                  ...result,
+                  report: {
+                    ...result.report,
+                    fully_repaired: false,
+                    residual_issues: [
+                      ...result.report.residual_issues,
+                      `Auto-repair output discarded: ${qualityGate.reason}`,
+                    ],
+                  },
+                };
+                shouldApplyPositions = false;
+              }
+            } catch (fallbackError) {
+              console.warn('[processGeometry] Fallback classify-only pass failed after rejecting repair output; keeping original geometry.', fallbackError);
+              effectiveResult = {
+                ...result,
+                report: {
+                  ...result.report,
+                  fully_repaired: false,
+                  residual_issues: [
+                    ...result.report.residual_issues,
+                    `Auto-repair output discarded: ${qualityGate.reason}`,
+                    'Fallback classify-only pass failed; geometry kept as-is.',
+                  ],
+                },
+              };
+              shouldApplyPositions = false;
+            }
+          }
+        }
+
+        if (shouldApplyPositions) {
+          applyRepairedPositions(geometry, effectiveResult.positions);
+        }
+
+        const { report } = effectiveResult;
         console.log(
-          `[processGeometry] Native ${classifyOnly ? 'classification' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
+          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms. ` +
           `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
           `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
           `watertight=${report.post.is_watertight}`,
@@ -248,7 +351,9 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
         // If the repaired mesh has a model/support split, extract the support
         // section as a separate geometry for orange overlay rendering.
-        if (report.model_triangle_count != null && report.model_triangle_count > 0) {
+        const positionsWereApplied = shouldApplyPositions;
+
+        if (positionsWereApplied && report.model_triangle_count != null && report.model_triangle_count > 0) {
           const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
           const allPos = posAttr.array as Float32Array;
           const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri

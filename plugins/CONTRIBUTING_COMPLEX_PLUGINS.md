@@ -63,7 +63,7 @@ Generated outputs:
 - `src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts`
 - `src/features/plugins/generatedBuiltinComplexPluginFileTypeHandlers.ts`
 - `src-tauri/src/generated_builtin_plugins.rs`
-- `rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs`
+- `rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs`
 - `src-tauri/generated_crate_requirements.toml` (audit of all plugin cargo dependencies)
 
 Do not edit generated files manually.
@@ -200,12 +200,12 @@ The function returns multiple encoder instances, one per format. Each encoder's 
 
 ### 4.3) Required Cargo crates for slicer encoder (optional)
 
-If your encoder implementation requires extra Rust crates beyond the core dragonfruit-slicer-v3 deps, declare them in:
+If your encoder implementation requires extra Rust crates beyond the core `dragonfruit-slicing-engine` deps, declare them in:
 
 - `plugins/<vendor>/slicing/rust/requiredCrates.toml`
   - Schema: TOML matching Cargo.toml `[dependencies]` and `[optional-dependencies]` sections
   - Generator validates version conflicts (strict: incompatible versions will fail the build)
-  - Generator auto-merges into `dragonfruit-slicer-v3/Cargo.toml`
+  - Generator auto-merges into `dragonfruit-slicing-engine/Cargo.toml`
   - All declared crates become available to encoder code via `use ...`
 
 **Example** (`plugins/anycubic/slicing/rust/requiredCrates.toml`):
@@ -278,7 +278,7 @@ Run these before opening a PR:
 1. `npm run generate:plugin-registry`
 2. `npm run check:plugin-allowlist`
 3. `npm run check:generated-plugin-registry`
-4. `cargo check --manifest-path rust/dragonfruit-slicer-v3/Cargo.toml` (validates cargo crate merges)
+4. `cargo check --manifest-path rust/dragonfruit-slicing-engine/Cargo.toml` (validates cargo crate merges)
 5. `npm run build`
 6. `cargo check --manifest-path src-tauri/Cargo.toml`
 
