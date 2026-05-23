@@ -818,6 +818,79 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeometryGroup {
+    Model,
+    Support,
+}
+
+const RAFT_Z_CUTOFF_MM: f32 = 2.0;
+const TOP_MODEL_BAND_MM: f32 = 1.0;
+const MODEL_MIN_TRIS_FLOOR: usize = 200;
+
+fn classify_model_support_group(
+    cid: usize,
+    raft_z_cut: f32,
+    model_seed: Option<usize>,
+    model_min_tris: usize,
+    comp_max_z: &[f32],
+    comp_tri_count: &[usize],
+) -> GeometryGroup {
+    // Anything in the raft floor band is support by definition.
+    if comp_max_z[cid] <= raft_z_cut {
+        return GeometryGroup::Support;
+    }
+
+    // High-poly components above raft are typically true model shells, even
+    // if the highest-Z seed was a support tip.
+    if comp_tri_count[cid] >= model_min_tris {
+        return GeometryGroup::Model;
+    }
+
+    // Fall back to top-band assignment around the seed component.
+    if let Some(seed) = model_seed {
+        let top_z = comp_max_z[seed];
+        if cid == seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
+            GeometryGroup::Model
+        } else {
+            GeometryGroup::Support
+        }
+    } else {
+        GeometryGroup::Support
+    }
+}
+
+fn compute_likely_support_geometry(
+    model_triangles_out: usize,
+    support_triangles_out: usize,
+    model_comp_count: usize,
+    support_comp_count: usize,
+    model_input_triangles: usize,
+    support_input_triangles: usize,
+) -> bool {
+    let model_avg_tris = if model_comp_count > 0 {
+        model_input_triangles / model_comp_count
+    } else {
+        0
+    };
+    let support_avg_tris = if support_comp_count > 0 {
+        support_input_triangles / support_comp_count
+    } else {
+        0
+    };
+
+    let strong_density = model_avg_tris > 0 && support_avg_tris.saturating_mul(4) < model_avg_tris;
+
+    support_triangles_out > 0
+        && (model_triangles_out == 0
+            || (strong_density
+                && support_triangles_out >= model_triangles_out
+                && support_comp_count >= model_comp_count)
+            || (support_comp_count >= model_comp_count.saturating_mul(6)
+                && support_input_triangles >= model_input_triangles.saturating_mul(2)
+                && support_triangles_out >= model_triangles_out.saturating_mul(2)))
+}
+
 /// Attempt to solidify a fragmented mesh by converting each connected
 /// component into a `Manifold` solid.
 ///
@@ -850,17 +923,8 @@ fn try_solidify_via_manifold_union(
 ) -> Option<(IndexedMesh, usize, usize, usize, usize, bool, usize)> {
     use manifold_csg::Manifold;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum GeometryGroup {
-        Model,
-        Support,
-    }
-
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
-
-    const RAFT_Z_CUTOFF_MM: f32 = 2.0;
-    const TOP_MODEL_BAND_MM: f32 = 1.0;
 
     let global_min_z = mesh
         .positions
@@ -887,26 +951,19 @@ fn try_solidify_via_manifold_union(
                 .partial_cmp(&comp_max_z[b])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+    let model_min_tris = model_seed
+        .map(|seed| (comp_tri_count[seed] / 8).max(MODEL_MIN_TRIS_FLOOR))
+        .unwrap_or(MODEL_MIN_TRIS_FLOOR);
 
-    let classify_group = |cid: usize| -> GeometryGroup {
-        // Anything in the raft floor band is support by definition.
-        if comp_max_z[cid] <= raft_z_cut {
-            return GeometryGroup::Support;
-        }
-
-        // Top-down model detection: the highest-Z component is model,
-        // plus near-top peers in case the real model body is split into
-        // multiple disconnected islands.
-        if let Some(seed) = model_seed {
-            let top_z = comp_max_z[seed];
-            if cid == seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
-                GeometryGroup::Model
-            } else {
-                GeometryGroup::Support
-            }
-        } else {
-            GeometryGroup::Support
-        }
+    let classify_group = |cid: usize| {
+        classify_model_support_group(
+            cid,
+            raft_z_cut,
+            model_seed,
+            model_min_tris,
+            &comp_max_z,
+            &comp_tri_count,
+        )
     };
 
     let mut model_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
@@ -1244,12 +1301,14 @@ fn try_solidify_via_manifold_union(
     );
 
     let support_triangles_out = (out_triangles.len()).saturating_sub(model_triangles_out);
-    let likely_support_geometry = support_triangles_out > 0
-        && (model_triangles_out == 0
-            || (support_triangles_out >= model_triangles_out.saturating_mul(2)
-                && support_input_components >= model_input_components)
-            || (support_input_components >= model_input_components.saturating_mul(8)
-                && support_input_triangles >= model_input_triangles));
+    let likely_support_geometry = compute_likely_support_geometry(
+        model_triangles_out,
+        support_triangles_out,
+        model_input_components,
+        support_input_components,
+        model_input_triangles,
+        support_input_triangles,
+    );
 
     Some((
         IndexedMesh {
@@ -2210,20 +2269,12 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
         return None;
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum GeometryGroup {
-        Model,
-        Support,
-    }
-
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
     if n_comps < 2 {
         return None;
     }
 
-    const RAFT_Z_CUTOFF_MM: f32 = 2.0;
-    const TOP_MODEL_BAND_MM: f32 = 1.0;
     const BASE_TOUCH_EPS_MM: f32 = 0.25;
 
     let global_min_z = mesh
@@ -2259,25 +2310,17 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     // This handles multi-shell models where parts sit at different heights while
     // still separating them from the low-poly support scaffold. Support posts,
     // cylinders, and contact tips are far below this threshold.
-    let model_min_tris = (comp_tri_count[model_seed] / 8).max(200);
+    let model_min_tris = (comp_tri_count[model_seed] / 8).max(MODEL_MIN_TRIS_FLOOR);
 
-    let classify_group = |cid: usize| -> GeometryGroup {
-        if comp_max_z[cid] <= raft_z_cut {
-            return GeometryGroup::Support;
-        }
-
-        // High-poly components above the raft base are model shells regardless
-        // of whether they reach the absolute top of the scene.
-        if comp_tri_count[cid] >= model_min_tris {
-            return GeometryGroup::Model;
-        }
-
-        let top_z = comp_max_z[model_seed];
-        if cid == model_seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
-            GeometryGroup::Model
-        } else {
-            GeometryGroup::Support
-        }
+    let classify_group = |cid: usize| {
+        classify_model_support_group(
+            cid,
+            raft_z_cut,
+            Some(model_seed),
+            model_min_tris,
+            &comp_max_z,
+            &comp_tri_count,
+        )
     };
 
     let mut model_comp_count = 0usize;
@@ -2362,17 +2405,14 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     mesh.triangles.extend(model_tris);
     mesh.triangles.extend(support_tris);
 
-    // A strong density signal (support comps ≥4× lower-poly than model) gives high
-    // confidence this is a model+support file, even if triangle counts are uneven.
-    let strong_density = model_avg_tris > 0 && support_avg_tris.saturating_mul(4) < model_avg_tris;
-
-    let likely_support_geometry = support_triangles_out > 0
-        && (model_triangles_out == 0
-            || (strong_density
-                && support_triangles_out >= model_triangles_out
-                && support_comp_count >= model_comp_count)
-            || (support_comp_count >= model_comp_count.saturating_mul(6)
-                && support_input_triangles >= model_input_triangles));
+    let likely_support_geometry = compute_likely_support_geometry(
+        model_triangles_out,
+        support_triangles_out,
+        model_comp_count,
+        support_comp_count,
+        model_input_triangles,
+        support_input_triangles,
+    );
 
     Some((model_triangles_out, likely_support_geometry))
 }
@@ -2768,5 +2808,65 @@ mod tests {
 
         // Boundary growth is large, but self-intersections improved by 90%.
         assert!(!non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn classify_group_promotes_high_poly_component_even_when_top_seed_is_small() {
+        // Simulates a tall low-poly support tip becoming the Z-seed while the
+        // real model body sits slightly lower but with far higher triangle density.
+        let comp_max_z = vec![100.0, 96.5, 72.0, 1.2];
+        let comp_tri_count = vec![96, 24_000, 180, 800];
+        let model_seed = Some(0usize);
+        let model_min_tris = (comp_tri_count[0] / 8).max(MODEL_MIN_TRIS_FLOOR);
+
+        assert_eq!(
+            classify_model_support_group(
+                1,
+                RAFT_Z_CUTOFF_MM,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            ),
+            GeometryGroup::Model
+        );
+        assert_eq!(
+            classify_model_support_group(
+                2,
+                RAFT_Z_CUTOFF_MM,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            ),
+            GeometryGroup::Support
+        );
+        assert_eq!(
+            classify_model_support_group(
+                3,
+                RAFT_Z_CUTOFF_MM,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            ),
+            GeometryGroup::Support
+        );
+    }
+
+    #[test]
+    fn likely_support_flag_stays_off_for_balanced_model_support_mix() {
+        // Mixed files should keep model tinting semantics unless supports
+        // clearly dominate both structure and output triangles.
+        assert!(!compute_likely_support_geometry(
+            180_000, 150_000, 3, 18, 240_000, 200_000,
+        ));
+    }
+
+    #[test]
+    fn likely_support_flag_turns_on_for_support_dominated_output() {
+        assert!(compute_likely_support_geometry(
+            20_000, 180_000, 1, 32, 20_000, 220_000,
+        ));
     }
 }
