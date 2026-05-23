@@ -1477,7 +1477,44 @@ fn attempt_non_manifold_face_cleanup(
     let filled = fill_small_holes(mesh, fill_holes_max_edges.clamp(8, 96));
     let culled_post = cull_degenerate_and_duplicate(mesh);
 
-    let after = analyze(mesh);
+    let mut adaptive_fill = 0usize;
+    let mut adaptive_cull = 0usize;
+    let mut adaptive_limit_used: Option<usize> = None;
+
+    let mut after = analyze(mesh);
+
+    // When cleanup opens a previously closed mesh, retry hole filling with a
+    // larger boundary budget. This salvages common ring-like openings without
+    // needing to accept a boundary-heavy intermediate result.
+    if before.boundary_edges == 0
+        && before.boundary_loops == 0
+        && after.boundary_edges > 0
+        && after.boundary_loops > 0
+    {
+        let adaptive_limit = fill_holes_max_edges.max(256).min(2048);
+        let mesh_before_adaptive_retry = mesh.clone();
+        let adaptive_filled_candidate = fill_small_holes(mesh, adaptive_limit);
+
+        if adaptive_filled_candidate > 0 {
+            let adaptive_culled_candidate = cull_degenerate_and_duplicate(mesh);
+            let retry_after = analyze(mesh);
+
+            let helped_boundary = retry_after.boundary_edges < after.boundary_edges
+                || retry_after.boundary_loops < after.boundary_loops;
+            let did_not_worsen_nme = retry_after.non_manifold_edges <= after.non_manifold_edges;
+            let did_not_worsen_si =
+                retry_after.self_intersection_triangles <= after.self_intersection_triangles;
+
+            if helped_boundary && did_not_worsen_nme && did_not_worsen_si {
+                adaptive_fill = adaptive_filled_candidate;
+                adaptive_cull = adaptive_culled_candidate;
+                adaptive_limit_used = Some(adaptive_limit);
+                after = retry_after;
+            } else {
+                *mesh = mesh_before_adaptive_retry;
+            }
+        }
+    }
     let improved = non_manifold_cleanup_is_improvement(&before, &after);
     let hard_regression = non_manifold_cleanup_is_hard_regression(&before, &after);
 
@@ -1503,9 +1540,9 @@ fn attempt_non_manifold_face_cleanup(
     }
 
     NonManifoldFaceCleanupOutcome::Applied {
-        changed: removed + culled_pre + filled + culled_post,
+        changed: removed + culled_pre + filled + culled_post + adaptive_fill + adaptive_cull,
         notes: format!(
-            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {} (removed={}, culled_pre={}, filled={}, culled_post={})",
+            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {} (removed={}, culled_pre={}, filled={}, culled_post={}{})",
             before.non_manifold_edges,
             after.non_manifold_edges,
             before.boundary_edges,
@@ -1518,6 +1555,13 @@ fn attempt_non_manifold_face_cleanup(
             culled_pre,
             filled,
             culled_post,
+            match adaptive_limit_used {
+                Some(limit) => format!(
+                    ", adaptive_fill(limit={})={}, adaptive_cull={}",
+                    limit, adaptive_fill, adaptive_cull
+                ),
+                None => String::new(),
+            },
         ),
     }
 }
@@ -1535,8 +1579,48 @@ fn non_manifold_cleanup_is_improvement(before: &MeshAnalysis, after: &MeshAnalys
         && after.duplicate_triangles <= before.duplicate_triangles
 }
 
+fn has_self_intersection_reduction_at_least(
+    before_self_intersections: usize,
+    after_self_intersections: usize,
+    min_percent: usize,
+) -> bool {
+    if before_self_intersections == 0 {
+        return false;
+    }
+
+    let reduced = before_self_intersections.saturating_sub(after_self_intersections);
+    reduced.saturating_mul(100) >= before_self_intersections.saturating_mul(min_percent)
+}
+
 fn non_manifold_cleanup_is_hard_regression(before: &MeshAnalysis, after: &MeshAnalysis) -> bool {
-    after.boundary_edges > before.boundary_edges.saturating_add(256)
+    // Guard: avoid destructive "fixes" that open large seams on previously
+    // closed meshes without materially reducing self-intersections.
+    let introduced_large_boundary_from_closed_mesh = before.boundary_edges == 0
+        && before.boundary_loops == 0
+        && after.boundary_edges >= 64
+        && after.boundary_loops > 0
+        && (before.self_intersection_triangles == 0
+            || !has_self_intersection_reduction_at_least(
+                before.self_intersection_triangles,
+                after.self_intersection_triangles,
+                35,
+            ));
+
+    // Guard: reject explosive boundary growth unless self-intersection relief is
+    // meaningfully large.
+    let boundary_growth_is_explosive = after.boundary_edges
+        > before.boundary_edges.saturating_add(256)
+        && after.boundary_edges >= std::cmp::max(128, before.boundary_edges.saturating_mul(4));
+    let explosive_growth_without_relief = boundary_growth_is_explosive
+        && (before.self_intersection_triangles == 0
+            || !has_self_intersection_reduction_at_least(
+                before.self_intersection_triangles,
+                after.self_intersection_triangles,
+                20,
+            ));
+
+    introduced_large_boundary_from_closed_mesh
+        || explosive_growth_without_relief
         || after.inconsistent_winding_edges > before.inconsistent_winding_edges.saturating_add(64)
         || after.self_intersection_triangles > before.self_intersection_triangles.saturating_add(64)
         || after.connected_components > before.connected_components.saturating_add(512)
@@ -2645,5 +2729,44 @@ mod tests {
 
         assert!(!non_manifold_cleanup_is_improvement(&before, &after));
         assert!(non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_rejects_large_boundary_introduction_with_weak_si_relief() {
+        let mut before = analysis(0, 126, 15, 7_501);
+        before.boundary_loops = 0;
+        before.inconsistent_winding_edges = 0;
+
+        let mut after = analysis(178, 0, 15, 7_460);
+        after.boundary_loops = 1;
+        after.inconsistent_winding_edges = 0;
+
+        // Non-manifold edges improved, but this is still a destructive outcome.
+        assert!(non_manifold_cleanup_is_improvement(&before, &after));
+        assert!(non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_allows_boundary_growth_when_si_relief_is_strong() {
+        let mut before = analysis(0, 126, 15, 1_000);
+        before.boundary_loops = 0;
+
+        let mut after = analysis(120, 0, 15, 300);
+        after.boundary_loops = 1;
+
+        // Strong self-intersection reduction should keep this path eligible.
+        assert!(!non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_allows_explosive_boundary_growth_if_si_relief_is_very_strong() {
+        let mut before = analysis(40, 126, 15, 2_000);
+        before.boundary_loops = 1;
+
+        let mut after = analysis(600, 0, 15, 200);
+        after.boundary_loops = 6;
+
+        // Boundary growth is large, but self-intersections improved by 90%.
+        assert!(!non_manifold_cleanup_is_hard_regression(&before, &after));
     }
 }
