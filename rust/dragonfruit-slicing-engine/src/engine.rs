@@ -102,6 +102,15 @@ fn is_vertical_aa_mode(mode: &str) -> bool {
 }
 
 #[inline]
+fn layer_index_sampling_span(job: &SliceJobV3) -> crate::index::LayerSamplingSpan {
+    if zaa::use_raster_perturbation(job) && job.effective_xy_aa_steps() > 1 {
+        crate::index::LayerSamplingSpan::FullLayer
+    } else {
+        crate::index::LayerSamplingSpan::CenterOnly
+    }
+}
+
+#[inline]
 fn ssaa_downsample_min_alpha_u8(blur_radius: usize, min_alpha_u8: u8) -> u8 {
     // In SSAA + Blur mode we must preserve low-coverage grayscale edge pixels
     // through the downsample step so they can participate in the blur kernel.
@@ -201,6 +210,7 @@ impl SupportMaskContext {
             &triangles,
             support_job.total_layers,
             support_job.layer_height_mm,
+            layer_index_sampling_span(&support_job),
         );
 
         Some(Self {
@@ -848,7 +858,9 @@ fn process_pending_layer_post(
             }
         }
 
-        if !zaa_config.has_custom_lut && (min_aa_alpha_u8 > 0 || zaa_config.z_blend_min_alpha_u8 > 0) {
+        if !zaa_config.has_custom_lut
+            && (min_aa_alpha_u8 > 0 || zaa_config.z_blend_min_alpha_u8 > 0)
+        {
             apply_topology_gated_post_blur_floors_local(
                 &mut mask,
                 work_bounds,
@@ -1236,7 +1248,11 @@ fn rasterize_vertical_aa_streaming_v3(
         //   is typically 4–10× smaller than this ceiling.
         // When cross_blend is enabled, +8 bytes/px (accum f32 + weight f32).
         let zblend_bytes_per_px: u64 = 6;
-        let crossblend_bytes_per_px: u64 = if zaa_config.cross_blend_cfg.is_some() { 8 } else { 0 };
+        let crossblend_bytes_per_px: u64 = if zaa_config.cross_blend_cfg.is_some() {
+            8
+        } else {
+            0
+        };
         let ws_bytes = layer_px.saturating_mul(zblend_bytes_per_px + crossblend_bytes_per_px);
         let ws_mb_per_worker = ws_bytes / 1_000_000;
         let ws_total_mb = ws_mb_per_worker.saturating_mul(expected_workers.max(1) as u64);
@@ -1826,9 +1842,8 @@ fn rasterize_vertical_aa_streaming_v3(
                                 .iter()
                                 .take(look_back)
                                 .any(|future| future.topology_non_empty);
-                            let workspace = workspace.get_or_insert_with(|| {
-                                zaa::ZaaKernelWorkspace::new(width, height)
-                            });
+                            let workspace = workspace
+                                .get_or_insert_with(|| zaa::ZaaKernelWorkspace::new(width, height));
                             let processed = process_pending_layer_post(
                                 layer,
                                 &prior_topologies,
@@ -1949,7 +1964,7 @@ fn rasterize_vertical_aa_streaming_v3(
                             future_topologies,
                             future_bounds,
                             futures_have_topology,
-                                    zaa_config,
+                            zaa_config,
                         })
                         .map_err(|_| {
                             SlicerV3Error::LayerPreview(
@@ -2250,6 +2265,7 @@ pub fn slice_with_progress_v3(
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
 
     let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
+    let use_raster_perturbation = is_3daa && zaa::use_raster_perturbation(job);
 
     // Pre-compute Coverage raster job for Vertical2. Doing this before the RLE
     // guard means the streaming path can reuse it without duplication.
@@ -2259,10 +2275,12 @@ pub fn slice_with_progress_v3(
     // supersampling cost on every layer and then gets processed again by 3DAA.
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
-        j.anti_aliasing_level = "Off".to_string();
-        j.anti_aliasing_mode = "Coverage".to_string();
-        j.blur_brush_radius_px = 0;
-        j.minimum_aa_alpha_percent = 0.0;
+        if !use_raster_perturbation {
+            j.anti_aliasing_level = "Off".to_string();
+            j.anti_aliasing_mode = "Coverage".to_string();
+            j.blur_brush_radius_px = 0;
+            j.minimum_aa_alpha_percent = 0.0;
+        }
         // Don't keep a redundant copy of triangles_xyz in the clone — it can be
         // several GB for dense 12K jobs.  We pass job.triangles_xyz separately
         // to rasterize_vertical_aa_streaming_v3, which frees it right after
@@ -2295,9 +2313,10 @@ pub fn slice_with_progress_v3(
             });
 
             // Parallel-encode path: rasterize + encode PNG in rayon workers.
-            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
-                // RLE-native 3DAA: z-blend via sliding binary topology window.
-                // No pixel buffers — O(look_back × intervals) working memory.
+            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa
+                && !use_raster_perturbation
+            {
+                // RLE-native legacy 3DAA: z-blend via sliding binary topology window.
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
                 slice_and_rasterize_3daa_rle_v3(
@@ -2560,6 +2579,7 @@ pub fn slice_and_rasterize_rle_v3(
         &triangles,
         raster_job.total_layers,
         raster_job.layer_height_mm,
+        layer_index_sampling_span(raster_job),
     );
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
@@ -2694,6 +2714,7 @@ pub fn slice_and_rasterize_3daa_rle_v3(
         &triangles,
         raster_job.total_layers,
         raster_job.layer_height_mm,
+        layer_index_sampling_span(&raster_job),
     );
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
@@ -2867,6 +2888,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         &triangles,
         raster_job.total_layers,
         raster_job.layer_height_mm,
+        layer_index_sampling_span(raster_job),
     );
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
@@ -2992,7 +3014,12 @@ fn slice_and_rasterize_v3_owned(
     let xyz_mb = (triangles_xyz.len() * std::mem::size_of::<f32>()) as f64 / 1_048_576.0;
     project_triangles_inplace(&mut triangles, job);
     let index_start = std::time::Instant::now();
-    let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
+    let layer_index = build_layer_index(
+        &triangles,
+        job.total_layers,
+        job.layer_height_mm,
+        layer_index_sampling_span(job),
+    );
     let index_ns = index_start.elapsed().as_nanos() as u64;
     let tri_mb =
         (tri_count * std::mem::size_of::<crate::geometry::Triangle>()) as f64 / 1_048_576.0;
@@ -3143,6 +3170,7 @@ pub fn slice_with_progress_v3_to_path(
     // 3DAA mode needs full raw masks for all layers so the EDT inter-layer
     // blend pass can run before final container encoding.
     let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
+    let use_raster_perturbation = is_3daa && zaa::use_raster_perturbation(job);
 
     // Pre-compute Coverage raster job for Vertical2 (needed by both the
     // streaming RLE path and the full-buffer fallback path below).
@@ -3152,10 +3180,12 @@ pub fn slice_with_progress_v3_to_path(
     // supersampling cost on every layer and then gets processed again by 3DAA.
     let raster_job_owned: Option<SliceJobV3> = if is_3daa {
         let mut j = job.clone();
-        j.anti_aliasing_level = "Off".to_string();
-        j.anti_aliasing_mode = "Coverage".to_string();
-        j.blur_brush_radius_px = 0;
-        j.minimum_aa_alpha_percent = 0.0;
+        if !use_raster_perturbation {
+            j.anti_aliasing_level = "Off".to_string();
+            j.anti_aliasing_mode = "Coverage".to_string();
+            j.blur_brush_radius_px = 0;
+            j.minimum_aa_alpha_percent = 0.0;
+        }
         // Don't keep a redundant copy of triangles_xyz in the clone — it can be
         // several GB for dense 12K jobs.  We pass job.triangles_xyz separately
         // to rasterize_vertical_aa_streaming_v3, which frees it right after
@@ -3185,9 +3215,10 @@ pub fn slice_with_progress_v3_to_path(
                 }) as ProgressCallbackV3
             });
 
-            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
-                // RLE-native 3DAA: z-blend via sliding binary topology window.
-                // No pixel buffers — O(look_back × intervals) working memory.
+            let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa
+                && !use_raster_perturbation
+            {
+                // RLE-native legacy 3DAA: z-blend via sliding binary topology window.
                 let mut rle_sink =
                     |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
                 slice_and_rasterize_3daa_rle_v3(
@@ -3493,6 +3524,9 @@ mod tests {
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
+            experimental_zaa_kernel: None,
+            experimental_zaa_pattern: None,
+            experimental_zaa_duplicate_z: None,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
         };
@@ -3556,6 +3590,9 @@ mod tests {
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
+            experimental_zaa_kernel: None,
+            experimental_zaa_pattern: None,
+            experimental_zaa_duplicate_z: None,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
         };
@@ -3621,6 +3658,9 @@ mod tests {
             z_blend_minimum_alpha_percent: 0.0,
             z_blend_max_alpha_percent: 90.0,
             z_blend_custom_lut: None,
+            experimental_zaa_kernel: None,
+            experimental_zaa_pattern: None,
+            experimental_zaa_duplicate_z: None,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
         };

@@ -392,6 +392,12 @@ struct SliceJobMetadata {
     #[serde(default)]
     z_blend_custom_lut: Option<Vec<u8>>,
     #[serde(default)]
+    experimental_zaa_kernel: Option<String>,
+    #[serde(default)]
+    experimental_zaa_pattern: Option<String>,
+    #[serde(default)]
+    experimental_zaa_duplicate_z: Option<bool>,
+    #[serde(default)]
     model_triangle_count: u32,
     container_compression_level: u8,
     build_width_mm: f32,
@@ -1322,6 +1328,9 @@ async fn slice_solid_native_to_temp_path(
             z_blend_minimum_alpha_percent: meta.z_blend_minimum_alpha_percent,
             z_blend_max_alpha_percent: meta.z_blend_max_alpha_percent,
             z_blend_custom_lut: meta.z_blend_custom_lut,
+            experimental_zaa_kernel: meta.experimental_zaa_kernel,
+            experimental_zaa_pattern: meta.experimental_zaa_pattern,
+            experimental_zaa_duplicate_z: meta.experimental_zaa_duplicate_z,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,
             build_depth_mm: meta.build_depth_mm,
