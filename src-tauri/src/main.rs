@@ -10,8 +10,28 @@ fn default_blur_brush_radius_px() -> u32 {
     1
 }
 
+fn default_blur_brush_kernel() -> String {
+    "gaussian".to_string()
+}
+
+fn default_blur_brush_sigma_x() -> f64 {
+    0.5
+}
+
+fn default_blur_brush_sigma_y() -> f64 {
+    0.5
+}
+
 fn default_z_blur_radius_layers() -> u32 {
     0
+}
+
+fn default_z_blur_kernel() -> String {
+    "box".to_string()
+}
+
+fn default_z_blur_sigma() -> f64 {
+    0.5
 }
 
 fn default_anti_aliasing_mode() -> String {
@@ -371,8 +391,18 @@ struct SliceJobMetadata {
     anti_aliasing_mode: String,
     #[serde(default = "default_blur_brush_radius_px")]
     blur_brush_radius_px: u32,
+    #[serde(default = "default_blur_brush_kernel")]
+    blur_brush_kernel: String,
+    #[serde(default = "default_blur_brush_sigma_x", alias = "blur_brush_sigma")]
+    blur_brush_sigma_x: f64,
+    #[serde(default = "default_blur_brush_sigma_y")]
+    blur_brush_sigma_y: f64,
     #[serde(default = "default_z_blur_radius_layers")]
     z_blur_radius_layers: u32,
+    #[serde(default = "default_z_blur_kernel")]
+    z_blur_kernel: String,
+    #[serde(default = "default_z_blur_sigma")]
+    z_blur_sigma: f64,
     aa_on_supports: bool,
     #[serde(default = "default_minimum_aa_alpha_percent")]
     minimum_aa_alpha_percent: f32,
@@ -1323,7 +1353,12 @@ async fn slice_solid_native_to_temp_path(
             anti_aliasing_level: meta.anti_aliasing_level,
             anti_aliasing_mode: meta.anti_aliasing_mode,
             blur_brush_radius_px: meta.blur_brush_radius_px,
+            blur_brush_kernel: meta.blur_brush_kernel,
+            blur_brush_sigma_x: meta.blur_brush_sigma_x,
+            blur_brush_sigma_y: meta.blur_brush_sigma_y,
             z_blur_radius_layers: meta.z_blur_radius_layers,
+            z_blur_kernel: meta.z_blur_kernel,
+            z_blur_sigma: meta.z_blur_sigma,
             aa_on_supports: meta.aa_on_supports,
             model_triangle_count: meta.model_triangle_count,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
