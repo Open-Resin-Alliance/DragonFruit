@@ -7,6 +7,11 @@
  * Environment variables set by Tauri CLI:
  *   TAURI_ENV_PLATFORM   — "windows", "linux", or "darwin"
  *   CARGO_BUILD_TARGET   — explicit Rust target triple (cross-compile)
+ *
+ * Environment variable set by scripts/tauri-build.mjs --universal:
+ *   DF_BUILD_TARGET_TRIPLE — "universal-apple-darwin" (overrides the above so we
+ *                            build both Apple arches and lipo them into one fat
+ *                            sidecar; there is no single rustc target for it).
  */
 
 import { execSync, spawnSync } from 'node:child_process';
@@ -35,7 +40,10 @@ if (!platform) {
 // ---------------------------------------------------------------------------
 // Determine the Rust target triple
 // ---------------------------------------------------------------------------
-let triple = process.env.CARGO_BUILD_TARGET;
+// DF_BUILD_TARGET_TRIPLE (set by tauri-build.mjs --universal) takes precedence
+// over Tauri's CARGO_BUILD_TARGET so a universal build is recognised even though
+// cargo has no single "universal-apple-darwin" rustc target.
+let triple = process.env.DF_BUILD_TARGET_TRIPLE || process.env.CARGO_BUILD_TARGET;
 if (!triple) {
       try {
             const rustcOut = execSync('rustc -vV', { encoding: 'utf8' });
@@ -50,6 +58,8 @@ if (!triple) {
       process.exit(1);
 }
 
+const isUniversal = platform === 'darwin' && triple === 'universal-apple-darwin';
+
 const binExt = platform === 'windows' ? '.exe' : '';
 const targetArgs = process.env.CARGO_BUILD_TARGET ? ['--target', triple] : [];
 // Release artifact dir differs when --target is specified
@@ -61,6 +71,33 @@ function run(cmd, args, cwd) {
       console.log(`[build-thumbnail-providers] ${cmd} ${args.join(' ')}`);
       const r = spawnSync(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
       if (r.status !== 0) process.exit(r.status ?? 1);
+}
+
+// ---------------------------------------------------------------------------
+// macOS universal — build both Apple arches as thin per-arch sidecars
+// ---------------------------------------------------------------------------
+// Verified empirically: a `tauri build --target universal-apple-darwin` compiles
+// each arch separately and resolves externalBin PER ARCH — the build sets
+// TAURI_ENV_TARGET_TRIPLE=<arch> and looks for
+//   ../rust/dragonfruit-voxl-thumbnail/target/release/dragonfruit-voxl-thumbnailer-<arch>
+// (e.g. ...-aarch64-apple-darwin, then ...-x86_64-apple-darwin), NOT a
+// ...-universal-apple-darwin file. Tauri lipos the per-arch .apps — sidecar
+// included — into the universal .app itself. So we emit a thin per-arch sidecar
+// for each arch into target/release/ and let Tauri do the merge.
+if (isUniversal) {
+      const externalBinDir = path.join(cliCrateDir, 'target', 'release');
+      mkdirSync(externalBinDir, { recursive: true });
+      for (const archTriple of ['x86_64-apple-darwin', 'aarch64-apple-darwin']) {
+            run(
+                  'cargo',
+                  ['build', '--release', '--bin', 'dragonfruit-voxl-thumbnailer', '--target', archTriple],
+                  cliCrateDir,
+            );
+            const archBin = path.join(cliCrateDir, 'target', archTriple, 'release', 'dragonfruit-voxl-thumbnailer');
+            const sidecarDst = path.join(externalBinDir, `dragonfruit-voxl-thumbnailer-${archTriple}`);
+            copyFileSync(archBin, sidecarDst);
+            console.log(`[build-thumbnail-providers] Per-arch sidecar → ${path.relative(projectRoot, sidecarDst)}`);
+      }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,10 +114,10 @@ if (platform === 'windows') {
 }
 
 // ---------------------------------------------------------------------------
-// Linux / macOS — build the CLI binary and copy it into src-tauri/binaries/
-// (Tauri externalBin expects files named <name>-<triple>[.exe])
+// Linux / macOS (single arch) — build the CLI binary and copy it into
+// src-tauri/binaries/ (Tauri externalBin expects files named <name>-<triple>)
 // ---------------------------------------------------------------------------
-if (platform === 'linux' || platform === 'darwin') {
+if (!isUniversal && (platform === 'linux' || platform === 'darwin')) {
       run(
             'cargo',
             ['build', '--release', '--bin', 'dragonfruit-voxl-thumbnailer', ...targetArgs],

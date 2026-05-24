@@ -20,12 +20,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # One universal macOS DMG (fat: native on Intel + Apple Silicon).
+          # cmakeArchs / dfBuildTriple drive the universal build env (see the
+          # build step below) — single source of truth, no duplicated literals.
           - platform: macos-latest
-            args: --target aarch64-apple-darwin --bundles app,dmg
-            artifactName: dragonfruit-macos-arm64
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin --bundles app,dmg
-            artifactName: dragonfruit-macos-x64
+            args: --target universal-apple-darwin --bundles app,dmg
+            artifactName: dragonfruit-macos-universal
+            cmakeArchs: "arm64;x86_64"
+            dfBuildTriple: universal-apple-darwin
           - platform: ubuntu-22.04
             args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
             artifactName: dragonfruit-linux-x64
@@ -79,14 +81,31 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build with tauri-action (workflow artifacts)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      # Build only — no release here. The macOS QuickLook .appex embed must run
+      # before any upload, so every platform builds in this step and uploads in
+      # the steps below. On macOS the universal env tells manifold's C++ to link
+      # fat (CMAKE_OSX_ARCHITECTURES) and build-thumbnail-providers.mjs to emit a
+      # universal sidecar (DF_BUILD_TARGET_TRIPLE); both are empty (ignored) off
+      # macOS.
+      - name: Build bundle (tauri-action)
         uses: tauri-apps/tauri-action@v0
         env:
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+          CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmakeArchs || '' }}
+          DF_BUILD_TARGET_TRIPLE: ${{ matrix.dfBuildTriple || '' }}
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
+
+      # macOS only: tauri-action (`npx tauri build`) does not run this repo's
+      # post-build, so embed the universal QuickLook .appex + re-sign + rebuild
+      # the DMG here (the same module tauri-build.mjs uses locally), then assert
+      # the bundle is fat + signed before it is uploaded.
+      - name: Embed QuickLook extension + verify universal bundle (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          node scripts/macos-embed-appex.mjs --target ${{ matrix.dfBuildTriple }}
+          node scripts/verify-universal-bundle.mjs
 
       - name: Upload workflow artifacts
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -98,17 +117,28 @@ jobs:
             src-tauri/target/*/release/bundle/**
           if-no-files-found: error
 
-      - name: Build with tauri-action (tag release)
+      # Tag release: build + embed already ran above, so we just upload the
+      # finished bundles. Uses action-gh-release (not tauri-action's built-in
+      # release) because the .appex embed must happen between build and upload —
+      # tauri-action's release mode builds and uploads in one step. Each matrix
+      # job upserts the same draft release with its own platform's assets.
+      - name: Publish release (tag)
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
+        uses: softprops/action-gh-release@v2
         with:
-          tauriScript: npx tauri
-          args: ${{ matrix.args }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "DragonFruit ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
+          tag_name: ${{ github.ref_name }}
+          name: "DragonFruit ${{ github.ref_name }}"
+          body: "See the assets to download this version and install."
+          draft: true
           prerelease: false
+          files: |
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/*/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/*/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/*/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/*/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/*/release/bundle/**/*.exe

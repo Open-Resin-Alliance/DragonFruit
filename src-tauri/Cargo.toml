@@ -4,13 +4,15 @@ version = "0.1.6"
 edition = "2021"
 
 [build-dependencies]
-# All tauri crates use the feat/cef branch which adds the CEF runtime backend.
-# macOS/Windows use wry (default); Linux builds pass --features tauri-cef.
-tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", features = [] }
+# All tauri crates come from the feat/cef branch which adds the CEF runtime
+# backend. macOS/Windows use wry (default); Linux builds pass --features
+# tauri-cef. Pinned to explicit revs (not `branch`) for reproducibility — see
+# the [patch.crates-io] note below and ADR 0005 for the bump procedure.
+tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142", features = [] }
 
 [dependencies]
 # default-features = false — runtime backend chosen via tauri-wry / tauri-cef features.
-tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false, features = ["compression", "dynamic-acl"] }
+tauri = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142", default-features = false, features = ["compression", "dynamic-acl"] }
 # Optional: pulled in by tauri-wry feature. On CEF builds these are excluded
 # to avoid E0252 collision (they pull tauri with default wry feature).
 tauri-plugin-log = { version = "2", optional = true }
@@ -51,16 +53,25 @@ tauri-cef = ["tauri/cef"]
 # Redirect all transitive tauri crate deps to the feat/cef branch so Cargo
 # resolves a single tauri version tree. Safe for macOS/Windows since wry
 # remains the default feature on feat/cef.
+#
+# Pinned to explicit revs rather than `branch = "feat/cef"` so the build is
+# reproducible and cannot silently drift when the upstream branch moves.
+# NOTE: the crates are NOT all on the same commit — Cargo.lock currently
+# resolves `tauri-plugin` (a build-time codegen crate) to an older commit than
+# the rest, so each entry is pinned to the exact rev it was already locked at.
+# This preserves the validated resolution; do not "unify" them to one rev
+# without a full cross-arch rebuild + smoke (see ADR 0005, "Bumping the pinned
+# tauri rev").
 # To revert to stable: delete this block and switch deps back to crates.io.
 [patch.crates-io]
-tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-codegen = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-plugin = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417aa48e72034c7816cfb4c142" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "a94e1b8595d9bb49328451dfe151d8499c712d44" }
 
 # Maximum release optimisation: fat LTO collapses all codegen units into one
 # link step, enabling inlining and dead-code elimination across crate boundaries.
