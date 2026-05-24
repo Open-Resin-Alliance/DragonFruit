@@ -209,6 +209,12 @@ const SLICING_3DAA_SAVED_CURVES_STORAGE_KEY = 'dragonfruit.slicing.3daaSavedCurv
 const SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY = 'dragonfruit.slicing.3daaSelectedCurveId';
 const SLICING_ZAA_PATTERN_STORAGE_KEY = 'dragonfruit.slicing.zaaPattern';
 const SLICING_ZAA_DUPLICATE_Z_STORAGE_KEY = 'dragonfruit.slicing.zaaDuplicateZ';
+const SLICING_BLUR_BRUSH_KERNEL_STORAGE_KEY = 'dragonfruit.slicing.blurBrushKernel';
+const SLICING_BLUR_BRUSH_SIGMA_X_STORAGE_KEY = 'dragonfruit.slicing.blurBrushSigmaX';
+const SLICING_BLUR_BRUSH_SIGMA_Y_STORAGE_KEY = 'dragonfruit.slicing.blurBrushSigmaY';
+const SLICING_BLUR_BRUSH_SIGMA_STORAGE_KEY = 'dragonfruit.slicing.blurBrushSigma';
+const SLICING_Z_BLUR_KERNEL_STORAGE_KEY = 'dragonfruit.slicing.zBlurKernel';
+const SLICING_Z_BLUR_SIGMA_STORAGE_KEY = 'dragonfruit.slicing.zBlurSigma';
 const NEW_CURVE_EDITING_TARGET = '__dragonfruit_new_curve__';
 const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
 const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
@@ -219,7 +225,7 @@ const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
 const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
 const REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM = 0.01;
 const MICRONS_PER_MM = 1000;
-const AA_STRENGTH_PRESETS = [2, 4, 8, 16] as const;
+const AA_STRENGTH_PRESETS = [4, 8, 16, 32] as const;
 const AA_STRENGTH_MIN_STEPS = 2;
 const AA_STRENGTH_MAX_STEPS = 64;
 const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
@@ -372,6 +378,7 @@ function resolveInitialAaMode(): 'Off' | 'Blur' | '3DAA' {
 }
 
 type AaStrengthLevel = `${number}x`;
+type BlurKernelMode = 'box' | 'gaussian';
 
 function parseAaLevelSteps(level: string | null | undefined): number | null {
   const trimmed = (level ?? '').trim().toLowerCase();
@@ -384,6 +391,46 @@ function parseAaLevelSteps(level: string | null | undefined): number | null {
 function clampAaLevelSteps(value: number): number {
   const next = Number.isFinite(value) ? value : 4;
   return Math.max(AA_STRENGTH_MIN_STEPS, Math.min(AA_STRENGTH_MAX_STEPS, Math.round(next)));
+}
+
+function resolveInitialBlurKernel(storageKey: string, fallback: BlurKernelMode): BlurKernelMode {
+  if (typeof window === 'undefined') return fallback;
+
+  const stored = window.localStorage.getItem(storageKey)
+    ?? window.sessionStorage.getItem(storageKey);
+  return stored === 'gaussian' ? 'gaussian' : 'box';
+}
+
+function clampBlurSigma(value: number, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0.05, Math.min(16, Math.round(numeric * 100) / 100));
+}
+
+function resolveInitialBlurSigma(storageKey: string, fallback: number, legacyStorageKey?: string): number {
+  if (typeof window === 'undefined') return fallback;
+
+  const stored = window.localStorage.getItem(storageKey)
+    ?? window.sessionStorage.getItem(storageKey);
+  if (stored != null && stored.trim().length > 0) {
+    const parsed = Number(stored);
+    if (Number.isFinite(parsed)) {
+      return clampBlurSigma(parsed, fallback);
+    }
+  }
+
+  if (legacyStorageKey) {
+    const legacyStored = window.localStorage.getItem(legacyStorageKey)
+      ?? window.sessionStorage.getItem(legacyStorageKey);
+    if (legacyStored != null && legacyStored.trim().length > 0) {
+      const parsed = Number(legacyStored);
+      if (Number.isFinite(parsed)) {
+        return clampBlurSigma(parsed, fallback);
+      }
+    }
+  }
+
+  return fallback;
 }
 
 function formatAaLevel(steps: number): AaStrengthLevel {
@@ -665,7 +712,29 @@ export function SlicingPanel({
     );
   });
   const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
+  const [blurBrushKernel, setBlurBrushKernel] = useState<BlurKernelMode>(() => resolveInitialBlurKernel(
+    SLICING_BLUR_BRUSH_KERNEL_STORAGE_KEY,
+    'gaussian',
+  ));
+  const [blurBrushSigmaX, setBlurBrushSigmaX] = useState<number>(() => resolveInitialBlurSigma(
+    SLICING_BLUR_BRUSH_SIGMA_X_STORAGE_KEY,
+    0.5,
+    SLICING_BLUR_BRUSH_SIGMA_STORAGE_KEY,
+  ));
+  const [blurBrushSigmaY, setBlurBrushSigmaY] = useState<number>(() => resolveInitialBlurSigma(
+    SLICING_BLUR_BRUSH_SIGMA_Y_STORAGE_KEY,
+    0.5,
+    SLICING_BLUR_BRUSH_SIGMA_STORAGE_KEY,
+  ));
   const [zBlurRadiusLayers, setZBlurRadiusLayers] = useState<number>(resolveInitialZBlurRadiusLayers);
+  const [zBlurKernel, setZBlurKernel] = useState<BlurKernelMode>(() => resolveInitialBlurKernel(
+    SLICING_Z_BLUR_KERNEL_STORAGE_KEY,
+    'box',
+  ));
+  const [zBlurSigma, setZBlurSigma] = useState<number>(() => resolveInitialBlurSigma(
+    SLICING_Z_BLUR_SIGMA_STORAGE_KEY,
+    0.5,
+  ));
   const [useCustomBlurBrushRadius, setUseCustomBlurBrushRadius] = useState<boolean>(() => {
     const initial = resolveInitialBlurBrushRadiusPx();
     return resolveInitialCustomOptionEnabled(
@@ -1248,9 +1317,20 @@ export function SlicingPanel({
   const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.aaMode : aaMode;
   const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(effectiveAutoAaConfig.aaSteps) : aaLevel;
   const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
+  const resolvedBlurBrushKernel: BlurKernelMode =
+    (aaQualityMode === 'auto' && antiAliasingAvailable)
+      ? 'gaussian'
+      : (useCustomBlurBrushRadius ? blurBrushKernel : 'gaussian');
+  const resolvedBlurBrushSigmaX = clampBlurSigma(blurBrushSigmaX, 0.5);
+  const resolvedBlurBrushSigmaY = clampBlurSigma(blurBrushSigmaY, 0.5);
   const resolvedZBlurRadiusLayers = (aaQualityMode === 'auto' && antiAliasingAvailable)
     ? effectiveAutoAaConfig.zBlurRadiusLayers
     : (resolvedAaMode === '3DAA' ? zBlurRadiusLayers : 0);
+  const resolvedZBlurKernel: BlurKernelMode =
+    (aaQualityMode === 'auto' && antiAliasingAvailable)
+      ? 'box'
+      : (resolvedAaMode === '3DAA' && useCustomZBlurRadius ? zBlurKernel : 'box');
+  const resolvedZBlurSigma = clampBlurSigma(zBlurSigma, 0.5);
   const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable)
     ? effectiveAutoAaConfig.zBlendLookBack
     : (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode)
@@ -1275,7 +1355,7 @@ export function SlicingPanel({
   const effectiveZaaDuplicateZ = shouldApply3daaSamplingOverrides
     ? zaaDuplicateZ
     : undefined;
-  const duplicateZSupportedAtCurrentAa = (parseAaLevelSteps(aaLevel) ?? 4) >= 16;
+  const duplicateZSupportedAtCurrentAa = (parseAaLevelSteps(resolvedAaLevel) ?? 4) >= 16;
   const advancedSampleCountLabel = aaMode === '3DAA' ? '3DAA Sample Count' : 'XY Sample Count';
   const advancedSampleCountHelp = aaMode === '3DAA'
     ? 'Controls how many raster samples each layer uses before resolving the final grayscale. In 3DAA these samples are distributed through the layer height using perturbation, so higher values improve shallow slopes and edge stability but cost more slicing time.'
@@ -1496,10 +1576,43 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_BLUR_BRUSH_KERNEL_STORAGE_KEY, blurBrushKernel);
+    window.sessionStorage.setItem(SLICING_BLUR_BRUSH_KERNEL_STORAGE_KEY, blurBrushKernel);
+  }, [blurBrushKernel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(clampBlurSigma(blurBrushSigmaX, 0.5));
+    window.localStorage.setItem(SLICING_BLUR_BRUSH_SIGMA_X_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_BLUR_BRUSH_SIGMA_X_STORAGE_KEY, serialized);
+  }, [blurBrushSigmaX]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(clampBlurSigma(blurBrushSigmaY, 0.5));
+    window.localStorage.setItem(SLICING_BLUR_BRUSH_SIGMA_Y_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_BLUR_BRUSH_SIGMA_Y_STORAGE_KEY, serialized);
+  }, [blurBrushSigmaY]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     const serialized = String(Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, Math.round(zBlurRadiusLayers))));
     window.localStorage.setItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY, serialized);
   }, [zBlurRadiusLayers]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_Z_BLUR_KERNEL_STORAGE_KEY, zBlurKernel);
+    window.sessionStorage.setItem(SLICING_Z_BLUR_KERNEL_STORAGE_KEY, zBlurKernel);
+  }, [zBlurKernel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(clampBlurSigma(zBlurSigma, 0.5));
+    window.localStorage.setItem(SLICING_Z_BLUR_SIGMA_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_Z_BLUR_SIGMA_STORAGE_KEY, serialized);
+  }, [zBlurSigma]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1844,7 +1957,12 @@ export function SlicingPanel({
         antiAliasingLevel: effectiveAntiAliasingLevel,
         antiAliasingMode: effectiveAntiAliasingMode,
         blurBrushRadiusPx: resolvedBlurBrushRadiusPx,
+        blurBrushKernel: resolvedBlurBrushKernel,
+        blurBrushSigmaX: resolvedBlurBrushSigmaX,
+        blurBrushSigmaY: resolvedBlurBrushSigmaY,
         zBlurRadiusLayers: resolvedZBlurRadiusLayers,
+        zBlurKernel: resolvedZBlurKernel,
+        zBlurSigma: resolvedZBlurSigma,
         zBlendLookBack: resolvedAaMode === '3DAA' ? resolvedZBlendLookBack : undefined,
         zBlendFadePx: resolvedAaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
         zBlendAutoFade: resolvedAaMode === '3DAA' ? (resolvedZBlendFadeMode === 'auto') : undefined,
@@ -2601,18 +2719,87 @@ export function SlicingPanel({
                         </button>
                       </div>
                       {useCustomBlurBrushRadius && (
-                        <ScrollableNumberField
-                          className="mt-1"
-                          value={blurBrushRadiusPx}
-                          onChange={setClampedBlurBrushRadiusPx}
-                          min={BLUR_WIDTH_MIN_PX}
-                          max={BLUR_WIDTH_MAX_PX}
-                          step={1}
-                          unit="px"
-                          ariaLabel="Custom blur width in pixels"
-                          decreaseTitle="Decrease blur width"
-                          increaseTitle="Increase blur width"
-                        />
+                        <div
+                          className="mt-1 rounded-md border p-2"
+                          style={{
+                            borderColor: 'var(--border-subtle)',
+                            background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 38%)',
+                          }}
+                        >
+                          <ScrollableNumberField
+                            value={blurBrushRadiusPx}
+                            onChange={setClampedBlurBrushRadiusPx}
+                            min={BLUR_WIDTH_MIN_PX}
+                            max={BLUR_WIDTH_MAX_PX}
+                            step={1}
+                            unit="px"
+                            ariaLabel="Custom blur width in pixels"
+                            decreaseTitle="Decrease blur width"
+                            increaseTitle="Increase blur width"
+                          />
+                          <div className="mt-2 grid grid-cols-2 gap-1">
+                            {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
+                              const active = blurBrushKernel === mode;
+                              return (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setBlurBrushKernel(mode)}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {blurBrushKernel === 'gaussian' && (
+                            <div className="mt-2 grid grid-cols-2 gap-1.5">
+                              <div>
+                                <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                  Sigma X
+                                </div>
+                                <ScrollableNumberField
+                                  value={blurBrushSigmaX}
+                                  onChange={(value) => setBlurBrushSigmaX(clampBlurSigma(value, 1.5))}
+                                  min={0.05}
+                                  max={16}
+                                  step={0.05}
+                                  unit=""
+                                  ariaLabel="Gaussian XY sigma X"
+                                  decreaseTitle="Decrease XY sigma X"
+                                  increaseTitle="Increase XY sigma X"
+                                />
+                              </div>
+                              <div>
+                                <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                  Sigma Y
+                                </div>
+                                <ScrollableNumberField
+                                  value={blurBrushSigmaY}
+                                  onChange={(value) => setBlurBrushSigmaY(clampBlurSigma(value, 1.5))}
+                                  min={0.05}
+                                  max={16}
+                                  step={0.05}
+                                  unit=""
+                                  ariaLabel="Gaussian XY sigma Y"
+                                  decreaseTitle="Decrease XY sigma Y"
+                                  increaseTitle="Increase XY sigma Y"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       {aaMode === '3DAA' && (
@@ -2669,18 +2856,69 @@ export function SlicingPanel({
                             </button>
                           </div>
                           {useCustomZBlurRadius && (
-                            <ScrollableNumberField
-                              className="mt-1"
-                              value={zBlurRadiusLayers}
-                              onChange={setClampedZBlurRadiusLayers}
-                              min={Z_BLUR_RADIUS_MIN_LAYERS}
-                              max={Z_BLUR_RADIUS_MAX_LAYERS}
-                              step={1}
-                              unit="layers"
-                              ariaLabel="3DAA Z blur depth in layers"
-                              decreaseTitle="Decrease Z blur depth"
-                              increaseTitle="Increase Z blur depth"
-                            />
+                            <div
+                              className="mt-1 rounded-md border p-2"
+                              style={{
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 38%)',
+                              }}
+                            >
+                              <ScrollableNumberField
+                                value={zBlurRadiusLayers}
+                                onChange={setClampedZBlurRadiusLayers}
+                                min={Z_BLUR_RADIUS_MIN_LAYERS}
+                                max={Z_BLUR_RADIUS_MAX_LAYERS}
+                                step={1}
+                                unit="layers"
+                                ariaLabel="3DAA Z blur depth in layers"
+                                decreaseTitle="Decrease Z blur depth"
+                                increaseTitle="Increase Z blur depth"
+                              />
+                              <div className="mt-2 grid grid-cols-2 gap-1">
+                                {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
+                                  const active = zBlurKernel === mode;
+                                  return (
+                                    <button
+                                      key={mode}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                            color: 'var(--text-strong)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => setZBlurKernel(mode)}
+                                    >
+                                      {label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {zBlurKernel === 'gaussian' && (
+                                <div className="mt-2">
+                                  <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                    Sigma
+                                  </div>
+                                  <ScrollableNumberField
+                                    value={zBlurSigma}
+                                    onChange={(value) => setZBlurSigma(clampBlurSigma(value, 0.5))}
+                                    min={0.05}
+                                    max={16}
+                                    step={0.05}
+                                    unit=""
+                                    ariaLabel="Gaussian Z sigma"
+                                    decreaseTitle="Decrease Z sigma"
+                                    increaseTitle="Increase Z sigma"
+                                  />
+                                </div>
+                              )}
+                            </div>
                           )}
                         </>
                       )}
@@ -2994,52 +3232,51 @@ export function SlicingPanel({
                             ))}
                           </div>
 
-                          <SettingLabelWithHelp
-                            label="Duplicate Terminal Z"
-                            help="Duplicates end samples in the perturbation sequence. This only changes 3DAA output at 16x, 32x, or 64x XY AA."
-                          />
-                          <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={!zaaDuplicateZ
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setZaaDuplicateZ(false)}
-                            >
-                              Off
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={zaaDuplicateZ
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setZaaDuplicateZ(true)}
-                            >
-                              On
-                            </button>
-                          </div>
-                          {!duplicateZSupportedAtCurrentAa && (
-                            <div className="px-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                              Duplicate Terminal Z only affects 3DAA at 16x, 32x, or 64x XY AA.
-                            </div>
+                          {duplicateZSupportedAtCurrentAa && (
+                            <>
+                              <SettingLabelWithHelp
+                                label="Duplicate Terminal Z"
+                                help="Duplicates end samples in the perturbation sequence."
+                              />
+                              <div className="grid grid-cols-2 gap-1">
+                                <button
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={!zaaDuplicateZ
+                                    ? {
+                                        borderColor: 'var(--accent-secondary-action-border)',
+                                        background: 'var(--accent-secondary-action-bg-92)',
+                                        color: 'var(--accent-secondary-action-color)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setZaaDuplicateZ(false)}
+                                >
+                                  Off
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={zaaDuplicateZ
+                                    ? {
+                                        borderColor: 'var(--accent-secondary-action-border)',
+                                        background: 'var(--accent-secondary-action-bg-92)',
+                                        color: 'var(--accent-secondary-action-color)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setZaaDuplicateZ(true)}
+                                >
+                                  On
+                                </button>
+                              </div>
+                            </>
                           )}
                         </>
                       )}

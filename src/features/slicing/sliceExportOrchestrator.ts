@@ -165,7 +165,13 @@ export type SliceExportOrchestratorOptions = {
   antiAliasingLevel?: AntiAliasingLevel;
   antiAliasingMode?: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blurBrushRadiusPx?: number;
+  blurBrushKernel?: 'box' | 'gaussian';
+  blurBrushSigma?: number;
+  blurBrushSigmaX?: number;
+  blurBrushSigmaY?: number;
   zBlurRadiusLayers?: number;
+  zBlurKernel?: 'box' | 'gaussian';
+  zBlurSigma?: number;
   zBlendLookBack?: number;
   zBlendFadePx?: number;
   zBlendAutoFade?: boolean;
@@ -250,7 +256,12 @@ export type SliceExportResult = {
       antiAliasingLevel: AntiAliasingLevel;
       antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
       blurBrushRadiusPx: number;
+      blurBrushKernel: 'box' | 'gaussian';
+      blurBrushSigmaX: number;
+      blurBrushSigmaY: number;
       zBlurRadiusLayers: number;
+      zBlurKernel: 'box' | 'gaussian';
+      zBlurSigma: number;
       aaOnSupports: boolean;
       minimumAaAlphaPercent: number;
       zaaKernel?: 'perturb';
@@ -670,7 +681,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     antiAliasingMode: options.antiAliasingMode ?? 'Blur',
     blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
+    blurBrushKernel: options.blurBrushKernel ?? 'gaussian',
+    blurBrushSigmaX: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaX ?? options.blurBrushSigma ?? 0.5))),
+    blurBrushSigmaY: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaY ?? options.blurBrushSigma ?? 0.5))),
     zBlurRadiusLayers: Math.max(0, Math.min(8, Math.round(options.zBlurRadiusLayers ?? 0))),
+    zBlurKernel: options.zBlurKernel ?? 'box',
+    zBlurSigma: Math.max(0.05, Math.min(16, Number(options.zBlurSigma ?? 0.5))),
     zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
     zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
     zBlendAutoFade: options.zBlendAutoFade !== false,
@@ -806,7 +822,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         antiAliasingLevel: nativeJob.antiAliasingLevel,
         antiAliasingMode: nativeJob.antiAliasingMode,
         blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+        blurBrushKernel: nativeJob.blurBrushKernel,
+        blurBrushSigmaX: nativeJob.blurBrushSigmaX,
+        blurBrushSigmaY: nativeJob.blurBrushSigmaY,
         zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
+        zBlurKernel: nativeJob.zBlurKernel,
+        zBlurSigma: nativeJob.zBlurSigma,
         aaOnSupports: nativeJob.aaOnSupports,
         minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
         zaaKernel: nativeJob.zaaKernel,

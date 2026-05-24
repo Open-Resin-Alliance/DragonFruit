@@ -346,7 +346,7 @@ fn merge_nonzero_bounds(current: &mut RleNonzeroBounds, next: RleNonzeroBounds) 
     }
 }
 
-fn apply_z_gaussian_blur_to_rle_layer(
+fn apply_z_weighted_blur_to_rle_layer(
     center: &PerturbRleModelLayer,
     history: &VecDeque<PerturbRleModelLayer>,
     future: &VecDeque<PendingPerturbRleLayer>,
@@ -464,7 +464,7 @@ fn finalize_perturb_rle_post_layer(
     let future: VecDeque<PendingPerturbRleLayer> = task.future.into();
 
     let z_blur_start = std::time::Instant::now();
-    let mut final_runs = apply_z_gaussian_blur_to_rle_layer(
+    let mut final_runs = apply_z_weighted_blur_to_rle_layer(
         &task.model,
         &history,
         &future,
@@ -1012,18 +1012,16 @@ impl ZBlurQueueState {
     }
 }
 
-fn gaussian_z_weights(radius: usize) -> Vec<u32> {
+fn weighted_z_blur_weights(radius: usize, gaussian: bool, sigma: f64) -> Vec<u32> {
     if radius == 0 {
         return vec![1024];
     }
 
-    // Practical default: keep Z blur visibly cross-layer at low radii.
-    // Aaron's reported baseline was sigma≈0.5 for *XY* Gaussian blur; for Z we
-    // use a broader default kernel so depth=1 does not feel underpowered.
-    // Optional override for tuning/experiments:
-    //   DF_3DAA_Z_BLUR_SIGMA_SCALE=<float>
-    let sigma_scale = env_override_f64("DF_3DAA_Z_BLUR_SIGMA_SCALE").unwrap_or(1.25);
-    let sigma = (radius as f64 * sigma_scale).max(0.5);
+    if !gaussian {
+        return vec![1; radius + 1];
+    }
+
+    let sigma = sigma.max(0.05);
     // Reduce center dominance so neighboring layers contribute more at low
     // depths (where users noticed blur looked too subtle).
     // Optional override:
@@ -1044,11 +1042,15 @@ fn gaussian_z_weights(radius: usize) -> Vec<u32> {
     weights
 }
 
-fn gaussian_z_weights_with_sigma(radius: usize, sigma: f64) -> Vec<u32> {
-    if radius == 0 {
-        return vec![1024];
+#[inline]
+fn perturb_3daa_rle_z_blur_weights(radius: usize, gaussian: bool, sigma: f64) -> Vec<u32> {
+    if !gaussian {
+        return vec![1; radius + 1];
     }
 
+    // Aaron's branch defaults sigma_z to 0.5.  The generic Dragonfruit Z-blur
+    // weights intentionally broaden the kernel and weaken the center sample,
+    // which made perturbation 3DAA look far blurrier than Aaron's reference.
     let sigma = sigma.max(0.01);
     let mut weights = Vec::with_capacity(radius + 1);
     for d in 0..=radius {
@@ -1057,15 +1059,6 @@ fn gaussian_z_weights_with_sigma(radius: usize, sigma: f64) -> Vec<u32> {
         weights.push((exponent.exp() * 1024.0).round().max(1.0) as u32);
     }
     weights
-}
-
-#[inline]
-fn perturb_3daa_rle_z_blur_weights(radius: usize) -> Vec<u32> {
-    // Aaron's branch defaults sigma_z to 0.5.  The generic Dragonfruit Z-blur
-    // weights intentionally broaden the kernel and weaken the center sample,
-    // which made perturbation 3DAA look far blurrier than Aaron's reference.
-    let sigma = env_override_f64("DF_3DAA_RLE_Z_BLUR_SIGMA").unwrap_or(0.5);
-    gaussian_z_weights_with_sigma(radius, sigma)
 }
 
 #[inline]
@@ -1095,7 +1088,7 @@ fn blit_gray_mask_into_local(
     }
 }
 
-fn apply_z_gaussian_blur_to_processed_layer(
+fn apply_z_weighted_blur_to_processed_layer(
     center: &mut PostProcessedLayer,
     history: &VecDeque<ZBlurHistoryLayer>,
     future: &VecDeque<PostProcessedLayer>,
@@ -1279,7 +1272,7 @@ fn enqueue_post_processed_layer(
             mask: next.mask.clone(),
         };
 
-        apply_z_gaussian_blur_to_processed_layer(
+        apply_z_weighted_blur_to_processed_layer(
             &mut next,
             &state.history,
             &state.pending,
@@ -1344,7 +1337,7 @@ fn flush_post_processed_layers(
             mask: next.mask.clone(),
         };
 
-        apply_z_gaussian_blur_to_processed_layer(
+        apply_z_weighted_blur_to_processed_layer(
             &mut next,
             &state.history,
             &state.pending,
@@ -1484,6 +1477,9 @@ fn process_pending_layer_post(
     width: usize,
     height: usize,
     blur_radius: usize,
+    blur_sigma_x: f64,
+    blur_sigma_y: f64,
+    blur_kernel_gaussian: bool,
     zaa_config: zaa::ZaaKernelConfig,
     workspace: &mut zaa::ZaaKernelWorkspace,
 ) -> PostProcessedLayer {
@@ -1583,7 +1579,10 @@ fn process_pending_layer_post(
                     min_y,
                     max_y,
                     blur_radius,
+                    blur_sigma_x,
+                    blur_sigma_y,
                     0,
+                    if blur_kernel_gaussian { "gaussian" } else { "box" },
                 );
             }
         }
@@ -1710,8 +1709,15 @@ fn rasterize_vertical_aa_streaming_v3(
     };
     let look_back = zaa_config.look_back;
     let z_blur_radius_layers = job.effective_z_blur_radius_layers();
-    let z_blur_weights = gaussian_z_weights(z_blur_radius_layers);
+    let z_blur_weights = weighted_z_blur_weights(
+        z_blur_radius_layers,
+        job.z_blur_kernel_is_gaussian(),
+        job.z_blur_sigma(),
+    );
     let blur_radius = effective_xy_blur_radius(job.blur_brush_radius_px as usize);
+    let blur_kernel_gaussian = job.blur_brush_kernel_is_gaussian();
+    let blur_sigma_x = job.blur_brush_sigma_x();
+    let blur_sigma_y = job.blur_brush_sigma_y();
     let tail_cure_lut = job.normalized_tail_cure_lut();
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
@@ -2094,6 +2100,9 @@ fn rasterize_vertical_aa_streaming_v3(
                         width,
                         height,
                         blur_radius,
+                        blur_sigma_x,
+                        blur_sigma_y,
+                        blur_kernel_gaussian,
                         task.zaa_config,
                         &mut workspace,
                     );
@@ -2569,6 +2578,9 @@ fn rasterize_vertical_aa_streaming_v3(
                                 width,
                                 height,
                                 blur_radius,
+                                blur_sigma_x,
+                                blur_sigma_y,
+                                blur_kernel_gaussian,
                                 zaa_config,
                                 workspace,
                             );
@@ -2764,6 +2776,9 @@ fn rasterize_vertical_aa_streaming_v3(
                         width,
                         height,
                         blur_radius,
+                        blur_sigma_x,
+                        blur_sigma_y,
+                        blur_kernel_gaussian,
                         zaa_config,
                         workspace,
                     );
@@ -3450,7 +3465,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     let blur_radius = effective_perturb_3daa_rle_xy_blur_radius(job.blur_brush_radius_px as usize);
     let z_blur_radius =
         effective_perturb_3daa_rle_z_blur_radius(job.effective_z_blur_radius_layers());
-    let z_blur_weights = perturb_3daa_rle_z_blur_weights(z_blur_radius);
+    let z_blur_weights = perturb_3daa_rle_z_blur_weights(
+        z_blur_radius,
+        job.z_blur_kernel_is_gaussian(),
+        job.z_blur_sigma(),
+    );
     let tail_cure_lut = job.normalized_tail_cure_lut();
     let post_blur_ns_accum = Arc::new(AtomicU64::new(0));
     let support_merge_ns_accum = Arc::new(AtomicU64::new(0));
@@ -4406,7 +4425,12 @@ mod tests {
             anti_aliasing_level: "32x".to_string(),
             anti_aliasing_mode: "Vertical2".to_string(),
             blur_brush_radius_px: 8,
+            blur_brush_kernel: "box".to_string(),
+            blur_brush_sigma_x: 1.5,
+            blur_brush_sigma_y: 1.5,
             z_blur_radius_layers: 0,
+            z_blur_kernel: "gaussian".to_string(),
+            z_blur_sigma: 0.5,
             aa_on_supports: false,
             model_triangle_count: 0,
             minimum_aa_alpha_percent: 0.0,
@@ -4584,7 +4608,12 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
+            blur_brush_kernel: "box".to_string(),
+            blur_brush_sigma_x: 1.5,
+            blur_brush_sigma_y: 1.5,
             z_blur_radius_layers: 0,
+            z_blur_kernel: "gaussian".to_string(),
+            z_blur_sigma: 0.5,
             aa_on_supports: false,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,
@@ -4651,7 +4680,12 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
+            blur_brush_kernel: "box".to_string(),
+            blur_brush_sigma_x: 1.5,
+            blur_brush_sigma_y: 1.5,
             z_blur_radius_layers: 0,
+            z_blur_kernel: "gaussian".to_string(),
+            z_blur_sigma: 0.5,
             aa_on_supports: false,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,
@@ -4720,7 +4754,12 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
+            blur_brush_kernel: "box".to_string(),
+            blur_brush_sigma_x: 1.5,
+            blur_brush_sigma_y: 1.5,
             z_blur_radius_layers: 0,
+            z_blur_kernel: "gaussian".to_string(),
+            z_blur_sigma: 0.5,
             aa_on_supports: true,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,

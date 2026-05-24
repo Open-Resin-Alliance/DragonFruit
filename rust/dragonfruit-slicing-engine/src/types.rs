@@ -21,8 +21,28 @@ fn default_blur_brush_radius_px() -> u32 {
     1
 }
 
+fn default_blur_brush_kernel() -> String {
+    "gaussian".to_string()
+}
+
+fn default_blur_brush_sigma_x() -> f64 {
+    0.5
+}
+
+fn default_blur_brush_sigma_y() -> f64 {
+    0.5
+}
+
 fn default_z_blur_radius_layers() -> u32 {
     0
+}
+
+fn default_z_blur_kernel() -> String {
+    "box".to_string()
+}
+
+fn default_z_blur_sigma() -> f64 {
+    0.5
 }
 
 fn default_anti_aliasing_mode() -> String {
@@ -98,7 +118,7 @@ fn anti_aliasing_level_steps(level: &str) -> u8 {
     0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
     pub output_format: String,
@@ -145,6 +165,15 @@ pub struct SliceJobV3 {
     /// Blur brush radius in pixels for the blur AA mode.
     #[serde(default = "default_blur_brush_radius_px")]
     pub blur_brush_radius_px: u32,
+    /// Optional blur kernel for XY blur / custom blur-radius modes.
+    #[serde(default = "default_blur_brush_kernel")]
+    pub blur_brush_kernel: String,
+    /// Gaussian sigma used on the X axis when XY blur kernel is set to Gaussian.
+    #[serde(default = "default_blur_brush_sigma_x", alias = "blur_brush_sigma")]
+    pub blur_brush_sigma_x: f64,
+    /// Gaussian sigma used on the Y axis when XY blur kernel is set to Gaussian.
+    #[serde(default = "default_blur_brush_sigma_y")]
+    pub blur_brush_sigma_y: f64,
     /// Optional Gaussian blur radius across neighboring Z layers.
     ///
     /// - Unit: layers
@@ -152,6 +181,12 @@ pub struct SliceJobV3 {
     /// - Only applied by vertical/3DAA post-processing paths.
     #[serde(default = "default_z_blur_radius_layers")]
     pub z_blur_radius_layers: u32,
+    /// Optional blur kernel for Z blur / custom depth modes.
+    #[serde(default = "default_z_blur_kernel")]
+    pub z_blur_kernel: String,
+    /// Gaussian sigma used when Z blur kernel is set to Gaussian.
+    #[serde(default = "default_z_blur_sigma")]
+    pub z_blur_sigma: f64,
     /// Whether AA should apply to support geometry when model/support split
     /// metadata is available.
     #[serde(default)]
@@ -344,6 +379,31 @@ impl SliceJobV3 {
             return 0;
         }
         self.z_blur_radius_layers.min(8) as usize
+    }
+
+    #[inline]
+    pub fn blur_brush_kernel_is_gaussian(&self) -> bool {
+        self.blur_brush_kernel.trim().eq_ignore_ascii_case("gaussian")
+    }
+
+    #[inline]
+    pub fn z_blur_kernel_is_gaussian(&self) -> bool {
+        self.z_blur_kernel.trim().eq_ignore_ascii_case("gaussian")
+    }
+
+    #[inline]
+    pub fn blur_brush_sigma_x(&self) -> f64 {
+        self.blur_brush_sigma_x.max(0.05)
+    }
+
+    #[inline]
+    pub fn blur_brush_sigma_y(&self) -> f64 {
+        self.blur_brush_sigma_y.max(0.05)
+    }
+
+    #[inline]
+    pub fn z_blur_sigma(&self) -> f64 {
+        self.z_blur_sigma.max(0.05)
     }
 
     #[inline]

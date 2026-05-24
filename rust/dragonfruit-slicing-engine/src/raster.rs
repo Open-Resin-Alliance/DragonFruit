@@ -1178,6 +1178,130 @@ fn apply_edge_box_blur_to_mask_in_roi(
     }); // end HPASS.with
 }
 
+fn gaussian_blur_weights(radius: usize, sigma: f64) -> Vec<u32> {
+    if radius == 0 {
+        return vec![1024];
+    }
+
+    let sigma = sigma.max(0.05);
+
+    let mut weights = Vec::with_capacity(radius + 1);
+    for d in 0..=radius {
+        let dist = d as f64;
+        let exponent = -((dist * dist) / (2.0 * sigma * sigma));
+        weights.push((exponent.exp() * 1024.0).round().max(1.0) as u32);
+    }
+    weights
+}
+
+fn weighted_blur_axis_denom(index: usize, max_index: usize, radius: usize, weights: &[u32]) -> u64 {
+    let mut denom = weights[0] as u64;
+    for dist in 1..=radius {
+        let w = weights[dist] as u64;
+        if index >= dist {
+            denom = denom.saturating_add(w);
+        }
+        if index.saturating_add(dist) <= max_index {
+            denom = denom.saturating_add(w);
+        }
+    }
+    denom.max(1)
+}
+
+fn apply_edge_gaussian_blur_to_mask_in_roi(
+    mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    sigma_x: f64,
+    sigma_y: f64,
+    min_alpha_u8: u8,
+    roi_min_x: usize,
+    roi_max_x: usize,
+    roi_min_y: usize,
+    roi_max_y: usize,
+) {
+    if radius == 0
+        || width == 0
+        || height == 0
+        || mask.is_empty()
+        || roi_min_x > roi_max_x
+        || roi_min_y > roi_max_y
+        || roi_max_x >= width
+        || roi_max_y >= height
+    {
+        return;
+    }
+
+    let weights_x = gaussian_blur_weights(radius, sigma_x);
+    let weights_y = gaussian_blur_weights(radius, sigma_y);
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let roi_h = roi_max_y - roi_min_y + 1;
+    let x_denoms: Vec<u64> = (roi_min_x..=roi_max_x)
+        .map(|x| weighted_blur_axis_denom(x, width - 1, radius, &weights_x))
+        .collect();
+    let y_denoms: Vec<u64> = (roi_min_y..=roi_max_y)
+        .map(|y| weighted_blur_axis_denom(y, height - 1, radius, &weights_y))
+        .collect();
+
+    let source = mask.to_vec();
+    let mut out = vec![0u8; mask.len()];
+    let mut ring: std::collections::VecDeque<(usize, Vec<u32>)> =
+        std::collections::VecDeque::with_capacity(radius.saturating_mul(2).saturating_add(1));
+
+    for add_row in 0..roi_h + radius {
+        if add_row < roi_h {
+            let y = roi_min_y + add_row;
+            let row_start = y * width;
+            let mut hrow = vec![0u32; roi_w];
+            for local_x in 0..roi_w {
+                let x = roi_min_x + local_x;
+                let mut accum = (weights_x[0] as u64).saturating_mul(source[row_start + x] as u64);
+                for dist in 1..=radius {
+                    let w = weights_x[dist] as u64;
+                    if let Some(left_x) = x.checked_sub(dist) {
+                        accum = accum.saturating_add(w.saturating_mul(source[row_start + left_x] as u64));
+                    }
+                    if let Some(right_x) = x.checked_add(dist) {
+                        if right_x < width {
+                            accum = accum.saturating_add(w.saturating_mul(source[row_start + right_x] as u64));
+                        }
+                    }
+                }
+                hrow[local_x] = accum.min(u32::MAX as u64) as u32;
+            }
+            ring.push_back((y, hrow));
+        }
+
+        if add_row >= radius {
+            let out_y = roi_min_y + (add_row - radius);
+            let y_denom = y_denoms[out_y - roi_min_y];
+            let row_start = out_y * width;
+            for local_x in 0..roi_w {
+                let x_denom = x_denoms[local_x];
+                let denom = x_denom.saturating_mul(y_denom).max(1);
+                let mut accum = 0u64;
+                for (row_y, hrow) in &ring {
+                    let dist = row_y.abs_diff(out_y);
+                    if dist > radius {
+                        continue;
+                    }
+                    accum = accum.saturating_add((weights_y[dist] as u64).saturating_mul(hrow[local_x] as u64));
+                }
+
+                let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
+                out[row_start + roi_min_x + local_x] = if blurred < min_alpha_u8 { 0 } else { blurred };
+            }
+
+            if out_y >= radius {
+                ring.pop_front();
+            }
+        }
+    }
+
+    mask.copy_from_slice(&out);
+}
+
 #[cfg(test)]
 pub(crate) fn apply_blur_postprocess_inplace(
     mask: &mut [u8],
@@ -1229,7 +1353,10 @@ pub(crate) fn apply_blur_postprocess_inplace(
         roi_min_y,
         roi_max_y,
         radius,
+        1.5,
+        1.5,
         min_alpha_u8,
+        "box",
     );
 }
 
@@ -1242,7 +1369,10 @@ pub(crate) fn apply_blur_postprocess_inplace_with_roi(
     roi_min_y: usize,
     roi_max_y: usize,
     radius: usize,
+    sigma_x: f64,
+    sigma_y: f64,
     min_alpha_u8: u8,
+    kernel: &str,
 ) {
     if radius == 0 || width == 0 || height == 0 || mask.is_empty() {
         return;
@@ -1256,17 +1386,33 @@ pub(crate) fn apply_blur_postprocess_inplace_with_roi(
         return;
     }
 
-    apply_edge_box_blur_to_mask_in_roi(
-        mask,
-        width,
-        height,
-        radius,
-        min_alpha_u8,
-        roi_min_x,
-        clamped_max_x,
-        roi_min_y,
-        clamped_max_y,
-    );
+    if kernel.trim().eq_ignore_ascii_case("gaussian") {
+        apply_edge_gaussian_blur_to_mask_in_roi(
+            mask,
+            width,
+            height,
+            radius,
+            sigma_x,
+            sigma_y,
+            min_alpha_u8,
+            roi_min_x,
+            clamped_max_x,
+            roi_min_y,
+            clamped_max_y,
+        );
+    } else {
+        apply_edge_box_blur_to_mask_in_roi(
+            mask,
+            width,
+            height,
+            radius,
+            min_alpha_u8,
+            roi_min_x,
+            clamped_max_x,
+            roi_min_y,
+            clamped_max_y,
+        );
+    }
 }
 
 pub(crate) fn encode_mask_to_rle(
@@ -3246,7 +3392,12 @@ mod tests {
             anti_aliasing_level: "Off".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 1,
+            blur_brush_kernel: "box".to_string(),
+            blur_brush_sigma_x: 1.5,
+            blur_brush_sigma_y: 1.5,
             z_blur_radius_layers: 0,
+            z_blur_kernel: "gaussian".to_string(),
+            z_blur_sigma: 0.5,
             aa_on_supports: false,
             model_triangle_count: 0,
             minimum_aa_alpha_percent: 35.0,

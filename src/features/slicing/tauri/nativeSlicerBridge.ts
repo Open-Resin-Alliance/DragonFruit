@@ -23,7 +23,13 @@ export type NativeSolidSliceJobEnvelope = {
   antiAliasingLevel: AntiAliasingLevel;
   antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blurBrushRadiusPx: number;
+  blurBrushKernel?: 'box' | 'gaussian';
+  blurBrushSigma?: number;
+  blurBrushSigmaX?: number;
+  blurBrushSigmaY?: number;
   zBlurRadiusLayers?: number;
+  zBlurKernel?: 'box' | 'gaussian';
+  zBlurSigma?: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
   mirrorX: boolean;
@@ -71,7 +77,12 @@ type NativeSolidSlicePayload = {
   anti_aliasing_level: AntiAliasingLevel;
   anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blur_brush_radius_px: number;
+  blur_brush_kernel: 'box' | 'gaussian';
+  blur_brush_sigma_x: number;
+  blur_brush_sigma_y: number;
   z_blur_radius_layers: number;
+  z_blur_kernel: 'box' | 'gaussian';
+  z_blur_sigma: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
@@ -119,7 +130,12 @@ type NativeSolidSliceMetadataPayload = {
   anti_aliasing_level: AntiAliasingLevel;
   anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blur_brush_radius_px: number;
+  blur_brush_kernel: 'box' | 'gaussian';
+  blur_brush_sigma_x: number;
+  blur_brush_sigma_y: number;
   z_blur_radius_layers: number;
+  z_blur_kernel: 'box' | 'gaussian';
+  z_blur_sigma: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
@@ -213,7 +229,12 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     anti_aliasing_level: job.antiAliasingLevel,
     anti_aliasing_mode: job.antiAliasingMode,
     blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
+    blur_brush_kernel: job.blurBrushKernel ?? 'gaussian',
+    blur_brush_sigma_x: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaX ?? job.blurBrushSigma ?? 0.5))),
+    blur_brush_sigma_y: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaY ?? job.blurBrushSigma ?? 0.5))),
     z_blur_radius_layers: Math.max(0, Math.min(8, Math.round(job.zBlurRadiusLayers ?? 0))),
+    z_blur_kernel: job.zBlurKernel ?? 'box',
+    z_blur_sigma: Math.max(0.05, Math.min(16, Number(job.zBlurSigma ?? 0.5))),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
@@ -264,7 +285,12 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     anti_aliasing_level: job.antiAliasingLevel,
     anti_aliasing_mode: job.antiAliasingMode,
     blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
+    blur_brush_kernel: job.blurBrushKernel ?? 'gaussian',
+    blur_brush_sigma_x: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaX ?? job.blurBrushSigma ?? 0.5))),
+    blur_brush_sigma_y: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaY ?? job.blurBrushSigma ?? 0.5))),
     z_blur_radius_layers: Math.max(0, Math.min(8, Math.round(job.zBlurRadiusLayers ?? 0))),
+    z_blur_kernel: job.zBlurKernel ?? 'box',
+    z_blur_sigma: Math.max(0.05, Math.min(16, Number(job.zBlurSigma ?? 0.5))),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
