@@ -2263,16 +2263,16 @@ export function SlicingPanel({
                       )}
                       <div className="grid grid-cols-4 gap-1 text-center">
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No AA' : `${effectiveAutoAaConfig.aaSteps}x AA`}
+                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No AA' : `${effectiveAutoAaConfig.aaSteps}x XY AA`}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No Blur' : `${effectiveAutoAaConfig.blurBrushRadiusPx}px Blur`}
+                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No XY Blur' : `${effectiveAutoAaConfig.blurBrushRadiusPx}px XY Blur`}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {effectiveAutoAaConfig.aaMode === 'Off' ? 'No 3DAA' : effectiveAutoAaConfig.aaMode === '3DAA' ? `${effectiveAutoAaConfig.zBlendLookBack} Layer` : 'Blur only'}
+                          {effectiveAutoAaConfig.aaMode === '3DAA' ? `${effectiveAutoAaConfig.zBlendLookBack} Lyr Z Blend` : 'No Z Blend'}
                         </span>
                         <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {effectiveAutoAaConfig.aaMode === '3DAA' ? ` ${selectedLutCurveLabel}` : 'No LUT'}
+                          {effectiveAutoAaConfig.aaMode === '3DAA' ? `LUT: ${selectedLutCurveLabel}` : 'No LUT'}
                         </span>
                       </div>
                     </>
@@ -2281,7 +2281,7 @@ export function SlicingPanel({
                   {aaQualityMode === 'advanced' && <>
                   <SettingLabelWithHelp
                     label="Anti-Aliasing Mode"
-                    help="Off disables AA. Blur smooths horizontal edges. 3DAA applies Blur and Z-axis blending between nearby layers."
+                    help="Off disables AA. Blur applies XY smoothing only. 3DAA applies XY smoothing plus Z-axis blending between nearby layers."
                   />
                   <div className="grid grid-cols-3 gap-1">
                     {(['Off', 'Blur', '3DAA'] as const).map((mode) => {
@@ -2313,8 +2313,8 @@ export function SlicingPanel({
                   {aaMode !== 'Off' && (
                     <>
                       <SettingLabelWithHelp
-                        label="2D AA Strength"
-                        help="Controls supersampling for the 2D edge-smoothing pass. Higher levels preserve finer edge detail but cost more slicing time."
+                        label="XY AA Strength"
+                        help="Controls supersampling for the layer-local XY edge-smoothing pass. Higher levels preserve finer edge detail but cost more slicing time."
                       />
                       <div className="grid grid-cols-5 gap-1">
                         {AA_STRENGTH_PRESETS.map((steps) => {
@@ -2380,8 +2380,8 @@ export function SlicingPanel({
                       )}
 
                       <SettingLabelWithHelp
-                        label="2D Blur Width"
-                        help="Controls edge blur width for the 2D pass in pixels. Higher values create smoother transitions but can soften fine details."
+                        label="XY Blur Width"
+                        help="Controls edge blur width for the XY pass in pixels. Higher values create smoother transitions but can soften fine details."
                       />
                       <div className="grid grid-cols-5 gap-1">
                         {BLUR_WIDTH_PRESETS.map((radius) => {
@@ -2723,7 +2723,7 @@ export function SlicingPanel({
                             }}
                           />
                           <SettingLabelWithHelp
-                            label="3DAA Controls"
+                            label="Z Blend Controls"
                             help="These controls are specific to Z-axis blending in 3DAA. Auto uses slope-adaptive blending; Advanced exposes manual tuning."
                           />
                           <div className="grid grid-cols-2 gap-1">
