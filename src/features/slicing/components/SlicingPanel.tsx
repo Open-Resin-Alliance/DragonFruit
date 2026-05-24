@@ -556,8 +556,10 @@ type AaAutoUiPreset = 'raw' | AaAutoPreset;
 
 type AutoAaResolvedConfig = {
   aaMode: 'Off' | 'Blur' | '3DAA';
+  antiAliasingMode: 'Coverage' | 'Blur' | 'Vertical2';
   aaSteps: number;
   blurBrushRadiusPx: number;
+  zBlurRadiusLayers: number;
   zBlendLookBack: number;
 };
 
@@ -565,15 +567,19 @@ const DEFAULT_AUTO_Z_BLEND_LOOK_BACK = 2;
 
 const PENDING_AUTO_AA_CONFIG: AutoAaResolvedConfig = {
   aaMode: 'Blur',
+  antiAliasingMode: 'Blur',
   aaSteps: 4,
   blurBrushRadiusPx: 1,
+  zBlurRadiusLayers: 0,
   zBlendLookBack: DEFAULT_AUTO_Z_BLEND_LOOK_BACK,
 };
 
 const DEFAULT_AUTO_AA_CONFIG: AutoAaResolvedConfig = {
   aaMode: 'Blur',
+  antiAliasingMode: 'Blur',
   aaSteps: 4,
   blurBrushRadiusPx: 1,
+  zBlurRadiusLayers: 0,
   zBlendLookBack: DEFAULT_AUTO_Z_BLEND_LOOK_BACK,
 };
 
@@ -585,6 +591,17 @@ function resolveInitialAaAutoPreset(): AaAutoUiPreset {
   if (stored === 'sharp' || stored === 'smooth') return stored;
   return 'balanced';
 }
+
+const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
+  preset: AaAutoUiPreset;
+  label: string;
+  desc: string;
+}> = [
+  { preset: 'raw', label: 'Disabled', desc: 'Raw masks only.' },
+  { preset: 'sharp', label: 'Sharp', desc: 'Crisp text and details.' },
+  { preset: 'balanced', label: 'Balanced', desc: 'Printer-aware smoothing.' },
+  { preset: 'smooth', label: 'Smooth', desc: 'Soft organic curves.' },
+];
 
 // AaAutoPreset is imported from autoAaPhysics.ts
 
@@ -1111,7 +1128,10 @@ export function SlicingPanel({
     const pxSizeX = Number(activePrinterProfile?.pixelSize?.x);
     const pxSizeY = Number(activePrinterProfile?.pixelSize?.y);
     if (Number.isFinite(pxSizeX) && Number.isFinite(pxSizeY) && pxSizeX > 0 && pxSizeY > 0) {
-      return Math.min(pxSizeX, pxSizeY) / 1000; // µm → mm
+      return {
+        x: pxSizeX / 1000,
+        y: pxSizeY / 1000,
+      }; // µm → mm
     }
 
     // Fallback: derive from build volume ÷ resolution
@@ -1120,14 +1140,18 @@ export function SlicingPanel({
     const buildW = Number(activePrinterProfile?.buildVolumeMm?.width);
     const buildD = Number(activePrinterProfile?.buildVolumeMm?.depth);
 
-    const pitchCandidates: number[] = [];
+    let pitchX: number | null = null;
+    let pitchY: number | null = null;
     if (Number.isFinite(resX) && Number.isFinite(buildW) && resX > 0 && buildW > 0) {
-      pitchCandidates.push(buildW / resX);
+      pitchX = buildW / resX;
     }
     if (Number.isFinite(resY) && Number.isFinite(buildD) && resY > 0 && buildD > 0) {
-      pitchCandidates.push(buildD / resY);
+      pitchY = buildD / resY;
     }
-    return pitchCandidates.length > 0 ? Math.min(...pitchCandidates) : 0.05;
+    return {
+      x: pitchX ?? pitchY ?? 0.05,
+      y: pitchY ?? pitchX ?? 0.05,
+    };
   }, [
     activePrinterProfile?.pixelSize?.x,
     activePrinterProfile?.pixelSize?.y,
@@ -1153,13 +1177,15 @@ export function SlicingPanel({
       const nextAutoAaConfig: AutoAaResolvedConfig = aaAutoPreset === 'raw'
         ? {
             aaMode: 'Off',
+            antiAliasingMode: 'Coverage',
             aaSteps: 0,
             blurBrushRadiusPx: 0,
+            zBlurRadiusLayers: 0,
             zBlendLookBack: 0,
           }
-        : computePhysicalAaConfig(aaAutoPreset, pixelPitchMm, safeLayerH);
+        : computePhysicalAaConfig(aaAutoPreset, pixelPitchMm.x, safeLayerH, pixelPitchMm.y);
 
-      const nextAutoZBlendLookBack = computePhysicalAaConfig('balanced', pixelPitchMm, safeLayerH).zBlendLookBack;
+      const nextAutoZBlendLookBack = computePhysicalAaConfig('balanced', pixelPitchMm.x, safeLayerH, pixelPitchMm.y).zBlendLookBack;
 
       if (cancelled) return;
       setAutoAaConfig(nextAutoAaConfig);
@@ -1191,7 +1217,7 @@ export function SlicingPanel({
     const layerHeightMm = Number(effectiveLayerHeightMm);
     const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
 
-    const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm, 1e-6);
+    const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm.x, 1e-6);
     // Mirror the Rust engine formula (types.rs `effective_z_blend_fade_px`):
     //   fade_per_layer = ceil(layer_height_px / tan(20°)) = ceil(layer_height_px × 2.747)
     //   total = fade_per_layer × look_back, clamped to [1, 256]
@@ -1223,7 +1249,7 @@ export function SlicingPanel({
   const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(effectiveAutoAaConfig.aaSteps) : aaLevel;
   const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
   const resolvedZBlurRadiusLayers = (aaQualityMode === 'auto' && antiAliasingAvailable)
-    ? (effectiveAutoAaConfig.aaMode === '3DAA' ? 1 : 0)
+    ? effectiveAutoAaConfig.zBlurRadiusLayers
     : (resolvedAaMode === '3DAA' ? zBlurRadiusLayers : 0);
   const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable)
     ? effectiveAutoAaConfig.zBlendLookBack
@@ -1236,6 +1262,7 @@ export function SlicingPanel({
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Off' as const : resolvedAaLevel;
   const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage' =
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Coverage' :
+    aaQualityMode === 'auto' ? effectiveAutoAaConfig.antiAliasingMode :
     resolvedAaMode === '3DAA' ? 'Vertical2' :
     'Blur';
   const shouldApply3daaSamplingOverrides = aaQualityMode === 'advanced' && resolvedAaMode === '3DAA';
@@ -1259,21 +1286,31 @@ export function SlicingPanel({
     : 'Controls XY blur radius in pixels. Higher values create smoother transitions but can soften fine details.';
   const autoAaSummarySampleLabel = effectiveAutoAaConfig.aaMode === 'Off'
     ? 'No AA'
+    : effectiveAutoAaConfig.antiAliasingMode === 'Blur'
+      ? 'Binary Base'
     : effectiveAutoAaConfig.aaMode === '3DAA'
       ? `${effectiveAutoAaConfig.aaSteps}x ZAA Samples`
-      : `${effectiveAutoAaConfig.aaSteps}x XY Samples`;
+      : `${effectiveAutoAaConfig.aaSteps}x Coverage`;
   const autoAaSummaryBlurLabel = effectiveAutoAaConfig.aaMode === 'Off'
     ? 'No Edge Blur'
-    : `${effectiveAutoAaConfig.blurBrushRadiusPx}px Edge Blur`;
-  const autoAaSummaryKernelLabel = effectiveAutoAaConfig.aaMode === '3DAA' ? '3DAA' : '2D Only';
+    : effectiveAutoAaConfig.antiAliasingMode === 'Coverage'
+      ? 'No Edge Blur'
+      : effectiveAutoAaConfig.aaMode === '3DAA'
+        ? `${effectiveAutoAaConfig.blurBrushRadiusPx}px XY · ${effectiveAutoAaConfig.zBlurRadiusLayers}L Z`
+        : `${effectiveAutoAaConfig.blurBrushRadiusPx}px Edge Blur`;
+  const autoAaSummaryKernelLabel = effectiveAutoAaConfig.aaMode === '3DAA'
+    ? '3DAA'
+    : effectiveAutoAaConfig.antiAliasingMode === 'Coverage'
+      ? 'Coverage'
+      : '2D Blur';
   const autoAaSummaryGrayLabel = effectiveAutoAaConfig.aaMode === 'Off'
     ? 'No Gray Map'
     : blurGraySourceMode === 'lut'
-      ? `Curve: ${selectedLutCurveLabel}`
+      ? `LUT: ${selectedLutCurveLabel}`
       : 'Min Grey';
   const blurUsesLutCurve = (aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'lut';
   const shouldUseLutCurveForExport =
-    (effectiveAntiAliasingMode === 'Vertical2' || effectiveAntiAliasingMode === 'Blur')
+    (effectiveAntiAliasingMode === 'Vertical2' || effectiveAntiAliasingMode === 'Blur' || effectiveAntiAliasingMode === 'Coverage')
     && blurGraySourceMode === 'lut';
 
   const minimumAaProfileSupport = useMemo(() => {
@@ -2311,14 +2348,12 @@ export function SlicingPanel({
                   <div className="grid grid-cols-2 gap-1.5">
                     {(['auto', 'advanced'] as const).map((qmode) => {
                       const qActive = aaQualityMode === qmode;
-                      const meta = qmode === 'auto'
-                        ? { label: 'Auto', desc: '' }
-                        : { label: 'Advanced', desc: '' };
+                      const label = qmode === 'auto' ? 'Auto' : 'Advanced';
                       return (
                         <button
                           key={qmode}
                           type="button"
-                          className="rounded border px-2 py-2 text-center transition-colors"
+                          className="rounded border px-2 py-1.5 text-center text-xs font-semibold transition-colors"
                           style={qActive
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
@@ -2332,8 +2367,7 @@ export function SlicingPanel({
                               }}
                           onClick={() => setAaQualityMode(qmode)}
                         >
-                          <div className="text-xs font-semibold">{meta.label}</div>
-                          <div className="text-[10px] leading-snug mt-0.5" style={{ color: qActive ? 'color-mix(in srgb, var(--text-strong), var(--text-muted) 45%)' : 'var(--text-muted)' }}>{meta.desc}</div>
+                          {label}
                         </button>
                       );
                     })}
@@ -2341,19 +2375,15 @@ export function SlicingPanel({
 
                   {aaQualityMode === 'auto' && (
                     <>
-                      <div className="space-y-1">
-                        {([
-                          { preset: 'raw' as const, label: 'Disabled', desc: 'Binary Voxels' },
-                          { preset: 'sharp' as const, label: 'Sharp', desc: 'Best for fine details and text.' },
-                          { preset: 'balanced' as const, label: 'Balanced', desc: 'Smooth edges without sacrificing fine detail.' },
-                          { preset: 'smooth' as const, label: 'Smooth', desc: 'Ideal for organic shapes and curved surfaces.' },
-                        ]).map(({ preset, label, desc }) => {
+                      <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
+                      <div className="grid grid-cols-2 gap-1">
+                        {AUTO_AA_PRESET_OPTIONS.map(({ preset, label, desc }) => {
                           const pActive = aaAutoPreset === preset;
                           return (
                             <button
                               key={preset}
                               type="button"
-                              className="w-full rounded border px-2.5 py-2 text-center transition-colors"
+                              className="flex min-h-[45px] flex-col items-center justify-center rounded border px-2 py-1.5 text-center transition-colors"
                               style={pActive
                                 ? {
                                     borderColor: 'var(--accent-secondary-action-border)',
@@ -2367,12 +2397,15 @@ export function SlicingPanel({
                                   }}
                               onClick={() => setAaAutoPreset(preset)}
                             >
-                              <div className="text-xs font-semibold">{label}</div>
-                              <div className="text-[10px] leading-snug mt-0.5" style={{ color: pActive ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 45%)' : 'var(--text-muted)' }}>{desc}</div>
+                              <div className="text-[11px] font-semibold leading-tight">{label}</div>
+                              <div className="mt-0.5 text-[9px] leading-tight" style={{ color: pActive ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
+                                {desc}
+                              </div>
                             </button>
                           );
                         })}
                       </div>
+                      <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
                       {isAutoAaCalculating && (
                         <div
                           className="flex items-center justify-center gap-1 rounded border px-2 py-1 text-[10px] font-medium"
@@ -2386,19 +2419,27 @@ export function SlicingPanel({
                           <span>Calculating AA profile…</span>
                         </div>
                       )}
-                      <div className="grid grid-cols-4 gap-1 text-center">
-                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaSummarySampleLabel}
-                        </span>
-                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaSummaryBlurLabel}
-                        </span>
-                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaSummaryKernelLabel}
-                        </span>
-                        <span className="rounded border px-1.5 py-1 text-[10px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)', background: 'var(--surface-0)' }}>
-                          {autoAaSummaryGrayLabel}
-                        </span>
+                      <div className="grid grid-cols-2 gap-1">
+                        {([
+                          ['Mode', autoAaSummaryKernelLabel],
+                          ['Samples', autoAaSummarySampleLabel],
+                          ['Blur', autoAaSummaryBlurLabel],
+                          ['Grey', autoAaSummaryGrayLabel],
+                        ] as const).map(([label, value]) => (
+                          <div
+                            key={label}
+                            className="min-w-0 rounded border px-1.5 py-1 text-center leading-tight"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-strong)',
+                            }}
+                            title={value}
+                          >
+                            <div className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
+                            <div className="truncate text-[11px] font-semibold">{value}</div>
+                          </div>
+                        ))}
                       </div>
                     </>
                   )}
