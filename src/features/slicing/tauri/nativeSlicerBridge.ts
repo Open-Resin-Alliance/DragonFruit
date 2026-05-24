@@ -23,6 +23,7 @@ export type NativeSolidSliceJobEnvelope = {
   antiAliasingLevel: AntiAliasingLevel;
   antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Vertical3' | 'CrossBlend' | 'Volumetric' | 'Coverage';
   blurBrushRadiusPx: number;
+  zBlurRadiusLayers?: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
   mirrorX: boolean;
@@ -70,6 +71,7 @@ type NativeSolidSlicePayload = {
   anti_aliasing_level: AntiAliasingLevel;
   anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Vertical3' | 'CrossBlend' | 'Volumetric' | 'Coverage';
   blur_brush_radius_px: number;
+  z_blur_radius_layers: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
@@ -117,6 +119,7 @@ type NativeSolidSliceMetadataPayload = {
   anti_aliasing_level: AntiAliasingLevel;
   anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Vertical3' | 'CrossBlend' | 'Volumetric' | 'Coverage';
   blur_brush_radius_px: number;
+  z_blur_radius_layers: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
@@ -210,6 +213,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     anti_aliasing_level: job.antiAliasingLevel,
     anti_aliasing_mode: job.antiAliasingMode,
     blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
+    z_blur_radius_layers: Math.max(0, Math.min(8, Math.round(job.zBlurRadiusLayers ?? 0))),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
@@ -260,6 +264,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     anti_aliasing_level: job.antiAliasingLevel,
     anti_aliasing_mode: job.antiAliasingMode,
     blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
+    z_blur_radius_layers: Math.max(0, Math.min(8, Math.round(job.zBlurRadiusLayers ?? 0))),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,

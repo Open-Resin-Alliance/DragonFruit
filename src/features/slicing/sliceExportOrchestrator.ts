@@ -165,6 +165,7 @@ export type SliceExportOrchestratorOptions = {
   antiAliasingLevel?: AntiAliasingLevel;
   antiAliasingMode?: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   blurBrushRadiusPx?: number;
+  zBlurRadiusLayers?: number;
   zBlendLookBack?: number;
   zBlendFadePx?: number;
   zBlendAutoFade?: boolean;
@@ -249,6 +250,7 @@ export type SliceExportResult = {
       antiAliasingLevel: AntiAliasingLevel;
       antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
       blurBrushRadiusPx: number;
+      zBlurRadiusLayers: number;
       aaOnSupports: boolean;
       minimumAaAlphaPercent: number;
       zaaKernel?: 'legacy' | 'perturb';
@@ -668,6 +670,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     antiAliasingMode: options.antiAliasingMode ?? 'Blur',
     blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
+    zBlurRadiusLayers: Math.max(0, Math.min(8, Math.round(options.zBlurRadiusLayers ?? 0))),
     zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
     zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
     zBlendAutoFade: options.zBlendAutoFade !== false,
@@ -717,6 +720,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     antiAliasingLevel: nativeJob.antiAliasingLevel,
     antiAliasingMode: nativeJob.antiAliasingMode,
     blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+    zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
     zaaKernel: nativeJob.zaaKernel,
     zaaPattern: nativeJob.zaaPattern,
     zaaDuplicateZ: nativeJob.zaaDuplicateZ,
@@ -802,6 +806,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         antiAliasingLevel: nativeJob.antiAliasingLevel,
         antiAliasingMode: nativeJob.antiAliasingMode,
         blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+        zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
         aaOnSupports: nativeJob.aaOnSupports,
         minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
         zaaKernel: nativeJob.zaaKernel,

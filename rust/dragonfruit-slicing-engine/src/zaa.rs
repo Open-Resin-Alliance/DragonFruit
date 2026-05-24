@@ -175,20 +175,13 @@ impl ZaaKernelConfig {
         let fade_px = job.effective_z_blend_fade_px();
         let z_blend_min_alpha_u8 =
             ((job.z_blend_minimum_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+        // Keep custom LUT application as a final tail-stage remap after all
+        // spatial blur passes.  Kernel blending should use a stable linear
+        // cure-window ramp to avoid double-applying custom LUT transforms.
         let has_custom_lut = job.z_blend_custom_lut.is_some();
-        let lut = if let Some(custom) = &job.z_blend_custom_lut {
-            let mut arr = [0u8; 256];
-            for (i, &v) in custom.iter().enumerate().take(256) {
-                arr[i] = v;
-            }
-            arr[0] = 0;
-            arr[255] = 255;
-            arr
-        } else {
-            let z_blend_max_alpha_u8 =
-                ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
-            z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8)
-        };
+        let z_blend_max_alpha_u8 =
+            ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+        let lut = z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8);
         let cross_blend_cfg = if kind == ZaaKernelKind::LegacyRoiBfs
             && is_cross_blend_mode(&job.anti_aliasing_mode)
         {

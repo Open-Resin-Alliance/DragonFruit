@@ -420,36 +420,6 @@ fn apply_topology_gated_post_blur_floors(
     }
 }
 
-#[inline]
-fn apply_topology_gated_post_blur_floors_local(
-    mask: &mut [u8],
-    mask_bounds: (usize, usize, usize, usize),
-    topology: BoundedBinaryMaskRef<'_>,
-    min_aa_alpha_u8: u8,
-    z_blend_min_alpha_u8: u8,
-) {
-    const TOPO_THRESHOLD: u8 = 127;
-    let row_width = bounds_row_width(mask_bounds);
-
-    for y in mask_bounds.2..=mask_bounds.3 {
-        let row = (y - mask_bounds.2) * row_width;
-        for x in mask_bounds.0..=mask_bounds.1 {
-            let idx = row + (x - mask_bounds.0);
-            let px = &mut mask[idx];
-            if *px == 0 {
-                continue;
-            }
-            if topology.is_set(x, y, TOPO_THRESHOLD) {
-                if *px < min_aa_alpha_u8 {
-                    *px = min_aa_alpha_u8;
-                }
-            } else if *px < z_blend_min_alpha_u8 {
-                *px = 0;
-            }
-        }
-    }
-}
-
 /// Returns an inclusive `(first_layer, last_layer)` window where model geometry
 /// can exist, based on model-triangle Z extents.
 ///
@@ -502,6 +472,28 @@ fn env_override_usize(name: &str) -> Option<usize> {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v >= 1)
+}
+
+#[inline]
+fn env_override_f64(name: &str) -> Option<f64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+#[inline]
+fn effective_xy_blur_radius(radius: usize) -> usize {
+    if radius == 0 {
+        return 0;
+    }
+
+    // Small radii felt underpowered in real slices. Keep UX-facing values
+    // simple, but apply a modest internal scale so radius=1 is visibly active.
+    // Optional override for tuning/experiments:
+    //   DF_3DAA_XY_BLUR_RADIUS_SCALE=<float>
+    let scale = env_override_f64("DF_3DAA_XY_BLUR_RADIUS_SCALE").unwrap_or(1.5);
+    ((radius as f64 * scale).ceil() as usize).clamp(1, 64)
 }
 
 #[inline]
@@ -643,6 +635,386 @@ struct PostProcessedLayer {
     support_merge_ns: u64,
 }
 
+#[derive(Clone)]
+struct ZBlurHistoryLayer {
+    mask: BoundedGrayMask,
+}
+
+#[derive(Default)]
+struct ZBlurQueueState {
+    radius: usize,
+    pending: VecDeque<PostProcessedLayer>,
+    history: VecDeque<ZBlurHistoryLayer>,
+}
+
+impl ZBlurQueueState {
+    fn new(radius: usize) -> Self {
+        Self {
+            radius,
+            pending: VecDeque::with_capacity(radius.saturating_mul(2).saturating_add(2)),
+            history: VecDeque::with_capacity(radius.saturating_add(1)),
+        }
+    }
+}
+
+fn gaussian_z_weights(radius: usize) -> Vec<u32> {
+    if radius == 0 {
+        return vec![1024];
+    }
+
+    // Practical default: keep Z blur visibly cross-layer at low radii.
+    // Aaron's reported baseline was sigma≈0.5 for *XY* Gaussian blur; for Z we
+    // use a broader default kernel so depth=1 does not feel underpowered.
+    // Optional override for tuning/experiments:
+    //   DF_3DAA_Z_BLUR_SIGMA_SCALE=<float>
+    let sigma_scale = env_override_f64("DF_3DAA_Z_BLUR_SIGMA_SCALE").unwrap_or(1.25);
+    let sigma = (radius as f64 * sigma_scale).max(0.5);
+    // Reduce center dominance so neighboring layers contribute more at low
+    // depths (where users noticed blur looked too subtle).
+    // Optional override:
+    //   DF_3DAA_Z_BLUR_CENTER_WEIGHT_SCALE=<float>
+    let center_weight_scale = env_override_f64("DF_3DAA_Z_BLUR_CENTER_WEIGHT_SCALE")
+        .unwrap_or(0.8)
+        .clamp(0.1, 2.0);
+    let mut weights = Vec::with_capacity(radius + 1);
+    for d in 0..=radius {
+        let dist = d as f64;
+        let exponent = -((dist * dist) / (2.0 * sigma * sigma));
+        let mut scaled = (exponent.exp() * 1024.0).round() as i64;
+        if d == 0 {
+            scaled = ((scaled as f64) * center_weight_scale).round() as i64;
+        }
+        weights.push(scaled.max(1) as u32);
+    }
+    weights
+}
+
+#[inline]
+fn blit_gray_mask_into_local(
+    dst: &mut [u8],
+    dst_bounds: (usize, usize, usize, usize),
+    src: BoundedGrayMaskRef<'_>,
+) {
+    let Some((src_min_x, src_max_x, src_min_y, src_max_y)) = src.bounds() else {
+        return;
+    };
+    let overlap_min_x = src_min_x.max(dst_bounds.0);
+    let overlap_max_x = src_max_x.min(dst_bounds.1);
+    let overlap_min_y = src_min_y.max(dst_bounds.2);
+    let overlap_max_y = src_max_y.min(dst_bounds.3);
+    if overlap_min_x > overlap_max_x || overlap_min_y > overlap_max_y {
+        return;
+    }
+
+    let dst_row_width = bounds_row_width(dst_bounds);
+    for y in overlap_min_y..=overlap_max_y {
+        let Some((src_row, start_x)) = src.row_span(y, overlap_min_x, overlap_max_x) else {
+            continue;
+        };
+        let dst_row_start = (y - dst_bounds.2) * dst_row_width + (start_x - dst_bounds.0);
+        dst[dst_row_start..dst_row_start + src_row.len()].copy_from_slice(src_row);
+    }
+}
+
+fn apply_z_gaussian_blur_to_processed_layer(
+    center: &mut PostProcessedLayer,
+    history: &VecDeque<ZBlurHistoryLayer>,
+    future: &VecDeque<PostProcessedLayer>,
+    radius: usize,
+    weights: &[u32],
+) {
+    if radius == 0 {
+        return;
+    }
+
+    let center_mask = std::mem::take(&mut center.mask);
+    let center_mask_view = center_mask.as_view();
+    let mut sources: Vec<(u32, BoundedGrayMaskRef<'_>)> =
+        Vec::with_capacity(radius.saturating_mul(2).saturating_add(1));
+    sources.push((weights[0], center_mask_view));
+
+    for dist in 1..=radius {
+        let w = weights[dist];
+        if let Some(prior) = history.iter().rev().nth(dist - 1) {
+            sources.push((w, prior.mask.as_view()));
+        }
+        if let Some(next) = future.get(dist - 1) {
+            sources.push((w, next.mask.as_view()));
+        }
+    }
+
+    if sources.len() <= 1 {
+        center.mask = center_mask;
+        return;
+    }
+
+    let mut blur_bounds: Option<(usize, usize, usize, usize)> = None;
+    for (_, mask) in &sources {
+        blur_bounds = merge_bounds(blur_bounds, mask.bounds());
+    }
+    let Some(blur_bounds) = blur_bounds else {
+        center.mask = center_mask;
+        return;
+    };
+
+    let final_bounds = merge_bounds(center.active_bounds, Some(blur_bounds)).unwrap_or(blur_bounds);
+    let final_row_width = bounds_row_width(final_bounds);
+    let final_row_count = final_bounds.3 - final_bounds.2 + 1;
+    let mut out = vec![0u8; final_row_width.saturating_mul(final_row_count)];
+    blit_gray_mask_into_local(&mut out, final_bounds, center_mask_view);
+
+    let denom: u32 = sources.iter().map(|(w, _)| *w).sum::<u32>().max(1);
+    for y in blur_bounds.2..=blur_bounds.3 {
+        let mut row_min_x = usize::MAX;
+        let mut row_max_x = 0usize;
+        let mut has_coverage = false;
+        for (_, mask) in &sources {
+            if let Some((row, start_x)) = mask.row_span(y, blur_bounds.0, blur_bounds.1) {
+                let mut first_non_zero = None;
+                let mut last_non_zero = None;
+                for (idx, &value) in row.iter().enumerate() {
+                    if value > 0 {
+                        if first_non_zero.is_none() {
+                            first_non_zero = Some(idx);
+                        }
+                        last_non_zero = Some(idx);
+                    }
+                }
+
+                if let (Some(first), Some(last)) = (first_non_zero, last_non_zero) {
+                    has_coverage = true;
+                    row_min_x = row_min_x.min(start_x + first);
+                    row_max_x = row_max_x.max(start_x + last);
+                }
+            }
+        }
+        if !has_coverage || row_min_x > row_max_x {
+            continue;
+        }
+
+        for x in row_min_x..=row_max_x {
+            let mut coverage_hit = false;
+            let mut accum = 0u32;
+            for (w, mask) in &sources {
+                let value = mask.sample(x, y);
+                if value > 0 {
+                    coverage_hit = true;
+                }
+                accum = accum.saturating_add((value as u32).saturating_mul(*w));
+            }
+            if !coverage_hit {
+                continue;
+            }
+
+            let blurred = ((accum + (denom / 2)) / denom).min(255) as u8;
+            let local_y = y - final_bounds.2;
+            let local_x = x - final_bounds.0;
+            out[local_y * final_row_width + local_x] = blurred;
+        }
+    }
+
+    center.active_bounds = Some(final_bounds);
+    center.mask = BoundedGrayMask::from_rows(final_bounds, out);
+}
+
+fn apply_tail_remap_and_support_merge(
+    layer: &mut PostProcessedLayer,
+    min_aa_alpha_u8: u8,
+    custom_lut: Option<&[u8; 256]>,
+) -> (u64, u64) {
+    let Some(bounds) = layer.active_bounds else {
+        return (0, 0);
+    };
+
+    let mut mask = expand_bounded_gray_mask_to_bounds(std::mem::take(&mut layer.mask), bounds);
+
+    let remap_start = std::time::Instant::now();
+    if let Some(lut) = custom_lut {
+        for px in mask.iter_mut() {
+            if *px == 0 {
+                continue;
+            }
+            *px = lut[*px as usize];
+        }
+    } else if min_aa_alpha_u8 > 0 {
+        for px in mask.iter_mut() {
+            if *px > 0 && *px < min_aa_alpha_u8 {
+                *px = 0;
+            }
+        }
+    }
+    let remap_ns = remap_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+
+    let mut support_merge_ns = 0u64;
+    if let Some(support_mask) = layer.layer.support_mask.as_ref() {
+        let merge_start = std::time::Instant::now();
+        merge_support_mask_inplace_local(&mut mask, bounds, support_mask);
+        support_merge_ns = merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    }
+
+    layer.mask = BoundedGrayMask::from_rows(bounds, mask);
+    (remap_ns, support_merge_ns)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn enqueue_post_processed_layer(
+    done: PostProcessedLayer,
+    z_blur_state: &mut Option<ZBlurQueueState>,
+    z_blur_weights: &[u32],
+    min_aa_alpha_u8: u8,
+    custom_lut: Option<&[u8; 256]>,
+    emitted_topologies: &mut VecDeque<BoundedBinaryMask>,
+    keep_emitted_topologies: bool,
+    look_back: usize,
+    encode_tx: &std::sync::mpsc::SyncSender<EncodeTask>,
+    z_blend_backward_ns: &AtomicU64,
+    z_blend_forward_ns: &AtomicU64,
+    cross_blend_ns: &AtomicU64,
+    cross_blend_touched_pixels: &AtomicU64,
+    cross_blend_contributing_layers: &AtomicU64,
+    post_blur_ns: &AtomicU64,
+    support_merge_ns: &AtomicU64,
+    forwarded_layers: &AtomicU64,
+) -> Result<(), SlicerV3Error> {
+    let mut done = done;
+    let (tail_remap_ns, tail_support_merge_ns) =
+        apply_tail_remap_and_support_merge(&mut done, min_aa_alpha_u8, custom_lut);
+    done.post_blur_ns = done.post_blur_ns.saturating_add(tail_remap_ns);
+    done.support_merge_ns = done.support_merge_ns.saturating_add(tail_support_merge_ns);
+
+    let Some(state) = z_blur_state.as_mut() else {
+        return forward_to_encode(
+            done,
+            emitted_topologies,
+            keep_emitted_topologies,
+            look_back,
+            encode_tx,
+            z_blend_backward_ns,
+            z_blend_forward_ns,
+            cross_blend_ns,
+            cross_blend_touched_pixels,
+            cross_blend_contributing_layers,
+            post_blur_ns,
+            support_merge_ns,
+            forwarded_layers,
+        );
+    };
+
+    state.pending.push_back(done);
+
+    while state.pending.len() > state.radius {
+        let mut next = state
+            .pending
+            .pop_front()
+            .expect("pending z-blur layer should exist");
+        let history_entry = ZBlurHistoryLayer {
+            mask: next.mask.clone(),
+        };
+
+        apply_z_gaussian_blur_to_processed_layer(
+            &mut next,
+            &state.history,
+            &state.pending,
+            state.radius,
+            z_blur_weights,
+        );
+
+        let (tail_remap_ns, tail_support_merge_ns) =
+            apply_tail_remap_and_support_merge(&mut next, min_aa_alpha_u8, custom_lut);
+        next.post_blur_ns = next.post_blur_ns.saturating_add(tail_remap_ns);
+        next.support_merge_ns = next.support_merge_ns.saturating_add(tail_support_merge_ns);
+
+        forward_to_encode(
+            next,
+            emitted_topologies,
+            keep_emitted_topologies,
+            look_back,
+            encode_tx,
+            z_blend_backward_ns,
+            z_blend_forward_ns,
+            cross_blend_ns,
+            cross_blend_touched_pixels,
+            cross_blend_contributing_layers,
+            post_blur_ns,
+            support_merge_ns,
+            forwarded_layers,
+        )?;
+
+        state.history.push_back(history_entry);
+        while state.history.len() > state.radius {
+            state.history.pop_front();
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_post_processed_layers(
+    z_blur_state: &mut Option<ZBlurQueueState>,
+    z_blur_weights: &[u32],
+    min_aa_alpha_u8: u8,
+    custom_lut: Option<&[u8; 256]>,
+    emitted_topologies: &mut VecDeque<BoundedBinaryMask>,
+    keep_emitted_topologies: bool,
+    look_back: usize,
+    encode_tx: &std::sync::mpsc::SyncSender<EncodeTask>,
+    z_blend_backward_ns: &AtomicU64,
+    z_blend_forward_ns: &AtomicU64,
+    cross_blend_ns: &AtomicU64,
+    cross_blend_touched_pixels: &AtomicU64,
+    cross_blend_contributing_layers: &AtomicU64,
+    post_blur_ns: &AtomicU64,
+    support_merge_ns: &AtomicU64,
+    forwarded_layers: &AtomicU64,
+) -> Result<(), SlicerV3Error> {
+    let Some(state) = z_blur_state.as_mut() else {
+        return Ok(());
+    };
+
+    while let Some(mut next) = state.pending.pop_front() {
+        let history_entry = ZBlurHistoryLayer {
+            mask: next.mask.clone(),
+        };
+
+        apply_z_gaussian_blur_to_processed_layer(
+            &mut next,
+            &state.history,
+            &state.pending,
+            state.radius,
+            z_blur_weights,
+        );
+
+        let (tail_remap_ns, tail_support_merge_ns) =
+            apply_tail_remap_and_support_merge(&mut next, min_aa_alpha_u8, custom_lut);
+        next.post_blur_ns = next.post_blur_ns.saturating_add(tail_remap_ns);
+        next.support_merge_ns = next.support_merge_ns.saturating_add(tail_support_merge_ns);
+
+        forward_to_encode(
+            next,
+            emitted_topologies,
+            keep_emitted_topologies,
+            look_back,
+            encode_tx,
+            z_blend_backward_ns,
+            z_blend_forward_ns,
+            cross_blend_ns,
+            cross_blend_touched_pixels,
+            cross_blend_contributing_layers,
+            post_blur_ns,
+            support_merge_ns,
+            forwarded_layers,
+        )?;
+
+        state.history.push_back(history_entry);
+        while state.history.len() > state.radius {
+            state.history.pop_front();
+        }
+    }
+
+    Ok(())
+}
+
 /// Perf counters returned by the 3DAA pump thread.
 ///
 /// All timings are nanosecond-precision totals accumulated across the whole job.
@@ -745,7 +1117,6 @@ fn process_pending_layer_post(
     width: usize,
     height: usize,
     blur_radius: usize,
-    min_aa_alpha_u8: u8,
     zaa_config: zaa::ZaaKernelConfig,
     workspace: &mut zaa::ZaaKernelWorkspace,
 ) -> PostProcessedLayer {
@@ -833,7 +1204,7 @@ fn process_pending_layer_post(
     );
 
     let mut post_blur_ns = 0u64;
-    let mut support_merge_ns = 0u64;
+    let support_merge_ns = 0u64;
 
     if should_blur_model {
         let blur_start = std::time::Instant::now();
@@ -857,27 +1228,8 @@ fn process_pending_layer_post(
                 );
             }
         }
-
-        if !zaa_config.has_custom_lut
-            && (min_aa_alpha_u8 > 0 || zaa_config.z_blend_min_alpha_u8 > 0)
-        {
-            apply_topology_gated_post_blur_floors_local(
-                &mut mask,
-                work_bounds,
-                layer.topology.as_view(),
-                min_aa_alpha_u8,
-                zaa_config.z_blend_min_alpha_u8,
-            );
-        }
         post_blur_ns = post_blur_ns
             .saturating_add(blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
-    }
-
-    if let Some(support_mask) = layer.support_mask.as_ref() {
-        let merge_start = std::time::Instant::now();
-        merge_support_mask_inplace_local(&mut mask, work_bounds, support_mask);
-        support_merge_ns = support_merge_ns
-            .saturating_add(merge_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
 
     let mask = BoundedGrayMask::from_rows(work_bounds, mask);
@@ -998,9 +1350,12 @@ fn rasterize_vertical_aa_streaming_v3(
         None
     };
     let look_back = zaa_config.look_back;
-    let blur_radius = job.blur_brush_radius_px as usize;
+    let z_blur_radius_layers = job.effective_z_blur_radius_layers();
+    let z_blur_weights = gaussian_z_weights(z_blur_radius_layers);
+    let blur_radius = effective_xy_blur_radius(job.blur_brush_radius_px as usize);
     let min_aa_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+    let tail_custom_lut = job.normalized_custom_cure_lut();
     const TOPOLOGY_ALPHA_THRESHOLD: u8 = 127;
 
     // Lazily allocate consumer-thread post workspaces only if we actually run
@@ -1309,7 +1664,7 @@ fn rasterize_vertical_aa_streaming_v3(
         eprintln!(
             "[3DAA] {}×{} layers={} hw={} raster_workers={} post_threads={} buffer_depth={} \
              workers={} ws_max≈{}MB/worker ws_total_max≈{}MB pending≈{}MB encode≈{}MB raster≈{}MB peak_max≈{}MB \
-             look_back={} encode_buf={} raster_buf={} raster_aa={} raster_mode={} rate_log_every={}",
+             look_back={} z_blur_radius={} encode_buf={} raster_buf={} raster_aa={} raster_mode={} rate_log_every={}",
             width,
             height,
             job.total_layers,
@@ -1325,6 +1680,7 @@ fn rasterize_vertical_aa_streaming_v3(
             raster_mb,
             peak_in_flight_mb,
             look_back,
+            z_blur_radius_layers,
             encode_buffer_depth,
             streaming_buffer_depth,
             raster_job.anti_aliasing_level,
@@ -1386,7 +1742,6 @@ fn rasterize_vertical_aa_streaming_v3(
                         width,
                         height,
                         blur_radius,
-                        min_aa_alpha_u8,
                         task.zaa_config,
                         &mut workspace,
                     );
@@ -1440,6 +1795,11 @@ fn rasterize_vertical_aa_streaming_v3(
             let callback_sweep_ns = AtomicU64::new(0);
             let callback_drain_ns = AtomicU64::new(0);
             let callback_total_ns = AtomicU64::new(0);
+            let mut z_blur_state = if z_blur_radius_layers > 0 {
+                Some(ZBlurQueueState::new(z_blur_radius_layers))
+            } else {
+                None
+            };
             // Timer for the 2-second periodic queue-depth diagnostic.
             let mut pump_diag_last = std::time::Instant::now();
             // Sliding window of the last `look_back` dispatched-layer topologies.
@@ -1770,8 +2130,12 @@ fn rasterize_vertical_aa_streaming_v3(
                                     while let Some(next_done) =
                                         post_done_reorder.remove(&post_next_emit_seq)
                                     {
-                                        forward_to_encode(
+                                        enqueue_post_processed_layer(
                                             next_done,
+                                            &mut z_blur_state,
+                                            &z_blur_weights,
+                                            min_aa_alpha_u8,
+                                            tail_custom_lut.as_ref(),
                                             &mut emitted_topologies,
                                             zaa_config.keep_emitted_topologies(),
                                             look_back,
@@ -1854,12 +2218,15 @@ fn rasterize_vertical_aa_streaming_v3(
                                 width,
                                 height,
                                 blur_radius,
-                                min_aa_alpha_u8,
                                 zaa_config,
                                 workspace,
                             );
-                            forward_to_encode(
+                            enqueue_post_processed_layer(
                                 processed,
+                                &mut z_blur_state,
+                                &z_blur_weights,
+                                min_aa_alpha_u8,
+                                tail_custom_lut.as_ref(),
                                 &mut emitted_topologies,
                                 zaa_config.keep_emitted_topologies(),
                                 look_back,
@@ -1989,8 +2356,12 @@ fn rasterize_vertical_aa_streaming_v3(
                             while let Some(next_done) =
                                 post_done_reorder.remove(&post_next_emit_seq)
                             {
-                                forward_to_encode(
+                                enqueue_post_processed_layer(
                                     next_done,
+                                    &mut z_blur_state,
+                                    &z_blur_weights,
+                                    min_aa_alpha_u8,
+                                    tail_custom_lut.as_ref(),
                                     &mut emitted_topologies,
                                     zaa_config.keep_emitted_topologies(),
                                     look_back,
@@ -2044,12 +2415,15 @@ fn rasterize_vertical_aa_streaming_v3(
                         width,
                         height,
                         blur_radius,
-                        min_aa_alpha_u8,
                         zaa_config,
                         workspace,
                     );
-                    forward_to_encode(
+                    enqueue_post_processed_layer(
                         processed,
+                        &mut z_blur_state,
+                        &z_blur_weights,
+                        min_aa_alpha_u8,
+                        tail_custom_lut.as_ref(),
                         &mut emitted_topologies,
                         zaa_config.keep_emitted_topologies(),
                         look_back,
@@ -2077,8 +2451,12 @@ fn rasterize_vertical_aa_streaming_v3(
                 while let Ok(done) = rx.recv() {
                     post_done_reorder.insert(done.seq, done);
                     while let Some(next_done) = post_done_reorder.remove(&post_next_emit_seq) {
-                        forward_to_encode(
+                        enqueue_post_processed_layer(
                             next_done,
+                            &mut z_blur_state,
+                            &z_blur_weights,
+                            min_aa_alpha_u8,
+                            tail_custom_lut.as_ref(),
                             &mut emitted_topologies,
                             zaa_config.keep_emitted_topologies(),
                             look_back,
@@ -2096,6 +2474,25 @@ fn rasterize_vertical_aa_streaming_v3(
                     }
                 }
             }
+
+            flush_post_processed_layers(
+                &mut z_blur_state,
+                &z_blur_weights,
+                min_aa_alpha_u8,
+                tail_custom_lut.as_ref(),
+                &mut emitted_topologies,
+                zaa_config.keep_emitted_topologies(),
+                look_back,
+                &encode_tx,
+                &z_blend_backward_ns,
+                &z_blend_forward_ns,
+                &cross_blend_ns,
+                &cross_blend_touched_pixels,
+                &cross_blend_contributing_layers,
+                &post_blur_ns,
+                &support_merge_ns,
+                forwarded_layers.as_ref(),
+            )?;
 
             // Signal the encode thread that all layers have been forwarded.
             drop(encode_tx);
@@ -2527,7 +2924,7 @@ pub fn slice_and_rasterize_rle_v3(
             (job.configured_xy_aa_steps() as usize).max(1)
         };
     let blur_radius = if job.anti_aliasing_mode_is_blur() && job.blur_brush_radius_px > 0 {
-        job.blur_brush_radius_px.max(1) as usize
+        effective_xy_blur_radius(job.blur_brush_radius_px.max(1) as usize)
     } else {
         0
     };
@@ -2694,7 +3091,7 @@ pub fn slice_and_rasterize_3daa_rle_v3(
     let look_back = zaa_config.look_back;
     // Optional post-blur only (user-controlled). 3DAA itself is handled by the
     // 2-D distance blend in `blend_3daa_rle`.
-    let blur_radius = job.blur_brush_radius_px as usize;
+    let blur_radius = effective_xy_blur_radius(job.blur_brush_radius_px as usize);
     let min_alpha_u8 =
         ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
 
@@ -2841,7 +3238,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
             (job.configured_xy_aa_steps() as usize).max(1)
         };
     let blur_radius = if job.anti_aliasing_mode_is_blur() && job.blur_brush_radius_px > 0 {
-        job.blur_brush_radius_px.max(1) as usize
+        effective_xy_blur_radius(job.blur_brush_radius_px.max(1) as usize)
     } else {
         0
     };
@@ -3513,6 +3910,7 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
+            z_blur_radius_layers: 0,
             aa_on_supports: false,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,
@@ -3579,6 +3977,7 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
+            z_blur_radius_layers: 0,
             aa_on_supports: false,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,
@@ -3647,6 +4046,7 @@ mod tests {
             anti_aliasing_level: "4x".to_string(),
             anti_aliasing_mode: "Blur".to_string(),
             blur_brush_radius_px: 2,
+            z_blur_radius_layers: 0,
             aa_on_supports: true,
             model_triangle_count: 12,
             minimum_aa_alpha_percent: 35.0,

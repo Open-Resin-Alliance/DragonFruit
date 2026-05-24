@@ -191,6 +191,8 @@ const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.aaLevelCustomEnabled';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
+const SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY = 'dragonfruit.slicing.zBlurRadiusLayers';
+const SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.zBlurRadiusCustomEnabled';
 const SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusCustomEnabled';
 const SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY = 'dragonfruit.slicing.blurGraySourceMode';
 const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
@@ -221,6 +223,9 @@ const AA_STRENGTH_MAX_STEPS = 64;
 const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
 const BLUR_WIDTH_MIN_PX = 1;
 const BLUR_WIDTH_MAX_PX = 64;
+const Z_BLUR_DEPTH_PRESETS = [2, 4, 6, 8] as const;
+const Z_BLUR_RADIUS_MIN_LAYERS = 0;
+const Z_BLUR_RADIUS_MAX_LAYERS = 8;
 const LOOK_BACK_PRESETS = [2, 4, 6, 8] as const;
 const LOOK_BACK_MIN_LAYERS = 1;
 const LOOK_BACK_MAX_LAYERS = 16;
@@ -407,6 +412,19 @@ function resolveInitialBlurBrushRadiusPx(): number {
   if (!Number.isFinite(parsed)) return 1;
   const rounded = Math.round(parsed);
   return Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, rounded));
+}
+
+function resolveInitialZBlurRadiusLayers(): number {
+  if (typeof window === 'undefined') return 2;
+
+  const stored = window.localStorage.getItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY);
+  if (stored == null || stored.trim().length === 0) return 2;
+
+  const parsed = Number(stored);
+  if (!Number.isFinite(parsed)) return 2;
+  const rounded = Math.round(parsed);
+  return Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, rounded));
 }
 
 function resolveInitialMinimumAaAlphaPercent(): number {
@@ -627,11 +645,19 @@ export function SlicingPanel({
     );
   });
   const [blurBrushRadiusPx, setBlurBrushRadiusPx] = useState<number>(resolveInitialBlurBrushRadiusPx);
+  const [zBlurRadiusLayers, setZBlurRadiusLayers] = useState<number>(resolveInitialZBlurRadiusLayers);
   const [useCustomBlurBrushRadius, setUseCustomBlurBrushRadius] = useState<boolean>(() => {
     const initial = resolveInitialBlurBrushRadiusPx();
     return resolveInitialCustomOptionEnabled(
       SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY,
       !isPresetValue(BLUR_WIDTH_PRESETS, initial),
+    );
+  });
+  const [useCustomZBlurRadius, setUseCustomZBlurRadius] = useState<boolean>(() => {
+    const initial = resolveInitialZBlurRadiusLayers();
+    return resolveInitialCustomOptionEnabled(
+      SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY,
+      !isPresetValue(Z_BLUR_DEPTH_PRESETS, initial),
     );
   });
   const [zBlendLookBack, setZBlendLookBack] = useState<number>(resolveInitialZBlendLookBack);
@@ -1181,6 +1207,9 @@ export function SlicingPanel({
   const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.aaMode : aaMode;
   const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(effectiveAutoAaConfig.aaSteps) : aaLevel;
   const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
+  const resolvedZBlurRadiusLayers = (aaQualityMode === 'auto' && antiAliasingAvailable)
+    ? (effectiveAutoAaConfig.aaMode === '3DAA' ? 1 : 0)
+    : (resolvedAaMode === '3DAA' ? zBlurRadiusLayers : 0);
   const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable)
     ? effectiveAutoAaConfig.zBlendLookBack
     : (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode)
@@ -1209,10 +1238,10 @@ export function SlicingPanel({
   const advancedSampleCountHelp = aaMode === '3DAA'
     ? 'Controls how many raster samples each layer uses before resolving the final grayscale. In 3DAA these samples are distributed through the layer height using perturbation, so higher values improve shallow slopes and edge stability but cost more slicing time.'
     : 'Controls supersampling for the layer-local XY edge-smoothing pass. Higher levels preserve finer edge detail but cost more slicing time.';
-  const advancedBlurWidthLabel = aaMode === '3DAA' ? 'Edge Finish Width' : 'XY Blur Width';
+  const advancedBlurWidthLabel = 'XY Blur Radius';
   const advancedBlurWidthHelp = aaMode === '3DAA'
-    ? 'Controls the final in-plane blur pass that softens perturbation output after sampling. Higher values smooth edges more, but can soften tiny features.'
-    : 'Controls edge blur width for the XY pass in pixels. Higher values create smoother transitions but can soften fine details.';
+    ? 'Controls the final in-plane XY blur radius that softens perturbation output after sampling. Higher values smooth edges more, but can soften tiny features.'
+    : 'Controls XY blur radius in pixels. Higher values create smoother transitions but can soften fine details.';
   const autoAaSummarySampleLabel = effectiveAutoAaConfig.aaMode === 'Off'
     ? 'No AA'
     : effectiveAutoAaConfig.aaMode === '3DAA'
@@ -1311,6 +1340,11 @@ export function SlicingPanel({
   const setClampedBlurBrushRadiusPx = useCallback((value: number) => {
     const next = Number.isFinite(value) ? value : 1;
     setBlurBrushRadiusPx(Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, Math.round(next))));
+  }, []);
+
+  const setClampedZBlurRadiusLayers = useCallback((value: number) => {
+    const next = Number.isFinite(value) ? value : 2;
+    setZBlurRadiusLayers(Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, Math.round(next))));
   }, []);
 
   const setClampedZBlendLookBack = useCallback((value: number) => {
@@ -1416,6 +1450,20 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY, serialized);
   }, [blurBrushRadiusPx]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, Math.round(zBlurRadiusLayers))));
+    window.localStorage.setItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY, serialized);
+  }, [zBlurRadiusLayers]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(useCustomZBlurRadius);
+    window.localStorage.setItem(SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY, serialized);
+  }, [useCustomZBlurRadius]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1752,6 +1800,7 @@ export function SlicingPanel({
         antiAliasingLevel: effectiveAntiAliasingLevel,
         antiAliasingMode: effectiveAntiAliasingMode,
         blurBrushRadiusPx: resolvedBlurBrushRadiusPx,
+        zBlurRadiusLayers: resolvedZBlurRadiusLayers,
         zBlendLookBack: resolvedAaMode === '3DAA' ? resolvedZBlendLookBack : undefined,
         zBlendFadePx: resolvedAaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
         zBlendAutoFade: resolvedAaMode === '3DAA' ? (resolvedZBlendFadeMode === 'auto') : undefined,
@@ -2511,6 +2560,76 @@ export function SlicingPanel({
                           decreaseTitle="Decrease blur width"
                           increaseTitle="Increase blur width"
                         />
+                      )}
+
+                      {aaMode === '3DAA' && (
+                        <>
+                          <SettingLabelWithHelp
+                            label="Z Blur Depth"
+                            help="Applies a Gaussian blur across neighboring layers after 3DAA sampling. Higher values smooth Z stair-steps more, but can soften tiny vertical details."
+                          />
+                          <div className="grid grid-cols-5 gap-1">
+                            {Z_BLUR_DEPTH_PRESETS.map((depth) => {
+                              const active = !useCustomZBlurRadius && zBlurRadiusLayers === depth;
+                              return (
+                                <button
+                                  key={depth}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => {
+                                    setUseCustomZBlurRadius(false);
+                                    setClampedZBlurRadiusLayers(depth);
+                                  }}
+                                >
+                                  {depth}
+                                </button>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
+                              style={useCustomZBlurRadius
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setUseCustomZBlurRadius(true)}
+                            >
+                              Custom
+                            </button>
+                          </div>
+                          {useCustomZBlurRadius && (
+                            <ScrollableNumberField
+                              className="mt-1"
+                              value={zBlurRadiusLayers}
+                              onChange={setClampedZBlurRadiusLayers}
+                              min={Z_BLUR_RADIUS_MIN_LAYERS}
+                              max={Z_BLUR_RADIUS_MAX_LAYERS}
+                              step={1}
+                              unit="layers"
+                              ariaLabel="3DAA Z blur depth in layers"
+                              decreaseTitle="Decrease Z blur depth"
+                              increaseTitle="Increase Z blur depth"
+                            />
+                          )}
+                        </>
                       )}
 
                       {(aaMode === 'Blur' || aaMode === '3DAA') && (

@@ -155,7 +155,7 @@ impl<'a> BoundedBinaryMaskRef<'a> {
 /// Compact grayscale mask stored only inside its non-empty global bounds.
 ///
 /// Pixels outside `bounds` are implicitly zero.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BoundedGrayMask {
     bounds: Option<MaskBounds>,
     row_width: usize,

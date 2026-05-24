@@ -21,6 +21,10 @@ fn default_blur_brush_radius_px() -> u32 {
     1
 }
 
+fn default_z_blur_radius_layers() -> u32 {
+    0
+}
+
 fn default_anti_aliasing_mode() -> String {
     "Blur".to_string()
 }
@@ -124,6 +128,13 @@ pub struct SliceJobV3 {
     /// Blur brush radius in pixels for the blur AA mode.
     #[serde(default = "default_blur_brush_radius_px")]
     pub blur_brush_radius_px: u32,
+    /// Optional Gaussian blur radius across neighboring Z layers.
+    ///
+    /// - Unit: layers
+    /// - `0` disables the pass
+    /// - Only applied by vertical/3DAA post-processing paths.
+    #[serde(default = "default_z_blur_radius_layers")]
+    pub z_blur_radius_layers: u32,
     /// Whether AA should apply to support geometry when model/support split
     /// metadata is available.
     #[serde(default)]
@@ -308,6 +319,14 @@ impl SliceJobV3 {
     #[inline]
     pub fn produces_binary_output(&self) -> bool {
         !self.produces_grayscale_output()
+    }
+
+    #[inline]
+    pub fn effective_z_blur_radius_layers(&self) -> usize {
+        if !self.anti_aliasing_mode_is_vertical() {
+            return 0;
+        }
+        self.z_blur_radius_layers.min(8) as usize
     }
 
     #[inline]
