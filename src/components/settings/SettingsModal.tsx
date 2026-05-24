@@ -11,9 +11,10 @@ import { SceneAutosaveSettingsTab } from '@/components/settings/SceneAutosaveSet
 import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from './UISettingsTab';
+import { TransformSettingsTab } from './TransformSettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, Compass, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -175,7 +176,7 @@ type SettingsModalProps = {
   activeOutputFormat?: string | null;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'transform' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -1024,6 +1025,12 @@ export function SettingsModal({
       icon: MonitorCog,
       tone: 'primary',
     },
+    transform: {
+      label: 'Transform',
+      description: 'Rotation snap increments and gizmo tick marks',
+      icon: Compass,
+      tone: 'primary',
+    },
     ui: {
       label: 'UI & Theme',
       description: 'Theme and custom UI token customization',
@@ -1074,7 +1081,7 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'transform', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'sceneAutosave', 'backups', 'logging', 'about'];
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
@@ -1317,6 +1324,7 @@ export function SettingsModal({
                   onView3dSettingsChange={setDraftView3dSettings}
                 />
               )}
+              {activeTab === 'transform' && <TransformSettingsTab />}
               {activeTab === 'mesh' && (
                 <MeshSettingsTab
                   shaderType={draftShaderType}

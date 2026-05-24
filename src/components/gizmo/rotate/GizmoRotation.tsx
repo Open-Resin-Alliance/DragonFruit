@@ -5,8 +5,15 @@ import * as THREE from 'three';
 import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
-import { snapAngle, SNAP_COARSE, SNAP_FINE, SNAP_STORAGE_KEY } from './snapRotation';
+import { snapAngle, SNAP_STORAGE_KEY } from './snapRotation';
 import { SnapTickMarks } from './SnapTickMarks';
+import {
+  getSavedRotationSnapSettings,
+  subscribeToRotationSnapSettings,
+  getRotationSnapIncrements,
+  toSnapTickConfig,
+  type RotationSnapSettings,
+} from '@/components/settings/rotationSnapPreferences';
 import type { GizmoAxis } from '../types';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
@@ -61,6 +68,10 @@ export function GizmoRotation({
   const rawAccumulatedAngleRef = useRef<number>(0);
   const lastSnappedAngleRef = useRef<number>(0);
   const prevSnapIncrementRef = useRef<number | null>(null);
+  // Configurable snap tiers (#104): state drives the tick render; the ref feeds
+  // the hot pointermove path without re-subscribing each render.
+  const [snapSettings, setSnapSettings] = useState<RotationSnapSettings>(getSavedRotationSnapSettings);
+  const snapSettingsRef = useRef<RotationSnapSettings>(snapSettings);
   // Callback refs to stabilize useEffect deps (prevents effect churn during drag)
   const onDragRef = useRef(onDrag);
   const onDragEndRef = useRef(onDragEnd);
@@ -117,6 +128,19 @@ export function GizmoRotation({
       }
     };
   }, [register, unregister, handleType]);
+
+  // Keep configurable snap tiers in sync (live preview + persisted changes).
+  useEffect(() => {
+    const apply = () => {
+      const next = getSavedRotationSnapSettings();
+      snapSettingsRef.current = next;
+      setSnapSettings(next);
+    };
+    apply();
+    return subscribeToRotationSnapSettings(apply);
+  }, []);
+
+  const snapTickConfig = useMemo(() => toSnapTickConfig(snapSettings), [snapSettings]);
   
   // Check if this handle is hovered via GPU picking
   const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 
@@ -276,8 +300,9 @@ export function GizmoRotation({
       let snapToggled = false;
       try { snapToggled = localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch {}
       const isSnapActive = e.metaKey || e.ctrlKey || snapToggled;
+      const { coarse, fine } = getRotationSnapIncrements(snapSettingsRef.current);
       const currentIncrement = isSnapActive
-        ? (e.shiftKey ? SNAP_FINE : SNAP_COARSE)
+        ? (e.shiftKey ? fine : coarse)
         : null;
 
       // Reset accumulated on any transition (free↔snap, coarse↔fine)
@@ -499,6 +524,7 @@ export function GizmoRotation({
           hovered={!!effectiveHovered}
           active={ringIsActive}
           opacityScale={opacityScale}
+          config={snapTickConfig}
         />
       )}
 
