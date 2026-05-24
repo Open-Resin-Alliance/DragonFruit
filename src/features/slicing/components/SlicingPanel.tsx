@@ -147,6 +147,8 @@ function formatProgressLayerLabel(done: number, total: number): string {
 
 type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'encoding' | 'finalizing' | 'handoff' | 'other';
 type BlurGraySourceMode = 'minimum' | 'lut';
+type ExperimentalZaaKernel = 'legacy' | 'perturb';
+type ExperimentalZaaPattern = 'uniform' | 'halton' | 'base2';
 
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
@@ -203,6 +205,9 @@ const SLICING_3DAA_AUTO_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaAutoMode';
 const SLICING_3DAA_RESIN_TYPE_STORAGE_KEY = 'dragonfruit.slicing.3daaResinType';
 const SLICING_3DAA_SAVED_CURVES_STORAGE_KEY = 'dragonfruit.slicing.3daaSavedCurves';
 const SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY = 'dragonfruit.slicing.3daaSelectedCurveId';
+const SLICING_EXPERIMENTAL_ZAA_KERNEL_STORAGE_KEY = 'dragonfruit.slicing.experimentalZaaKernel';
+const SLICING_EXPERIMENTAL_ZAA_PATTERN_STORAGE_KEY = 'dragonfruit.slicing.experimentalZaaPattern';
+const SLICING_EXPERIMENTAL_ZAA_DUPLICATE_Z_STORAGE_KEY = 'dragonfruit.slicing.experimentalZaaDuplicateZ';
 const NEW_CURVE_EDITING_TARGET = '__dragonfruit_new_curve__';
 const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
 const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
@@ -471,6 +476,28 @@ function resolveInitialZBlendAutoMode(): boolean {
   return stored !== 'false';
 }
 
+function resolveInitialExperimentalZaaKernel(): ExperimentalZaaKernel {
+  if (typeof window === 'undefined') return 'legacy';
+  const stored = window.localStorage.getItem(SLICING_EXPERIMENTAL_ZAA_KERNEL_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_EXPERIMENTAL_ZAA_KERNEL_STORAGE_KEY);
+  return stored === 'perturb' ? 'perturb' : 'legacy';
+}
+
+function resolveInitialExperimentalZaaPattern(): ExperimentalZaaPattern {
+  if (typeof window === 'undefined') return 'uniform';
+  const stored = window.localStorage.getItem(SLICING_EXPERIMENTAL_ZAA_PATTERN_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_EXPERIMENTAL_ZAA_PATTERN_STORAGE_KEY);
+  if (stored === 'halton' || stored === 'base2') return stored;
+  return 'uniform';
+}
+
+function resolveInitialExperimentalZaaDuplicateZ(): boolean {
+  if (typeof window === 'undefined') return false;
+  const stored = window.localStorage.getItem(SLICING_EXPERIMENTAL_ZAA_DUPLICATE_Z_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_EXPERIMENTAL_ZAA_DUPLICATE_Z_STORAGE_KEY);
+  return stored === 'true';
+}
+
 /** Max-alpha (%) for the cure-window LUT keyed by material transparency. */
 const Z_BLEND_MAX_ALPHA_BY_RESIN = {
   opaque: 90,
@@ -627,6 +654,9 @@ export function SlicingPanel({
   const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
   const [zBlendFadeMode, setZBlendFadeMode] = useState<'auto' | 'manual'>(resolveInitialZBlendFadeMode);
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
+  const [experimentalZaaKernel, setExperimentalZaaKernel] = useState<ExperimentalZaaKernel>(resolveInitialExperimentalZaaKernel);
+  const [experimentalZaaPattern, setExperimentalZaaPattern] = useState<ExperimentalZaaPattern>(resolveInitialExperimentalZaaPattern);
+  const [experimentalZaaDuplicateZ, setExperimentalZaaDuplicateZ] = useState<boolean>(resolveInitialExperimentalZaaDuplicateZ);
   const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
   const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoUiPreset>(resolveInitialAaAutoPreset);
   const [autoAaConfig, setAutoAaConfig] = useState<AutoAaResolvedConfig>(DEFAULT_AUTO_AA_CONFIG);
@@ -1174,6 +1204,17 @@ export function SlicingPanel({
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Coverage' :
     resolvedAaMode === '3DAA' ? 'Vertical2' :
     'Blur';
+  const shouldApplyExperimentalZaaControls = aaQualityMode === 'advanced' && resolvedAaMode === '3DAA';
+  const effectiveExperimentalZaaKernel = shouldApplyExperimentalZaaControls
+    ? experimentalZaaKernel
+    : undefined;
+  const effectiveExperimentalZaaPattern = shouldApplyExperimentalZaaControls && experimentalZaaKernel === 'perturb'
+    ? experimentalZaaPattern
+    : undefined;
+  const effectiveExperimentalZaaDuplicateZ = shouldApplyExperimentalZaaControls && experimentalZaaKernel === 'perturb'
+    ? experimentalZaaDuplicateZ
+    : undefined;
+  const experimentalDuplicateZSupportedAtCurrentAa = (parseAaLevelSteps(aaLevel) ?? 4) >= 16;
   const blurUsesLutCurve = (aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'lut';
   const shouldUseLutCurveForExport =
     (effectiveAntiAliasingMode === 'Vertical2' || effectiveAntiAliasingMode === 'Blur')
@@ -1409,6 +1450,25 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY, serialized);
   }, [zBlendAutoMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_EXPERIMENTAL_ZAA_KERNEL_STORAGE_KEY, experimentalZaaKernel);
+    window.sessionStorage.setItem(SLICING_EXPERIMENTAL_ZAA_KERNEL_STORAGE_KEY, experimentalZaaKernel);
+  }, [experimentalZaaKernel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SLICING_EXPERIMENTAL_ZAA_PATTERN_STORAGE_KEY, experimentalZaaPattern);
+    window.sessionStorage.setItem(SLICING_EXPERIMENTAL_ZAA_PATTERN_STORAGE_KEY, experimentalZaaPattern);
+  }, [experimentalZaaPattern]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(experimentalZaaDuplicateZ);
+    window.localStorage.setItem(SLICING_EXPERIMENTAL_ZAA_DUPLICATE_Z_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_EXPERIMENTAL_ZAA_DUPLICATE_Z_STORAGE_KEY, serialized);
+  }, [experimentalZaaDuplicateZ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1700,6 +1760,9 @@ export function SlicingPanel({
         zBlendCustomLut: shouldUseLutCurveForExport
           ? selectedSharedLut
           : undefined,
+        experimentalZaaKernel: effectiveExperimentalZaaKernel,
+        experimentalZaaPattern: effectiveExperimentalZaaPattern,
+        experimentalZaaDuplicateZ: effectiveExperimentalZaaDuplicateZ,
         minimumAaAlphaPercentOverride: shouldUseLutCurveForExport && effectiveAntiAliasingMode === 'Blur'
           ? 0
           : (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
@@ -2904,6 +2967,141 @@ export function SlicingPanel({
                               )}
                             </>
                           )}
+
+                          <>
+                            <div
+                              className="my-2.5 mx-1 h-px rounded-full"
+                              style={{
+                                background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
+                              }}
+                            />
+                            <SettingLabelWithHelp
+                              label="Experimental ZAA Kernel"
+                              help="Internal comparison controls for Aaron-style raster-time Z perturbation. Legacy keeps the current ROI-local post kernel; Aaron Prototype moves the test path into raster-time sample placement."
+                            />
+                            <div className="grid grid-cols-2 gap-1">
+                              <button
+                                type="button"
+                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                style={experimentalZaaKernel === 'legacy'
+                                  ? {
+                                      borderColor: 'var(--accent-secondary-action-border)',
+                                      background: 'var(--accent-secondary-action-bg-92)',
+                                      color: 'var(--accent-secondary-action-color)',
+                                    }
+                                  : {
+                                      borderColor: 'var(--border-subtle)',
+                                      background: 'var(--surface-0)',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                onClick={() => setExperimentalZaaKernel('legacy')}
+                              >
+                                Legacy
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                style={experimentalZaaKernel === 'perturb'
+                                  ? {
+                                      borderColor: 'var(--accent-secondary-action-border)',
+                                      background: 'var(--accent-secondary-action-bg-92)',
+                                      color: 'var(--accent-secondary-action-color)',
+                                    }
+                                  : {
+                                      borderColor: 'var(--border-subtle)',
+                                      background: 'var(--surface-0)',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                onClick={() => setExperimentalZaaKernel('perturb')}
+                              >
+                                Aaron Prototype
+                              </button>
+                            </div>
+
+                            {experimentalZaaKernel === 'perturb' && (
+                              <>
+                                <SettingLabelWithHelp
+                                  label="Perturbation Pattern"
+                                  help="Chooses how the Aaron prototype distributes Z samples. Uniform uses centered spacing, Halton is low-discrepancy, and Base2 uses a van der Corput sequence."
+                                />
+                                <div className="grid grid-cols-3 gap-1">
+                                  {([
+                                    ['uniform', 'Uniform'],
+                                    ['halton', 'Halton'],
+                                    ['base2', 'Base2'],
+                                  ] as const).map(([pattern, label]) => (
+                                    <button
+                                      key={pattern}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={experimentalZaaPattern === pattern
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => setExperimentalZaaPattern(pattern)}
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <SettingLabelWithHelp
+                                  label="Duplicate Terminal Z"
+                                  help="Tests Aaron-style duplicate end-sample behavior. This only changes the prototype at 16x, 32x, or 64x XY AA."
+                                />
+                                <div className="grid grid-cols-2 gap-1">
+                                  <button
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={!experimentalZaaDuplicateZ
+                                      ? {
+                                          borderColor: 'var(--accent-secondary-action-border)',
+                                          background: 'var(--accent-secondary-action-bg-92)',
+                                          color: 'var(--accent-secondary-action-color)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setExperimentalZaaDuplicateZ(false)}
+                                  >
+                                    Off
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={experimentalZaaDuplicateZ
+                                      ? {
+                                          borderColor: 'var(--accent-secondary-action-border)',
+                                          background: 'var(--accent-secondary-action-bg-92)',
+                                          color: 'var(--accent-secondary-action-color)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setExperimentalZaaDuplicateZ(true)}
+                                  >
+                                    On
+                                  </button>
+                                </div>
+                                {!experimentalDuplicateZSupportedAtCurrentAa && (
+                                  <div className="px-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                                    Duplicate Terminal Z only affects the Aaron prototype at 16x, 32x, or 64x XY AA.
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </>
                         </>
                       )}
 

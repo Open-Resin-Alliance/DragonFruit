@@ -15,6 +15,132 @@ pub type TopologyBounds = Option<(usize, usize, usize, usize)>;
 pub enum ZaaKernelKind {
     /// Current ROI-local BFS/EDT-derived z-blend kernel used by `paul/3daa`.
     LegacyRoiBfs,
+    /// Internal-only prototype that moves ZAA into raster-time Z-perturbed
+    /// supersampling while preserving the rest of the existing pipeline.
+    AaronPerturbationPrototype,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZaaPerturbationPattern {
+    Uniform,
+    Halton,
+    Base2,
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name),
+        Ok(value)
+            if value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+                || value.eq_ignore_ascii_case("on")
+    )
+}
+
+fn parse_pattern(value: &str) -> Option<ZaaPerturbationPattern> {
+    if value.eq_ignore_ascii_case("halton") {
+        Some(ZaaPerturbationPattern::Halton)
+    } else if value.eq_ignore_ascii_case("base2") {
+        Some(ZaaPerturbationPattern::Base2)
+    } else if value.eq_ignore_ascii_case("uniform") {
+        Some(ZaaPerturbationPattern::Uniform)
+    } else {
+        None
+    }
+}
+
+fn env_perturbation_pattern() -> ZaaPerturbationPattern {
+    std::env::var("DF_ZAA_PERTURBATION_MODE")
+        .ok()
+        .as_deref()
+        .and_then(parse_pattern)
+        .unwrap_or(ZaaPerturbationPattern::Uniform)
+}
+
+pub fn perturbation_pattern(job: &SliceJobV3) -> ZaaPerturbationPattern {
+    job.experimental_zaa_pattern
+        .as_deref()
+        .and_then(parse_pattern)
+        .unwrap_or_else(env_perturbation_pattern)
+}
+
+#[inline]
+pub fn use_raster_perturbation(job: &SliceJobV3) -> bool {
+    if !is_vertical_aa_mode(&job.anti_aliasing_mode) || job.configured_xy_aa_steps() <= 1 {
+        return false;
+    }
+
+    if let Some(kernel) = job.experimental_zaa_kernel.as_deref() {
+        return kernel.eq_ignore_ascii_case("perturb")
+            || kernel.eq_ignore_ascii_case("aaron")
+            || kernel.eq_ignore_ascii_case("prototype");
+    }
+
+    matches!(
+        std::env::var("DF_ZAA_KERNEL"),
+        Ok(value)
+            if value.eq_ignore_ascii_case("perturb")
+                || value.eq_ignore_ascii_case("aaron")
+                || value.eq_ignore_ascii_case("prototype")
+    )
+}
+
+#[inline]
+pub fn duplicate_terminal_z_samples(job: &SliceJobV3, aa_steps: usize) -> bool {
+    use_raster_perturbation(job)
+        && job
+            .experimental_zaa_duplicate_z
+            .unwrap_or_else(|| env_flag("DF_ZAA_DUPLICATE_Z"))
+        && matches!(aa_steps, 16 | 32 | 64)
+}
+
+#[inline]
+pub fn z_steps_for_aa(aa_steps: usize, duplicate_terminal_z: bool) -> usize {
+    if duplicate_terminal_z {
+        (aa_steps / 2).max(1)
+    } else {
+        aa_steps.max(1)
+    }
+}
+
+#[inline]
+pub fn perturbation_offset(
+    pattern: ZaaPerturbationPattern,
+    sample_index: usize,
+    z_steps: usize,
+) -> f32 {
+    match pattern {
+        ZaaPerturbationPattern::Uniform => (sample_index as f32 + 0.5) / z_steps.max(1) as f32,
+        ZaaPerturbationPattern::Halton => halton_base_5((sample_index + 1) as u32),
+        ZaaPerturbationPattern::Base2 => van_der_corput_base_2((sample_index + 1) as u32),
+    }
+}
+
+fn halton_base_5(mut index: u32) -> f32 {
+    let mut result = 0.0f32;
+    let mut f = 1.0f32 / 5.0f32;
+
+    while index > 0 {
+        result += f * (index % 5) as f32;
+        index /= 5;
+        f /= 5.0f32;
+    }
+
+    result
+}
+
+fn van_der_corput_base_2(mut index: u32) -> f32 {
+    let mut result = 0.0f32;
+    let mut f = 0.5f32;
+
+    while index > 0 {
+        result += f * (index & 1) as f32;
+        index >>= 1;
+        f *= 0.5f32;
+    }
+
+    result
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +156,11 @@ pub struct ZaaKernelConfig {
 
 impl ZaaKernelConfig {
     pub fn from_job(job: &SliceJobV3) -> Self {
+        let kind = if use_raster_perturbation(job) {
+            ZaaKernelKind::AaronPerturbationPrototype
+        } else {
+            ZaaKernelKind::LegacyRoiBfs
+        };
         let look_back = (job.z_blend_look_back as usize).max(1);
         let fade_px = job.effective_z_blend_fade_px();
         let z_blend_min_alpha_u8 =
@@ -48,7 +179,9 @@ impl ZaaKernelConfig {
                 ((job.z_blend_max_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
             z_blend::make_cure_window_lut(z_blend_min_alpha_u8, z_blend_max_alpha_u8)
         };
-        let cross_blend_cfg = if is_cross_blend_mode(&job.anti_aliasing_mode) {
+        let cross_blend_cfg = if kind == ZaaKernelKind::LegacyRoiBfs
+            && is_cross_blend_mode(&job.anti_aliasing_mode)
+        {
             Some(cross_blend::CrossBlendKernelConfig {
                 window_layers: look_back,
                 z_decay: 0.75,
@@ -63,7 +196,7 @@ impl ZaaKernelConfig {
         };
 
         Self {
-            kind: ZaaKernelKind::LegacyRoiBfs,
+            kind,
             look_back,
             fade_px,
             z_blend_min_alpha_u8,
@@ -76,6 +209,11 @@ impl ZaaKernelConfig {
     #[inline]
     pub fn keep_emitted_topologies(&self) -> bool {
         self.cross_blend_cfg.is_some()
+    }
+
+    #[inline]
+    pub fn uses_raster_perturbation(&self) -> bool {
+        matches!(self.kind, ZaaKernelKind::AaronPerturbationPrototype)
     }
 }
 
@@ -128,6 +266,11 @@ pub fn apply_kernel(
 ) -> ZaaKernelStats {
     match config.kind {
         ZaaKernelKind::LegacyRoiBfs => apply_legacy_roi_bfs(inputs, config, workspace),
+        ZaaKernelKind::AaronPerturbationPrototype => {
+            let _ = inputs;
+            let _ = workspace;
+            ZaaKernelStats::default()
+        }
     }
 }
 
@@ -232,4 +375,43 @@ pub fn is_cross_blend_mode(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("vertical3")
         || mode.trim().eq_ignore_ascii_case("crossblend")
         || mode.trim().eq_ignore_ascii_case("volumetric")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{perturbation_offset, z_steps_for_aa, ZaaPerturbationPattern};
+
+    #[test]
+    fn uniform_offsets_are_centered() {
+        let actual: Vec<f32> = (0..4)
+            .map(|idx| perturbation_offset(ZaaPerturbationPattern::Uniform, idx, 4))
+            .collect();
+        let expected = [0.125, 0.375, 0.625, 0.875];
+
+        for (idx, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!((a - e).abs() < 1e-6, "idx={idx} expected {e}, got {a}");
+        }
+    }
+
+    #[test]
+    fn base2_sequence_matches_expected() {
+        let expected = [0.5, 0.25, 0.75, 0.125, 0.625, 0.375, 0.875, 0.0625];
+
+        for (idx, &exp) in expected.iter().enumerate() {
+            let val = perturbation_offset(ZaaPerturbationPattern::Base2, idx, expected.len());
+            assert!(
+                (val - exp).abs() < 1e-6,
+                "idx={} expected {}, got {}",
+                idx,
+                exp,
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_terminal_z_halves_unique_steps() {
+        assert_eq!(z_steps_for_aa(16, true), 8);
+        assert_eq!(z_steps_for_aa(8, false), 8);
+    }
 }

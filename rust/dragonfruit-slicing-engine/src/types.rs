@@ -193,6 +193,15 @@ pub struct SliceJobV3 {
     /// (solid).
     #[serde(default)]
     pub z_blend_custom_lut: Option<Vec<u8>>,
+    /// Optional internal-only override for the active ZAA kernel.
+    #[serde(default)]
+    pub experimental_zaa_kernel: Option<String>,
+    /// Optional internal-only override for Aaron-style perturbation patterns.
+    #[serde(default)]
+    pub experimental_zaa_pattern: Option<String>,
+    /// Optional internal-only duplicate-terminal-Z toggle for Aaron-style tests.
+    #[serde(default)]
+    pub experimental_zaa_duplicate_z: Option<bool>,
     /// Flat triangle buffer (`x,y,z` * 3 vertices per triangle).
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.

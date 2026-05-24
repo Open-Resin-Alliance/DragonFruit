@@ -171,6 +171,9 @@ export type SliceExportOrchestratorOptions = {
   zBlendMinimumAlphaPercent?: number;
   zBlendMaxAlphaPercent?: number;
   zBlendCustomLut?: number[];
+  experimentalZaaKernel?: 'legacy' | 'perturb';
+  experimentalZaaPattern?: 'uniform' | 'halton' | 'base2';
+  experimentalZaaDuplicateZ?: boolean;
   minimumAaAlphaPercentOverride?: number;
   aaOnSupports?: boolean;
   outputMode?: 'download' | 'return';
@@ -248,6 +251,9 @@ export type SliceExportResult = {
       blurBrushRadiusPx: number;
       aaOnSupports: boolean;
       minimumAaAlphaPercent: number;
+      experimentalZaaKernel?: 'legacy' | 'perturb';
+      experimentalZaaPattern?: 'uniform' | 'halton' | 'base2';
+      experimentalZaaDuplicateZ?: boolean;
       modelTriangleCount: number;
       triangleFloatCount: number;
       buildWidthMm: number;
@@ -668,6 +674,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     zBlendMinimumAlphaPercent: Math.max(0, Math.min(100, options.zBlendMinimumAlphaPercent ?? 0)),
     zBlendMaxAlphaPercent: Math.max(0, Math.min(100, options.zBlendMaxAlphaPercent ?? 90)),
     zBlendCustomLut: options.zBlendCustomLut,
+    experimentalZaaKernel: options.experimentalZaaKernel,
+    experimentalZaaPattern: options.experimentalZaaPattern,
+    experimentalZaaDuplicateZ: options.experimentalZaaDuplicateZ,
     aaOnSupports: options.aaOnSupports ?? (perfSettings.aaOnSupportsExperimental === true),
     minimumAaAlphaPercent: Math.max(
       0,
@@ -708,6 +717,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     antiAliasingLevel: nativeJob.antiAliasingLevel,
     antiAliasingMode: nativeJob.antiAliasingMode,
     blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+    experimentalZaaKernel: nativeJob.experimentalZaaKernel,
+    experimentalZaaPattern: nativeJob.experimentalZaaPattern,
+    experimentalZaaDuplicateZ: nativeJob.experimentalZaaDuplicateZ,
   });
 
   let progressTotal = solidMesh.totalLayers;
@@ -792,6 +804,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
         aaOnSupports: nativeJob.aaOnSupports,
         minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
+        experimentalZaaKernel: nativeJob.experimentalZaaKernel,
+        experimentalZaaPattern: nativeJob.experimentalZaaPattern,
+        experimentalZaaDuplicateZ: nativeJob.experimentalZaaDuplicateZ,
         modelTriangleCount: nativeJob.modelTriangleCount,
         triangleFloatCount: nativeJob.trianglesXYZ.length,
         buildWidthMm: nativeJob.buildWidthMm,
