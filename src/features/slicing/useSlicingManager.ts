@@ -3,16 +3,28 @@ import { useState, useEffect, useMemo, useCallback, useRef, type SetStateAction 
 interface SlicingStateProps {
   hasGeometry: boolean;
   zRange: { min: number; max: number };
+  layerHeightMm?: number | null;
 }
 
-export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
-  const [layerHeightMicron, setLayerHeightMicron] = useState<number>(50);
+function resolveLayerHeightMicron(layerHeightMm: number | null | undefined): number | null {
+  const parsed = Number(layerHeightMm);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(1, Math.round(parsed * 1000));
+}
+
+export function useSlicingManager({ hasGeometry, zRange, layerHeightMm: controlledLayerHeightMm }: SlicingStateProps) {
+  const controlledLayerHeightMicron = useMemo(
+    () => resolveLayerHeightMicron(controlledLayerHeightMm),
+    [controlledLayerHeightMm],
+  );
+  const [uncontrolledLayerHeightMicron, setLayerHeightMicron] = useState<number>(() => controlledLayerHeightMicron ?? 50);
   const [crossSectionMode, setCrossSectionMode] = useState<'smooth' | 'rasterized'>('smooth');
   const [layerIndex, setLayerIndexState] = useState<number>(0);
   const [lowerLayerIndex, setLowerLayerIndexState] = useState<number>(0);
   const topSliderInitializedRef = useRef(false);
   const prevNumLayersRef = useRef<number>(0);
 
+  const layerHeightMicron = controlledLayerHeightMicron ?? uncontrolledLayerHeightMicron;
   const layerHeightMm = useMemo(() => layerHeightMicron / 1000, [layerHeightMicron]);
 
   // Reset layer index only when switching from no-geom to has-geom (e.g. first load)

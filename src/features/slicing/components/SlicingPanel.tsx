@@ -53,6 +53,7 @@ interface SlicingPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
   estimatedLayerCountOverride?: number | null;
+  estimatedLayerHeightMmOverride?: number | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onSliceRunStarted?: () => void;
@@ -212,6 +213,7 @@ const NEW_CURVE_EDITING_TARGET = '__dragonfruit_new_curve__';
 const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
 const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
+const REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT = 'dragonfruit:slicing-remote-offline-layer-height-changed';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
 const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
@@ -590,6 +592,7 @@ export function SlicingPanel({
   models,
   activeModel,
   estimatedLayerCountOverride,
+  estimatedLayerHeightMmOverride,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
   onSliceRunStarted,
@@ -1037,15 +1040,27 @@ export function SlicingPanel({
 
   const materialProfileForSlicing = useMemo(() => {
     if (!effectiveMaterialProfile) return null;
-    if (!showRemoteOfflineLayerHeightOverride) return effectiveMaterialProfile;
+    if (showRemoteOfflineLayerHeightOverride) {
+      return {
+        ...effectiveMaterialProfile,
+        layerHeightMm: effectiveLayerHeightMm ?? clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      };
+    }
     return {
       ...effectiveMaterialProfile,
-      layerHeightMm: effectiveLayerHeightMm ?? clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      layerHeightMm: clampLayerHeightMm(effectiveMaterialProfile.layerHeightMm, 0.05),
     };
   }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
 
   const estimatedLayerCount = useMemo(() => {
-    if (Number.isFinite(estimatedLayerCountOverride) && Number(estimatedLayerCountOverride) > 0) {
+    const overrideLayerHeightMm = Number(estimatedLayerHeightMmOverride);
+    const canTrustOverride = Number.isFinite(estimatedLayerCountOverride)
+      && Number(estimatedLayerCountOverride) > 0
+      && effectiveLayerHeightMm != null
+      && Number.isFinite(overrideLayerHeightMm)
+      && Math.abs(overrideLayerHeightMm - effectiveLayerHeightMm) <= 0.0005;
+
+    if (canTrustOverride) {
       return Math.max(0, Math.round(Number(estimatedLayerCountOverride)));
     }
 
@@ -1062,7 +1077,7 @@ export function SlicingPanel({
     }
 
     return Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-  }, [effectiveLayerHeightMm, estimatedLayerCountOverride, visibleModels]);
+  }, [effectiveLayerHeightMm, estimatedLayerCountOverride, estimatedLayerHeightMmOverride, visibleModels]);
 
   const estimatedPrintTimeLabel = useMemo(() => {
     if (!effectiveMaterialProfile || estimatedLayerCount <= 0) return '—';
@@ -1380,21 +1395,12 @@ export function SlicingPanel({
     setZBlendFadeMode(targetMode);
   }, [aaMode, aaQualityMode, zBlendAutoMode, zBlendFadeMode]);
 
-  const persistRemoteOfflineLayerHeight = useCallback((value: number) => {
-    if (typeof window === 'undefined') return;
-
-    const serialized = String(clampRemoteOfflineLayerHeightMm(value));
-    window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
-    window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
-  }, []);
-
   const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
     setRemoteOfflineLayerHeightMm((previous) => {
       const next = clampRemoteOfflineLayerHeightMm(value, previous);
-      persistRemoteOfflineLayerHeight(next);
-      return next;
+      return Object.is(previous, next) ? previous : next;
     });
-  }, [persistRemoteOfflineLayerHeight]);
+  }, []);
 
   useEffect(() => {
     void getSlicerEngineVersion().then((v) => {
@@ -1562,6 +1568,7 @@ export function SlicingPanel({
     const serialized = String(clampRemoteOfflineLayerHeightMm(remoteOfflineLayerHeightMm));
     window.localStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY, serialized);
+    window.dispatchEvent(new CustomEvent(REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT));
   }, [remoteOfflineLayerHeightMm]);
 
   const resolvedMaterialLabel = useMemo(() => {
@@ -1713,7 +1720,7 @@ export function SlicingPanel({
       alert('Select a printer profile first.');
       return;
     }
-    
+
     if (!materialProfileForSlicing) {
       alert('Select a material profile first.');
       return;
@@ -2009,7 +2016,7 @@ export function SlicingPanel({
       } else {
         console.error('Slice ZIP export failed:', error);
         const message = error instanceof Error ? error.message : 'Unknown slicing error.';
-        
+
         // If disk space error, aggressively clean ALL temp files to recover space
         if (message.includes('not enough space') || message.includes('os error 112') || message.includes('disk full')) {
           console.warn('[Slicing] Disk space error detected — cleaning ALL temp artifacts.');
@@ -2336,10 +2343,10 @@ export function SlicingPanel({
                     <>
                       <div className="space-y-1">
                         {([
-                          { preset: 'raw' as const, label: 'Disabled', desc: 'No anti-aliasing. Pure voxel edges.' },
-                          { preset: 'sharp' as const, label: 'Sharp', desc: 'Crisp pixel-level edges. Best for fine details and text.' },
+                          { preset: 'raw' as const, label: 'Disabled', desc: 'Binary Voxels' },
+                          { preset: 'sharp' as const, label: 'Sharp', desc: 'Best for fine details and text.' },
                           { preset: 'balanced' as const, label: 'Balanced', desc: 'Smooth edges without sacrificing fine detail.' },
-                          { preset: 'smooth' as const, label: 'Smooth', desc: 'Maximum softness. Ideal for organic shapes and curved surfaces.' },
+                          { preset: 'smooth' as const, label: 'Smooth', desc: 'Ideal for organic shapes and curved surfaces.' },
                         ]).map(({ preset, label, desc }) => {
                           const pActive = aaAutoPreset === preset;
                           return (

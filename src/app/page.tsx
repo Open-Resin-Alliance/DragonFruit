@@ -425,6 +425,7 @@ const PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
   ?? 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
+const REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT = 'dragonfruit:slicing-remote-offline-layer-height-changed';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
 const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
@@ -435,6 +436,18 @@ const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
 const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
+
+function readRemoteOfflineLayerHeightSnapshotMm(): number | null {
+  if (typeof window === 'undefined') return null;
+
+  const raw = window.localStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
+  if (raw == null || raw.trim().length === 0) return null;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(0.01, Math.min(1, parsed));
+}
 
 type TransformStoreCommitResult = {
   updated: boolean;
@@ -834,21 +847,6 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
-  const networkSelectedMaterialLayerHeightMm = React.useMemo(() => {
-    const profile = activePrinterProfile;
-    if (!profile || !profile.networkSupport) return null;
-    if (profile.networkConnection?.connected !== true) return null;
-    const selectedMaterialId = profile.networkConnection?.selectedMaterialId?.trim() ?? '';
-    if (!selectedMaterialId) return null;
-    const candidate = Number(profile.networkConnection?.selectedMaterialLayerHeightMm);
-    if (!Number.isFinite(candidate) || candidate <= 0) return null;
-    return candidate;
-  }, [
-    activePrinterProfile?.networkConnection?.connected,
-    activePrinterProfile?.networkConnection?.selectedMaterialId,
-    activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
-    activePrinterProfile?.networkSupport,
-  ]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
@@ -3963,23 +3961,58 @@ export default function Home() {
   const selectedSliceDeviceReachability = selectedSliceDeviceId
     ? (printerReachabilityByDeviceId[selectedSliceDeviceId] ?? null)
     : null;
-  const shouldUseRemoteOfflineLayerHeight = Boolean(activeNetworkUiAdapter) && (
-    activePrinterProfile?.networkConnection?.connected !== true
-    || selectedSliceDeviceReachability === false
-  );
-  const remoteOfflineSlicedLayerHeightMm = (() => {
-    if (!activeNetworkUiAdapter) return null;
+  const shouldUseRemoteOfflineLayerHeight = Boolean(activeNetworkUiAdapter)
+    && activeNetworkUiAdapter?.supportsRemoteMaterialProfiles !== false
+    && (
+      activePrinterProfile?.networkConnection?.connected !== true
+      || selectedSliceDeviceReachability === false
+    );
+  const [remoteOfflineLayerHeightSnapshotMm, setRemoteOfflineLayerHeightSnapshotMm] = React.useState<number | null>(() => (
+    readRemoteOfflineLayerHeightSnapshotMm()
+  ));
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateSnapshot = () => {
+      const next = readRemoteOfflineLayerHeightSnapshotMm();
+      setRemoteOfflineLayerHeightSnapshotMm((previous) => (Object.is(previous, next) ? previous : next));
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY) updateSnapshot();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener(REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT, updateSnapshot);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT, updateSnapshot);
+    };
+  }, []);
+
+  const remoteOfflineSlicedLayerHeightMm = React.useMemo(() => {
     if (!shouldUseRemoteOfflineLayerHeight) return null;
-    if (typeof window === 'undefined') return null;
+    return remoteOfflineLayerHeightSnapshotMm;
+  }, [remoteOfflineLayerHeightSnapshotMm, shouldUseRemoteOfflineLayerHeight]);
+  const remoteSelectedMaterialLayerHeightMm = React.useMemo(() => {
+    if (!activeNetworkUiAdapter) return null;
+    if (activeNetworkUiAdapter.supportsRemoteMaterialProfiles === false) return null;
+    if (activePrinterProfile?.networkConnection?.connected !== true) return null;
+    if (selectedSliceDeviceReachability === false) return null;
 
-    const raw = window.localStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
-      ?? window.sessionStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
-    if (raw == null || raw.trim().length === 0) return null;
+    const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return null;
 
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) return null;
-    return Math.max(0.001, Math.min(1, parsed));
-  })();
+    const candidate = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+    if (!Number.isFinite(candidate) || candidate <= 0) return null;
+    return Math.max(0.001, candidate);
+  }, [
+    activeNetworkUiAdapter,
+    activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialId,
+    activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
+    selectedSliceDeviceReachability,
+  ]);
   const printingMonitoringAdapter = React.useMemo(
     () => getProfileMonitoringUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
@@ -3988,11 +4021,12 @@ export default function Home() {
     if (remoteOfflineSlicedLayerHeightMm != null) {
       return remoteOfflineSlicedLayerHeightMm;
     }
-    if (networkSelectedMaterialLayerHeightMm != null) {
-      return Math.max(0.001, Number(networkSelectedMaterialLayerHeightMm));
+    if (remoteSelectedMaterialLayerHeightMm != null) {
+      return remoteSelectedMaterialLayerHeightMm;
     }
     return Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
-  }, [activeMaterialProfile?.layerHeightMm, networkSelectedMaterialLayerHeightMm, remoteOfflineSlicedLayerHeightMm]);
+  }, [activeMaterialProfile?.layerHeightMm, remoteOfflineSlicedLayerHeightMm, remoteSelectedMaterialLayerHeightMm]);
+  const crossSectionLayerHeightMm = slicedLayerHeightMm;
   const isLayerHeightMatch = React.useCallback((candidateLayerHeightMm: number | null | undefined) => {
     if (candidateLayerHeightMm == null) return false;
     return Math.abs(candidateLayerHeightMm - slicedLayerHeightMm) <= 0.0005;
@@ -10488,13 +10522,14 @@ export default function Home() {
 
   const slicing = useSlicingManager({
     hasGeometry: scene.models.length > 0,
-    zRange: sceneZRange
+    zRange: sceneZRange,
+    layerHeightMm: crossSectionLayerHeightMm,
   });
 
   const estimatedSlicerLayerCount = React.useMemo(() => {
     if (scene.models.length === 0) return 0;
 
-    const layerHeightMm = Math.max(0.001, slicedLayerHeightMm || 0.05);
+    const layerHeightMm = Math.max(0.001, crossSectionLayerHeightMm || 0.05);
     const printableMaxZMm = Math.max(0, Number(sceneZRange.max) || 0);
     const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
     const slicerHeightMm = buildHeightLimitMm > 0
@@ -10502,7 +10537,7 @@ export default function Home() {
       : printableMaxZMm;
 
     return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
-  }, [activePrinterProfile?.buildVolumeMm.height, scene.models.length, sceneZRange.max, slicedLayerHeightMm]);
+  }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, scene.models.length, sceneZRange.max]);
 
   const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile) return '—';
@@ -10543,9 +10578,9 @@ export default function Home() {
     if (printingPreviewTotalLayers <= 0) return null;
 
     const clampedLayer = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
-    const height = clampedLayer * slicedLayerHeightMm;
+    const height = clampedLayer * crossSectionLayerHeightMm;
     return Math.min(Math.max(height, 0), Math.max(slicing.heightMm, 0));
-  }, [printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicedLayerHeightMm, slicing.heightMm]);
+  }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm]);
 
   React.useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) => {
@@ -10662,12 +10697,12 @@ export default function Home() {
   }, [runExportThumbnailCapture]);
 
   React.useEffect(() => {
-    const targetMicron = Math.max(1, Math.round(slicedLayerHeightMm * 1000));
+    const targetMicron = Math.max(1, Math.round(crossSectionLayerHeightMm * 1000));
     if (slicing.layerHeightMicron !== targetMicron) {
       slicing.setLayerHeightMicron(targetMicron);
     }
   }, [
-    slicedLayerHeightMm,
+    crossSectionLayerHeightMm,
     slicing.layerHeightMicron,
     slicing.setLayerHeightMicron,
   ]);
@@ -14635,6 +14670,7 @@ export default function Home() {
               models={scene.models}
               activeModel={scene.activeModel}
               estimatedLayerCountOverride={estimatedSlicerLayerCount}
+              estimatedLayerHeightMmOverride={crossSectionLayerHeightMm}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
