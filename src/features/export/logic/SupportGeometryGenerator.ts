@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { Roots, Segment, Joint, Vec3 } from '@/supports/types';
 import { SupportData } from '@/supports/rendering/SupportBuilder';
-import { getSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
+import { getConeQuaternion } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { RaftSettings } from '@/supports/Rafts/Crenelated/RaftTypes';
+import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
 /**
  * SupportGeometryGenerator
@@ -20,6 +22,22 @@ import { RaftSettings } from '@/supports/Rafts/Crenelated/RaftTypes';
  * - ContactConeRenderer
  */
 export class SupportGeometryGenerator {
+  private static readonly NON_SELECTED_JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
+
+  private static buildSphereMesh(pos: { x: number; y: number; z: number }, diameter: number, widthSegments = 16, heightSegments = 16): THREE.Mesh {
+    const geometry = new THREE.SphereGeometry(Math.max(0.001, diameter) / 2, widthSegments, heightSegments);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.position.set(pos.x, pos.y, pos.z);
+    return mesh;
+  }
+
+  public static getExportJointDiameter(diameter: number): number {
+    return Math.max(0.001, diameter - this.NON_SELECTED_JOINT_BLEND_MM);
+  }
+
+  public static getExportKnotDiameter(diameter: number): number {
+    return Math.max(0.001, diameter - JOINT_DIAMETER_OFFSET_MM);
+  }
   
   /**
    * Generates a single group containing all meshes for a support structure
@@ -50,12 +68,7 @@ export class SupportGeometryGenerator {
       if (seg.topJoint) {
         endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
       } else if (data.contactCone) {
-        // Calculate socket position
-        const socketPos = getSocketPosition(
-          data.contactCone.pos,
-          data.contactCone.normal,
-          data.contactCone.profile
-        );
+        const socketPos = getFinalSocketPosition(data.contactCone);
         endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
       } else {
         // Fallback
@@ -179,10 +192,11 @@ export class SupportGeometryGenerator {
   }
 
   public static generateJointMesh(joint: Joint): THREE.Mesh {
-    const geometry = new THREE.SphereGeometry(joint.diameter / 2, 16, 16);
-    const mesh = new THREE.Mesh(geometry);
-    mesh.position.set(joint.pos.x, joint.pos.y, joint.pos.z);
-    return mesh;
+    return this.buildSphereMesh(joint.pos, this.getExportJointDiameter(joint.diameter), 16, 16);
+  }
+
+  public static generateKnotMesh(knot: { pos: Vec3; diameter?: number }): THREE.Mesh {
+    return this.buildSphereMesh(knot.pos, this.getExportKnotDiameter(knot.diameter ?? 1.2), 8, 8);
   }
 
   public static generateConeMesh(coneData: any): THREE.Group {
@@ -204,89 +218,35 @@ export class SupportGeometryGenerator {
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
+    const effectiveSurfaceNormal = coneData.surfaceNormal || coneData.normal;
+    const primitiveThickness = profile.type === 'disk'
+      ? (coneData.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, coneData.normal, profile))
+      : 0;
+    const coneStartPos = {
+      x: coneData.pos.x + effectiveSurfaceNormal.x * primitiveThickness,
+      y: coneData.pos.y + effectiveSurfaceNormal.y * primitiveThickness,
+      z: coneData.pos.z + effectiveSurfaceNormal.z * primitiveThickness,
+    };
+    const center = {
+      x: coneStartPos.x + coneData.normal.x * (length / 2),
+      y: coneStartPos.y + coneData.normal.y * (length / 2),
+      z: coneStartPos.z + coneData.normal.z * (length / 2),
+    };
+    const quaternion = getConeQuaternion(coneData.normal);
 
     // 2. Cone Body
     // Standard Cylinder: Top radius = contact, Bottom radius = body
     const geometry = new THREE.CylinderGeometry(contactRadius, bodyRadius, length, 16);
-    
-    // ContactConeRenderer logic:
-    // const center = getConeCenterPosition(pos, normal, profile);
-    // const quaternion = getConeQuaternion(normal);
-    // group position = center, quaternion = quaternion
-    
-    // Let's replicate the math inline or import helpers if possible.
-    // The helpers are in `contactConeUtils.ts`. Can we import them?
-    // Yes, they are just math.
-    
-    // However, `ContactConeRenderer` does:
-    // <group position={center} quaternion={quaternion}> <mesh> ... </mesh> </group>
-    
-    // We can't import `getConeCenterPosition` easily if it's not exported from index.
-    // Let's recreate the math. Y-up cylinder.
-    // Center of cylinder is at local (0,0,0).
-    // We want Top (contact) to touch the model at `pos`.
-    // "Top" is at local Y = +length/2.
-    // So we need to position the mesh such that +Y end is at `pos`.
-    // Wait, ContactConeRenderer uses `getConeCenterPosition`.
-    // If we don't match it exactly, we drift.
-    
-    // Let's look at `getSocketPosition` usage earlier in this file.
-    // It is imported from `@/supports/SupportPrimitives/ContactCone`.
-    // Let's check if we can import `getConeCenterPosition` and `getConeQuaternion`.
-    // If not, let's approximate.
-    
-    // Math:
-    // Normal points INTO model? Or AWAY?
-    // `ContactConeRenderer`: "normal: Cone axis (points into model)"?
-    // Actually, usually normal points OUT of model surface.
-    // If normal points OUT (e.g. 0,0,1), and cone attaches to bottom face...
-    // We want the small tip at `pos`.
-    // The large base (socket) at `pos + normal * length`?
-    // `getSocketPosition`: `pos + normal * length`.
-    // So `normal` points AWAY from the model surface towards the floor.
-    
-    // Cylinder Y-up. Top (+Y) = contact (small). Bottom (-Y) = socket (large).
-    // We want Top (+Y) at `pos`.
-    // We want Bottom (-Y) at `pos + normal * length`.
-    // So the vector (Bottom - Top) = (pos + N*L) - pos = N*L.
-    // Local vector (Bottom - Top) = (0, -L/2, 0) - (0, L/2, 0) = (0, -L, 0).
-    // So we want (0, -1, 0) to align with Normal.
-    // Or (0, 1, 0) to align with -Normal.
-    
-    // Rotation:
-    const up = new THREE.Vector3(0, 1, 0);
-    const normalVec = new THREE.Vector3(coneData.normal.x, coneData.normal.y, coneData.normal.z);
-    // If we align UP (small end) with -Normal (pointing into model):
-    const quaternion = new THREE.Quaternion().setFromUnitVectors(up, normalVec.clone().negate());
-    
-    // Position:
-    // Midpoint of cone is at `pos + normal * (length / 2)`.
-    const midpoint = new THREE.Vector3(coneData.pos.x, coneData.pos.y, coneData.pos.z)
-      .add(normalVec.clone().multiplyScalar(length / 2));
-      
+
     const coneMesh = new THREE.Mesh(geometry);
-    coneMesh.position.copy(midpoint);
+    coneMesh.position.set(center.x, center.y, center.z);
     coneMesh.setRotationFromQuaternion(quaternion);
     group.add(coneMesh);
 
-    // 3. Socket Sphere
-    // At `socketPos` (large end).
-    // `getSocketPosition` already calculated this for the shaft end.
-    const socketPos = new THREE.Vector3(coneData.pos.x, coneData.pos.y, coneData.pos.z)
-      .add(normalVec.clone().multiplyScalar(length));
-      
-    // Joint radius logic from renderer: `getJointRadius(bodyDiameter)`
-    // We can approximate or import.
-    // Default joint radius is usually slightly larger than shaft.
-    // Let's use bodyRadius * 1.2 or similar if we can't find the constant.
-    // In `ContactConeRenderer`: `const jointRadius = getJointRadius(profile.bodyDiameterMm);`
-    // `getJointRadius` usually returns `diameter * 0.5 * 1.2` (from constants).
-    // Let's assume 1.0mm radius for standard 1.5mm shaft.
-    const jointRadius = bodyRadius * 1.2; 
-    
-    const sphereGeom = new THREE.SphereGeometry(jointRadius, 16, 12);
+    // 3. Cone-start sphere (matches the live ContactConeRenderer)
+    const sphereGeom = new THREE.SphereGeometry(contactRadius, 16, 12);
     const sphereMesh = new THREE.Mesh(sphereGeom);
-    sphereMesh.position.copy(socketPos);
+    sphereMesh.position.set(coneStartPos.x, coneStartPos.y, coneStartPos.z);
     group.add(sphereMesh);
 
     return group;

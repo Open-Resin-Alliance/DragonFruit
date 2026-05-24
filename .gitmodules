@@ -4,6 +4,9 @@
 [submodule "plugins/sdcp-v3"]
 	path = plugins/sdcp-v3
 	url = ../df-plugin-sdcp-v3.git
+[submodule "plugins/anycubic"]
+	path = plugins/anycubic
+	url = ../df-plugin-anycubic.git
 [submodule "plugins/elegoo"]
 	path = plugins/elegoo
 	url = ../df-plugin-elegoo

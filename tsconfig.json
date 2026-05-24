@@ -37,6 +37,9 @@
     "rust/**/target",
     "rust/**/target/**",
     "src-tauri/target",
+    "src-tauri/rust/target",
+    "src-tauri/rust/**/target",
+    "src-tauri/rust/**/target/**",
     "src-tauri/gen",
     "src-tauri/frontend-dist"
   ]

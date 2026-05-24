@@ -818,6 +818,79 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeometryGroup {
+    Model,
+    Support,
+}
+
+const RAFT_Z_CUTOFF_MM: f32 = 2.0;
+const TOP_MODEL_BAND_MM: f32 = 1.0;
+const MODEL_MIN_TRIS_FLOOR: usize = 200;
+
+fn classify_model_support_group(
+    cid: usize,
+    raft_z_cut: f32,
+    model_seed: Option<usize>,
+    model_min_tris: usize,
+    comp_max_z: &[f32],
+    comp_tri_count: &[usize],
+) -> GeometryGroup {
+    // Anything in the raft floor band is support by definition.
+    if comp_max_z[cid] <= raft_z_cut {
+        return GeometryGroup::Support;
+    }
+
+    // High-poly components above raft are typically true model shells, even
+    // if the highest-Z seed was a support tip.
+    if comp_tri_count[cid] >= model_min_tris {
+        return GeometryGroup::Model;
+    }
+
+    // Fall back to top-band assignment around the seed component.
+    if let Some(seed) = model_seed {
+        let top_z = comp_max_z[seed];
+        if cid == seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
+            GeometryGroup::Model
+        } else {
+            GeometryGroup::Support
+        }
+    } else {
+        GeometryGroup::Support
+    }
+}
+
+fn compute_likely_support_geometry(
+    model_triangles_out: usize,
+    support_triangles_out: usize,
+    model_comp_count: usize,
+    support_comp_count: usize,
+    model_input_triangles: usize,
+    support_input_triangles: usize,
+) -> bool {
+    let model_avg_tris = if model_comp_count > 0 {
+        model_input_triangles / model_comp_count
+    } else {
+        0
+    };
+    let support_avg_tris = if support_comp_count > 0 {
+        support_input_triangles / support_comp_count
+    } else {
+        0
+    };
+
+    let strong_density = model_avg_tris > 0 && support_avg_tris.saturating_mul(4) < model_avg_tris;
+
+    support_triangles_out > 0
+        && (model_triangles_out == 0
+            || (strong_density
+                && support_triangles_out >= model_triangles_out
+                && support_comp_count >= model_comp_count)
+            || (support_comp_count >= model_comp_count.saturating_mul(6)
+                && support_input_triangles >= model_input_triangles.saturating_mul(2)
+                && support_triangles_out >= model_triangles_out.saturating_mul(2)))
+}
+
 /// Attempt to solidify a fragmented mesh by converting each connected
 /// component into a `Manifold` solid.
 ///
@@ -850,17 +923,8 @@ fn try_solidify_via_manifold_union(
 ) -> Option<(IndexedMesh, usize, usize, usize, usize, bool, usize)> {
     use manifold_csg::Manifold;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum GeometryGroup {
-        Model,
-        Support,
-    }
-
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
-
-    const RAFT_Z_CUTOFF_MM: f32 = 2.0;
-    const TOP_MODEL_BAND_MM: f32 = 1.0;
 
     let global_min_z = mesh
         .positions
@@ -887,26 +951,19 @@ fn try_solidify_via_manifold_union(
                 .partial_cmp(&comp_max_z[b])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+    let model_min_tris = model_seed
+        .map(|seed| (comp_tri_count[seed] / 8).max(MODEL_MIN_TRIS_FLOOR))
+        .unwrap_or(MODEL_MIN_TRIS_FLOOR);
 
-    let classify_group = |cid: usize| -> GeometryGroup {
-        // Anything in the raft floor band is support by definition.
-        if comp_max_z[cid] <= raft_z_cut {
-            return GeometryGroup::Support;
-        }
-
-        // Top-down model detection: the highest-Z component is model,
-        // plus near-top peers in case the real model body is split into
-        // multiple disconnected islands.
-        if let Some(seed) = model_seed {
-            let top_z = comp_max_z[seed];
-            if cid == seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
-                GeometryGroup::Model
-            } else {
-                GeometryGroup::Support
-            }
-        } else {
-            GeometryGroup::Support
-        }
+    let classify_group = |cid: usize| {
+        classify_model_support_group(
+            cid,
+            raft_z_cut,
+            model_seed,
+            model_min_tris,
+            &comp_max_z,
+            &comp_tri_count,
+        )
     };
 
     let mut model_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
@@ -1244,12 +1301,14 @@ fn try_solidify_via_manifold_union(
     );
 
     let support_triangles_out = (out_triangles.len()).saturating_sub(model_triangles_out);
-    let likely_support_geometry = support_triangles_out > 0
-        && (model_triangles_out == 0
-            || (support_triangles_out >= model_triangles_out.saturating_mul(2)
-                && support_input_components >= model_input_components)
-            || (support_input_components >= model_input_components.saturating_mul(8)
-                && support_input_triangles >= model_input_triangles));
+    let likely_support_geometry = compute_likely_support_geometry(
+        model_triangles_out,
+        support_triangles_out,
+        model_input_components,
+        support_input_components,
+        model_input_triangles,
+        support_input_triangles,
+    );
 
     Some((
         IndexedMesh {
@@ -1477,7 +1536,44 @@ fn attempt_non_manifold_face_cleanup(
     let filled = fill_small_holes(mesh, fill_holes_max_edges.clamp(8, 96));
     let culled_post = cull_degenerate_and_duplicate(mesh);
 
-    let after = analyze(mesh);
+    let mut adaptive_fill = 0usize;
+    let mut adaptive_cull = 0usize;
+    let mut adaptive_limit_used: Option<usize> = None;
+
+    let mut after = analyze(mesh);
+
+    // When cleanup opens a previously closed mesh, retry hole filling with a
+    // larger boundary budget. This salvages common ring-like openings without
+    // needing to accept a boundary-heavy intermediate result.
+    if before.boundary_edges == 0
+        && before.boundary_loops == 0
+        && after.boundary_edges > 0
+        && after.boundary_loops > 0
+    {
+        let adaptive_limit = fill_holes_max_edges.max(256).min(2048);
+        let mesh_before_adaptive_retry = mesh.clone();
+        let adaptive_filled_candidate = fill_small_holes(mesh, adaptive_limit);
+
+        if adaptive_filled_candidate > 0 {
+            let adaptive_culled_candidate = cull_degenerate_and_duplicate(mesh);
+            let retry_after = analyze(mesh);
+
+            let helped_boundary = retry_after.boundary_edges < after.boundary_edges
+                || retry_after.boundary_loops < after.boundary_loops;
+            let did_not_worsen_nme = retry_after.non_manifold_edges <= after.non_manifold_edges;
+            let did_not_worsen_si =
+                retry_after.self_intersection_triangles <= after.self_intersection_triangles;
+
+            if helped_boundary && did_not_worsen_nme && did_not_worsen_si {
+                adaptive_fill = adaptive_filled_candidate;
+                adaptive_cull = adaptive_culled_candidate;
+                adaptive_limit_used = Some(adaptive_limit);
+                after = retry_after;
+            } else {
+                *mesh = mesh_before_adaptive_retry;
+            }
+        }
+    }
     let improved = non_manifold_cleanup_is_improvement(&before, &after);
     let hard_regression = non_manifold_cleanup_is_hard_regression(&before, &after);
 
@@ -1503,9 +1599,9 @@ fn attempt_non_manifold_face_cleanup(
     }
 
     NonManifoldFaceCleanupOutcome::Applied {
-        changed: removed + culled_pre + filled + culled_post,
+        changed: removed + culled_pre + filled + culled_post + adaptive_fill + adaptive_cull,
         notes: format!(
-            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {} (removed={}, culled_pre={}, filled={}, culled_post={})",
+            "nme {} -> {}, boundary {} -> {}, inconsistent {} -> {}, self_int {} -> {} (removed={}, culled_pre={}, filled={}, culled_post={}{})",
             before.non_manifold_edges,
             after.non_manifold_edges,
             before.boundary_edges,
@@ -1518,6 +1614,13 @@ fn attempt_non_manifold_face_cleanup(
             culled_pre,
             filled,
             culled_post,
+            match adaptive_limit_used {
+                Some(limit) => format!(
+                    ", adaptive_fill(limit={})={}, adaptive_cull={}",
+                    limit, adaptive_fill, adaptive_cull
+                ),
+                None => String::new(),
+            },
         ),
     }
 }
@@ -1535,8 +1638,48 @@ fn non_manifold_cleanup_is_improvement(before: &MeshAnalysis, after: &MeshAnalys
         && after.duplicate_triangles <= before.duplicate_triangles
 }
 
+fn has_self_intersection_reduction_at_least(
+    before_self_intersections: usize,
+    after_self_intersections: usize,
+    min_percent: usize,
+) -> bool {
+    if before_self_intersections == 0 {
+        return false;
+    }
+
+    let reduced = before_self_intersections.saturating_sub(after_self_intersections);
+    reduced.saturating_mul(100) >= before_self_intersections.saturating_mul(min_percent)
+}
+
 fn non_manifold_cleanup_is_hard_regression(before: &MeshAnalysis, after: &MeshAnalysis) -> bool {
-    after.boundary_edges > before.boundary_edges.saturating_add(256)
+    // Guard: avoid destructive "fixes" that open large seams on previously
+    // closed meshes without materially reducing self-intersections.
+    let introduced_large_boundary_from_closed_mesh = before.boundary_edges == 0
+        && before.boundary_loops == 0
+        && after.boundary_edges >= 64
+        && after.boundary_loops > 0
+        && (before.self_intersection_triangles == 0
+            || !has_self_intersection_reduction_at_least(
+                before.self_intersection_triangles,
+                after.self_intersection_triangles,
+                35,
+            ));
+
+    // Guard: reject explosive boundary growth unless self-intersection relief is
+    // meaningfully large.
+    let boundary_growth_is_explosive = after.boundary_edges
+        > before.boundary_edges.saturating_add(256)
+        && after.boundary_edges >= std::cmp::max(128, before.boundary_edges.saturating_mul(4));
+    let explosive_growth_without_relief = boundary_growth_is_explosive
+        && (before.self_intersection_triangles == 0
+            || !has_self_intersection_reduction_at_least(
+                before.self_intersection_triangles,
+                after.self_intersection_triangles,
+                20,
+            ));
+
+    introduced_large_boundary_from_closed_mesh
+        || explosive_growth_without_relief
         || after.inconsistent_winding_edges > before.inconsistent_winding_edges.saturating_add(64)
         || after.self_intersection_triangles > before.self_intersection_triangles.saturating_add(64)
         || after.connected_components > before.connected_components.saturating_add(512)
@@ -2126,20 +2269,12 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
         return None;
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum GeometryGroup {
-        Model,
-        Support,
-    }
-
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
     if n_comps < 2 {
         return None;
     }
 
-    const RAFT_Z_CUTOFF_MM: f32 = 2.0;
-    const TOP_MODEL_BAND_MM: f32 = 1.0;
     const BASE_TOUCH_EPS_MM: f32 = 0.25;
 
     let global_min_z = mesh
@@ -2175,25 +2310,17 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     // This handles multi-shell models where parts sit at different heights while
     // still separating them from the low-poly support scaffold. Support posts,
     // cylinders, and contact tips are far below this threshold.
-    let model_min_tris = (comp_tri_count[model_seed] / 8).max(200);
+    let model_min_tris = (comp_tri_count[model_seed] / 8).max(MODEL_MIN_TRIS_FLOOR);
 
-    let classify_group = |cid: usize| -> GeometryGroup {
-        if comp_max_z[cid] <= raft_z_cut {
-            return GeometryGroup::Support;
-        }
-
-        // High-poly components above the raft base are model shells regardless
-        // of whether they reach the absolute top of the scene.
-        if comp_tri_count[cid] >= model_min_tris {
-            return GeometryGroup::Model;
-        }
-
-        let top_z = comp_max_z[model_seed];
-        if cid == model_seed || comp_max_z[cid] >= top_z - TOP_MODEL_BAND_MM {
-            GeometryGroup::Model
-        } else {
-            GeometryGroup::Support
-        }
+    let classify_group = |cid: usize| {
+        classify_model_support_group(
+            cid,
+            raft_z_cut,
+            Some(model_seed),
+            model_min_tris,
+            &comp_max_z,
+            &comp_tri_count,
+        )
     };
 
     let mut model_comp_count = 0usize;
@@ -2278,17 +2405,14 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
     mesh.triangles.extend(model_tris);
     mesh.triangles.extend(support_tris);
 
-    // A strong density signal (support comps ≥4× lower-poly than model) gives high
-    // confidence this is a model+support file, even if triangle counts are uneven.
-    let strong_density = model_avg_tris > 0 && support_avg_tris.saturating_mul(4) < model_avg_tris;
-
-    let likely_support_geometry = support_triangles_out > 0
-        && (model_triangles_out == 0
-            || (strong_density
-                && support_triangles_out >= model_triangles_out
-                && support_comp_count >= model_comp_count)
-            || (support_comp_count >= model_comp_count.saturating_mul(6)
-                && support_input_triangles >= model_input_triangles));
+    let likely_support_geometry = compute_likely_support_geometry(
+        model_triangles_out,
+        support_triangles_out,
+        model_comp_count,
+        support_comp_count,
+        model_input_triangles,
+        support_input_triangles,
+    );
 
     Some((model_triangles_out, likely_support_geometry))
 }
@@ -2645,5 +2769,104 @@ mod tests {
 
         assert!(!non_manifold_cleanup_is_improvement(&before, &after));
         assert!(non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_rejects_large_boundary_introduction_with_weak_si_relief() {
+        let mut before = analysis(0, 126, 15, 7_501);
+        before.boundary_loops = 0;
+        before.inconsistent_winding_edges = 0;
+
+        let mut after = analysis(178, 0, 15, 7_460);
+        after.boundary_loops = 1;
+        after.inconsistent_winding_edges = 0;
+
+        // Non-manifold edges improved, but this is still a destructive outcome.
+        assert!(non_manifold_cleanup_is_improvement(&before, &after));
+        assert!(non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_allows_boundary_growth_when_si_relief_is_strong() {
+        let mut before = analysis(0, 126, 15, 1_000);
+        before.boundary_loops = 0;
+
+        let mut after = analysis(120, 0, 15, 300);
+        after.boundary_loops = 1;
+
+        // Strong self-intersection reduction should keep this path eligible.
+        assert!(!non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn non_manifold_cleanup_allows_explosive_boundary_growth_if_si_relief_is_very_strong() {
+        let mut before = analysis(40, 126, 15, 2_000);
+        before.boundary_loops = 1;
+
+        let mut after = analysis(600, 0, 15, 200);
+        after.boundary_loops = 6;
+
+        // Boundary growth is large, but self-intersections improved by 90%.
+        assert!(!non_manifold_cleanup_is_hard_regression(&before, &after));
+    }
+
+    #[test]
+    fn classify_group_promotes_high_poly_component_even_when_top_seed_is_small() {
+        // Simulates a tall low-poly support tip becoming the Z-seed while the
+        // real model body sits slightly lower but with far higher triangle density.
+        let comp_max_z = vec![100.0, 96.5, 72.0, 1.2];
+        let comp_tri_count = vec![96, 24_000, 180, 800];
+        let model_seed = Some(0usize);
+        let model_min_tris = (comp_tri_count[0] / 8).max(MODEL_MIN_TRIS_FLOOR);
+
+        assert_eq!(
+            classify_model_support_group(
+                1,
+                RAFT_Z_CUTOFF_MM,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            ),
+            GeometryGroup::Model
+        );
+        assert_eq!(
+            classify_model_support_group(
+                2,
+                RAFT_Z_CUTOFF_MM,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            ),
+            GeometryGroup::Support
+        );
+        assert_eq!(
+            classify_model_support_group(
+                3,
+                RAFT_Z_CUTOFF_MM,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            ),
+            GeometryGroup::Support
+        );
+    }
+
+    #[test]
+    fn likely_support_flag_stays_off_for_balanced_model_support_mix() {
+        // Mixed files should keep model tinting semantics unless supports
+        // clearly dominate both structure and output triangles.
+        assert!(!compute_likely_support_geometry(
+            180_000, 150_000, 3, 18, 240_000, 200_000,
+        ));
+    }
+
+    #[test]
+    fn likely_support_flag_turns_on_for_support_dominated_output() {
+        assert!(compute_likely_support_geometry(
+            20_000, 180_000, 1, 32, 20_000, 220_000,
+        ));
     }
 }

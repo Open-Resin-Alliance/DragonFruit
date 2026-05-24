@@ -75,11 +75,24 @@ test('normalizeImportDefaultsSettings falls back to safe defaults', () => {
     raftBottomMode: 'invalid',
     raftWallEnabled: 'yes',
     rootsEnabled: 123,
+    autoRepairScenes: 'no',
   });
 
   assert.equal(normalized.raftBottomMode, 'solid');
   assert.equal(normalized.raftWallEnabled, true);
   assert.equal(normalized.rootsEnabled, true);
+  assert.equal(normalized.autoRepairScenes, false);
+});
+
+test('normalizeImportDefaultsSettings preserves explicit auto repair toggle', () => {
+  const normalized = normalizeImportDefaultsSettings({
+    raftBottomMode: 'solid',
+    raftWallEnabled: true,
+    rootsEnabled: true,
+    autoRepairScenes: false,
+  });
+
+  assert.equal(normalized.autoRepairScenes, false);
 });
 
 test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode and preserves wall preference', () => {
@@ -87,11 +100,13 @@ test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode 
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: false,
+    autoRepairScenes: false,
   });
 
   assert.equal(normalized.raftBottomMode, 'line');
   assert.equal(normalized.raftWallEnabled, true);
   assert.equal(normalized.rootsEnabled, true);
+  assert.equal(normalized.autoRepairScenes, false);
 });
 
 test('normalizeImportDefaultsSettings keeps wall preference when raft mode is non-solid', () => {
@@ -99,10 +114,12 @@ test('normalizeImportDefaultsSettings keeps wall preference when raft mode is no
     raftBottomMode: 'off',
     raftWallEnabled: false,
     rootsEnabled: true,
+    autoRepairScenes: true,
   });
 
   assert.equal(normalized.raftBottomMode, 'off');
   assert.equal(normalized.raftWallEnabled, false);
+  assert.equal(normalized.autoRepairScenes, true);
 });
 
 test('applyImportDefaultsToSupportPayload keeps payload unchanged when roots are enabled', () => {
@@ -111,6 +128,7 @@ test('applyImportDefaultsToSupportPayload keeps payload unchanged when roots are
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: true,
+    autoRepairScenes: true,
   };
 
   const next = applyImportDefaultsToSupportPayload(payload, defaults);
@@ -123,6 +141,7 @@ test('applyImportDefaultsToSupportPayload aligns root diameter to trunk diameter
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: false,
+    autoRepairScenes: true,
   };
 
   const next = applyImportDefaultsToSupportPayload(payload, defaults);
@@ -139,6 +158,7 @@ test('getImportDefaultsRaftPatch disables wall when raft base is off', () => {
     raftBottomMode: 'off',
     raftWallEnabled: true,
     rootsEnabled: false,
+    autoRepairScenes: true,
   });
 
   assert.equal(patch.bottomMode, 'off');
@@ -150,6 +170,7 @@ test('getImportDefaultsRaftPatch disables wall when raft base is line', () => {
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: true,
+    autoRepairScenes: true,
   });
 
   assert.equal(patch.bottomMode, 'line');
