@@ -2376,7 +2376,7 @@ export function SlicingPanel({
                   {aaQualityMode === 'auto' && (
                     <>
                       <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
-                      <div className="grid grid-cols-2 gap-1">
+                      <div className="grid grid-cols-2 gap-1.5">
                         {AUTO_AA_PRESET_OPTIONS.map(({ preset, label, desc }) => {
                           const pActive = aaAutoPreset === preset;
                           return (
@@ -2405,7 +2405,6 @@ export function SlicingPanel({
                           );
                         })}
                       </div>
-                      <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
                       {isAutoAaCalculating && (
                         <div
                           className="flex items-center justify-center gap-1 rounded border px-2 py-1 text-[10px] font-medium"
@@ -2419,20 +2418,26 @@ export function SlicingPanel({
                           <span>Calculating AA profile…</span>
                         </div>
                       )}
-                      <div className="grid grid-cols-2 gap-1">
+                      <div
+                        className="mt-2.5 grid grid-cols-2 overflow-hidden rounded"
+                        style={{
+                          background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 42%)',
+                          boxShadow: 'inset 0 0 0 1px var(--border-subtle)',
+                        }}
+                      >
                         {([
                           ['Mode', autoAaSummaryKernelLabel],
                           ['Samples', autoAaSummarySampleLabel],
                           ['Blur', autoAaSummaryBlurLabel],
                           ['Grey', autoAaSummaryGrayLabel],
-                        ] as const).map(([label, value]) => (
+                        ] as const).map(([label, value], index) => (
                           <div
                             key={label}
-                            className="min-w-0 rounded border px-1.5 py-1 text-center leading-tight"
+                            className="min-w-0 px-1.5 py-1.5 text-center leading-tight"
                             style={{
-                              borderColor: 'var(--border-subtle)',
-                              background: 'var(--surface-0)',
                               color: 'var(--text-strong)',
+                              borderRight: index % 2 === 0 ? '1px solid var(--border-subtle)' : undefined,
+                              borderBottom: index < 2 ? '1px solid var(--border-subtle)' : undefined,
                             }}
                             title={value}
                           >
