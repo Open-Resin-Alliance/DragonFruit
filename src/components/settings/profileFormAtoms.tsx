@@ -703,6 +703,7 @@ export function MaterialProfileFormSections({ draft, onChange }: MaterialProfile
 type MaterialAntiAliasingSectionProps = {
   draft: MaterialDraft;
   onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+  lockActivationToggles?: boolean;
 };
 
 const AA_STRENGTH_PRESETS = [4, 8, 16, 32] as const;
@@ -860,14 +861,15 @@ function AaInlineHelp({ children }: { children: React.ReactNode }) {
   return <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>{children}</p>;
 }
 
-export function MaterialAntiAliasingSection({ draft, onChange }: MaterialAntiAliasingSectionProps) {
+export function MaterialAntiAliasingSection({ draft, onChange, lockActivationToggles = false }: MaterialAntiAliasingSectionProps) {
   const settings = {
     ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     ...(draft.antiAliasingSettings ?? {}),
   };
+  const customSettingsEnabled = settings.enableCustomSettings === true || settings.enableOverride === true;
   const overrideEnabled = settings.enableOverride === true;
-  const aaEnabled = overrideEnabled && settings.mode !== 'Off';
-  const is3daa = overrideEnabled && settings.mode === '3DAA';
+  const aaEnabled = customSettingsEnabled && settings.mode !== 'Off';
+  const is3daa = customSettingsEnabled && settings.mode === '3DAA';
   const sampleSteps = parseAaLevelSteps(settings.level);
   const customStrengthEnabled = aaEnabled && settings.useCustomLevel;
   const customXyBlurEnabled = aaEnabled && settings.useCustomBlurBrushRadius;
@@ -921,43 +923,101 @@ export function MaterialAntiAliasingSection({ draft, onChange }: MaterialAntiAli
     <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
       <AaCard
         title="Anti-Aliasing Settings"
-        description="By default, material profiles defer to the slicer's Auto AA settings. Enable this only when a material needs its own tuned anti-aliasing behavior."
+        description="Custom settings can be saved on the material without forcing the slicer to use them. Override AA Settings applies those saved settings instead of Auto AA."
       >
-        <button
-          type="button"
-          role="switch"
-          aria-checked={overrideEnabled}
-          onClick={() => updateAaSettings({ enableOverride: !overrideEnabled })}
-          className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
-          style={{
-            borderColor: overrideEnabled
-              ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
-              : 'var(--border-subtle)',
-            background: overrideEnabled
-              ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
-              : 'var(--surface-1)',
-            color: overrideEnabled ? 'var(--text-strong)' : 'var(--text-muted)',
-          }}
-        >
-          <span className="font-medium">Override AA Settings</span>
-          <span
-            className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
-            style={{ background: overrideEnabled ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={customSettingsEnabled}
+            disabled={lockActivationToggles}
+            onClick={() => {
+              if (lockActivationToggles) return;
+              const next = !customSettingsEnabled;
+              updateAaSettings({
+                enableCustomSettings: next,
+                enableOverride: next ? overrideEnabled : false,
+              });
+            }}
+            className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between disabled:cursor-not-allowed disabled:opacity-45"
+            style={{
+              borderColor: lockActivationToggles
+                ? 'var(--border-subtle)'
+                : customSettingsEnabled
+                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+                : 'var(--border-subtle)',
+              background: lockActivationToggles
+                ? 'var(--surface-2)'
+                : customSettingsEnabled
+                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
+                : 'var(--surface-1)',
+              color: lockActivationToggles
+                ? 'var(--text-muted)'
+                : customSettingsEnabled ? 'var(--text-strong)' : 'var(--text-muted)',
+              opacity: lockActivationToggles ? 0.72 : 1,
+            }}
           >
-            <span className={`h-4 w-4 rounded-full bg-white transition-transform ${overrideEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
-          </span>
-        </button>
+            <span className="font-medium">Custom Settings</span>
+            <span
+              className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
+              style={{ background: lockActivationToggles ? 'var(--surface-3)' : customSettingsEnabled ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+            >
+              <span
+                className={`h-4 w-4 rounded-full bg-white transition-transform ${customSettingsEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+                style={{ background: lockActivationToggles ? 'var(--text-muted)' : 'white' }}
+              />
+            </span>
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={overrideEnabled}
+            disabled={!customSettingsEnabled || lockActivationToggles}
+            onClick={() => {
+              if (lockActivationToggles) return;
+              updateAaSettings({ enableOverride: !overrideEnabled });
+            }}
+            className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between disabled:cursor-not-allowed disabled:opacity-45"
+            style={{
+              borderColor: lockActivationToggles
+                ? 'var(--border-subtle)'
+                : overrideEnabled
+                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+                : 'var(--border-subtle)',
+              background: lockActivationToggles
+                ? 'var(--surface-2)'
+                : overrideEnabled
+                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
+                : 'var(--surface-1)',
+              color: lockActivationToggles
+                ? 'var(--text-muted)'
+                : overrideEnabled ? 'var(--text-strong)' : 'var(--text-muted)',
+              opacity: lockActivationToggles ? 0.72 : 1,
+            }}
+          >
+            <span className="font-medium">Override Auto</span>
+            <span
+              className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
+              style={{ background: lockActivationToggles ? 'var(--surface-3)' : overrideEnabled ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+            >
+              <span
+                className={`h-4 w-4 rounded-full bg-white transition-transform ${overrideEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+                style={{ background: lockActivationToggles ? 'var(--text-muted)' : 'white' }}
+              />
+            </span>
+          </button>
+        </div>
       </AaCard>
 
       <AaCard
-        disabled={!overrideEnabled}
+        disabled={!customSettingsEnabled}
         title="Anti-Aliasing Type"
         description="Off disables grayscale AA. 2D Blur smooths XY edges. 3D AA adds Z perturbation sampling through the layer height for smoother vertical transitions."
       >
         <AaSelectDropdown
           label=""
           value={settings.mode}
-          disabled={!overrideEnabled}
+          disabled={!customSettingsEnabled}
           helpText="Off keeps exported pixels binary. 2D Blur applies XY grayscale edge smoothing. 3D AA samples through Z for smoother vertical transitions."
           onChange={(value) => updateAaSettings({ mode: value as MaterialAntiAliasingSettings['mode'] })}
           options={[
@@ -968,21 +1028,31 @@ export function MaterialAntiAliasingSection({ draft, onChange }: MaterialAntiAli
         />
       </AaCard>
 
-      {!overrideEnabled ? (
+      {!customSettingsEnabled && (
         <div
           className="md:col-span-2 rounded-xl border px-3 py-2 text-xs"
           style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
         >
-          Auto AA is active for this material. Enable the override above only when this resin needs material-specific AA tuning.
+          Auto AA is active for this material. Enable Custom Settings to store material-specific AA tuning without applying it yet.
         </div>
-      ) : settings.mode === 'Off' ? (
+      )}
+      {customSettingsEnabled && !overrideEnabled && (
         <div
           className="md:col-span-2 rounded-xl border px-3 py-2 text-xs"
           style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
         >
-          This material override turns anti-aliasing off. Choose 2D Blur or 3D AA to tune smoothing.
+          Custom AA settings are saved on this material, but Auto AA is still used until Override AA Settings is enabled.
         </div>
-      ) : (
+      )}
+      {customSettingsEnabled && settings.mode === 'Off' && (
+        <div
+          className="md:col-span-2 rounded-xl border px-3 py-2 text-xs"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
+        >
+          These custom settings turn anti-aliasing off. Choose 2D Blur or 3D AA to tune smoothing.
+        </div>
+      )}
+      {customSettingsEnabled && settings.mode !== 'Off' && (
         <>
           <AaCard
             title={is3daa ? '3D AA Sample Count' : 'Sample Count'}

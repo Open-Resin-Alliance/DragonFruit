@@ -221,6 +221,7 @@ const SLICING_Z_BLUR_SIGMA_STORAGE_KEY = 'dragonfruit.slicing.zBlurSigma';
 const NEW_CURVE_EDITING_TARGET = '__dragonfruit_new_curve__';
 const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
 const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
+const SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY = 'dragonfruit.slicing.sessionAaOverrideByMaterial.v1';
 const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT = 'dragonfruit:slicing-remote-offline-layer-height-changed';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
@@ -267,6 +268,74 @@ function materialProfileToDraft(profile: MaterialProfile): MaterialDraft {
       ...(profile.antiAliasingSettings ?? {}),
     },
   };
+}
+
+type StoredSessionAaOverride = {
+  minimumAaAlphaPercent?: number;
+  antiAliasingSettings?: unknown;
+};
+
+function readSessionAaOverrideDraft(profile: MaterialProfile): MaterialDraft | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const entry = (parsed as Record<string, StoredSessionAaOverride>)[profile.id];
+    if (!entry || typeof entry !== 'object') return null;
+    const minimumAaAlphaPercent = Number(entry.minimumAaAlphaPercent);
+    return {
+      ...materialProfileToDraft(profile),
+      minimumAaAlphaPercent: Number.isFinite(minimumAaAlphaPercent)
+        ? Math.max(0, Math.min(100, Math.round(minimumAaAlphaPercent)))
+        : profile.minimumAaAlphaPercent,
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ...(profile.antiAliasingSettings ?? {}),
+        ...(entry.antiAliasingSettings && typeof entry.antiAliasingSettings === 'object' ? entry.antiAliasingSettings : {}),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionAaOverrideDraft(materialId: string, draft: MaterialDraft): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.sessionStorage.getItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const next = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? { ...(parsed as Record<string, StoredSessionAaOverride>) }
+      : {};
+    next[materialId] = {
+      minimumAaAlphaPercent: draft.minimumAaAlphaPercent,
+      antiAliasingSettings: draft.antiAliasingSettings,
+    };
+    window.sessionStorage.setItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore storage failures; the in-memory override still works.
+  }
+}
+
+function clearSessionAaOverrideDraft(materialId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.sessionStorage.getItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    const next = { ...(parsed as Record<string, StoredSessionAaOverride>) };
+    delete next[materialId];
+    if (Object.keys(next).length === 0) {
+      window.sessionStorage.removeItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY);
+    } else {
+      window.sessionStorage.setItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // ignore storage failures
+  }
 }
 
 function resolveInitialCustomOptionEnabled(storageKey: string, fallback = false): boolean {
@@ -867,7 +936,7 @@ export function SlicingPanel({
   );
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   useEffect(() => {
-    setSessionAaOverrideDraft(null);
+    setSessionAaOverrideDraft(activeMaterialProfile ? readSessionAaOverrideDraft(activeMaterialProfile) : null);
     setEditingSessionAaOverrideDraft(null);
     setIsSessionAaOverrideOpen(false);
     setMaterialAaEditorDraft(null);
@@ -954,12 +1023,7 @@ export function SlicingPanel({
     });
   }, [aaMode, aaQualityMode, autoDetectedResinType, blurGraySourceMode]);
 
-  const selectedLutCurveLabel = useMemo(() => {
-    if (zBlendResinType === 'custom') {
-      return (savedCurves.find((curve) => curve.id === selectedCurveId)?.name ?? 'Custom').trim() || 'Custom';
-    }
-    return zBlendResinType === 'clear' ? 'Clear' : 'Opaque';
-  }, [savedCurves, selectedCurveId, zBlendResinType]);
+  const autoLutCurveLabel = autoDetectedResinType === 'clear' ? 'Clear' : 'Opaque';
 
   const sessionAaOverrideEnabled = sessionAaOverrideDraft?.antiAliasingSettings?.enableOverride === true;
   const materialProfileAaOverrideEnabled = activeMaterialProfile?.antiAliasingSettings?.enableOverride === true;
@@ -991,6 +1055,7 @@ export function SlicingPanel({
       antiAliasingSettings: {
         ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
         ...(baseDraft.antiAliasingSettings ?? {}),
+        enableCustomSettings: true,
         enableOverride: true,
       },
     });
@@ -1467,15 +1532,13 @@ export function SlicingPanel({
       : '2D Blur';
   const autoAaSummaryGrayLabel = effectiveAutoAaConfig.aaMode === 'Off'
     ? 'No Gray Map'
-    : blurGraySourceMode === 'lut'
-      ? `LUT: ${selectedLutCurveLabel}`
-      : 'Min Grey';
+    : `LUT: ${autoLutCurveLabel}`;
   const effectiveBlurGraySourceMode = materialAaOverrideEnabled
     ? profileAntiAliasingSettings.blurGraySourceMode
-    : blurGraySourceMode;
+    : 'lut';
   const effectiveZBlendResinType = materialAaOverrideEnabled
     ? profileAntiAliasingSettings.zBlendResinType
-    : 'opaque';
+    : autoDetectedResinType;
   const effectiveSelectedLutCurveId = materialAaOverrideEnabled
     ? profileAntiAliasingSettings.selectedLutCurveId
     : selectedCurveId;
@@ -2750,7 +2813,12 @@ export function SlicingPanel({
                               background: 'var(--surface-0)',
                               color: 'var(--text-muted)',
                             }}
-                            onClick={() => setSessionAaOverrideDraft(null)}
+                            onClick={() => {
+                              if (activeMaterialProfile) {
+                                clearSessionAaOverrideDraft(activeMaterialProfile.id);
+                              }
+                              setSessionAaOverrideDraft(null);
+                            }}
                           >
                             Clear Session Override
                           </button>
@@ -3660,7 +3728,7 @@ export function SlicingPanel({
       {isMaterialAaEditorOpen && materialAaEditorDraft && activeMaterialProfile && typeof document !== 'undefined' && createPortal(
         <div className="fixed left-0 right-0 top-[var(--topbar-height)] bottom-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3">
           <div
-            className="w-full max-w-[920px] max-h-[88vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col"
+            className="w-full max-w-[920px] h-[min(760px,88vh)] overflow-hidden rounded-xl border shadow-2xl flex flex-col"
             style={{
               background: 'var(--surface-0)',
               borderColor: 'var(--border-subtle)',
@@ -3729,7 +3797,7 @@ export function SlicingPanel({
       {isSessionAaOverrideOpen && editingSessionAaOverrideDraft && typeof document !== 'undefined' && createPortal(
         <div className="fixed left-0 right-0 top-[var(--topbar-height)] bottom-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3">
           <div
-            className="w-full max-w-[920px] max-h-[88vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col"
+            className="w-full max-w-[920px] h-[min(760px,88vh)] overflow-hidden rounded-xl border shadow-2xl flex flex-col"
             style={{
               background: 'var(--surface-0)',
               borderColor: 'var(--border-subtle)',
@@ -3761,6 +3829,7 @@ export function SlicingPanel({
             <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
               <MaterialAntiAliasingSection
                 draft={editingSessionAaOverrideDraft}
+                lockActivationToggles
                 onChange={(next) => {
                   setEditingSessionAaOverrideDraft((current) => {
                     if (!current) return current;
@@ -3773,6 +3842,9 @@ export function SlicingPanel({
               <button
                 type="button"
                 onClick={() => {
+                  if (activeMaterialProfile) {
+                    clearSessionAaOverrideDraft(activeMaterialProfile.id);
+                  }
                   setSessionAaOverrideDraft(null);
                   setEditingSessionAaOverrideDraft(null);
                   setIsSessionAaOverrideOpen(false);
@@ -3793,6 +3865,9 @@ export function SlicingPanel({
                 <button
                   type="button"
                   onClick={() => {
+                    if (activeMaterialProfile) {
+                      writeSessionAaOverrideDraft(activeMaterialProfile.id, editingSessionAaOverrideDraft);
+                    }
                     setSessionAaOverrideDraft(editingSessionAaOverrideDraft);
                     setIsSessionAaOverrideOpen(false);
                   }}

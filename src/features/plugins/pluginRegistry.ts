@@ -497,6 +497,7 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     antiAliasingSettings: (value.antiAliasingSettings && typeof value.antiAliasingSettings === 'object')
       ? value.antiAliasingSettings as MaterialProfile['antiAliasingSettings']
       : {
+        enableCustomSettings: false,
         enableOverride: false,
         mode: 'Blur',
         level: '4x',

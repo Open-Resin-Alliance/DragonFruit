@@ -203,6 +203,7 @@ export type LocalMaterialSettingsValue = string | number | boolean;
 export type LocalMaterialSettingsMap = Record<string, LocalMaterialSettingsValue>;
 
 export type MaterialAntiAliasingSettings = {
+  enableCustomSettings: boolean;
   enableOverride: boolean;
   mode: 'Off' | 'Blur' | '3DAA';
   level: string;
@@ -231,6 +232,7 @@ export type MaterialAntiAliasingSettings = {
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
+  enableCustomSettings: false,
   enableOverride: false,
   mode: 'Blur',
   level: '4x',
@@ -331,6 +333,9 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
   const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
 
   return {
+    enableCustomSettings: typeof source.enableCustomSettings === 'boolean'
+      ? source.enableCustomSettings
+      : (typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableCustomSettings),
     enableOverride: typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride,
     mode,
     level,
