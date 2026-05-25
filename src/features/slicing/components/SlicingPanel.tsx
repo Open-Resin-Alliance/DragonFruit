@@ -192,7 +192,8 @@ const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.aaLevelCustomEnabled';
 const SLICING_BLUR_BRUSH_RADIUS_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusPx';
-const SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY = 'dragonfruit.slicing.zBlurRadiusLayers';
+const SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY = 'dragonfruit.slicing.zBlurRadiusLayers'; // legacy key (radius semantics) — read-only for migration detection
+const SLICING_Z_BLUR_TOTAL_LAYERS_STORAGE_KEY = 'dragonfruit.slicing.zBlurTotalLayers'; // new key (total-layers semantics)
 const SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.zBlurRadiusCustomEnabled';
 const SLICING_BLUR_BRUSH_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.blurBrushRadiusCustomEnabled';
 const SLICING_BLUR_GRAY_SOURCE_STORAGE_KEY = 'dragonfruit.slicing.blurGraySourceMode';
@@ -229,11 +230,12 @@ const AA_STRENGTH_PRESETS = [4, 8, 16, 32] as const;
 const AA_STRENGTH_MIN_STEPS = 2;
 const AA_STRENGTH_MAX_STEPS = 64;
 const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
-const BLUR_WIDTH_MIN_PX = 1;
+const BLUR_WIDTH_MIN_PX = 0; // 0 = XY blur disabled (engine skips blur code path)
 const BLUR_WIDTH_MAX_PX = 64;
-const Z_BLUR_DEPTH_PRESETS = [2, 4, 6, 8] as const;
-const Z_BLUR_RADIUS_MIN_LAYERS = 0;
-const Z_BLUR_RADIUS_MAX_LAYERS = 8;
+const Z_BLUR_TOTAL_LAYERS_PRESETS = [2, 3, 4, 5] as const; // total layers (not radius); 1 = disabled
+const Z_BLUR_TOTAL_MIN = 1; // 1 = disabled
+const Z_BLUR_TOTAL_MAX = 17; // max total layers = 2 × engine-cap(8) + 1
+const Z_BLUR_RADIUS_MAX_LAYERS = 8; // engine internal radius cap — kept for engineRadius conversion
 const LOOK_BACK_PRESETS = [2, 4, 6, 8] as const;
 const LOOK_BACK_MIN_LAYERS = 1;
 const LOOK_BACK_MAX_LAYERS = 16;
@@ -268,14 +270,31 @@ function resolveInitialCustomOptionEnabled(storageKey: string, fallback = false)
 function SettingLabelWithHelp({
   label,
   help,
+  onToggle,
+  isOpen,
 }: {
   label: string;
   help: string;
+  /** When provided, the label row becomes a collapse toggle. Adds a chevron inline — no extra height. */
+  onToggle?: () => void;
+  isOpen?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   return (
-    <div className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-      <span>{label}</span>
+    <div
+      className={`flex items-center gap-1 text-xs${onToggle ? ' cursor-pointer select-none' : ''}`}
+      style={{ color: 'var(--text-muted)' }}
+      onClick={onToggle}
+      role={onToggle ? 'button' : undefined}
+      tabIndex={onToggle ? 0 : undefined}
+      onKeyDown={onToggle ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } } : undefined}
+    >
+      <span className="flex-1">{label}</span>
+      {onToggle && (
+        <span className="inline-flex items-center opacity-50" aria-hidden="true">
+          <ChevronDown className={`h-3 w-3 transition-transform duration-150 ${isOpen ? '' : '-rotate-90'}`} />
+        </span>
+      )}
       <span
         className="inline-flex h-3.5 w-3.5 items-center justify-center rounded border cursor-help relative"
         style={{
@@ -288,6 +307,7 @@ function SettingLabelWithHelp({
         onMouseLeave={() => setHovered(false)}
         onFocus={() => setHovered(true)}
         onBlur={() => setHovered(false)}
+        onClick={(e) => e.stopPropagation()}
         aria-label={`${label}. ${help}`}
       >
         <CircleHelp className="h-2.5 w-2.5" />
@@ -463,17 +483,18 @@ function resolveInitialBlurBrushRadiusPx(): number {
   return Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, rounded));
 }
 
-function resolveInitialZBlurRadiusLayers(): number {
-  if (typeof window === 'undefined') return 2;
+function resolveInitialZBlurTotalLayers(): number {
+  // Reads from new key (total-layers semantics). Old key had radius semantics — not migrated.
+  if (typeof window === 'undefined') return 3;
 
-  const stored = window.localStorage.getItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY)
-    ?? window.sessionStorage.getItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY);
-  if (stored == null || stored.trim().length === 0) return 2;
+  const stored = window.localStorage.getItem(SLICING_Z_BLUR_TOTAL_LAYERS_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_Z_BLUR_TOTAL_LAYERS_STORAGE_KEY);
+  if (stored == null || stored.trim().length === 0) return 3;
 
   const parsed = Number(stored);
-  if (!Number.isFinite(parsed)) return 2;
+  if (!Number.isFinite(parsed)) return 3;
   const rounded = Math.round(parsed);
-  return Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, rounded));
+  return Math.max(Z_BLUR_TOTAL_MIN, Math.min(Z_BLUR_TOTAL_MAX, rounded));
 }
 
 function resolveInitialMinimumAaAlphaPercent(): number {
@@ -542,11 +563,11 @@ function resolveInitialZBlendAutoMode(): boolean {
 }
 
 function resolveInitialZaaPattern(): ZaaPattern {
-  if (typeof window === 'undefined') return 'uniform';
+  if (typeof window === 'undefined') return 'halton';
   const stored = window.localStorage.getItem(SLICING_ZAA_PATTERN_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_ZAA_PATTERN_STORAGE_KEY);
-  if (stored === 'halton' || stored === 'base2') return stored;
-  return 'uniform';
+  if (stored === 'uniform' || stored === 'halton' || stored === 'base2') return stored;
+  return 'halton'; // Default changed from 'uniform' to 'halton' (lower-discrepancy)
 }
 
 function resolveInitialZaaDuplicateZ(): boolean {
@@ -726,7 +747,7 @@ export function SlicingPanel({
     0.5,
     SLICING_BLUR_BRUSH_SIGMA_STORAGE_KEY,
   ));
-  const [zBlurRadiusLayers, setZBlurRadiusLayers] = useState<number>(resolveInitialZBlurRadiusLayers);
+  const [zBlurTotalLayers, setZBlurTotalLayers] = useState<number>(resolveInitialZBlurTotalLayers);
   const [zBlurKernel, setZBlurKernel] = useState<BlurKernelMode>(() => resolveInitialBlurKernel(
     SLICING_Z_BLUR_KERNEL_STORAGE_KEY,
     'box',
@@ -743,10 +764,10 @@ export function SlicingPanel({
     );
   });
   const [useCustomZBlurRadius, setUseCustomZBlurRadius] = useState<boolean>(() => {
-    const initial = resolveInitialZBlurRadiusLayers();
+    const initial = resolveInitialZBlurTotalLayers();
     return resolveInitialCustomOptionEnabled(
       SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY,
-      !isPresetValue(Z_BLUR_DEPTH_PRESETS, initial),
+      !isPresetValue(Z_BLUR_TOTAL_LAYERS_PRESETS, initial),
     );
   });
   const [zBlendLookBack, setZBlendLookBack] = useState<number>(resolveInitialZBlendLookBack);
@@ -762,6 +783,12 @@ export function SlicingPanel({
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [zaaPattern, setZaaPattern] = useState<ZaaPattern>(resolveInitialZaaPattern);
   const [zaaDuplicateZ, setZaaDuplicateZ] = useState<boolean>(resolveInitialZaaDuplicateZ);
+  // Rollup / collapse state — transient (not persisted to localStorage)
+  const [showMoreZaaOptions, setShowMoreZaaOptions] = useState(false);   // item 4: "More" rollup for Pattern + DupZ
+  const [showXyBlurSection, setShowXyBlurSection] = useState(true);      // item 6
+  const [showZBlurSection, setShowZBlurSection] = useState(true);        // item 6
+  const [showGrayscaleSection, setShowGrayscaleSection] = useState(true); // item 6
+  const [showAaOnSupports, setShowAaOnSupports] = useState(false);       // item 7: default closed
   const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
   const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoUiPreset>(resolveInitialAaAutoPreset);
   const [autoAaConfig, setAutoAaConfig] = useState<AutoAaResolvedConfig>(DEFAULT_AUTO_AA_CONFIG);
@@ -1323,9 +1350,12 @@ export function SlicingPanel({
       : (useCustomBlurBrushRadius ? blurBrushKernel : 'gaussian');
   const resolvedBlurBrushSigmaX = clampBlurSigma(blurBrushSigmaX, 0.5);
   const resolvedBlurBrushSigmaY = clampBlurSigma(blurBrushSigmaY, 0.5);
+  // Convert total layers → engine radius. Total=1 means disabled (radius=0).
+  // Formula: radius = floor((total - 1) / 2). Engine caps at Z_BLUR_RADIUS_MAX_LAYERS (8).
+  const zBlurEngineRadius = zBlurTotalLayers <= 1 ? 0 : Math.min(Z_BLUR_RADIUS_MAX_LAYERS, Math.floor((zBlurTotalLayers - 1) / 2));
   const resolvedZBlurRadiusLayers = (aaQualityMode === 'auto' && antiAliasingAvailable)
     ? effectiveAutoAaConfig.zBlurRadiusLayers
-    : (resolvedAaMode === '3DAA' ? zBlurRadiusLayers : 0);
+    : (resolvedAaMode === '3DAA' ? zBlurEngineRadius : 0);
   const resolvedZBlurKernel: BlurKernelMode =
     (aaQualityMode === 'auto' && antiAliasingAvailable)
       ? 'box'
@@ -1474,9 +1504,9 @@ export function SlicingPanel({
     setBlurBrushRadiusPx(Math.max(BLUR_WIDTH_MIN_PX, Math.min(BLUR_WIDTH_MAX_PX, Math.round(next))));
   }, []);
 
-  const setClampedZBlurRadiusLayers = useCallback((value: number) => {
-    const next = Number.isFinite(value) ? value : 2;
-    setZBlurRadiusLayers(Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, Math.round(next))));
+  const setClampedZBlurTotalLayers = useCallback((value: number) => {
+    const next = Number.isFinite(value) ? value : 3;
+    setZBlurTotalLayers(Math.max(Z_BLUR_TOTAL_MIN, Math.min(Z_BLUR_TOTAL_MAX, Math.round(next))));
   }, []);
 
   const setClampedZBlendLookBack = useCallback((value: number) => {
@@ -1596,10 +1626,10 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const serialized = String(Math.max(Z_BLUR_RADIUS_MIN_LAYERS, Math.min(Z_BLUR_RADIUS_MAX_LAYERS, Math.round(zBlurRadiusLayers))));
-    window.localStorage.setItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY, serialized);
-    window.sessionStorage.setItem(SLICING_Z_BLUR_RADIUS_LAYERS_STORAGE_KEY, serialized);
-  }, [zBlurRadiusLayers]);
+    const serialized = String(Math.max(Z_BLUR_TOTAL_MIN, Math.min(Z_BLUR_TOTAL_MAX, Math.round(zBlurTotalLayers))));
+    window.localStorage.setItem(SLICING_Z_BLUR_TOTAL_LAYERS_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_Z_BLUR_TOTAL_LAYERS_STORAGE_KEY, serialized);
+  }, [zBlurTotalLayers]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2600,384 +2630,15 @@ export function SlicingPanel({
                   </div>
                   {aaMode !== 'Off' && (
                     <>
+                      {/* ── Grayscale Mapping — moved before Sample Count (item 8) ── */}
                       <SettingLabelWithHelp
-                        label={advancedSampleCountLabel}
-                        help={advancedSampleCountHelp}
+                        label="Grayscale Mapping"
+                        help="LUT Curve is the default and recommended path for grayscale AA. Minimum Grey remains available as a simpler fallback override when you want threshold-style behavior instead of a cure-response curve."
+                        onToggle={() => setShowGrayscaleSection((v) => !v)}
+                        isOpen={showGrayscaleSection}
                       />
-                      <div className="grid grid-cols-5 gap-1">
-                        {AA_STRENGTH_PRESETS.map((steps) => {
-                          const level = formatAaLevel(steps);
-                          const active = !useCustomAaLevel && aaLevel === level;
-                          return (
-                            <button
-                              key={level}
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={active
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => {
-                                setUseCustomAaLevel(false);
-                                setAaLevel(level);
-                              }}
-                            >
-                              {level}
-                            </button>
-                          );
-                        })}
-                        <button
-                          type="button"
-                          className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
-                          style={useCustomAaLevel
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                color: 'var(--text-strong)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'var(--surface-0)',
-                                color: 'var(--text-muted)',
-                              }}
-                          onClick={() => setUseCustomAaLevel(true)}
-                        >
-                          Custom
-                        </button>
-                      </div>
-                      {useCustomAaLevel && (
-                        <ScrollableNumberField
-                          className="mt-1"
-                          value={parseAaLevelSteps(aaLevel) ?? 4}
-                          onChange={setClampedAaLevelSteps}
-                          min={AA_STRENGTH_MIN_STEPS}
-                          max={AA_STRENGTH_MAX_STEPS}
-                          step={1}
-                          unit="x"
-                          ariaLabel="Custom AA strength"
-                          decreaseTitle="Decrease AA strength"
-                          increaseTitle="Increase AA strength"
-                        />
-                      )}
-
-                      <SettingLabelWithHelp
-                        label={advancedBlurWidthLabel}
-                        help={advancedBlurWidthHelp}
-                      />
-                      <div className="grid grid-cols-5 gap-1">
-                        {BLUR_WIDTH_PRESETS.map((radius) => {
-                          const active = !useCustomBlurBrushRadius && blurBrushRadiusPx === radius;
-                          return (
-                            <button
-                              key={radius}
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={active
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => {
-                                setUseCustomBlurBrushRadius(false);
-                                setClampedBlurBrushRadiusPx(radius);
-                              }}
-                            >
-                              {`${radius}px`}
-                            </button>
-                          );
-                        })}
-                        <button
-                          type="button"
-                          className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
-                          style={useCustomBlurBrushRadius
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                color: 'var(--text-strong)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'var(--surface-0)',
-                                color: 'var(--text-muted)',
-                              }}
-                          onClick={() => setUseCustomBlurBrushRadius(true)}
-                        >
-                          Custom
-                        </button>
-                      </div>
-                      {useCustomBlurBrushRadius && (
-                        <div
-                          className="mt-1 rounded-md border p-2"
-                          style={{
-                            borderColor: 'var(--border-subtle)',
-                            background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 38%)',
-                          }}
-                        >
-                          <ScrollableNumberField
-                            value={blurBrushRadiusPx}
-                            onChange={setClampedBlurBrushRadiusPx}
-                            min={BLUR_WIDTH_MIN_PX}
-                            max={BLUR_WIDTH_MAX_PX}
-                            step={1}
-                            unit="px"
-                            ariaLabel="Custom blur width in pixels"
-                            decreaseTitle="Decrease blur width"
-                            increaseTitle="Increase blur width"
-                          />
-                          <div className="mt-2 grid grid-cols-2 gap-1">
-                            {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
-                              const active = blurBrushKernel === mode;
-                              return (
-                                <button
-                                  key={mode}
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={active
-                                    ? {
-                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                        color: 'var(--text-strong)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  onClick={() => setBlurBrushKernel(mode)}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                          {blurBrushKernel === 'gaussian' && (
-                            <div className="mt-2 grid grid-cols-2 gap-1.5">
-                              <div>
-                                <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                  Sigma X
-                                </div>
-                                <ScrollableNumberField
-                                  value={blurBrushSigmaX}
-                                  onChange={(value) => setBlurBrushSigmaX(clampBlurSigma(value, 1.5))}
-                                  min={0.05}
-                                  max={16}
-                                  step={0.05}
-                                  unit=""
-                                  ariaLabel="Gaussian XY sigma X"
-                                  decreaseTitle="Decrease XY sigma X"
-                                  increaseTitle="Increase XY sigma X"
-                                />
-                              </div>
-                              <div>
-                                <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                  Sigma Y
-                                </div>
-                                <ScrollableNumberField
-                                  value={blurBrushSigmaY}
-                                  onChange={(value) => setBlurBrushSigmaY(clampBlurSigma(value, 1.5))}
-                                  min={0.05}
-                                  max={16}
-                                  step={0.05}
-                                  unit=""
-                                  ariaLabel="Gaussian XY sigma Y"
-                                  decreaseTitle="Decrease XY sigma Y"
-                                  increaseTitle="Increase XY sigma Y"
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {aaMode === '3DAA' && (
+                      {showGrayscaleSection && (
                         <>
-                          <SettingLabelWithHelp
-                            label="Z Blur Depth"
-                            help="Applies a Gaussian blur across neighboring layers after 3DAA sampling. Higher values smooth Z stair-steps more, but can soften tiny vertical details."
-                          />
-                          <div className="grid grid-cols-5 gap-1">
-                            {Z_BLUR_DEPTH_PRESETS.map((depth) => {
-                              const active = !useCustomZBlurRadius && zBlurRadiusLayers === depth;
-                              return (
-                                <button
-                                  key={depth}
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={active
-                                    ? {
-                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                        color: 'var(--text-strong)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  onClick={() => {
-                                    setUseCustomZBlurRadius(false);
-                                    setClampedZBlurRadiusLayers(depth);
-                                  }}
-                                >
-                                  {depth}
-                                </button>
-                              );
-                            })}
-                            <button
-                              type="button"
-                              className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
-                              style={useCustomZBlurRadius
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                    color: 'var(--text-strong)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setUseCustomZBlurRadius(true)}
-                            >
-                              Custom
-                            </button>
-                          </div>
-                          {useCustomZBlurRadius && (
-                            <div
-                              className="mt-1 rounded-md border p-2"
-                              style={{
-                                borderColor: 'var(--border-subtle)',
-                                background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 38%)',
-                              }}
-                            >
-                              <ScrollableNumberField
-                                value={zBlurRadiusLayers}
-                                onChange={setClampedZBlurRadiusLayers}
-                                min={Z_BLUR_RADIUS_MIN_LAYERS}
-                                max={Z_BLUR_RADIUS_MAX_LAYERS}
-                                step={1}
-                                unit="layers"
-                                ariaLabel="3DAA Z blur depth in layers"
-                                decreaseTitle="Decrease Z blur depth"
-                                increaseTitle="Increase Z blur depth"
-                              />
-                              <div className="mt-2 grid grid-cols-2 gap-1">
-                                {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
-                                  const active = zBlurKernel === mode;
-                                  return (
-                                    <button
-                                      key={mode}
-                                      type="button"
-                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                      style={active
-                                        ? {
-                                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                            color: 'var(--text-strong)',
-                                          }
-                                        : {
-                                            borderColor: 'var(--border-subtle)',
-                                            background: 'var(--surface-0)',
-                                            color: 'var(--text-muted)',
-                                          }}
-                                      onClick={() => setZBlurKernel(mode)}
-                                    >
-                                      {label}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                              {zBlurKernel === 'gaussian' && (
-                                <div className="mt-2">
-                                  <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                    Sigma
-                                  </div>
-                                  <ScrollableNumberField
-                                    value={zBlurSigma}
-                                    onChange={(value) => setZBlurSigma(clampBlurSigma(value, 0.5))}
-                                    min={0.05}
-                                    max={16}
-                                    step={0.05}
-                                    unit=""
-                                    ariaLabel="Gaussian Z sigma"
-                                    decreaseTitle="Decrease Z sigma"
-                                    increaseTitle="Increase Z sigma"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {(aaMode === 'Blur' || aaMode === '3DAA') && (
-                        <>
-                          <SettingLabelWithHelp
-                            label="AA on Supports"
-                            help="Controls whether native support and raft geometry also receives grayscale AA in the selected mode. Off keeps supports crisp and binary; On allows anti-aliased support edges too."
-                          />
-                          <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={!aaOnSupportsEnabled
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setAaOnSupportsEnabled(false)}
-                            >
-                              Supports Off
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={aaOnSupportsEnabled
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setAaOnSupportsEnabled(true)}
-                            >
-                              Supports On
-                            </button>
-                          </div>
-
-                          <div
-                            className="my-2.5 mx-1 h-px rounded-full"
-                            style={{
-                              background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
-                            }}
-                          />
-                          <SettingLabelWithHelp
-                            label="Grayscale Mapping"
-                            help="LUT Curve is the default and recommended path for grayscale AA. Minimum Grey remains available as a simpler fallback override when you want threshold-style behavior instead of a cure-response curve."
-                          />
                           <div className="grid grid-cols-2 gap-1">
                             <button
                               type="button"
@@ -3127,7 +2788,7 @@ export function SlicingPanel({
                             </div>
                           )}
 
-                          {(aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'minimum' && (
+                          {blurGraySourceMode === 'minimum' && (
                             <div className="space-y-1">
                               <SettingLabelWithHelp
                                 label="Minimum Grey Level"
@@ -3192,7 +2853,486 @@ export function SlicingPanel({
                         </>
                       )}
 
+                      {/* divider between Grayscale and Sample Count */}
+                      <div
+                        className="my-2.5 mx-1 h-px rounded-full"
+                        style={{
+                          background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
+                        }}
+                      />
+
+                      {/* ── Sample Count ── */}
+                      <SettingLabelWithHelp
+                        label={advancedSampleCountLabel}
+                        help={advancedSampleCountHelp}
+                      />
+                      <div className="grid grid-cols-5 gap-1">
+                        {AA_STRENGTH_PRESETS.map((steps) => {
+                          const level = formatAaLevel(steps);
+                          const active = !useCustomAaLevel && aaLevel === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={active
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => {
+                                setUseCustomAaLevel(false);
+                                setAaLevel(level);
+                              }}
+                            >
+                              {level}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
+                          style={useCustomAaLevel
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-0)',
+                                color: 'var(--text-muted)',
+                              }}
+                          onClick={() => setUseCustomAaLevel(true)}
+                        >
+                          Custom
+                        </button>
+                      </div>
+                      {useCustomAaLevel && (
+                        <ScrollableNumberField
+                          className="mt-1"
+                          value={parseAaLevelSteps(aaLevel) ?? 4}
+                          onChange={setClampedAaLevelSteps}
+                          min={AA_STRENGTH_MIN_STEPS}
+                          max={AA_STRENGTH_MAX_STEPS}
+                          step={1}
+                          unit="x"
+                          ariaLabel="Custom AA strength"
+                          decreaseTitle="Decrease AA strength"
+                          increaseTitle="Increase AA strength"
+                        />
+                      )}
+
+                      {/* ── "More" rollup: Perturbation Pattern + Duplicate Terminal Z (3DAA only, item 4) ── */}
                       {aaMode === '3DAA' && (
+                        <>
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 px-0.5 py-0.5 rounded text-xs transition-colors"
+                            style={{ color: 'var(--text-muted)' }}
+                            onClick={() => setShowMoreZaaOptions((v) => !v)}
+                          >
+                            <ChevronDown className={`h-3 w-3 transition-transform duration-150 ${showMoreZaaOptions ? '' : '-rotate-90'}`} />
+                            <span>More</span>
+                          </button>
+                          {showMoreZaaOptions && (
+                            <>
+                              <SettingLabelWithHelp
+                                label="Perturbation Pattern"
+                                help="Chooses how 3DAA distributes Z samples. Uniform uses centered spacing, Halton is low-discrepancy, and Base2 uses a van der Corput sequence."
+                              />
+                              <div className="grid grid-cols-3 gap-1">
+                                {([
+                                  ['uniform', 'Uniform'],
+                                  ['halton', 'Halton'],
+                                  ['base2', 'Base2'],
+                                ] as const).map(([pattern, label]) => (
+                                  <button
+                                    key={pattern}
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={zaaPattern === pattern
+                                      ? {
+                                          borderColor: 'var(--accent-secondary-action-border)',
+                                          background: 'var(--accent-secondary-action-bg-92)',
+                                          color: 'var(--accent-secondary-action-color)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setZaaPattern(pattern)}
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+
+                              {duplicateZSupportedAtCurrentAa && (
+                                <>
+                                  <SettingLabelWithHelp
+                                    label="Duplicate Terminal Z"
+                                    // TODO: verify 'Y perturbations' wording — likely a typo for 'Z perturbations'
+                                    help="Reduces triangle lookups by 50% by pairing half of Y perturbations at the same Z perturbation height."
+                                  />
+                                  <div className="grid grid-cols-2 gap-1">
+                                    <button
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={!zaaDuplicateZ
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => setZaaDuplicateZ(false)}
+                                    >
+                                      Off
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={zaaDuplicateZ
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => setZaaDuplicateZ(true)}
+                                    >
+                                      On
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </>
+                          )}
+                        </>
+                      )}
+
+                      {/* ── XY Blur Radius (item 1: disabled state; item 6: collapse toggle) ── */}
+                      <SettingLabelWithHelp
+                        label={advancedBlurWidthLabel}
+                        help={advancedBlurWidthHelp}
+                        onToggle={() => setShowXyBlurSection((v) => !v)}
+                        isOpen={showXyBlurSection}
+                      />
+                      {showXyBlurSection && (
+                        <>
+                          <div className="grid grid-cols-5 gap-1">
+                            {BLUR_WIDTH_PRESETS.map((radius) => {
+                              const active = !useCustomBlurBrushRadius && blurBrushRadiusPx === radius;
+                              return (
+                                <button
+                                  key={radius}
+                                  type="button"
+                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                  style={active
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => {
+                                    setUseCustomBlurBrushRadius(false);
+                                    setClampedBlurBrushRadiusPx(radius);
+                                  }}
+                                >
+                                  {`${radius}px`}
+                                </button>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
+                              style={useCustomBlurBrushRadius
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setUseCustomBlurBrushRadius(true)}
+                            >
+                              Custom
+                            </button>
+                          </div>
+                          {useCustomBlurBrushRadius && (
+                            <div
+                              className="mt-1 rounded-md border p-2"
+                              style={{
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 38%)',
+                              }}
+                            >
+                              <ScrollableNumberField
+                                value={blurBrushRadiusPx}
+                                onChange={setClampedBlurBrushRadiusPx}
+                                min={BLUR_WIDTH_MIN_PX}
+                                max={BLUR_WIDTH_MAX_PX}
+                                step={1}
+                                unit="px"
+                                ariaLabel="Custom blur width in pixels"
+                                decreaseTitle="Decrease blur width"
+                                increaseTitle="Increase blur width"
+                              />
+                              {/* Item 1: radius=0 → "XY Blur Disabled" replaces Box/Gaussian grid */}
+                              {blurBrushRadiusPx === 0 ? (
+                                <div className="mt-2">
+                                  <button
+                                    type="button"
+                                    className="w-full rounded border px-1.5 py-1 text-xs font-medium"
+                                    style={{
+                                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                      color: 'var(--text-strong)',
+                                    }}
+                                  >
+                                    XY Blur Disabled
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="mt-2 grid grid-cols-2 gap-1">
+                                  {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
+                                    const active = blurBrushKernel === mode;
+                                    return (
+                                      <button
+                                        key={mode}
+                                        type="button"
+                                        className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                        style={active
+                                          ? {
+                                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                              color: 'var(--text-strong)',
+                                            }
+                                          : {
+                                              borderColor: 'var(--border-subtle)',
+                                              background: 'var(--surface-0)',
+                                              color: 'var(--text-muted)',
+                                            }}
+                                        onClick={() => setBlurBrushKernel(mode)}
+                                      >
+                                        {label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {blurBrushKernel === 'gaussian' && blurBrushRadiusPx > 0 && (
+                                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                                  <div>
+                                    <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                      Sigma X
+                                    </div>
+                                    <ScrollableNumberField
+                                      value={blurBrushSigmaX}
+                                      onChange={(value) => setBlurBrushSigmaX(clampBlurSigma(value, 1.5))}
+                                      min={0.05}
+                                      max={16}
+                                      step={0.05}
+                                      unit=""
+                                      ariaLabel="Gaussian XY sigma X"
+                                      decreaseTitle="Decrease XY sigma X"
+                                      increaseTitle="Increase XY sigma X"
+                                    />
+                                  </div>
+                                  <div>
+                                    <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                      Sigma Y
+                                    </div>
+                                    <ScrollableNumberField
+                                      value={blurBrushSigmaY}
+                                      onChange={(value) => setBlurBrushSigmaY(clampBlurSigma(value, 1.5))}
+                                      min={0.05}
+                                      max={16}
+                                      step={0.05}
+                                      unit=""
+                                      ariaLabel="Gaussian XY sigma Y"
+                                      decreaseTitle="Decrease XY sigma Y"
+                                      increaseTitle="Increase XY sigma Y"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* ── Z Blur Total Layers (3DAA only; items 2+3+6) ── */}
+                      {aaMode === '3DAA' && (
+                        <>
+                          <SettingLabelWithHelp
+                            label="Z Blur Total Layers"
+                            help="Blends this many neighboring layers together after 3DAA sampling to smooth Z stair-steps. 1 disables Z blur. Uses radius = ⌊(N−1)/2⌋ internally."
+                            onToggle={() => setShowZBlurSection((v) => !v)}
+                            isOpen={showZBlurSection}
+                          />
+                          {showZBlurSection && (
+                            <>
+                              <div className="grid grid-cols-5 gap-1">
+                                {Z_BLUR_TOTAL_LAYERS_PRESETS.map((total) => {
+                                  const active = !useCustomZBlurRadius && zBlurTotalLayers === total;
+                                  return (
+                                    <button
+                                      key={total}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                            color: 'var(--text-strong)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      onClick={() => {
+                                        setUseCustomZBlurRadius(false);
+                                        setClampedZBlurTotalLayers(total);
+                                      }}
+                                    >
+                                      {`${total}L`}
+                                    </button>
+                                  );
+                                })}
+                                <button
+                                  type="button"
+                                  className="min-w-0 rounded border px-1 py-1 text-[9px] sm:text-[11px] font-medium leading-none tracking-tight whitespace-nowrap transition-colors"
+                                  style={useCustomZBlurRadius
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                        color: 'var(--text-strong)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-0)',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                  onClick={() => setUseCustomZBlurRadius(true)}
+                                >
+                                  Custom
+                                </button>
+                              </div>
+                              {useCustomZBlurRadius && (
+                                <div
+                                  className="mt-1 rounded-md border p-2"
+                                  style={{
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 38%)',
+                                  }}
+                                >
+                                  <ScrollableNumberField
+                                    value={zBlurTotalLayers}
+                                    onChange={setClampedZBlurTotalLayers}
+                                    min={Z_BLUR_TOTAL_MIN}
+                                    max={Z_BLUR_TOTAL_MAX}
+                                    step={1}
+                                    unit="layers"
+                                    ariaLabel="3DAA Z blur total layer count"
+                                    decreaseTitle="Decrease Z blur layers"
+                                    increaseTitle="Increase Z blur layers"
+                                  />
+                                  {/* Item 3: total=1 (disabled) → "Z Blur Disabled" replaces Box/Gaussian grid */}
+                                  {zBlurTotalLayers <= 1 ? (
+                                    <div className="mt-2">
+                                      <button
+                                        type="button"
+                                        className="w-full rounded border px-1.5 py-1 text-xs font-medium"
+                                        style={{
+                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                          color: 'var(--text-strong)',
+                                        }}
+                                      >
+                                        Z Blur Disabled
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-2 grid grid-cols-2 gap-1">
+                                      {([['box', 'Box'], ['gaussian', 'Gaussian']] as const).map(([mode, label]) => {
+                                        const active = zBlurKernel === mode;
+                                        return (
+                                          <button
+                                            key={mode}
+                                            type="button"
+                                            className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                            style={active
+                                              ? {
+                                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                                  color: 'var(--text-strong)',
+                                                }
+                                              : {
+                                                  borderColor: 'var(--border-subtle)',
+                                                  background: 'var(--surface-0)',
+                                                  color: 'var(--text-muted)',
+                                                }}
+                                            onClick={() => setZBlurKernel(mode)}
+                                          >
+                                            {label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  {zBlurKernel === 'gaussian' && zBlurTotalLayers > 1 && (
+                                    <div className="mt-2">
+                                      <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                        Sigma
+                                      </div>
+                                      <ScrollableNumberField
+                                        value={zBlurSigma}
+                                        onChange={(value) => setZBlurSigma(clampBlurSigma(value, 0.5))}
+                                        min={0.05}
+                                        max={16}
+                                        step={0.05}
+                                        unit=""
+                                        ariaLabel="Gaussian Z sigma"
+                                        decreaseTitle="Decrease Z sigma"
+                                        increaseTitle="Increase Z sigma"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </>
+                      )}
+
+                      {/* ── AA on Supports — moved to bottom, default closed (item 7) ── */}
+                      {(aaMode === 'Blur' || aaMode === '3DAA') && (
                         <>
                           <div
                             className="my-2.5 mx-1 h-px rounded-full"
@@ -3201,20 +3341,17 @@ export function SlicingPanel({
                             }}
                           />
                           <SettingLabelWithHelp
-                            label="Perturbation Pattern"
-                            help="Chooses how 3DAA distributes Z samples. Uniform uses centered spacing, Halton is low-discrepancy, and Base2 uses a van der Corput sequence."
+                            label="AA on Supports"
+                            help="Controls whether native support and raft geometry also receives grayscale AA in the selected mode. Off keeps supports crisp and binary; On allows anti-aliased support edges too."
+                            onToggle={() => setShowAaOnSupports((v) => !v)}
+                            isOpen={showAaOnSupports}
                           />
-                          <div className="grid grid-cols-3 gap-1">
-                            {([
-                              ['uniform', 'Uniform'],
-                              ['halton', 'Halton'],
-                              ['base2', 'Base2'],
-                            ] as const).map(([pattern, label]) => (
+                          {showAaOnSupports && (
+                            <div className="grid grid-cols-2 gap-1">
                               <button
-                                key={pattern}
                                 type="button"
                                 className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                style={zaaPattern === pattern
+                                style={!aaOnSupportsEnabled
                                   ? {
                                       borderColor: 'var(--accent-secondary-action-border)',
                                       background: 'var(--accent-secondary-action-bg-92)',
@@ -3225,58 +3362,29 @@ export function SlicingPanel({
                                       background: 'var(--surface-0)',
                                       color: 'var(--text-muted)',
                                     }}
-                                onClick={() => setZaaPattern(pattern)}
+                                onClick={() => setAaOnSupportsEnabled(false)}
                               >
-                                {label}
+                                Supports Off
                               </button>
-                            ))}
-                          </div>
-
-                          {duplicateZSupportedAtCurrentAa && (
-                            <>
-                              <SettingLabelWithHelp
-                                label="Duplicate Terminal Z"
-                                help="Duplicates end samples in the perturbation sequence."
-                              />
-                              <div className="grid grid-cols-2 gap-1">
-                                <button
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={!zaaDuplicateZ
-                                    ? {
-                                        borderColor: 'var(--accent-secondary-action-border)',
-                                        background: 'var(--accent-secondary-action-bg-92)',
-                                        color: 'var(--accent-secondary-action-color)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  onClick={() => setZaaDuplicateZ(false)}
-                                >
-                                  Off
-                                </button>
-                                <button
-                                  type="button"
-                                  className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                  style={zaaDuplicateZ
-                                    ? {
-                                        borderColor: 'var(--accent-secondary-action-border)',
-                                        background: 'var(--accent-secondary-action-bg-92)',
-                                        color: 'var(--accent-secondary-action-color)',
-                                      }
-                                    : {
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-0)',
-                                        color: 'var(--text-muted)',
-                                      }}
-                                  onClick={() => setZaaDuplicateZ(true)}
-                                >
-                                  On
-                                </button>
-                              </div>
-                            </>
+                              <button
+                                type="button"
+                                className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                style={aaOnSupportsEnabled
+                                  ? {
+                                      borderColor: 'var(--accent-secondary-action-border)',
+                                      background: 'var(--accent-secondary-action-bg-92)',
+                                      color: 'var(--accent-secondary-action-color)',
+                                    }
+                                  : {
+                                      borderColor: 'var(--border-subtle)',
+                                      background: 'var(--surface-0)',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                onClick={() => setAaOnSupportsEnabled(true)}
+                              >
+                                Supports On
+                              </button>
+                            </div>
                           )}
                         </>
                       )}
