@@ -1,0 +1,62 @@
+site_name: DragonFruit Documentation
+site_description: User and developer documentation for the DragonFruit resin slicer.
+site_url: https://open-resin-alliance.github.io/DragonFruit/
+repo_name: Open-Resin-Alliance/DragonFruit
+repo_url: https://github.com/Open-Resin-Alliance/DragonFruit
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Building from Source: getting-started/building-from-source.md
+      - Quick Start: getting-started/quick-start.md
+      - Interface Tour: getting-started/interface-tour.md
+  - Workflows:
+      - Model Preparation: workflows/model-preparation.md
+      - Transform and Positioning: workflows/transform-and-positioning.md
+      - Place On-Face and Mirror: workflows/place-on-face-and-mirror.md
+      - Mesh Smoothing: workflows/mesh-smoothing.md
+      - Arrange Models: workflows/arrange-models.md
+      - Duplicate Models: workflows/duplicate-models.md
+      - Support Placement: workflows/support-placement.md
+      - Island Analysis Workflow: workflows/island-analysis-workflow.md
+      - Raft and Export: workflows/raft-and-export.md
+      - Printing Preview and Send: workflows/printing-preview-and-send.md
+  - Features:
+      - Island Analysis and Voxels: features/island-analysis.md
+  - Reference:
+      - Anatomy of Supports: reference/support-anatomy/index.md
+      - Hotkeys: reference/hotkeys.md
+      - Support Types: reference/support-types.md
+      - File Formats: reference/file-formats.md
+  - Troubleshooting:
+      - Common Issues: troubleshooting/common-issues.md
+  - Developer Guide:
+      - Overview: dev/index.md
+      - Architecture: dev/architecture-overview.md
+      - Architecture and Handoff: dev/architecture-and-handoff.md
+      - Plugin Framework: dev/plugins-framework.md
+      - Complex Plugin Contributing: dev/plugins-complex-contributing.md
+      - Support System: dev/support-system.md
+      - Branch Supports: dev/branch-supports.md
+      - Grid and Branching: dev/grid-and-branching.md
+      - Raft Geometry: dev/raft-geometry.md
+      - Scan Positioning: dev/scan-positioning.md
+      - Native Twin Optimization Plan: dev/native-twin-optimization-plan.md
+      - Data Storage: dev/data-storage.md
+      - Formats: dev/formats.md
+      - VOXL Format Spec: dev/voxl-format-spec.md
+      - LYS Mesh Extraction Spec: dev/lys-mesh-extraction-spec.md
+      - RTSP Relay: dev/rtsp-relay.md
+      - Contributing: dev/contributing.md
