@@ -2622,237 +2622,6 @@ export function SlicingPanel({
                   </div>
                   {aaMode !== 'Off' && (
                     <>
-                      {/* ── Grayscale Mapping — moved before Sample Count (item 8) ── */}
-                      <SettingLabelWithHelp
-                        label="Grayscale Mapping"
-                        help="LUT Curve is the default and recommended path for grayscale AA. Minimum Grey remains available as a simpler fallback override when you want threshold-style behavior instead of a cure-response curve."
-                        onToggle={() => setShowGrayscaleSection((v) => !v)}
-                        isOpen={showGrayscaleSection}
-                      />
-                      {showGrayscaleSection && (
-                        <>
-                          <div className="grid grid-cols-2 gap-1">
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={blurGraySourceMode === 'lut'
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setBlurGraySourceMode('lut')}
-                            >
-                              LUT Curve
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                              style={blurGraySourceMode === 'minimum'
-                                ? {
-                                    borderColor: 'var(--accent-secondary-action-border)',
-                                    background: 'var(--accent-secondary-action-bg-92)',
-                                    color: 'var(--accent-secondary-action-color)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-0)',
-                                    color: 'var(--text-muted)',
-                                  }}
-                              onClick={() => setBlurGraySourceMode('minimum')}
-                            >
-                              Minimum Grey
-                            </button>
-                          </div>
-
-                          {((aaMode === 'Blur' && blurUsesLutCurve)
-                            || (aaMode === '3DAA' && blurGraySourceMode === 'lut')) && (
-                            <div className="space-y-1">
-                              <SettingLabelWithHelp
-                                label="LUT Curve"
-                                help={aaMode === '3DAA'
-                                  ? 'Chooses the cure-response LUT for perturbation-based 3DAA grayscale output. Opaque uses a stronger EXP curve (~47%→90%) for standard resins, Clear uses a gentler EXP curve (~39%→65%) for translucent materials, and Custom lets you import or tune your own curve.'
-                                  : 'Remaps the final grayscale output through the shared resin-calibrated cure curve system used by both Blur AA and 3DAA.'}
-                              />
-                              <div className="grid grid-cols-3 gap-1">
-                                {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
-                                  const active = zBlendResinType === rtype;
-                                  const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
-                                  return (
-                                    <button
-                                      key={rtype}
-                                      type="button"
-                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                      style={active
-                                        ? {
-                                            borderColor: 'var(--accent-secondary-action-border)',
-                                            background: 'var(--accent-secondary-action-bg-92)',
-                                            color: 'var(--accent-secondary-action-color)',
-                                          }
-                                        : {
-                                            borderColor: 'var(--border-subtle)',
-                                            background: 'var(--surface-0)',
-                                            color: 'var(--text-muted)',
-                                          }}
-                                      title={isAutoDetected ? 'Auto-detected from material name' : undefined}
-                                      onClick={() => setZBlendResinType(rtype)}
-                                    >
-                                      {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
-                                      {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                              {zBlendResinType === 'custom' && (
-                                <LutCurveSelector
-                                  savedCurves={savedCurves}
-                                  selectedCurveId={selectedCurveId}
-                                  onSelectCurve={setSelectedCurveId}
-                                  onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
-                                />
-                              )}
-                              <LutCurveEditorModal
-                                isOpen={editingTarget !== null}
-                                savedCurves={savedCurves}
-                                selectedCurveId={selectedCurveId}
-                                onSelectCurve={(id) => {
-                                  setSelectedCurveId(id);
-                                  setEditingTarget(id);
-                                }}
-                                onImportCurve={(curve) => {
-                                  const importedId = curve.id.trim() || crypto.randomUUID();
-                                  const normalizedName = curve.name.trim() || 'Imported Curve';
-                                  setSavedCurves((prev) => {
-                                    const lowerNames = new Set(prev.map((entry) => entry.name.trim().toLowerCase()));
-                                    let finalName = normalizedName;
-                                    let suffix = 2;
-                                    while (lowerNames.has(finalName.trim().toLowerCase())) {
-                                      finalName = `${normalizedName} (${suffix})`;
-                                      suffix += 1;
-                                    }
-                                    const importedCurve = {
-                                      ...curve,
-                                      id: importedId,
-                                      name: finalName,
-                                    };
-                                    return [...prev, importedCurve];
-                                  });
-                                  setSelectedCurveId(importedId);
-                                  setEditingTarget(importedId);
-                                }}
-                                editingCurve={
-                                  editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
-                                    ? null
-                                    : (savedCurves.find((c) => c.id === editingTarget) ?? null)
-                                }
-                                onSave={(curve) => {
-                                  if (savedCurves.some((c) => c.id === curve.id)) {
-                                    setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
-                                  } else {
-                                    setSavedCurves((prev) => [...prev, curve]);
-                                    setSelectedCurveId(curve.id);
-                                  }
-                                  setEditingTarget(null);
-                                }}
-                                onDelete={(id) => {
-                                  const next = savedCurves.filter((c) => c.id !== id);
-                                  const fallback = next.length > 0
-                                    ? next
-                                    : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
-
-                                  const nextSelectedId = selectedCurveId === id
-                                    ? fallback[0].id
-                                    : (fallback.some((curve) => curve.id === selectedCurveId)
-                                        ? selectedCurveId
-                                        : fallback[0].id);
-
-                                  setSavedCurves(fallback);
-                                  setSelectedCurveId(nextSelectedId);
-                                  setEditingTarget(nextSelectedId);
-                                }}
-                                onClose={() => setEditingTarget(null)}
-                              />
-                            </div>
-                          )}
-
-                          {blurGraySourceMode === 'minimum' && (
-                            <div className="space-y-1">
-                              <SettingLabelWithHelp
-                                label="Minimum Grey Level"
-                                help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
-                              />
-                              {hasProfileMinimumAaAlpha && (
-                                <div className="grid grid-cols-2 gap-1">
-                                  <button
-                                    type="button"
-                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                    style={!enableMinimumAaAlphaOverride
-                                      ? {
-                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                          color: 'var(--text-strong)',
-                                        }
-                                      : {
-                                          borderColor: 'var(--border-subtle)',
-                                          background: 'var(--surface-0)',
-                                          color: 'var(--text-muted)',
-                                        }}
-                                    onClick={() => setEnableMinimumAaAlphaOverride(false)}
-                                  >
-                                    {`Profile (${profileMinimumAaAlphaPercent}%)`}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
-                                    style={enableMinimumAaAlphaOverride
-                                      ? {
-                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                                          color: 'var(--text-strong)',
-                                        }
-                                      : {
-                                          borderColor: 'var(--border-subtle)',
-                                          background: 'var(--surface-0)',
-                                          color: 'var(--text-muted)',
-                                        }}
-                                    onClick={() => setEnableMinimumAaAlphaOverride(true)}
-                                  >
-                                    Override
-                                  </button>
-                                </div>
-                              )}
-                              {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
-                                <ScrollableNumberField
-                                  className="mt-1"
-                                  value={minimumAaAlphaPercent}
-                                  onChange={setClampedMinimumAaAlphaPercent}
-                                  min={0}
-                                  max={100}
-                                  step={1}
-                                  unit="%"
-                                  ariaLabel="Minimum alpha percent override"
-                                  decreaseTitle="Decrease minimum alpha"
-                                  increaseTitle="Increase minimum alpha"
-                                />
-                              )}
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {/* divider between Grayscale and Sample Count */}
-                      <div
-                        className="my-2.5 mx-1 h-px rounded-full"
-                        style={{
-                          background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
-                        }}
-                      />
-
                       {/* ── Sample Count ── */}
                       <SettingLabelWithHelp
                         label={advancedSampleCountLabel}
@@ -3317,6 +3086,237 @@ export function SlicingPanel({
                                 </div>
                               )}
                             </>
+                          )}
+                        </>
+                      )}
+
+                      {/* divider before Grayscale */}
+                      <div
+                        className="my-2.5 mx-1 h-px rounded-full"
+                        style={{
+                          background: 'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 22%, color-mix(in srgb, var(--border-subtle), var(--text-muted) 18%) 78%, transparent 100%)',
+                        }}
+                      />
+
+                      {/* ── Grayscale Mapping ── */}
+                      <SettingLabelWithHelp
+                        label="Grayscale Mapping"
+                        help="LUT Curve is the default and recommended path for grayscale AA. Minimum Grey remains available as a simpler fallback override when you want threshold-style behavior instead of a cure-response curve."
+                        onToggle={() => setShowGrayscaleSection((v) => !v)}
+                        isOpen={showGrayscaleSection}
+                      />
+                      {showGrayscaleSection && (
+                        <>
+                          <div className="grid grid-cols-2 gap-1">
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={blurGraySourceMode === 'lut'
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setBlurGraySourceMode('lut')}
+                            >
+                              LUT Curve
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                              style={blurGraySourceMode === 'minimum'
+                                ? {
+                                    borderColor: 'var(--accent-secondary-action-border)',
+                                    background: 'var(--accent-secondary-action-bg-92)',
+                                    color: 'var(--accent-secondary-action-color)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-0)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                              onClick={() => setBlurGraySourceMode('minimum')}
+                            >
+                              Minimum Grey
+                            </button>
+                          </div>
+
+                          {((aaMode === 'Blur' && blurUsesLutCurve)
+                            || (aaMode === '3DAA' && blurGraySourceMode === 'lut')) && (
+                            <div className="space-y-1">
+                              <SettingLabelWithHelp
+                                label="LUT Curve"
+                                help={aaMode === '3DAA'
+                                  ? 'Chooses the cure-response LUT for perturbation-based 3DAA grayscale output. Opaque uses a stronger EXP curve (~47%→90%) for standard resins, Clear uses a gentler EXP curve (~39%→65%) for translucent materials, and Custom lets you import or tune your own curve.'
+                                  : 'Remaps the final grayscale output through the shared resin-calibrated cure curve system used by both Blur AA and 3DAA.'}
+                              />
+                              <div className="grid grid-cols-3 gap-1">
+                                {(['opaque', 'clear', 'custom'] as const).map((rtype) => {
+                                  const active = zBlendResinType === rtype;
+                                  const isAutoDetected = rtype !== 'custom' && autoDetectedResinType === rtype;
+                                  return (
+                                    <button
+                                      key={rtype}
+                                      type="button"
+                                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                      style={active
+                                        ? {
+                                            borderColor: 'var(--accent-secondary-action-border)',
+                                            background: 'var(--accent-secondary-action-bg-92)',
+                                            color: 'var(--accent-secondary-action-color)',
+                                          }
+                                        : {
+                                            borderColor: 'var(--border-subtle)',
+                                            background: 'var(--surface-0)',
+                                            color: 'var(--text-muted)',
+                                          }}
+                                      title={isAutoDetected ? 'Auto-detected from material name' : undefined}
+                                      onClick={() => setZBlendResinType(rtype)}
+                                    >
+                                      {rtype === 'opaque' ? 'Opaque' : rtype === 'clear' ? 'Clear' : 'Custom'}
+                                      {isAutoDetected && <span className="ml-1 opacity-60 text-[9px]">✦</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {zBlendResinType === 'custom' && (
+                                <LutCurveSelector
+                                  savedCurves={savedCurves}
+                                  selectedCurveId={selectedCurveId}
+                                  onSelectCurve={setSelectedCurveId}
+                                  onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
+                                />
+                              )}
+                              <LutCurveEditorModal
+                                isOpen={editingTarget !== null}
+                                savedCurves={savedCurves}
+                                selectedCurveId={selectedCurveId}
+                                onSelectCurve={(id) => {
+                                  setSelectedCurveId(id);
+                                  setEditingTarget(id);
+                                }}
+                                onImportCurve={(curve) => {
+                                  const importedId = curve.id.trim() || crypto.randomUUID();
+                                  const normalizedName = curve.name.trim() || 'Imported Curve';
+                                  setSavedCurves((prev) => {
+                                    const lowerNames = new Set(prev.map((entry) => entry.name.trim().toLowerCase()));
+                                    let finalName = normalizedName;
+                                    let suffix = 2;
+                                    while (lowerNames.has(finalName.trim().toLowerCase())) {
+                                      finalName = `${normalizedName} (${suffix})`;
+                                      suffix += 1;
+                                    }
+                                    const importedCurve = {
+                                      ...curve,
+                                      id: importedId,
+                                      name: finalName,
+                                    };
+                                    return [...prev, importedCurve];
+                                  });
+                                  setSelectedCurveId(importedId);
+                                  setEditingTarget(importedId);
+                                }}
+                                editingCurve={
+                                  editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
+                                    ? null
+                                    : (savedCurves.find((c) => c.id === editingTarget) ?? null)
+                                }
+                                onSave={(curve) => {
+                                  if (savedCurves.some((c) => c.id === curve.id)) {
+                                    setSavedCurves((prev) => prev.map((c) => c.id === curve.id ? curve : c));
+                                  } else {
+                                    setSavedCurves((prev) => [...prev, curve]);
+                                    setSelectedCurveId(curve.id);
+                                  }
+                                  setEditingTarget(null);
+                                }}
+                                onDelete={(id) => {
+                                  const next = savedCurves.filter((c) => c.id !== id);
+                                  const fallback = next.length > 0
+                                    ? next
+                                    : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
+
+                                  const nextSelectedId = selectedCurveId === id
+                                    ? fallback[0].id
+                                    : (fallback.some((curve) => curve.id === selectedCurveId)
+                                        ? selectedCurveId
+                                        : fallback[0].id);
+
+                                  setSavedCurves(fallback);
+                                  setSelectedCurveId(nextSelectedId);
+                                  setEditingTarget(nextSelectedId);
+                                }}
+                                onClose={() => setEditingTarget(null)}
+                              />
+                            </div>
+                          )}
+
+                          {blurGraySourceMode === 'minimum' && (
+                            <div className="space-y-1">
+                              <SettingLabelWithHelp
+                                label="Minimum Grey Level"
+                                help="Sets the minimum pixel intensity used by AA gradients. Profile uses material defaults; Override lets you force a value for this slice."
+                              />
+                              {hasProfileMinimumAaAlpha && (
+                                <div className="grid grid-cols-2 gap-1">
+                                  <button
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={!enableMinimumAaAlphaOverride
+                                      ? {
+                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                          color: 'var(--text-strong)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setEnableMinimumAaAlphaOverride(false)}
+                                  >
+                                    {`Profile (${profileMinimumAaAlphaPercent}%)`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                                    style={enableMinimumAaAlphaOverride
+                                      ? {
+                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                          color: 'var(--text-strong)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }}
+                                    onClick={() => setEnableMinimumAaAlphaOverride(true)}
+                                  >
+                                    Override
+                                  </button>
+                                </div>
+                              )}
+                              {(enableMinimumAaAlphaOverride || !hasProfileMinimumAaAlpha) && (
+                                <ScrollableNumberField
+                                  className="mt-1"
+                                  value={minimumAaAlphaPercent}
+                                  onChange={setClampedMinimumAaAlphaPercent}
+                                  min={0}
+                                  max={100}
+                                  step={1}
+                                  unit="%"
+                                  ariaLabel="Minimum alpha percent override"
+                                  decreaseTitle="Decrease minimum alpha"
+                                  increaseTitle="Increase minimum alpha"
+                                />
+                              )}
+                            </div>
                           )}
                         </>
                       )}
