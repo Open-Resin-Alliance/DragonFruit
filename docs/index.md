@@ -4,6 +4,12 @@ Welcome to the official DragonFruit documentation.
 
 DragonFruit is an open-source resin slicer and support-authoring environment focused on practical print preparation: model setup, support generation, island analysis, and export workflows.
 
+## Mission
+
+DragonFruit aims to be a modern 3D printing preparation environment that helps users understand, prepare, and validate models quickly and confidently.
+
+The focus is decision support and reliable outcomes rather than rendering alone. The docs are organized around clarity, speed, accuracy, and an architecture that can expand into adjacent domains like bracing, measurement, and export.
+
 !!! warning
 DragonFruit is under active development. Validate outputs before production printing, especially on new workflows.
 

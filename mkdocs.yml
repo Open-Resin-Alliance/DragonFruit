@@ -36,6 +36,7 @@ nav:
   - Features:
       - Island Analysis and Voxels: features/island-analysis.md
   - Reference:
+      - Anatomy of Supports: reference/support-anatomy/index.md
       - Hotkeys: reference/hotkeys.md
       - Support Types: reference/support-types.md
       - File Formats: reference/file-formats.md
@@ -44,12 +45,15 @@ nav:
   - Developer Guide:
       - Overview: dev/index.md
       - Architecture: dev/architecture-overview.md
+      - Architecture and Handoff: dev/architecture-and-handoff.md
       - Plugin Framework: dev/plugins-framework.md
       - Complex Plugin Contributing: dev/plugins-complex-contributing.md
       - Support System: dev/support-system.md
+      - Branch Supports: dev/branch-supports.md
       - Grid and Branching: dev/grid-and-branching.md
       - Raft Geometry: dev/raft-geometry.md
       - Scan Positioning: dev/scan-positioning.md
+      - Native Twin Optimization Plan: dev/native-twin-optimization-plan.md
       - Data Storage: dev/data-storage.md
       - Formats: dev/formats.md
       - VOXL Format Spec: dev/voxl-format-spec.md

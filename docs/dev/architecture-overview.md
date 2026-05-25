@@ -16,6 +16,15 @@ DragonFruit follows a domain-driven structure, especially in support-related cod
 - `plugins/`: plugin ecosystem and profile extension points.
 - `profiles/`: printer/material presets.
 
+## Handoff shape
+
+The most useful handoff docs live beside the domains they describe:
+
+- `support-system.md` for support subsystem contracts
+- `grid-and-branching.md` for grid ownership and trunk promotion
+- `raft-geometry.md` for raft generation
+- `scan-positioning.md` for scan alignment and world-space assumptions
+
 ## Support architecture split
 
 - **Primitives**: roots, shaft, knot, joint, contact cone.

@@ -13,6 +13,13 @@ When modifiers overlap, more specific combinations win:
 
 Key press order does not matter.
 
+## Support placement rules
+
+- `Alt` plus a model-first click enters the branch flow.
+- `Alt` plus a support-first click enters the brace flow.
+- `Ctrl` plus a support-first click enters kickstand placement.
+- `Ctrl+Alt` always owns the interaction for leaf placement when the first valid click is on the model.
+
 ## Resolution matrix
 
 ### No modifier
@@ -42,6 +49,12 @@ Key press order does not matter.
 - Releasing a required modifier key cancels the active placement family.
 - Canceling clears preview/snap/hover transient state.
 - Re-entering starts from a fresh state (no stale preview resurrection).
+
+## Explicitly forbidden outcomes
+
+- `Ctrl+Alt` should never fall through to kickstand or Alt-only branch behavior.
+- Key order must not change the final result when the held modifiers are the same.
+- Re-entering placement must not resurrect stale preview state.
 
 ## Quick cheat sheet
 

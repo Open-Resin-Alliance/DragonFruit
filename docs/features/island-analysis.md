@@ -8,6 +8,12 @@ Island analysis identifies disconnected or unsupported regions across layers.
 - Labels island regions per layer.
 - Builds 3D voxel visualizations from scan labels.
 
+## Voxel visualization notes
+
+- Each island can be rendered as instanced voxels instead of a smooth mesh overlay.
+- The voxel approach maps directly to the labeled scan grid, which keeps the display faithful to the underlying data.
+- Useful color schemes include unique colors, lifecycle coloring, and height gradients.
+
 ## Visualization modes
 
 - **Unique colors**: each island gets a distinct color.

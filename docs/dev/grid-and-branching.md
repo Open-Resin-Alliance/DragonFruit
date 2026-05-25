@@ -9,23 +9,28 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
 3. Compare contact heights for trunk replacement vs new branch behavior.
 4. Search alternate nodes only when no same-node trunk ownership applies.
 
-## Trunk replacement contract
-
-When a new candidate at the same node is higher than current trunk contact:
-
-- replacement planning and execution should occur in trunk replacement modules
-- dependents are rehosted before old trunk removal
-- history records single coherent action
-
 ## Branch support contract
 
-Branches attach to host shafts and may chain recursively (branch-on-branch).
-Branch joints constrained to host shaft geometry must be reprojected when parent geometry changes.
+- Branches attach to host shafts instead of the build plate.
+- Branches may chain recursively from trunk to branch to branch.
+- Branch joints must be reprojected whenever parent shaft geometry changes.
+
+## Trunk replacement contract
+
+- When a new candidate at the same node is higher than the current trunk contact, trunk replacement should be planned and applied as one coherent action.
+- Dependents should be rehosted before the old trunk is removed.
+- Undo and redo should treat the replacement as a single history event.
 
 ## Known risk areas
 
 - Front-most vs nearest snapping ambiguity in dense overlap scenes
 - Segment ID collisions causing incorrect preview endpoint resolution
 - Joint snapping instability under rapid topology edits
+
+## Related
+
+- [Support System](support-system.md)
+- [Architecture and Handoff](architecture-and-handoff.md)
+- [Support Placement](../workflows/support-placement.md)
 
 Reference issues are tracked in historical docs and issue tracker; keep this page focused on invariant behavior.

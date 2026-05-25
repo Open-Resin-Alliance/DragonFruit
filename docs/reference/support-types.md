@@ -2,6 +2,8 @@
 
 DragonFruit support authoring uses reusable primitives and composed support types.
 
+For the full geometry and behavior breakdown, see [Anatomy of Supports](support-anatomy/index.md).
+
 ## Core primitives
 
 - **Roots**: base footprint element.

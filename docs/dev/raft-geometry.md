@@ -13,14 +13,15 @@ DragonFruit raft generation produces a sacrificial base derived from support roo
 - Improve adhesion and support network stability.
 - Ease removal via chamfer profile.
 - Reduce suction issues with perimeter gap strategy.
+- Keep the raft material-efficient while still forming a stable base.
 
 ## Implementation notes
 
-- Footprint recomputes when rooted support topology changes.
-- Manual geometry construction is preferred where triangulation artifacts are problematic.
-- Export pipeline includes raft geometry when enabled.
+- The raft footprint is derived from support-root circles, then regenerated when rooted support topology changes.
+- Manual geometry construction is preferred where triangulation artifacts become visible.
+- The export pipeline includes raft geometry when enabled.
 
-## Validation checklist
+## Validation
 
 - No NaN vertices.
 - Correct winding and normals.
