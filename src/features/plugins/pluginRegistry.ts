@@ -494,6 +494,35 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     liftSpeedMmMin: sanitizeNumber(value.liftSpeedMmMin, 60, 0, 100000),
     retractSpeedMmMin: sanitizeNumber(value.retractSpeedMmMin, 150, 0, 100000),
     minimumAaAlphaPercent: sanitizeNumber(value.minimumAaAlphaPercent, 35, 0, 100),
+    antiAliasingSettings: (value.antiAliasingSettings && typeof value.antiAliasingSettings === 'object')
+      ? value.antiAliasingSettings as MaterialProfile['antiAliasingSettings']
+      : {
+        enableOverride: false,
+        mode: 'Blur',
+        level: '4x',
+        useCustomLevel: false,
+        blurBrushRadiusPx: 1,
+        useCustomBlurBrushRadius: false,
+        blurBrushKernel: 'gaussian',
+        blurBrushSigmaX: 0.5,
+        blurBrushSigmaY: 0.5,
+        zBlurRadiusLayers: 0,
+        useCustomZBlurRadius: false,
+        zBlurKernel: 'box',
+        zBlurSigma: 0.5,
+        zBlendLookBack: 2,
+        useCustomZBlendLookBack: false,
+        zBlendFadePx: 20,
+        zBlendFadeMode: 'auto',
+        zBlendAutoMode: true,
+        useCustomZBlendFadePx: false,
+        zaaPattern: 'halton',
+        zaaDuplicateZ: true,
+        blurGraySourceMode: 'lut',
+        zBlendResinType: 'opaque',
+        selectedLutCurveId: 'default',
+        aaOnSupports: false,
+      },
   };
 }
 

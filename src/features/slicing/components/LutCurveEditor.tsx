@@ -658,10 +658,11 @@ interface LutCurveSelectorProps {
   onSelectCurve: (id: string) => void;
   /** id = edit that curve, null = create new */
   onOpenEditor: (id: string | null) => void;
+  variant?: 'panel' | 'settings';
 }
 
 export function LutCurveSelector({
-  savedCurves, selectedCurveId, onSelectCurve, onOpenEditor,
+  savedCurves, selectedCurveId, onSelectCurve, onOpenEditor, variant = 'panel',
 }: LutCurveSelectorProps) {
   const effectiveId = savedCurves.some((c) => c.id === selectedCurveId)
     ? selectedCurveId
@@ -675,8 +676,10 @@ export function LutCurveSelector({
     onSelectCurve(id);
   }, [onSelectCurve]);
 
+  const isSettingsVariant = variant === 'settings';
+
   return (
-    <div className="mt-2.5">
+    <div className={isSettingsVariant ? 'mt-1' : 'mt-2.5'}>
       <div className="flex min-w-0 items-center gap-1.5">
         <div className="min-w-0 flex-1">
           <SelectDropdown
@@ -684,12 +687,16 @@ export function LutCurveSelector({
             options={dropdownOptions}
             onChange={handleSelectCurve}
             className="space-y-0"
-            selectClassName="!h-8 !px-2.5 text-[12px] w-full"
-            selectStyle={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              color: 'var(--text-strong)',
-            }}
+            selectClassName={isSettingsVariant
+              ? 'w-full h-[36px] px-2.5 pr-10 leading-tight text-sm'
+              : '!h-8 !px-2.5 text-[12px] w-full'}
+            selectStyle={isSettingsVariant
+              ? undefined
+              : {
+                  background: 'var(--surface-0)',
+                  borderColor: 'var(--border-subtle)',
+                  color: 'var(--text-strong)',
+                }}
             ariaLabel="Select LUT curve"
           />
         </div>
@@ -701,12 +708,16 @@ export function LutCurveSelector({
           onClick={() => {
             if (canEdit) onOpenEditor(effectiveId);
           }}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5 disabled:opacity-35 disabled:cursor-not-allowed"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-0)',
-            color: 'var(--text-strong)',
-          }}
+          className={isSettingsVariant
+            ? 'ui-button ui-button-secondary inline-flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-md !p-0 disabled:opacity-35 disabled:cursor-not-allowed'
+            : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5 disabled:opacity-35 disabled:cursor-not-allowed'}
+          style={isSettingsVariant
+            ? undefined
+            : {
+                borderColor: 'var(--border-subtle)',
+                background: 'var(--surface-0)',
+                color: 'var(--text-strong)',
+              }}
           aria-label="Edit selected curve"
         >
           <Pencil className="h-3.5 w-3.5" />

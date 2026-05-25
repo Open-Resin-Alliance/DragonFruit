@@ -202,6 +202,62 @@ function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
 export type LocalMaterialSettingsValue = string | number | boolean;
 export type LocalMaterialSettingsMap = Record<string, LocalMaterialSettingsValue>;
 
+export type MaterialAntiAliasingSettings = {
+  enableOverride: boolean;
+  mode: 'Off' | 'Blur' | '3DAA';
+  level: string;
+  useCustomLevel: boolean;
+  blurBrushRadiusPx: number;
+  useCustomBlurBrushRadius: boolean;
+  blurBrushKernel: 'box' | 'gaussian';
+  blurBrushSigmaX: number;
+  blurBrushSigmaY: number;
+  zBlurRadiusLayers: number;
+  useCustomZBlurRadius: boolean;
+  zBlurKernel: 'box' | 'gaussian';
+  zBlurSigma: number;
+  zBlendLookBack: number;
+  useCustomZBlendLookBack: boolean;
+  zBlendFadePx: number;
+  zBlendFadeMode: 'auto' | 'manual';
+  zBlendAutoMode: boolean;
+  useCustomZBlendFadePx: boolean;
+  zaaPattern: 'uniform' | 'halton' | 'base2';
+  zaaDuplicateZ: boolean;
+  blurGraySourceMode: 'minimum' | 'lut';
+  zBlendResinType: 'opaque' | 'clear' | 'custom';
+  selectedLutCurveId: string;
+  aaOnSupports: boolean;
+};
+
+export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
+  enableOverride: false,
+  mode: 'Blur',
+  level: '4x',
+  useCustomLevel: false,
+  blurBrushRadiusPx: 1,
+  useCustomBlurBrushRadius: false,
+  blurBrushKernel: 'gaussian',
+  blurBrushSigmaX: 0.5,
+  blurBrushSigmaY: 0.5,
+  zBlurRadiusLayers: 0,
+  useCustomZBlurRadius: false,
+  zBlurKernel: 'box',
+  zBlurSigma: 0.5,
+  zBlendLookBack: 2,
+  useCustomZBlendLookBack: false,
+  zBlendFadePx: 20,
+  zBlendFadeMode: 'auto',
+  zBlendAutoMode: true,
+  useCustomZBlendFadePx: false,
+  zaaPattern: 'halton',
+  zaaDuplicateZ: true,
+  blurGraySourceMode: 'lut',
+  zBlendResinType: 'opaque',
+  selectedLutCurveId: 'default',
+  aaOnSupports: false,
+};
+
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
   'layerHeightMm',
   'normalExposureSec',
@@ -237,6 +293,7 @@ export type MaterialProfile = {
   liftSpeedMmMin: number;
   retractSpeedMmMin: number;
   minimumAaAlphaPercent: number;
+  antiAliasingSettings: MaterialAntiAliasingSettings;
   localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
 };
 
@@ -244,6 +301,62 @@ function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, numeric));
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAliasingSettings {
+  const source = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+  const defaults = DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS;
+  const mode = source.mode === 'Off' || source.mode === '3DAA' ? source.mode : defaults.mode;
+  const blurBrushKernel = source.blurBrushKernel === 'box' ? 'box' : defaults.blurBrushKernel;
+  const zBlurKernel = source.zBlurKernel === 'gaussian' ? 'gaussian' : defaults.zBlurKernel;
+  const zaaPattern = source.zaaPattern === 'uniform' || source.zaaPattern === 'base2'
+    ? source.zaaPattern
+    : defaults.zaaPattern;
+  const blurGraySourceMode = source.blurGraySourceMode === 'minimum' ? 'minimum' : defaults.blurGraySourceMode;
+  const zBlendFadeMode = source.zBlendFadeMode === 'manual' ? 'manual' : defaults.zBlendFadeMode;
+  const zBlendResinType = source.zBlendResinType === 'clear' || source.zBlendResinType === 'custom'
+    ? source.zBlendResinType
+    : defaults.zBlendResinType;
+  const selectedLutCurveId = typeof source.selectedLutCurveId === 'string' && source.selectedLutCurveId.trim().length > 0
+    ? source.selectedLutCurveId.trim()
+    : defaults.selectedLutCurveId;
+  const levelRaw = typeof source.level === 'string' ? source.level.trim().toLowerCase() : defaults.level;
+  const levelSteps = Number(levelRaw.endsWith('x') ? levelRaw.slice(0, -1) : levelRaw);
+  const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
+
+  return {
+    enableOverride: typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride,
+    mode,
+    level,
+    useCustomLevel: typeof source.useCustomLevel === 'boolean' ? source.useCustomLevel : defaults.useCustomLevel,
+    blurBrushRadiusPx: Math.round(clampNumber(source.blurBrushRadiusPx, defaults.blurBrushRadiusPx, 0, 64)),
+    useCustomBlurBrushRadius: typeof source.useCustomBlurBrushRadius === 'boolean' ? source.useCustomBlurBrushRadius : defaults.useCustomBlurBrushRadius,
+    blurBrushKernel,
+    blurBrushSigmaX: clampNumber(source.blurBrushSigmaX, defaults.blurBrushSigmaX, 0.05, 16),
+    blurBrushSigmaY: clampNumber(source.blurBrushSigmaY, defaults.blurBrushSigmaY, 0.05, 16),
+    zBlurRadiusLayers: Math.round(clampNumber(source.zBlurRadiusLayers, defaults.zBlurRadiusLayers, 0, 8)),
+    useCustomZBlurRadius: typeof source.useCustomZBlurRadius === 'boolean' ? source.useCustomZBlurRadius : defaults.useCustomZBlurRadius,
+    zBlurKernel,
+    zBlurSigma: clampNumber(source.zBlurSigma, defaults.zBlurSigma, 0.05, 16),
+    zBlendLookBack: Math.round(clampNumber(source.zBlendLookBack, defaults.zBlendLookBack, 1, 16)),
+    useCustomZBlendLookBack: typeof source.useCustomZBlendLookBack === 'boolean' ? source.useCustomZBlendLookBack : defaults.useCustomZBlendLookBack,
+    zBlendFadePx: Math.round(clampNumber(source.zBlendFadePx, defaults.zBlendFadePx, 1, 256)),
+    zBlendFadeMode,
+    zBlendAutoMode: typeof source.zBlendAutoMode === 'boolean' ? source.zBlendAutoMode : defaults.zBlendAutoMode,
+    useCustomZBlendFadePx: typeof source.useCustomZBlendFadePx === 'boolean' ? source.useCustomZBlendFadePx : defaults.useCustomZBlendFadePx,
+    zaaPattern,
+    zaaDuplicateZ: typeof source.zaaDuplicateZ === 'boolean' ? source.zaaDuplicateZ : defaults.zaaDuplicateZ,
+    blurGraySourceMode,
+    zBlendResinType,
+    selectedLutCurveId,
+    aaOnSupports: typeof source.aaOnSupports === 'boolean' ? source.aaOnSupports : defaults.aaOnSupports,
+  };
 }
 
 function sanitizeLocalMaterialSettingsMap(input: unknown): LocalMaterialSettingsMap | undefined {
@@ -835,6 +948,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
     minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
+    antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
     localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
     id: createDefaultMaterialIdFromTemplateName(template.name),
     printerProfileId: primaryPrinterId,
@@ -1023,6 +1137,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
           retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
           minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
+          antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
           localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
         };
       })
@@ -1248,6 +1363,7 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       localSettingsByOutput: undefined,
     };
 
@@ -1525,6 +1641,7 @@ export function addMaterialProfile(
     liftSpeedMmMin: partial?.liftSpeedMmMin ?? 60,
     retractSpeedMmMin: partial?.retractSpeedMmMin ?? 150,
     minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
+    antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
     localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
   };
 
@@ -1834,6 +1951,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
       localSettingsByOutput: updates.localSettingsByOutput !== undefined
         ? sanitizeLocalSettingsByOutput(updates.localSettingsByOutput)
         : profile.localSettingsByOutput,
+      antiAliasingSettings: updates.antiAliasingSettings !== undefined
+        ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
+        : profile.antiAliasingSettings,
     };
   });
 
@@ -1915,6 +2035,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
         liftSpeedMmMin: 60,
         retractSpeedMmMin: 150,
         minimumAaAlphaPercent: 35,
+        antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
         localSettingsByOutput: undefined,
       },
     ];
@@ -2071,6 +2192,7 @@ export function importPrinterBundle(payload: unknown): string {
       liftSpeedMmMin: Number.isFinite(Number(material.liftSpeedMmMin)) ? Number(material.liftSpeedMmMin) : 60,
       retractSpeedMmMin: Number.isFinite(Number(material.retractSpeedMmMin)) ? Number(material.retractSpeedMmMin) : 150,
       minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
+      antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
       localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
     }));
 
@@ -2095,6 +2217,7 @@ export function importPrinterBundle(payload: unknown): string {
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       localSettingsByOutput: undefined,
     });
   }
@@ -2551,6 +2674,9 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(
           (template as any).minimumAaAlphaPercent,
           item.minimumAaAlphaPercent,
+        ),
+        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(
+          (template as any).antiAliasingSettings ?? item.antiAliasingSettings,
         ),
         localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput)
           ?? item.localSettingsByOutput,

@@ -1,18 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, CircleHelp, Cpu, Download, Edit3, Layers3, Loader2, Play, Printer, Timer } from 'lucide-react';
+import { ChevronDown, CircleHelp, Cpu, Download, Edit3, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
+  DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+  type MaterialProfile,
   getProfileStoreServerSnapshot,
   getProfileStoreSnapshot,
   subscribeToProfileStore,
+  updateMaterialProfile,
 } from '@/features/profiles/profileStore';
 import {
   getPrinterReachabilityServerSnapshot,
@@ -31,7 +35,6 @@ import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
   getSavedSlicingPerformanceSettings,
   saveSlicingPerformanceSettings,
-  subscribeToSlicingPerformanceSettings,
 } from '@/components/settings/performancePreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { computePhysicalAaConfig, type AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
@@ -253,6 +256,17 @@ function deriveFadeDistancePresets(basePx: number): number[] {
   const candidates = [base, base * 2, base * 3, base * 4]
     .map((px) => Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, px)));
   return Array.from(new Set(candidates));
+}
+
+function materialProfileToDraft(profile: MaterialProfile): MaterialDraft {
+  const { id: _id, printerProfileId: _printerProfileId, ...draft } = profile;
+  return {
+    ...draft,
+    antiAliasingSettings: {
+      ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      ...(profile.antiAliasingSettings ?? {}),
+    },
+  };
 }
 
 function resolveInitialCustomOptionEnabled(storageKey: string, fallback = false): boolean {
@@ -553,7 +567,7 @@ function resolveInitialZBlendAutoMode(): boolean {
   if (typeof window === 'undefined') return true;
   const stored = window.localStorage.getItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY);
-  // Default to true (Auto / slope-adaptive) unless user explicitly selected 'advanced'.
+  // Default to true (Auto / slope-adaptive) unless user explicitly selected Expert.
   return stored !== 'false';
 }
 
@@ -608,11 +622,11 @@ function resolveInitialSelectedCurveId(curves: SavedCurve[]): string {
   return curves[0].id;
 }
 
-function resolveInitialAaQualityMode(): 'auto' | 'advanced' {
+function resolveInitialAaQualityMode(): 'auto' | 'expert' {
   if (typeof window === 'undefined') return 'auto';
   const stored = window.localStorage.getItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_AA_QUALITY_MODE_STORAGE_KEY);
-  return stored === 'advanced' ? 'advanced' : 'auto';
+  return stored === 'advanced' || stored === 'expert' ? 'expert' : 'auto';
 }
 
 type AaAutoUiPreset = 'raw' | AaAutoPreset;
@@ -784,11 +798,16 @@ export function SlicingPanel({
   const [showZBlurSection, setShowZBlurSection] = useState(true);        // item 6
   const [showGrayscaleSection, setShowGrayscaleSection] = useState(true); // item 6
   const [showAaOnSupports, setShowAaOnSupports] = useState(false);       // item 7: default closed
-  const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'advanced'>(resolveInitialAaQualityMode);
+  const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'expert'>(resolveInitialAaQualityMode);
   const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoUiPreset>(resolveInitialAaAutoPreset);
   const [autoAaConfig, setAutoAaConfig] = useState<AutoAaResolvedConfig>(DEFAULT_AUTO_AA_CONFIG);
   const [autoZBlendLookBack, setAutoZBlendLookBack] = useState<number>(DEFAULT_AUTO_Z_BLEND_LOOK_BACK);
   const [isAutoAaCalculating, setIsAutoAaCalculating] = useState(false);
+  const [materialAaEditorDraft, setMaterialAaEditorDraft] = useState<MaterialDraft | null>(null);
+  const [isMaterialAaEditorOpen, setIsMaterialAaEditorOpen] = useState(false);
+  const [sessionAaOverrideDraft, setSessionAaOverrideDraft] = useState<MaterialDraft | null>(null);
+  const [editingSessionAaOverrideDraft, setEditingSessionAaOverrideDraft] = useState<MaterialDraft | null>(null);
+  const [isSessionAaOverrideOpen, setIsSessionAaOverrideOpen] = useState(false);
   const [zBlendResinType, setZBlendResinType] = useState<'opaque' | 'clear' | 'custom'>(resolveInitialZBlendResinType);
   const [savedCurves, setSavedCurves] = useState<SavedCurve[]>(() => resolveInitialSavedCurves());
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => resolveInitialSelectedCurveId(resolveInitialSavedCurves()));
@@ -836,11 +855,6 @@ export function SlicingPanel({
   const hasSlicingProgressStartedRef = useRef(false);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
-  const slicingPerformanceSettings = React.useSyncExternalStore(
-    subscribeToSlicingPerformanceSettings,
-    getSavedSlicingPerformanceSettings,
-    getSavedSlicingPerformanceSettings,
-  );
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
     subscribeToPrinterReachability,
     getPrinterReachabilitySnapshot,
@@ -852,7 +866,21 @@ export function SlicingPanel({
     [activePrinterProfile?.networkSupport],
   );
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
-  const aaOnSupportsEnabled = slicingPerformanceSettings.aaOnSupportsExperimental === true;
+  useEffect(() => {
+    setSessionAaOverrideDraft(null);
+    setEditingSessionAaOverrideDraft(null);
+    setIsSessionAaOverrideOpen(false);
+    setMaterialAaEditorDraft(null);
+    setIsMaterialAaEditorOpen(false);
+  }, [activeMaterialProfile?.id]);
+  const profileAntiAliasingSettings = useMemo(() => ({
+    ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+    ...(activeMaterialProfile?.antiAliasingSettings ?? {}),
+    ...(sessionAaOverrideDraft?.antiAliasingSettings ?? {}),
+  }), [activeMaterialProfile?.antiAliasingSettings, sessionAaOverrideDraft?.antiAliasingSettings]);
+  const aaOnSupportsEnabled = profileAntiAliasingSettings.enableOverride === true
+    ? profileAntiAliasingSettings.aaOnSupports
+    : getSavedSlicingPerformanceSettings().aaOnSupportsExperimental === true;
   const effectiveMaterialProfile = useMemo(() => {
     if (!activeMaterialProfile) return null;
     if (!activePrinterProfile) return activeMaterialProfile;
@@ -933,6 +961,42 @@ export function SlicingPanel({
     return zBlendResinType === 'clear' ? 'Clear' : 'Opaque';
   }, [savedCurves, selectedCurveId, zBlendResinType]);
 
+  const sessionAaOverrideEnabled = sessionAaOverrideDraft?.antiAliasingSettings?.enableOverride === true;
+  const materialProfileAaOverrideEnabled = activeMaterialProfile?.antiAliasingSettings?.enableOverride === true;
+  const aaOverrideNoticeLabel = sessionAaOverrideEnabled
+    ? 'Session Override active'
+    : materialProfileAaOverrideEnabled
+      ? 'Using Material Settings'
+      : null;
+  const handleOpenMaterialAaEditor = useCallback(() => {
+    if (!activeMaterialProfile) return;
+    setMaterialAaEditorDraft(materialProfileToDraft(activeMaterialProfile));
+    setIsMaterialAaEditorOpen(true);
+  }, [activeMaterialProfile]);
+
+  const handleSaveMaterialAaEditor = useCallback(() => {
+    if (!activeMaterialProfile || !materialAaEditorDraft) return;
+    updateMaterialProfile(activeMaterialProfile.id, {
+      minimumAaAlphaPercent: materialAaEditorDraft.minimumAaAlphaPercent,
+      antiAliasingSettings: materialAaEditorDraft.antiAliasingSettings,
+    });
+    setIsMaterialAaEditorOpen(false);
+  }, [activeMaterialProfile, materialAaEditorDraft]);
+
+  const handleOpenSessionAaOverride = useCallback(() => {
+    if (!activeMaterialProfile) return;
+    const baseDraft = sessionAaOverrideDraft ?? materialProfileToDraft(activeMaterialProfile);
+    setEditingSessionAaOverrideDraft({
+      ...baseDraft,
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ...(baseDraft.antiAliasingSettings ?? {}),
+        enableOverride: true,
+      },
+    });
+    setIsSessionAaOverrideOpen(true);
+  }, [activeMaterialProfile, sessionAaOverrideDraft]);
+
   const opaqueDefaultLut = useMemo(
     () => sampleCurveToLut(DEFAULT_OPAQUE_EXP_120_230_CURVE),
     [],
@@ -942,16 +1006,6 @@ export function SlicingPanel({
     () => sampleCurveToLut(DEFAULT_CLEAR_EXP_100_CURVE),
     [],
   );
-
-  const selectedSharedLut = useMemo(() => {
-    if (zBlendResinType === 'custom') {
-      return sampleCurveToLut(
-        (savedCurves.find((c) => c.id === selectedCurveId) ?? savedCurves[0])?.points
-        ?? DEFAULT_CUSTOM_CURVE,
-      );
-    }
-    return zBlendResinType === 'clear' ? clearDefaultLut : opaqueDefaultLut;
-  }, [clearDefaultLut, opaqueDefaultLut, savedCurves, selectedCurveId, zBlendResinType]);
 
   useEffect(() => {
     if (savedCurves.length === 0) {
@@ -1327,55 +1381,61 @@ export function SlicingPanel({
     [autoZBlendFadePx],
   );
 
-  const useAutoFadeDistance =
-    (aaQualityMode === 'auto' && antiAliasingAvailable)
-    || (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode);
+  const materialAaOverrideEnabled = profileAntiAliasingSettings.enableOverride === true;
+  useEffect(() => {
+    if (!materialAaOverrideEnabled) return;
+    setAaQualityMode('expert');
+  }, [materialAaOverrideEnabled]);
+
+  const profileAaMode = materialAaOverrideEnabled
+    ? profileAntiAliasingSettings.mode
+    : effectiveAutoAaConfig.aaMode;
+  const profileAaLevel = materialAaOverrideEnabled
+    ? formatAaLevel(parseAaLevelSteps(profileAntiAliasingSettings.level) ?? 4)
+    : (effectiveAutoAaConfig.aaMode === 'Off' ? 'Off' as const : formatAaLevel(effectiveAutoAaConfig.aaSteps || 4));
+
+  const useAutoFadeDistance = profileAaMode === '3DAA';
 
   const effectiveZBlendFadePx = useAutoFadeDistance
     ? autoZBlendFadePx
-    : zBlendFadePx;
+    : profileAntiAliasingSettings.zBlendFadePx;
 
   // Resolved AA state: auto mode overrides manual state when AA is available.
-  const resolvedAaMode = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.aaMode : aaMode;
-  const resolvedAaLevel = (aaQualityMode === 'auto' && antiAliasingAvailable) ? formatAaLevel(effectiveAutoAaConfig.aaSteps) : aaLevel;
-  const resolvedBlurBrushRadiusPx = (aaQualityMode === 'auto' && antiAliasingAvailable) ? effectiveAutoAaConfig.blurBrushRadiusPx : blurBrushRadiusPx;
-  const resolvedBlurBrushKernel: BlurKernelMode =
-    (aaQualityMode === 'auto' && antiAliasingAvailable)
-      ? 'gaussian'
-      : (useCustomBlurBrushRadius ? blurBrushKernel : 'gaussian');
-  const resolvedBlurBrushSigmaX = clampBlurSigma(blurBrushSigmaX, 0.5);
-  const resolvedBlurBrushSigmaY = clampBlurSigma(blurBrushSigmaY, 0.5);
-  const resolvedZBlurRadiusLayers = (aaQualityMode === 'auto' && antiAliasingAvailable)
-    ? effectiveAutoAaConfig.zBlurRadiusLayers
-    : (resolvedAaMode === '3DAA' ? zBlurRadiusLayers : 0);
-  const resolvedZBlurKernel: BlurKernelMode =
-    (aaQualityMode === 'auto' && antiAliasingAvailable)
-      ? 'box'
-      : (resolvedAaMode === '3DAA' && useCustomZBlurRadius ? zBlurKernel : 'box');
-  const resolvedZBlurSigma = clampBlurSigma(zBlurSigma, 0.5);
-  const resolvedZBlendLookBack = (aaQualityMode === 'auto' && antiAliasingAvailable)
-    ? effectiveAutoAaConfig.zBlendLookBack
-    : (aaQualityMode === 'advanced' && aaMode === '3DAA' && zBlendAutoMode)
-      ? effectiveAutoZBlendLookBack
-      : zBlendLookBack;
+  const resolvedAaMode = profileAaMode;
+  const resolvedAaLevel = profileAaLevel;
+  const resolvedBlurBrushRadiusPx = materialAaOverrideEnabled
+    ? profileAntiAliasingSettings.blurBrushRadiusPx
+    : effectiveAutoAaConfig.blurBrushRadiusPx;
+  const resolvedBlurBrushKernel: BlurKernelMode = materialAaOverrideEnabled && profileAntiAliasingSettings.useCustomBlurBrushRadius
+    ? profileAntiAliasingSettings.blurBrushKernel
+    : 'gaussian';
+  const resolvedBlurBrushSigmaX = clampBlurSigma(profileAntiAliasingSettings.blurBrushSigmaX, 0.5);
+  const resolvedBlurBrushSigmaY = clampBlurSigma(profileAntiAliasingSettings.blurBrushSigmaY, 0.5);
+  const resolvedZBlurRadiusLayers = resolvedAaMode === '3DAA'
+    ? (materialAaOverrideEnabled ? profileAntiAliasingSettings.zBlurRadiusLayers : effectiveAutoAaConfig.zBlurRadiusLayers)
+    : 0;
+  const resolvedZBlurKernel: BlurKernelMode = materialAaOverrideEnabled && profileAntiAliasingSettings.useCustomZBlurRadius
+    ? profileAntiAliasingSettings.zBlurKernel
+    : 'box';
+  const resolvedZBlurSigma = clampBlurSigma(profileAntiAliasingSettings.zBlurSigma, 0.5);
+  const resolvedZBlendLookBack = profileAaMode === '3DAA' ? effectiveAutoZBlendLookBack : 0;
   const resolvedZBlendFadeMode = useAutoFadeDistance ? 'auto' as const : 'manual' as const;
 
   const effectiveAntiAliasingLevel =
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Off' as const : resolvedAaLevel;
   const effectiveAntiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage' =
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Coverage' :
-    aaQualityMode === 'auto' ? effectiveAutoAaConfig.antiAliasingMode :
     resolvedAaMode === '3DAA' ? 'Vertical2' :
     'Blur';
-  const shouldApply3daaSamplingOverrides = aaQualityMode === 'advanced' && resolvedAaMode === '3DAA';
+  const shouldApply3daaSamplingOverrides = resolvedAaMode === '3DAA';
   const effectiveZaaKernel = resolvedAaMode === '3DAA'
     ? 'perturb' as const
     : undefined;
   const effectiveZaaPattern = shouldApply3daaSamplingOverrides
-    ? zaaPattern
+    ? profileAntiAliasingSettings.zaaPattern
     : undefined;
   const effectiveZaaDuplicateZ = shouldApply3daaSamplingOverrides
-    ? zaaDuplicateZ
+    ? profileAntiAliasingSettings.zaaDuplicateZ
     : undefined;
   const duplicateZSupportedAtCurrentAa = (parseAaLevelSteps(resolvedAaLevel) ?? 4) >= 16;
   const advancedSampleCountLabel = aaMode === '3DAA' ? '3DAA Sample Count' : 'XY Sample Count';
@@ -1410,15 +1470,31 @@ export function SlicingPanel({
     : blurGraySourceMode === 'lut'
       ? `LUT: ${selectedLutCurveLabel}`
       : 'Min Grey';
-  const blurUsesLutCurve = (aaMode === 'Blur' || aaMode === '3DAA') && blurGraySourceMode === 'lut';
+  const effectiveBlurGraySourceMode = materialAaOverrideEnabled
+    ? profileAntiAliasingSettings.blurGraySourceMode
+    : blurGraySourceMode;
+  const effectiveZBlendResinType = materialAaOverrideEnabled
+    ? profileAntiAliasingSettings.zBlendResinType
+    : 'opaque';
+  const effectiveSelectedLutCurveId = materialAaOverrideEnabled
+    ? profileAntiAliasingSettings.selectedLutCurveId
+    : selectedCurveId;
+  const effectiveCustomLutCurve = savedCurves.find((curve) => curve.id === effectiveSelectedLutCurveId) ?? null;
+  const effectiveCustomLut = effectiveCustomLutCurve ? sampleCurveToLut(effectiveCustomLutCurve.points) : opaqueDefaultLut;
+  const effectiveZBlendMaxAlphaPercent = effectiveZBlendResinType === 'clear'
+    ? Z_BLEND_MAX_ALPHA_BY_RESIN.clear
+    : effectiveZBlendResinType === 'custom'
+      ? Math.max(...effectiveCustomLut) / 255 * 100
+      : Z_BLEND_MAX_ALPHA_BY_RESIN.opaque;
+  const blurUsesLutCurve = (aaMode === 'Blur' || aaMode === '3DAA') && effectiveBlurGraySourceMode === 'lut';
   const shouldUseLutCurveForExport =
     (effectiveAntiAliasingMode === 'Vertical2' || effectiveAntiAliasingMode === 'Blur' || effectiveAntiAliasingMode === 'Coverage')
-    && blurGraySourceMode === 'lut';
+    && effectiveBlurGraySourceMode === 'lut';
 
   const minimumAaProfileSupport = useMemo(() => {
     const fallback = Math.max(
       0,
-      Math.min(100, Math.round(Number(effectiveMaterialProfile?.minimumAaAlphaPercent ?? 35))),
+      Math.min(100, Math.round(Number(sessionAaOverrideDraft?.minimumAaAlphaPercent ?? effectiveMaterialProfile?.minimumAaAlphaPercent ?? 35))),
     );
 
     if (!effectiveMaterialProfile) {
@@ -1476,6 +1552,7 @@ export function SlicingPanel({
     activePrinterProfile?.display.outputFormat,
     activePrinterProfile?.display.settingsMode,
     effectiveMaterialProfile,
+    sessionAaOverrideDraft?.minimumAaAlphaPercent,
     selectedFormat?.outputFormat,
   ]);
 
@@ -1528,7 +1605,7 @@ export function SlicingPanel({
   }, [fadeDistancePresets, useAutoFadeDistance, useCustomZBlendFadePx, zBlendFadePx]);
 
   useEffect(() => {
-    if (aaQualityMode !== 'advanced' || aaMode !== '3DAA') return;
+    if (aaQualityMode !== 'expert' || aaMode !== '3DAA') return;
     const targetMode: 'auto' | 'manual' = zBlendAutoMode ? 'auto' : 'manual';
     if (zBlendFadeMode === targetMode) return;
     setZBlendFadeMode(targetMode);
@@ -1989,24 +2066,24 @@ export function SlicingPanel({
         zBlendFadePx: resolvedAaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
         zBlendAutoFade: resolvedAaMode === '3DAA' ? (resolvedZBlendFadeMode === 'auto') : undefined,
         zBlendMinimumAlphaPercent: resolvedAaMode === '3DAA'
-          ? ((aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
-              ? profileMinimumAaAlphaPercent
-              : minimumAaAlphaPercent)
+          ? profileMinimumAaAlphaPercent
           : undefined,
-        zBlendMaxAlphaPercent: resolvedAaMode === '3DAA' && zBlendResinType !== 'custom'
-          ? Z_BLEND_MAX_ALPHA_BY_RESIN[zBlendResinType]
+        zBlendMaxAlphaPercent: resolvedAaMode === '3DAA'
+          ? effectiveZBlendMaxAlphaPercent
           : 90,
         zBlendCustomLut: shouldUseLutCurveForExport
-          ? selectedSharedLut
+          ? (effectiveZBlendResinType === 'clear'
+              ? clearDefaultLut
+              : effectiveZBlendResinType === 'custom'
+                ? effectiveCustomLut
+                : opaqueDefaultLut)
           : undefined,
         zaaKernel: effectiveZaaKernel,
         zaaPattern: effectiveZaaPattern,
         zaaDuplicateZ: effectiveZaaDuplicateZ,
         minimumAaAlphaPercentOverride: shouldUseLutCurveForExport && effectiveAntiAliasingMode === 'Blur'
           ? 0
-          : (aaQualityMode === 'auto' || !enableMinimumAaAlphaOverride)
-            ? profileMinimumAaAlphaPercent
-            : minimumAaAlphaPercent,
+          : profileMinimumAaAlphaPercent,
 
         outputMode: 'return',
         exportThumbnailPng,
@@ -2483,18 +2560,27 @@ export function SlicingPanel({
                 <>
                   <SettingLabelWithHelp
                     label="Anti-Aliasing"
-                    help="Auto derives all settings from your printer resolution and material layer height. Advanced gives full manual control."
+                    help="Auto derives slice settings from your printer resolution and material layer height. Expert lets you jump to material AA settings or apply a temporary session override."
                   />
                   <div className="grid grid-cols-2 gap-1.5">
-                    {(['auto', 'advanced'] as const).map((qmode) => {
+                    {(['auto', 'expert'] as const).map((qmode) => {
                       const qActive = aaQualityMode === qmode;
-                      const label = qmode === 'auto' ? 'Auto' : 'Advanced';
+                      const label = qmode === 'auto' ? 'Auto' : 'Expert';
+                      const disabled = qmode === 'auto' && materialAaOverrideEnabled;
                       return (
                         <button
                           key={qmode}
                           type="button"
-                          className="rounded border px-2 py-1.5 text-center text-xs font-semibold transition-colors"
-                          style={qActive
+                          disabled={disabled}
+                          className="rounded border px-2 py-1.5 text-center text-xs font-semibold transition-colors disabled:cursor-not-allowed"
+                          style={disabled
+                            ? {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 36%)',
+                                color: 'color-mix(in srgb, var(--text-muted), transparent 22%)',
+                                opacity: 0.55,
+                              }
+                            : qActive
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
@@ -2505,17 +2591,35 @@ export function SlicingPanel({
                                 background: 'var(--surface-0)',
                                 color: 'var(--text-muted)',
                               }}
-                          onClick={() => setAaQualityMode(qmode)}
+                          onClick={() => {
+                            if (disabled) return;
+                            setAaQualityMode(qmode);
+                          }}
                         >
                           {label}
                         </button>
                       );
                     })}
                   </div>
+                  {aaOverrideNoticeLabel && (
+                    <>
+                      <div className="h-1.5" />
+                      <div
+                        className="rounded border px-2 py-1.5 text-center text-[10px] font-semibold"
+                        style={{
+                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                          color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 16%)',
+                        }}
+                      >
+                        {aaOverrideNoticeLabel}
+                      </div>
+                    </>
+                  )}
 
                   {aaQualityMode === 'auto' && (
                     <>
-                      <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
+                      <div className="h-1.5" />
                       <div className="grid grid-cols-2 gap-1.5">
                         {AUTO_AA_PRESET_OPTIONS.map(({ preset, label, desc }) => {
                           const pActive = aaAutoPreset === preset;
@@ -2558,8 +2662,9 @@ export function SlicingPanel({
                           <span>Calculating AA profile…</span>
                         </div>
                       )}
+                      <div className="h-1.5" />
                       <div
-                        className="mt-2.5 grid grid-cols-2 overflow-hidden rounded"
+                        className="grid grid-cols-2 overflow-hidden rounded"
                         style={{
                           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 42%)',
                           boxShadow: 'inset 0 0 0 1px var(--border-subtle)',
@@ -2589,7 +2694,72 @@ export function SlicingPanel({
                     </>
                   )}
 
-                  {aaQualityMode === 'advanced' && <>
+                  {aaQualityMode === 'expert' && (
+                    <>
+                      <div className="h-1.5" />
+                      <div className="space-y-1.5">
+                        <button
+                          type="button"
+                          disabled={!activeMaterialProfile}
+                          className="w-full rounded border px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+                          style={sessionAaOverrideEnabled
+                            ? {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 36%)',
+                                color: 'color-mix(in srgb, var(--text-muted), transparent 18%)',
+                                opacity: 0.55,
+                              }
+                            : {
+                                borderColor: materialProfileAaOverrideEnabled ? 'var(--accent-secondary-action-border)' : 'var(--border-subtle)',
+                                background: materialProfileAaOverrideEnabled ? 'var(--accent-secondary-action-bg-92)' : 'var(--surface-0)',
+                                color: materialProfileAaOverrideEnabled ? 'var(--accent-secondary-action-color)' : 'var(--text-strong)',
+                              }}
+                          onClick={handleOpenMaterialAaEditor}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold leading-tight">Material Profile Settings</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: sessionAaOverrideEnabled ? 'var(--text-muted)' : materialProfileAaOverrideEnabled ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
+                              {sessionAaOverrideEnabled ? 'Bypassed' : materialProfileAaOverrideEnabled ? 'Override On' : 'Edit'}
+                            </span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!activeMaterialProfile}
+                          className="w-full rounded border px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+                          style={{
+                            borderColor: sessionAaOverrideEnabled ? 'var(--accent-secondary-action-border)' : 'var(--border-subtle)',
+                            background: sessionAaOverrideEnabled ? 'var(--accent-secondary-action-bg-92)' : 'var(--surface-0)',
+                            color: sessionAaOverrideEnabled ? 'var(--accent-secondary-action-color)' : 'var(--text-strong)',
+                          }}
+                          onClick={handleOpenSessionAaOverride}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold leading-tight">Session Overrides</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: sessionAaOverrideEnabled ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
+                              {sessionAaOverrideEnabled ? 'Active' : 'Temporary'}
+                            </span>
+                          </div>
+                        </button>
+                        {sessionAaOverrideDraft && (
+                          <button
+                            type="button"
+                            className="w-full rounded border px-2 py-1.5 text-xs font-semibold transition-colors"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-muted)',
+                            }}
+                            onClick={() => setSessionAaOverrideDraft(null)}
+                          >
+                            Clear Session Override
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {false && aaQualityMode === 'expert' && <>
                   <SettingLabelWithHelp
                     label="Anti-Aliasing Mode"
                     help="Off disables AA. Blur applies XY smoothing only. 3DAA applies XY smoothing plus Z perturbation sampling through the layer height."
@@ -3485,6 +3655,161 @@ export function SlicingPanel({
             );
           })()}
         </div>
+      )}
+
+      {isMaterialAaEditorOpen && materialAaEditorDraft && activeMaterialProfile && typeof document !== 'undefined' && createPortal(
+        <div className="fixed left-0 right-0 top-[var(--topbar-height)] bottom-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3">
+          <div
+            className="w-full max-w-[920px] max-h-[88vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Material anti-aliasing settings"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Material Anti-Aliasing Settings
+                </h2>
+                <p className="ui-meta truncate">
+                  {activeMaterialProfile.name} · {activeMaterialProfile.brand}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMaterialAaEditorOpen(false)}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                aria-label="Close material anti-aliasing settings"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
+              <MaterialAntiAliasingSection
+                draft={materialAaEditorDraft}
+                onChange={(next) => {
+                  setMaterialAaEditorDraft((current) => {
+                    if (!current) return current;
+                    return typeof next === 'function' ? next(current) : next;
+                  });
+                }}
+              />
+            </div>
+            <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={() => setIsMaterialAaEditorOpen(false)}
+                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMaterialAaEditor}
+                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                style={{
+                  borderColor: 'var(--accent-secondary-action-border)',
+                  background: 'var(--accent-secondary-action-bg-92)',
+                  color: 'var(--accent-secondary-action-color)',
+                }}
+              >
+                Save Material
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {isSessionAaOverrideOpen && editingSessionAaOverrideDraft && typeof document !== 'undefined' && createPortal(
+        <div className="fixed left-0 right-0 top-[var(--topbar-height)] bottom-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3">
+          <div
+            className="w-full max-w-[920px] max-h-[88vh] overflow-hidden rounded-xl border shadow-2xl flex flex-col"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Session anti-aliasing override"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Session Anti-Aliasing Override
+                </h2>
+                <p className="ui-meta truncate">
+                  {activeMaterialProfile ? `${activeMaterialProfile.name} · ${activeMaterialProfile.brand}` : 'Current material'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSessionAaOverrideOpen(false)}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                aria-label="Close session anti-aliasing override"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 overflow-y-auto custom-scrollbar flex-1">
+              <MaterialAntiAliasingSection
+                draft={editingSessionAaOverrideDraft}
+                onChange={(next) => {
+                  setEditingSessionAaOverrideDraft((current) => {
+                    if (!current) return current;
+                    return typeof next === 'function' ? next(current) : next;
+                  });
+                }}
+              />
+            </div>
+            <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSessionAaOverrideDraft(null);
+                  setEditingSessionAaOverrideDraft(null);
+                  setIsSessionAaOverrideOpen(false);
+                }}
+                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Clear Override
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSessionAaOverrideOpen(false)}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSessionAaOverrideDraft(editingSessionAaOverrideDraft);
+                    setIsSessionAaOverrideOpen(false);
+                  }}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  style={{
+                    borderColor: 'var(--accent-secondary-action-border)',
+                    background: 'var(--accent-secondary-action-bg-92)',
+                    color: 'var(--accent-secondary-action-color)',
+                  }}
+                >
+                  Apply for Session
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
 
       {showSlicingModal && typeof document !== 'undefined' && createPortal(

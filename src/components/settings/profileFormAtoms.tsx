@@ -1,10 +1,23 @@
 'use client';
 
 import React from 'react';
-import { CarFront, ChevronDown, ChevronUp, Snail } from 'lucide-react';
+import { CarFront, ChevronDown, ChevronUp, CircleHelp, Snail } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
-import type { MaterialProfile, PrinterOutputFormat } from '@/features/profiles/profileStore';
+import { MouseTooltip } from '@/components/ui/MouseTooltip';
+import {
+  DEFAULT_CUSTOM_CURVE,
+  DEFAULT_SAVED_CURVES,
+  LutCurveEditorModal,
+  LutCurveSelector,
+  type SavedCurve,
+} from '@/features/slicing/components/LutCurveEditor';
+import {
+  DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+  type MaterialAntiAliasingSettings,
+  type MaterialProfile,
+  type PrinterOutputFormat,
+} from '@/features/profiles/profileStore';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
@@ -105,6 +118,46 @@ export function FieldTagChip({ tag, color, compact = false }: FieldTagChipProps)
 
 // ─── LabeledInput ─────────────────────────────────────────────────────────────
 
+function FieldHelpTooltip({ label, help }: { label: string; help: string }) {
+  const [hovered, setHovered] = React.useState(false);
+
+  return (
+    <span
+      className="inline-flex h-3.5 w-3.5 items-center justify-center rounded border cursor-help relative"
+      style={{
+        borderColor: 'var(--border-subtle)',
+        background: 'var(--surface-0)',
+        color: 'var(--text-muted)',
+      }}
+      tabIndex={0}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      onClick={(event) => event.stopPropagation()}
+      aria-label={`${label}. ${help}`}
+    >
+      <CircleHelp className="h-2.5 w-2.5" />
+      <MouseTooltip visible={hovered} offset={{ x: 0, y: 28 }} className="left-1/2 -translate-x-1/2">
+        <div
+          className="rounded px-2 py-1.5 text-[11px] leading-tight font-medium shadow-lg"
+          style={{
+            background: 'rgba(24, 24, 24, 0.98)',
+            color: 'var(--text-strong, #e0e0e0)',
+            border: '1px solid var(--accent, #baf72e)',
+            maxWidth: 260,
+            whiteSpace: 'normal',
+            textAlign: 'left',
+            boxShadow: '0 6px 32px 0 rgba(0,0,0,0.44), 0 1.5px 8px 0 rgba(0,0,0,0.28)',
+          }}
+        >
+          {help}
+        </div>
+      </MouseTooltip>
+    </span>
+  );
+}
+
 type LabeledInputProps = {
   label: string;
   helpText?: string;
@@ -126,16 +179,7 @@ export function LabeledInput({ label, helpText, disabled = false, value, onChang
     <label className="space-y-1 block">
       <span className="ui-label font-medium inline-flex items-center gap-1.5">
         {label}
-        {helpText && (
-          <span
-            title={helpText}
-            aria-label={`${label} help`}
-            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-          >
-            ?
-          </span>
-        )}
+        {helpText && <FieldHelpTooltip label={label} help={helpText} />}
       </span>
       <input
         type="text"
@@ -213,16 +257,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
     <label className="space-y-1 block">
       <span className="ui-label font-medium inline-flex items-center gap-1.5">
         {label}
-        {helpText && (
-          <span
-            title={helpText}
-            aria-label={`${label} help`}
-            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-          >
-            ?
-          </span>
-        )}
+        {helpText && <FieldHelpTooltip label={label} help={helpText} />}
       </span>
       <div className="relative">
         <input
@@ -339,16 +374,7 @@ export function LabeledTwoStageNumberInput({
     <label className="space-y-1 block md:col-span-2">
       <span className="ui-label font-medium inline-flex items-center gap-1.5">
         {label}
-        {helpText && (
-          <span
-            title={helpText}
-            aria-label={`${label} help`}
-            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
-          >
-            ?
-          </span>
-        )}
+        {helpText && <FieldHelpTooltip label={label} help={helpText} />}
       </span>
       <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
         <div className="relative">
@@ -427,16 +453,18 @@ export function LabeledSelectInput({ label, value, options, onChange, disabled =
 
 type LabeledToggleInputProps = {
   label: string;
+  helpText?: string;
   checked: boolean;
   onChange: (value: boolean) => void;
   disabled?: boolean;
 };
 
-export function LabeledToggleInput({ label, checked, onChange, disabled = false }: LabeledToggleInputProps) {
+export function LabeledToggleInput({ label, helpText, checked, onChange, disabled = false }: LabeledToggleInputProps) {
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium inline-flex items-center">
+      <span className="ui-label font-medium inline-flex items-center gap-1.5">
         {label}
+        {helpText && <FieldHelpTooltip label={label} help={helpText} />}
       </span>
       <button
         type="button"
@@ -625,14 +653,6 @@ export function MaterialProfileFormSections({ draft, onChange }: MaterialProfile
             value={draft.retractSpeedMmMin}
             onChange={(value) => onChange((prev) => ({ ...prev, retractSpeedMmMin: value }))}
           />
-          <LabeledNumberInput
-            label="Minimum AA alpha (%)"
-            value={draft.minimumAaAlphaPercent}
-            onChange={(value) => onChange((prev) => ({
-              ...prev,
-              minimumAaAlphaPercent: Math.max(0, Math.min(100, value)),
-            }))}
-          />
         </div>
       </div>
 
@@ -676,6 +696,1136 @@ export function MaterialProfileFormSections({ draft, onChange }: MaterialProfile
           />
         </div>
       </div>
+    </>
+  );
+}
+
+type MaterialAntiAliasingSectionProps = {
+  draft: MaterialDraft;
+  onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+};
+
+const AA_STRENGTH_PRESETS = [4, 8, 16, 32] as const;
+const BLUR_WIDTH_PRESETS = [1, 2, 4, 8] as const;
+const Z_BLUR_RADIUS_PRESETS = [1, 2, 3] as const;
+const LOOK_BACK_PRESETS = [2, 4, 6, 8] as const;
+
+const LUT_CURVES_STORAGE_KEY = 'dragonfruit.slicing.3daaSavedCurves';
+const NEW_CURVE_EDITING_TARGET = '__new__';
+
+function resolveMaterialAaSavedCurves(): SavedCurve[] {
+  if (typeof window === 'undefined') return DEFAULT_SAVED_CURVES;
+  try {
+    const raw = window.sessionStorage.getItem(LUT_CURVES_STORAGE_KEY)
+      ?? window.localStorage.getItem(LUT_CURVES_STORAGE_KEY);
+    if (!raw) return DEFAULT_SAVED_CURVES;
+    const parsed = JSON.parse(raw) as SavedCurve[];
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch {
+    // Ignore malformed persisted LUT data and fall back to defaults.
+  }
+  return DEFAULT_SAVED_CURVES;
+}
+
+function parseAaLevelSteps(level: string | null | undefined): number {
+  const trimmed = (level ?? '').trim().toLowerCase();
+  const parsed = Number(trimmed.endsWith('x') ? trimmed.slice(0, -1) : trimmed);
+  if (!Number.isFinite(parsed)) return 4;
+  return Math.max(2, Math.min(64, Math.round(parsed)));
+}
+
+function formatAaLevel(steps: number): string {
+  return `${Math.max(2, Math.min(64, Math.round(steps)))}x`;
+}
+
+function clampAaNumber(value: number, fallback: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function PresetButton({
+  active,
+  disabled = false,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      className={`rounded border px-1.5 py-1 text-xs font-medium transition-colors ${disabled ? 'cursor-not-allowed opacity-45' : ''}`}
+      style={disabled
+        ? {
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-2), black 6%)',
+            color: 'var(--text-muted)',
+          }
+        : active
+        ? {
+            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+            color: 'var(--text-strong)',
+          }
+        : {
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-0)',
+            color: 'var(--text-muted)',
+          }}
+      onClick={() => {
+        if (disabled) return;
+        onClick();
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function AaHelpIcon({ label, text }: { label: string; text: string }) {
+  return (
+    <span className="normal-case tracking-normal">
+      <FieldHelpTooltip label={label} help={text} />
+    </span>
+  );
+}
+
+function AaSelectDropdown({
+  label,
+  helpText,
+  value,
+  disabled = false,
+  options,
+  onChange,
+}: {
+  label: string;
+  helpText?: string;
+  value: string;
+  disabled?: boolean;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-1 block">
+      {label && (
+        <span className="ui-label font-medium inline-flex items-center gap-1.5">
+          {label}
+          {helpText && <AaHelpIcon label={label} text={helpText} />}
+        </span>
+      )}
+      <SelectDropdown
+        ariaLabel={label || 'Select option'}
+        value={value}
+        disabled={disabled}
+        onChange={onChange}
+        options={options}
+        selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm"
+      />
+    </label>
+  );
+}
+
+function AaCard({
+  title,
+  description,
+  disabled = false,
+  className = '',
+  children,
+}: {
+  title: string;
+  description: string;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-3 transition-opacity ${disabled ? 'opacity-55' : ''} ${className}`}
+      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+    >
+      <div className="ui-meta font-semibold uppercase tracking-wide mb-2 flex items-center gap-1.5">
+        {title}
+        <AaHelpIcon label={title} text={description} />
+      </div>
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
+}
+
+function AaInlineHelp({ children }: { children: React.ReactNode }) {
+  return <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>{children}</p>;
+}
+
+export function MaterialAntiAliasingSection({ draft, onChange }: MaterialAntiAliasingSectionProps) {
+  const settings = {
+    ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+    ...(draft.antiAliasingSettings ?? {}),
+  };
+  const overrideEnabled = settings.enableOverride === true;
+  const aaEnabled = overrideEnabled && settings.mode !== 'Off';
+  const is3daa = overrideEnabled && settings.mode === '3DAA';
+  const sampleSteps = parseAaLevelSteps(settings.level);
+  const customStrengthEnabled = aaEnabled && settings.useCustomLevel;
+  const customXyBlurEnabled = aaEnabled && settings.useCustomBlurBrushRadius;
+  const gaussianXyEnabled = customXyBlurEnabled && settings.blurBrushKernel === 'gaussian' && settings.blurBrushRadiusPx > 0;
+  const duplicateZEnabled = is3daa && sampleSteps >= 16;
+  const customZBlurEnabled = is3daa && settings.useCustomZBlurRadius;
+  const gaussianZEnabled = customZBlurEnabled && settings.zBlurKernel === 'gaussian' && settings.zBlurRadiusLayers > 0;
+  const [savedCurves, setSavedCurves] = React.useState<SavedCurve[]>(() => resolveMaterialAaSavedCurves());
+  const [editingTarget, setEditingTarget] = React.useState<string | null>(null);
+
+  const updateAaSettings = React.useCallback((patch: Partial<MaterialAntiAliasingSettings>) => {
+    onChange((prev) => ({
+      ...prev,
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ...(prev.antiAliasingSettings ?? {}),
+        ...patch,
+      },
+    }));
+  }, [onChange]);
+
+  React.useEffect(() => {
+    if (savedCurves.length === 0) {
+      const fallback = { ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] };
+      setSavedCurves([fallback]);
+      updateAaSettings({ selectedLutCurveId: fallback.id });
+      return;
+    }
+
+    if (!savedCurves.some((curve) => curve.id === settings.selectedLutCurveId)) {
+      updateAaSettings({ selectedLutCurveId: savedCurves[0].id });
+    }
+
+    if (
+      editingTarget
+      && editingTarget !== NEW_CURVE_EDITING_TARGET
+      && !savedCurves.some((curve) => curve.id === editingTarget)
+    ) {
+      setEditingTarget(null);
+    }
+  }, [editingTarget, savedCurves, settings.selectedLutCurveId, updateAaSettings]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = JSON.stringify(savedCurves);
+    window.localStorage.setItem(LUT_CURVES_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(LUT_CURVES_STORAGE_KEY, serialized);
+  }, [savedCurves]);
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+      <AaCard
+        title="Anti-Aliasing Settings"
+        description="By default, material profiles defer to the slicer's Auto AA settings. Enable this only when a material needs its own tuned anti-aliasing behavior."
+      >
+        <button
+          type="button"
+          role="switch"
+          aria-checked={overrideEnabled}
+          onClick={() => updateAaSettings({ enableOverride: !overrideEnabled })}
+          className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
+          style={{
+            borderColor: overrideEnabled
+              ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+              : 'var(--border-subtle)',
+            background: overrideEnabled
+              ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
+              : 'var(--surface-1)',
+            color: overrideEnabled ? 'var(--text-strong)' : 'var(--text-muted)',
+          }}
+        >
+          <span className="font-medium">Override AA Settings</span>
+          <span
+            className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
+            style={{ background: overrideEnabled ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+          >
+            <span className={`h-4 w-4 rounded-full bg-white transition-transform ${overrideEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+          </span>
+        </button>
+      </AaCard>
+
+      <AaCard
+        disabled={!overrideEnabled}
+        title="Anti-Aliasing Type"
+        description="Off disables grayscale AA. 2D Blur smooths XY edges. 3D AA adds Z perturbation sampling through the layer height for smoother vertical transitions."
+      >
+        <AaSelectDropdown
+          label=""
+          value={settings.mode}
+          disabled={!overrideEnabled}
+          helpText="Off keeps exported pixels binary. 2D Blur applies XY grayscale edge smoothing. 3D AA samples through Z for smoother vertical transitions."
+          onChange={(value) => updateAaSettings({ mode: value as MaterialAntiAliasingSettings['mode'] })}
+          options={[
+            { value: 'Off', label: 'Off' },
+            { value: 'Blur', label: '2D Blur' },
+            { value: '3DAA', label: '3D AA' },
+          ]}
+        />
+      </AaCard>
+
+      {!overrideEnabled ? (
+        <div
+          className="md:col-span-2 rounded-xl border px-3 py-2 text-xs"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
+        >
+          Auto AA is active for this material. Enable the override above only when this resin needs material-specific AA tuning.
+        </div>
+      ) : settings.mode === 'Off' ? (
+        <div
+          className="md:col-span-2 rounded-xl border px-3 py-2 text-xs"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
+        >
+          This material override turns anti-aliasing off. Choose 2D Blur or 3D AA to tune smoothing.
+        </div>
+      ) : (
+        <>
+          <AaCard
+            title={is3daa ? '3D AA Sample Count' : 'Sample Count'}
+            description={is3daa
+              ? 'Controls the total 3D AA perturbation samples. Higher values can smooth shallow slopes and thin layers, but increase raster time.'
+              : 'Controls XY supersampling strength. Higher values create smoother edges and curves, but take longer to rasterize.'}
+          >
+            <AaSelectDropdown
+              label="Preset"
+              value={settings.useCustomLevel ? 'custom' : settings.level}
+              helpText="Choose a common AA sample count. Higher values are smoother and slower."
+              onChange={(value) => {
+                if (value === 'custom') {
+                  updateAaSettings({ useCustomLevel: true });
+                  return;
+                }
+                updateAaSettings({ level: value, useCustomLevel: false });
+              }}
+              options={[
+                ...AA_STRENGTH_PRESETS.map((steps) => ({ value: formatAaLevel(steps), label: formatAaLevel(steps) })),
+                { value: 'custom', label: 'Custom' },
+              ]}
+            />
+            {customStrengthEnabled && (
+              <LabeledNumberInput
+                label="Custom AA strength"
+                helpText="Custom sample count, expressed as N x. Keep this near the preset range unless you are validating a specific material and printer combination."
+                value={sampleSteps}
+                onChange={(value) => updateAaSettings({ level: formatAaLevel(value), useCustomLevel: true })}
+              />
+            )}
+          </AaCard>
+
+          <AaCard
+            title={is3daa ? 'XY Blur' : 'Edge Blur'}
+            description={is3daa
+              ? 'Applies a post-AA XY blur to soften pixel stair-stepping after 3D AA sampling. Set 0 px with Custom to disable blur.'
+              : 'Applies a grayscale edge blur after rasterization. Wider blur softens edges more, but can reduce fine detail.'}
+          >
+            <AaSelectDropdown
+              label="Width"
+              value={settings.useCustomBlurBrushRadius ? 'custom' : String(settings.blurBrushRadiusPx)}
+              helpText="Choose how many pixels the XY grayscale blur spreads from the source edge."
+              onChange={(value) => {
+                if (value === 'custom') {
+                  updateAaSettings({ useCustomBlurBrushRadius: true });
+                  return;
+                }
+                updateAaSettings({ blurBrushRadiusPx: Number(value), useCustomBlurBrushRadius: false });
+              }}
+              options={[
+                ...BLUR_WIDTH_PRESETS.map((radius) => ({ value: String(radius), label: `${radius}px` })),
+                { value: 'custom', label: 'Custom' },
+              ]}
+            />
+            {customXyBlurEnabled && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <LabeledNumberInput
+                  label="Radius (px)"
+                  helpText="Blur radius in pixels. 0 disables the XY blur pass; larger values spread grayscale farther from the original edge."
+                  value={settings.blurBrushRadiusPx}
+                  onChange={(value) => updateAaSettings({ blurBrushRadiusPx: Math.round(clampAaNumber(value, 1, 0, 64)), useCustomBlurBrushRadius: true })}
+                />
+                <AaSelectDropdown
+                  label="Kernel"
+                  value={settings.blurBrushKernel}
+                  helpText="Box is a hard average. Gaussian weights the center more heavily and usually gives a smoother resin-friendly falloff."
+                  onChange={(value) => updateAaSettings({ blurBrushKernel: value === 'box' ? 'box' : 'gaussian' })}
+                  options={[{ value: 'box', label: 'Box' }, { value: 'gaussian', label: 'Gaussian' }]}
+                />
+                {gaussianXyEnabled && (
+                  <>
+                    <LabeledNumberInput
+                      label="Sigma X"
+                      helpText="Horizontal Gaussian falloff. Larger values spread the grayscale gradient farther in X."
+                      value={settings.blurBrushSigmaX}
+                      onChange={(value) => updateAaSettings({ blurBrushSigmaX: clampAaNumber(value, 0.5, 0.05, 16) })}
+                    />
+                    <LabeledNumberInput
+                      label="Sigma Y"
+                      helpText="Vertical Gaussian falloff. Larger values spread the grayscale gradient farther in Y."
+                      value={settings.blurBrushSigmaY}
+                      onChange={(value) => updateAaSettings({ blurBrushSigmaY: clampAaNumber(value, 0.5, 0.05, 16) })}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+          </AaCard>
+
+          {is3daa && (
+            <>
+              <AaCard
+                title="3D AA Sampling"
+                description="Controls how 3D AA distributes Z samples inside each layer."
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <AaSelectDropdown
+                    label="Pattern"
+                    value={settings.zaaPattern}
+                    helpText="Uniform uses centered spacing, Halton uses a low-discrepancy sequence, and Base2 uses a van der Corput sequence."
+                    onChange={(value) => updateAaSettings({ zaaPattern: value as MaterialAntiAliasingSettings['zaaPattern'] })}
+                    options={[
+                      { value: 'uniform', label: 'Uniform' },
+                      { value: 'halton', label: 'Halton' },
+                      { value: 'base2', label: 'Base2' },
+                    ]}
+                  />
+                  <LabeledToggleInput
+                    label="Duplicate Terminal Z"
+                    helpText="Available at 16x and above. Pairs half of the Y perturbations at the same Z height to reduce triangle lookups for high sample counts."
+                    checked={settings.zaaDuplicateZ}
+                    disabled={!duplicateZEnabled}
+                    onChange={(value) => updateAaSettings({ zaaDuplicateZ: value })}
+                  />
+                </div>
+              </AaCard>
+
+              <AaCard
+                title="3D AA Z Blur"
+                description="Applies grayscale blur across neighboring layers after 3D AA sampling. The radius is symmetric: 2 layers means 2 look-behind layers, the current layer, and 2 look-ahead layers are included."
+              >
+                <AaSelectDropdown
+                  label="Radius"
+                  value={settings.useCustomZBlurRadius ? 'custom' : String(settings.zBlurRadiusLayers)}
+                  helpText="Choose the symmetric Z blur radius. For example, 2 layers uses 2 previous layers, the current layer, and 2 future layers."
+                  onChange={(value) => {
+                    if (value === 'custom') {
+                      updateAaSettings({ useCustomZBlurRadius: true });
+                      return;
+                    }
+                    updateAaSettings({ zBlurRadiusLayers: Number(value), useCustomZBlurRadius: false });
+                  }}
+                  options={[
+                    { value: '0', label: 'Off' },
+                    ...Z_BLUR_RADIUS_PRESETS.map((layers) => ({ value: String(layers), label: `${layers} layers` })),
+                    { value: 'custom', label: 'Custom' },
+                  ]}
+                />
+                {customZBlurEnabled && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <LabeledNumberInput
+                      label="Custom radius"
+                      helpText="Number of look-behind and look-ahead layers used for Z blur. 0 disables the Z blur pass."
+                      value={settings.zBlurRadiusLayers}
+                      onChange={(value) => updateAaSettings({ zBlurRadiusLayers: Math.round(clampAaNumber(value, 0, 0, 8)), useCustomZBlurRadius: true })}
+                    />
+                    <AaSelectDropdown
+                      label="Kernel"
+                      value={settings.zBlurKernel}
+                      helpText="Box averages layers evenly. Gaussian weights nearby layers more strongly."
+                      onChange={(value) => updateAaSettings({ zBlurKernel: value === 'gaussian' ? 'gaussian' : 'box' })}
+                      options={[{ value: 'box', label: 'Box' }, { value: 'gaussian', label: 'Gaussian' }]}
+                    />
+                    {gaussianZEnabled && (
+                      <LabeledNumberInput
+                        label="Sigma"
+                        helpText="Gaussian falloff for Z blur. Larger values spread grayscale across more of the selected layer window."
+                        value={settings.zBlurSigma}
+                        onChange={(value) => updateAaSettings({ zBlurSigma: clampAaNumber(value, 0.5, 0.05, 16) })}
+                      />
+                    )}
+                  </div>
+                )}
+              </AaCard>
+            </>
+          )}
+
+          <AaCard
+            title="Grayscale Mapping"
+            description="LUT Curve is the recommended grayscale path. Minimum Grey remains available for threshold-style resin tuning."
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <AaSelectDropdown
+                label="Source"
+                value={settings.blurGraySourceMode}
+                helpText="LUT Curve is the recommended grayscale path. Minimum Grey uses a threshold-style lower bound."
+                onChange={(value) => updateAaSettings({ blurGraySourceMode: value === 'minimum' ? 'minimum' : 'lut' })}
+                options={[{ value: 'lut', label: 'LUT Curve' }, { value: 'minimum', label: 'Minimum Grey' }]}
+              />
+              {settings.blurGraySourceMode === 'lut' ? (
+                <>
+                  <AaSelectDropdown
+                    label="Curve"
+                    value={settings.zBlendResinType}
+                    helpText="Opaque uses a stronger curve for standard resins. Clear uses a gentler curve for translucent materials. Custom lets you pick or edit a saved LUT curve."
+                    onChange={(value) => updateAaSettings({
+                      zBlendResinType: value === 'clear' || value === 'custom' ? value : 'opaque',
+                    })}
+                    options={[
+                      { value: 'opaque', label: 'Opaque' },
+                      { value: 'clear', label: 'Clear' },
+                      { value: 'custom', label: 'Custom' },
+                    ]}
+                  />
+                  {settings.zBlendResinType === 'custom' && (
+                    <div className="md:col-span-2">
+                      <LutCurveSelector
+                        variant="settings"
+                        savedCurves={savedCurves}
+                        selectedCurveId={settings.selectedLutCurveId}
+                        onSelectCurve={(id) => updateAaSettings({ selectedLutCurveId: id })}
+                        onOpenEditor={(id) => setEditingTarget(id ?? NEW_CURVE_EDITING_TARGET)}
+                      />
+                    </div>
+                  )}
+                  <LutCurveEditorModal
+                    isOpen={editingTarget !== null}
+                    savedCurves={savedCurves}
+                    selectedCurveId={settings.selectedLutCurveId}
+                    onSelectCurve={(id) => updateAaSettings({ selectedLutCurveId: id })}
+                    onImportCurve={(curve) => {
+                      const importedId = curve.id.trim() || crypto.randomUUID();
+                      const normalizedName = curve.name.trim() || 'Imported Curve';
+                      setSavedCurves((prev) => {
+                        const lowerNames = new Set(prev.map((entry) => entry.name.trim().toLowerCase()));
+                        let finalName = normalizedName;
+                        let suffix = 2;
+                        while (lowerNames.has(finalName.trim().toLowerCase())) {
+                          finalName = `${normalizedName} (${suffix})`;
+                          suffix += 1;
+                        }
+                        return [...prev, { ...curve, id: importedId, name: finalName }];
+                      });
+                      updateAaSettings({ selectedLutCurveId: importedId });
+                      setEditingTarget(importedId);
+                    }}
+                    editingCurve={
+                      editingTarget === null || editingTarget === NEW_CURVE_EDITING_TARGET
+                        ? null
+                        : (savedCurves.find((curve) => curve.id === editingTarget) ?? null)
+                    }
+                    onSave={(curve) => {
+                      setSavedCurves((prev) => (
+                        prev.some((entry) => entry.id === curve.id)
+                          ? prev.map((entry) => entry.id === curve.id ? curve : entry)
+                          : [...prev, curve]
+                      ));
+                      updateAaSettings({ selectedLutCurveId: curve.id });
+                      setEditingTarget(null);
+                    }}
+                    onDelete={(id) => {
+                      const next = savedCurves.filter((curve) => curve.id !== id);
+                      const fallback = next.length > 0
+                        ? next
+                        : [{ ...DEFAULT_SAVED_CURVES[0], id: crypto.randomUUID(), points: [...DEFAULT_CUSTOM_CURVE] }];
+                      const nextSelectedId = settings.selectedLutCurveId === id
+                        ? fallback[0].id
+                        : (fallback.some((curve) => curve.id === settings.selectedLutCurveId)
+                            ? settings.selectedLutCurveId
+                            : fallback[0].id);
+                      setSavedCurves(fallback);
+                      updateAaSettings({ selectedLutCurveId: nextSelectedId });
+                      setEditingTarget(nextSelectedId);
+                    }}
+                    onClose={() => setEditingTarget(null)}
+                  />
+                </>
+              ) : (
+                <LabeledNumberInput
+                  label="Minimum Grey Level"
+                  helpText="Minimum pixel intensity used by AA gradients. Higher values make faint grayscale pixels cure more strongly."
+                  value={draft.minimumAaAlphaPercent}
+                  onChange={(value) => onChange((prev) => ({ ...prev, minimumAaAlphaPercent: Math.max(0, Math.min(100, value)) }))}
+                />
+              )}
+            </div>
+          </AaCard>
+
+          <AaCard
+            title="AA on Supports"
+            description="Controls whether native support and raft geometry receives grayscale AA in the selected mode."
+          >
+            <LabeledToggleInput
+              label="Apply AA to Support Geometry"
+              helpText="Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too."
+              checked={settings.aaOnSupports}
+              onChange={(value) => updateAaSettings({ aaOnSupports: value })}
+            />
+          </AaCard>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAliasingSectionProps) {
+  const settings = {
+    ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+    ...(draft.antiAliasingSettings ?? {}),
+  };
+  const overrideEnabled = settings.enableOverride === true;
+  const aaEnabled = overrideEnabled && settings.mode !== 'Off';
+  const is3daa = overrideEnabled && settings.mode === '3DAA';
+  const sampleSteps = parseAaLevelSteps(settings.level);
+  const customStrengthEnabled = aaEnabled && settings.useCustomLevel;
+  const customXyBlurEnabled = aaEnabled && settings.useCustomBlurBrushRadius;
+  const gaussianXyEnabled = customXyBlurEnabled && settings.blurBrushKernel === 'gaussian' && settings.blurBrushRadiusPx > 0;
+  const duplicateZEnabled = is3daa && sampleSteps >= 16;
+  const customLookBackEnabled = is3daa && settings.useCustomZBlendLookBack;
+  const manualFadeEnabled = is3daa && settings.zBlendFadeMode === 'manual';
+  const customZBlurEnabled = is3daa && settings.useCustomZBlurRadius;
+  const gaussianZEnabled = customZBlurEnabled && settings.zBlurKernel === 'gaussian' && settings.zBlurRadiusLayers > 0;
+
+  const updateAaSettings = React.useCallback((patch: Partial<MaterialAntiAliasingSettings>) => {
+    onChange((prev) => ({
+      ...prev,
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ...(prev.antiAliasingSettings ?? {}),
+        ...patch,
+      },
+    }));
+  }, [onChange]);
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+      <AaCard
+        title="Anti-Aliasing Settings"
+        description="By default, material profiles defer to the slicer's Auto AA settings. Enable this only when a material needs its own tuned anti-aliasing behavior."
+      >
+        <LabeledToggleInput
+          label="Enable Anti-Aliasing Override"
+          helpText="When disabled, DragonFruit ignores this material profile's AA settings and uses the slicer's Auto AA configuration."
+          checked={overrideEnabled}
+          onChange={(value) => updateAaSettings({ enableOverride: value })}
+        />
+      </AaCard>
+
+      <AaCard
+        disabled={!overrideEnabled}
+        title="Anti-Aliasing Type"
+        description="Off disables grayscale AA. 2D Blur smooths XY edges. 3D AA adds Z perturbation sampling through the layer height for smoother vertical transitions."
+      >
+        <div className="grid grid-cols-1 gap-2">
+          <AaSelectDropdown
+            label="Type"
+            value={settings.mode}
+            disabled={!overrideEnabled}
+            helpText="Off keeps exported pixels binary. 2D Blur applies XY grayscale edge smoothing. 3D AA samples through Z for smoother vertical transitions."
+            onChange={(value) => updateAaSettings({ mode: value as MaterialAntiAliasingSettings['mode'] })}
+            options={[
+              { value: 'Off', label: 'Off' },
+              { value: 'Blur', label: '2D Blur' },
+              { value: '3DAA', label: '3D AA' },
+            ]}
+          />
+        </div>
+      </AaCard>
+
+      <AaCard
+        disabled={!aaEnabled}
+        title={is3daa ? '3DAA Sample Count' : 'XY Sample Count'}
+        description={is3daa
+          ? 'Controls the total 3DAA perturbation samples. Higher values can smooth shallow slopes and thin layers, but increase raster time.'
+          : 'Controls XY supersampling strength. Higher values create smoother edges and curves, but take longer to rasterize.'}
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <AaSelectDropdown
+            label="Preset strength"
+            value={settings.useCustomLevel ? 'custom' : settings.level}
+            disabled={!aaEnabled}
+            helpText="Choose a common AA sample count. Higher values are smoother and slower."
+            onChange={(value) => {
+              if (value === 'custom') {
+                updateAaSettings({ useCustomLevel: true });
+                return;
+              }
+              updateAaSettings({ level: value, useCustomLevel: false });
+            }}
+            options={[
+              ...AA_STRENGTH_PRESETS.map((steps) => ({ value: formatAaLevel(steps), label: formatAaLevel(steps) })),
+              { value: 'custom', label: 'Custom' },
+            ]}
+          />
+        </div>
+        <LabeledNumberInput
+          label="Custom AA strength"
+          helpText="Custom sample count, expressed as N x. Keep this near the preset range unless you are validating a specific material and printer combination."
+          disabled={!customStrengthEnabled}
+          value={sampleSteps}
+          onChange={(value) => updateAaSettings({ level: formatAaLevel(value), useCustomLevel: true })}
+        />
+      </AaCard>
+
+      <AaCard
+        disabled={!aaEnabled}
+        title={is3daa ? 'XY Blur Radius' : 'Edge Blur Width'}
+        description={is3daa
+          ? 'Applies a post-AA XY blur to soften pixel stair-stepping after 3DAA sampling. Set 0 px with Custom to disable blur.'
+          : 'Applies a grayscale edge blur after rasterization. Wider blur softens edges more, but can reduce fine detail.'}
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <AaSelectDropdown
+            label="Preset width"
+            value={settings.useCustomBlurBrushRadius ? 'custom' : String(settings.blurBrushRadiusPx)}
+            disabled={!aaEnabled}
+            helpText="Choose how many pixels the XY grayscale blur spreads from the source edge."
+            onChange={(value) => {
+              if (value === 'custom') {
+                updateAaSettings({ useCustomBlurBrushRadius: true });
+                return;
+              }
+              updateAaSettings({ blurBrushRadiusPx: Number(value), useCustomBlurBrushRadius: false });
+            }}
+            options={[
+              ...BLUR_WIDTH_PRESETS.map((radius) => ({ value: String(radius), label: `${radius}px` })),
+              { value: 'custom', label: 'Custom' },
+            ]}
+          />
+          <LabeledNumberInput
+            label="Custom blur radius (px)"
+            helpText="Blur radius in pixels. 0 disables the XY blur pass; larger values spread grayscale farther from the original edge."
+            disabled={!customXyBlurEnabled}
+            value={settings.blurBrushRadiusPx}
+            onChange={(value) => updateAaSettings({ blurBrushRadiusPx: Math.round(clampAaNumber(value, 1, 0, 64)), useCustomBlurBrushRadius: true })}
+          />
+          <AaSelectDropdown
+            label="Kernel"
+            value={settings.blurBrushKernel}
+            disabled={!customXyBlurEnabled}
+            helpText="Box is a hard average. Gaussian weights the center more heavily and usually gives a smoother resin-friendly falloff."
+            onChange={(value) => updateAaSettings({ blurBrushKernel: value === 'box' ? 'box' : 'gaussian' })}
+            options={[{ value: 'box', label: 'Box' }, { value: 'gaussian', label: 'Gaussian' }]}
+          />
+          <LabeledNumberInput
+            label="Sigma X"
+            helpText="Horizontal Gaussian falloff. Larger values spread the grayscale gradient farther in X."
+            disabled={!gaussianXyEnabled}
+            value={settings.blurBrushSigmaX}
+            onChange={(value) => updateAaSettings({ blurBrushSigmaX: clampAaNumber(value, 0.5, 0.05, 16) })}
+          />
+          <LabeledNumberInput
+            label="Sigma Y"
+            helpText="Vertical Gaussian falloff. Larger values spread the grayscale gradient farther in Y."
+            disabled={!gaussianXyEnabled}
+            value={settings.blurBrushSigmaY}
+            onChange={(value) => updateAaSettings({ blurBrushSigmaY: clampAaNumber(value, 0.5, 0.05, 16) })}
+          />
+        </div>
+      </AaCard>
+
+      <AaCard
+        disabled={!is3daa}
+        title="3DAA Sampling"
+        description="Controls how 3DAA distributes Z samples inside each layer."
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <AaSelectDropdown
+            label="Pattern"
+            value={settings.zaaPattern}
+            disabled={!is3daa}
+            helpText="Uniform uses centered spacing, Halton uses a low-discrepancy sequence, and Base2 uses a van der Corput sequence."
+            onChange={(value) => updateAaSettings({ zaaPattern: value as MaterialAntiAliasingSettings['zaaPattern'] })}
+            options={[
+              { value: 'uniform', label: 'Uniform' },
+              { value: 'halton', label: 'Halton' },
+              { value: 'base2', label: 'Base2' },
+            ]}
+          />
+          <LabeledToggleInput
+            label="Duplicate Terminal Z"
+            helpText="Available at 16x and above. Pairs half of the Y perturbations at the same Z height to reduce triangle lookups for high sample counts."
+            checked={settings.zaaDuplicateZ}
+            disabled={!duplicateZEnabled}
+            onChange={(value) => updateAaSettings({ zaaDuplicateZ: value })}
+          />
+        </div>
+      </AaCard>
+
+      <AaCard
+        disabled={!is3daa}
+        title="3DAA Blend Window"
+        description="Controls how far 3DAA looks across neighboring layers and how quickly grayscale fades at Z transitions."
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <AaSelectDropdown
+            label="Look-back preset"
+            value={settings.useCustomZBlendLookBack ? 'custom' : String(settings.zBlendLookBack)}
+            disabled={!is3daa}
+            helpText="Choose how many earlier layers are considered when blending 3DAA grayscale."
+            onChange={(value) => {
+              if (value === 'custom') {
+                updateAaSettings({ useCustomZBlendLookBack: true });
+                return;
+              }
+              updateAaSettings({ zBlendLookBack: Number(value), useCustomZBlendLookBack: false });
+            }}
+            options={[
+              ...LOOK_BACK_PRESETS.map((layers) => ({ value: String(layers), label: `${layers} layers` })),
+              { value: 'custom', label: 'Custom' },
+            ]}
+          />
+          <LabeledNumberInput
+            label="Look-back layers"
+            helpText="Number of earlier layers considered when blending 3DAA grayscale. Larger windows can smooth slow Z transitions, but may over-soften details."
+            disabled={!customLookBackEnabled}
+            value={settings.zBlendLookBack}
+            onChange={(value) => updateAaSettings({ zBlendLookBack: Math.round(clampAaNumber(value, 2, 1, 16)), useCustomZBlendLookBack: true })}
+          />
+          <AaSelectDropdown
+            label="Fade mode"
+            value={settings.zBlendFadeMode}
+            disabled={!is3daa}
+            helpText="Auto lets the engine derive fade distance. Manual uses the pixel distance below."
+            onChange={(value) => updateAaSettings({
+              zBlendFadeMode: value === 'manual' ? 'manual' : 'auto',
+              useCustomZBlendFadePx: value === 'manual',
+            })}
+            options={[{ value: 'auto', label: 'Auto fade' }, { value: 'manual', label: 'Manual fade' }]}
+          />
+          <LabeledNumberInput
+            label="Fade distance (px)"
+            helpText="Manual pixel distance for the 3DAA grayscale fade. Higher values create a longer, softer transition."
+            disabled={!manualFadeEnabled}
+            value={settings.zBlendFadePx}
+            onChange={(value) => updateAaSettings({ zBlendFadePx: Math.round(clampAaNumber(value, 20, 1, 256)), useCustomZBlendFadePx: true })}
+          />
+          <LabeledToggleInput
+            label="3DAA Auto Mode"
+            helpText="Lets the engine derive blend-window behavior from the current material layer height and printer pixel pitch."
+            checked={settings.zBlendAutoMode}
+            disabled={!is3daa}
+            onChange={(value) => updateAaSettings({ zBlendAutoMode: value })}
+          />
+        </div>
+      </AaCard>
+
+      <AaCard
+        disabled={!is3daa}
+        title="3DAA Z Blur"
+        description="Applies grayscale blur across neighboring layers after 3DAA sampling."
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <AaSelectDropdown
+            label="Radius preset"
+            value={settings.useCustomZBlurRadius ? 'custom' : String(settings.zBlurRadiusLayers)}
+            disabled={!is3daa}
+            helpText="Choose how many adjacent layers are used by the Z blur pass."
+            onChange={(value) => {
+              if (value === 'custom') {
+                updateAaSettings({ useCustomZBlurRadius: true });
+                return;
+              }
+              updateAaSettings({ zBlurRadiusLayers: Number(value), useCustomZBlurRadius: false });
+            }}
+            options={[
+              ...Z_BLUR_RADIUS_PRESETS.map((layers) => ({ value: String(layers), label: `${layers} layers` })),
+              { value: 'custom', label: 'Custom' },
+            ]}
+          />
+          <LabeledNumberInput
+            label="Custom Z blur radius"
+            helpText="Number of adjacent layers used for Z blur. 0 disables the Z blur pass."
+            disabled={!customZBlurEnabled}
+            value={settings.zBlurRadiusLayers}
+            onChange={(value) => updateAaSettings({ zBlurRadiusLayers: Math.round(clampAaNumber(value, 0, 0, 8)), useCustomZBlurRadius: true })}
+          />
+          <AaSelectDropdown
+            label="Kernel"
+            value={settings.zBlurKernel}
+            disabled={!customZBlurEnabled}
+            helpText="Box averages layers evenly. Gaussian weights nearby layers more strongly."
+            onChange={(value) => updateAaSettings({ zBlurKernel: value === 'gaussian' ? 'gaussian' : 'box' })}
+            options={[{ value: 'box', label: 'Box' }, { value: 'gaussian', label: 'Gaussian' }]}
+          />
+          <LabeledNumberInput
+            label="Sigma"
+            helpText="Gaussian falloff for Z blur. Larger values spread grayscale across more of the selected layer window."
+            disabled={!gaussianZEnabled}
+            value={settings.zBlurSigma}
+            onChange={(value) => updateAaSettings({ zBlurSigma: clampAaNumber(value, 0.5, 0.05, 16) })}
+          />
+        </div>
+      </AaCard>
+
+      <AaCard
+        disabled={!aaEnabled}
+        title="Grayscale Mapping"
+        description="LUT Curve is the recommended grayscale path. Minimum Grey remains available for threshold-style resin tuning."
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <AaSelectDropdown
+            label="Source"
+            value={settings.blurGraySourceMode}
+            disabled={!aaEnabled}
+            helpText="LUT Curve is the recommended grayscale path. Minimum Grey uses a threshold-style lower bound."
+            onChange={(value) => updateAaSettings({ blurGraySourceMode: value === 'minimum' ? 'minimum' : 'lut' })}
+            options={[{ value: 'lut', label: 'LUT Curve' }, { value: 'minimum', label: 'Minimum Grey' }]}
+          />
+          <AaSelectDropdown
+            label="Resin curve"
+            value={settings.zBlendResinType}
+            disabled={!aaEnabled || settings.blurGraySourceMode !== 'lut'}
+            helpText="Opaque uses a stronger cure-response curve for standard resins. Clear uses a gentler curve for translucent materials."
+            onChange={(value) => updateAaSettings({ zBlendResinType: value === 'clear' ? 'clear' : 'opaque' })}
+            options={[{ value: 'opaque', label: 'Opaque' }, { value: 'clear', label: 'Clear' }]}
+          />
+          <LabeledNumberInput
+            label="Minimum Grey Level"
+            helpText="Minimum pixel intensity used by AA gradients. Higher values make faint grayscale pixels cure more strongly."
+            disabled={!aaEnabled || settings.blurGraySourceMode !== 'minimum'}
+            value={draft.minimumAaAlphaPercent}
+            onChange={(value) => onChange((prev) => ({ ...prev, minimumAaAlphaPercent: Math.max(0, Math.min(100, value)) }))}
+          />
+        </div>
+      </AaCard>
+
+      <AaCard
+        disabled={!aaEnabled}
+        title="AA on Supports"
+        description="Controls whether native support and raft geometry receives grayscale AA in the selected mode."
+      >
+        <LabeledToggleInput
+          label="AA on Supports"
+          helpText="Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too."
+          checked={settings.aaOnSupports}
+          disabled={!aaEnabled}
+          onChange={(value) => updateAaSettings({ aaOnSupports: value })}
+        />
+      </AaCard>
+    </div>
+  );
+}
+
+function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAliasingSectionProps) {
+  const settings = {
+    ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+    ...(draft.antiAliasingSettings ?? {}),
+  };
+
+  const updateAaSettings = React.useCallback((patch: Partial<MaterialAntiAliasingSettings>) => {
+    onChange((prev) => ({
+      ...prev,
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ...(prev.antiAliasingSettings ?? {}),
+        ...patch,
+      },
+    }));
+  }, [onChange]);
+
+  return (
+    <>
+      <AaCard
+        title="Anti-Aliasing Mode"
+        description="Off disables grayscale AA. Blur smooths XY edges. 3DAA adds Z perturbation sampling through the layer height for smoother vertical transitions."
+      >
+        <div className="grid grid-cols-3 gap-1">
+          {(['Off', 'Blur', '3DAA'] as const).map((mode) => (
+            <PresetButton key={mode} active={settings.mode === mode} onClick={() => updateAaSettings({ mode })}>
+              {mode}
+            </PresetButton>
+          ))}
+        </div>
+      </AaCard>
+
+      {settings.mode !== 'Off' && (
+        <AaCard
+          title={settings.mode === '3DAA' ? '3DAA Sample Count' : 'XY Sample Count'}
+          description={settings.mode === '3DAA'
+            ? 'Controls the total 3DAA perturbation samples. Higher values can smooth shallow slopes and thin layers, but increase raster time.'
+            : 'Controls XY supersampling strength. Higher values create smoother edges and curves, but take longer to rasterize.'}
+        >
+          <div className="grid grid-cols-5 gap-1">
+            {AA_STRENGTH_PRESETS.map((steps) => {
+              const level = formatAaLevel(steps);
+              return (
+                <PresetButton key={level} active={!settings.useCustomLevel && settings.level === level} onClick={() => updateAaSettings({ level, useCustomLevel: false })}>
+                  {level}
+                </PresetButton>
+              );
+            })}
+            <PresetButton active={settings.useCustomLevel} onClick={() => updateAaSettings({ useCustomLevel: true })}>Custom</PresetButton>
+          </div>
+          {settings.useCustomLevel && (
+            <LabeledNumberInput
+              label="Custom AA strength"
+              helpText="Custom sample count, expressed as N x. Keep this near the preset range unless you are validating a specific material and printer combination."
+              value={parseAaLevelSteps(settings.level)}
+              onChange={(value) => updateAaSettings({ level: formatAaLevel(value), useCustomLevel: true })}
+            />
+          )}
+        </AaCard>
+      )}
+
+      {settings.mode === '3DAA' && (
+        <AaCard
+          title="3DAA Sampling"
+          description="Controls how 3DAA distributes Z samples inside each layer."
+        >
+          <div className="grid grid-cols-3 gap-1">
+            {([['uniform', 'Uniform'], ['halton', 'Halton'], ['base2', 'Base2']] as const).map(([pattern, label]) => (
+              <PresetButton key={pattern} active={settings.zaaPattern === pattern} onClick={() => updateAaSettings({ zaaPattern: pattern })}>{label}</PresetButton>
+            ))}
+          </div>
+          <AaInlineHelp>Uniform uses centered spacing, Halton uses a low-discrepancy sequence, and Base2 uses a van der Corput sequence.</AaInlineHelp>
+          {parseAaLevelSteps(settings.level) >= 16 && (
+            <LabeledToggleInput label="Duplicate Terminal Z" checked={settings.zaaDuplicateZ} onChange={(value) => updateAaSettings({ zaaDuplicateZ: value })} />
+          )}
+          {parseAaLevelSteps(settings.level) >= 16 && (
+            <AaInlineHelp>Duplicate Terminal Z pairs half of the Y perturbations at the same Z height, reducing triangle lookups for high sample counts.</AaInlineHelp>
+          )}
+        </AaCard>
+      )}
+
+      {settings.mode !== 'Off' && (
+        <AaCard
+          title={settings.mode === '3DAA' ? 'XY Blur Radius' : 'Edge Blur Width'}
+          description={settings.mode === '3DAA'
+            ? 'Applies a post-AA XY blur to soften pixel stair-stepping after 3DAA sampling. Set 0 px with Custom to disable blur.'
+            : 'Applies a grayscale edge blur after rasterization. Wider blur softens edges more, but can reduce fine detail.'}
+        >
+          <div className="grid grid-cols-5 gap-1">
+            {BLUR_WIDTH_PRESETS.map((radius) => (
+              <PresetButton key={radius} active={!settings.useCustomBlurBrushRadius && settings.blurBrushRadiusPx === radius} onClick={() => updateAaSettings({ blurBrushRadiusPx: radius, useCustomBlurBrushRadius: false })}>{radius}px</PresetButton>
+            ))}
+            <PresetButton active={settings.useCustomBlurBrushRadius} onClick={() => updateAaSettings({ useCustomBlurBrushRadius: true })}>Custom</PresetButton>
+          </div>
+          {settings.useCustomBlurBrushRadius && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <LabeledNumberInput
+                label="Custom blur radius (px)"
+                helpText="Blur radius in pixels. 0 disables the XY blur pass; larger values spread grayscale farther from the original edge."
+                value={settings.blurBrushRadiusPx}
+                onChange={(value) => updateAaSettings({ blurBrushRadiusPx: Math.round(clampAaNumber(value, 1, 0, 64)), useCustomBlurBrushRadius: true })}
+              />
+              <SelectDropdown label="Kernel" value={settings.blurBrushKernel} onChange={(value) => updateAaSettings({ blurBrushKernel: value === 'box' ? 'box' : 'gaussian' })} options={[{ value: 'box', label: 'Box' }, { value: 'gaussian', label: 'Gaussian' }]} className="space-y-1 block" labelClassName="font-medium" selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm" />
+              <AaInlineHelp>Box is a hard average. Gaussian weights the center more heavily and usually gives a smoother resin-friendly falloff.</AaInlineHelp>
+              {settings.blurBrushKernel === 'gaussian' && settings.blurBrushRadiusPx > 0 && (
+                <>
+                  <LabeledNumberInput label="Sigma X" helpText="Horizontal Gaussian falloff. Larger values spread the grayscale gradient farther in X." value={settings.blurBrushSigmaX} onChange={(value) => updateAaSettings({ blurBrushSigmaX: clampAaNumber(value, 0.5, 0.05, 16) })} />
+                  <LabeledNumberInput label="Sigma Y" helpText="Vertical Gaussian falloff. Larger values spread the grayscale gradient farther in Y." value={settings.blurBrushSigmaY} onChange={(value) => updateAaSettings({ blurBrushSigmaY: clampAaNumber(value, 0.5, 0.05, 16) })} />
+                </>
+              )}
+            </div>
+          )}
+        </AaCard>
+      )}
+
+      {settings.mode === '3DAA' && (
+        <AaCard
+          title="3DAA Blend Window"
+          description="Controls how far 3DAA looks across neighboring layers and how quickly grayscale fades at Z transitions."
+        >
+          <div className="grid grid-cols-5 gap-1">
+            {LOOK_BACK_PRESETS.map((layers) => (
+              <PresetButton key={layers} active={!settings.useCustomZBlendLookBack && settings.zBlendLookBack === layers} onClick={() => updateAaSettings({ zBlendLookBack: layers, useCustomZBlendLookBack: false })}>{layers}L</PresetButton>
+            ))}
+            <PresetButton active={settings.useCustomZBlendLookBack} onClick={() => updateAaSettings({ useCustomZBlendLookBack: true })}>Custom</PresetButton>
+          </div>
+          {settings.useCustomZBlendLookBack && (
+            <LabeledNumberInput
+              label="Look-back layers"
+              helpText="Number of earlier layers considered when blending 3DAA grayscale. Larger windows can smooth slow Z transitions, but may over-soften details."
+              value={settings.zBlendLookBack}
+              onChange={(value) => updateAaSettings({ zBlendLookBack: Math.round(clampAaNumber(value, 2, 1, 16)), useCustomZBlendLookBack: true })}
+            />
+          )}
+          <div className="grid grid-cols-2 gap-1">
+            {(['auto', 'manual'] as const).map((mode) => (
+              <PresetButton key={mode} active={settings.zBlendFadeMode === mode} onClick={() => updateAaSettings({ zBlendFadeMode: mode })}>{mode === 'auto' ? 'Auto Fade' : 'Manual Fade'}</PresetButton>
+            ))}
+          </div>
+          {settings.zBlendFadeMode === 'manual' && (
+            <LabeledNumberInput
+              label="Fade distance (px)"
+              helpText="Manual pixel distance for the 3DAA grayscale fade. Higher values create a longer, softer transition."
+              value={settings.zBlendFadePx}
+              onChange={(value) => updateAaSettings({ zBlendFadePx: Math.round(clampAaNumber(value, 20, 1, 256)), useCustomZBlendFadePx: true })}
+            />
+          )}
+          <LabeledToggleInput label="3DAA Auto Mode" checked={settings.zBlendAutoMode} onChange={(value) => updateAaSettings({ zBlendAutoMode: value })} />
+          <AaInlineHelp>3DAA Auto Mode lets the engine derive blend-window behavior from the current material layer height and printer pixel pitch.</AaInlineHelp>
+        </AaCard>
+      )}
+
+      {settings.mode === '3DAA' && (
+        <AaCard
+          title="3DAA Z Blur"
+          description="Applies grayscale blur across neighboring layers after 3DAA sampling."
+        >
+          <div className="grid grid-cols-4 gap-1">
+            {Z_BLUR_RADIUS_PRESETS.map((layers) => (
+              <PresetButton key={layers} active={!settings.useCustomZBlurRadius && settings.zBlurRadiusLayers === layers} onClick={() => updateAaSettings({ zBlurRadiusLayers: layers, useCustomZBlurRadius: false })}>{layers}L</PresetButton>
+            ))}
+            <PresetButton active={settings.useCustomZBlurRadius} onClick={() => updateAaSettings({ useCustomZBlurRadius: true })}>Custom</PresetButton>
+          </div>
+          {settings.useCustomZBlurRadius && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <LabeledNumberInput
+                label="Custom Z blur radius"
+                helpText="Number of adjacent layers used for Z blur. 0 disables the Z blur pass."
+                value={settings.zBlurRadiusLayers}
+                onChange={(value) => updateAaSettings({ zBlurRadiusLayers: Math.round(clampAaNumber(value, 0, 0, 8)), useCustomZBlurRadius: true })}
+              />
+              <SelectDropdown label="Kernel" value={settings.zBlurKernel} onChange={(value) => updateAaSettings({ zBlurKernel: value === 'gaussian' ? 'gaussian' : 'box' })} options={[{ value: 'box', label: 'Box' }, { value: 'gaussian', label: 'Gaussian' }]} className="space-y-1 block" labelClassName="font-medium" selectClassName="w-full h-[36px] px-2.5 pr-10 leading-tight text-sm" />
+              {settings.zBlurKernel === 'gaussian' && settings.zBlurRadiusLayers > 0 && (
+                <LabeledNumberInput label="Sigma" helpText="Gaussian falloff for Z blur. Larger values spread grayscale across more of the selected layer window." value={settings.zBlurSigma} onChange={(value) => updateAaSettings({ zBlurSigma: clampAaNumber(value, 0.5, 0.05, 16) })} />
+              )}
+            </div>
+          )}
+        </AaCard>
+      )}
+
+      {settings.mode !== 'Off' && (
+        <AaCard
+          title="Grayscale Mapping"
+          description="LUT Curve is the recommended grayscale path. Minimum Grey remains available for threshold-style resin tuning."
+        >
+          <div className="grid grid-cols-2 gap-1">
+            <PresetButton active={settings.blurGraySourceMode === 'lut'} onClick={() => updateAaSettings({ blurGraySourceMode: 'lut' })}>LUT Curve</PresetButton>
+            <PresetButton active={settings.blurGraySourceMode === 'minimum'} onClick={() => updateAaSettings({ blurGraySourceMode: 'minimum' })}>Minimum Grey</PresetButton>
+          </div>
+          {settings.blurGraySourceMode === 'lut' && (
+            <div className="grid grid-cols-2 gap-1">
+              <PresetButton active={settings.zBlendResinType === 'opaque'} onClick={() => updateAaSettings({ zBlendResinType: 'opaque' })}>Opaque</PresetButton>
+              <PresetButton active={settings.zBlendResinType === 'clear'} onClick={() => updateAaSettings({ zBlendResinType: 'clear' })}>Clear</PresetButton>
+            </div>
+          )}
+          {settings.blurGraySourceMode === 'lut' && (
+            <AaInlineHelp>Opaque uses a stronger cure-response curve for standard resins. Clear uses a gentler curve for translucent materials.</AaInlineHelp>
+          )}
+          {settings.blurGraySourceMode === 'minimum' && (
+            <LabeledNumberInput
+              label="Minimum Grey Level"
+              helpText="Minimum pixel intensity used by AA gradients. Higher values make faint grayscale pixels cure more strongly."
+              value={draft.minimumAaAlphaPercent}
+              onChange={(value) => onChange((prev) => ({ ...prev, minimumAaAlphaPercent: Math.max(0, Math.min(100, value)) }))}
+            />
+          )}
+        </AaCard>
+      )}
+
+      {(settings.mode === 'Blur' || settings.mode === '3DAA') && (
+        <AaCard
+          title="AA on Supports"
+          description="Controls whether native support and raft geometry receives grayscale AA in the selected mode."
+        >
+          <LabeledToggleInput label="AA on Supports" checked={settings.aaOnSupports} onChange={(value) => updateAaSettings({ aaOnSupports: value })} />
+          <AaInlineHelp>Disabled keeps supports crisp and binary. Enabled allows anti-aliased support edges too.</AaInlineHelp>
+        </AaCard>
+      )}
     </>
   );
 }
@@ -1023,6 +2173,10 @@ export function ReplacementMaterialEditorShell({
   const renderTabBody = React.useCallback((tabId: string) => {
     if (tabId === 'meta') {
       return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
+    }
+
+    if (tabId === 'anti-aliasing') {
+      return <MaterialAntiAliasingSection draft={draft} onChange={onDraftChange} />;
     }
 
     return (

@@ -157,6 +157,7 @@ export function TopBar({
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
   const [profileModalOpenNetworkSettingsToken, setProfileModalOpenNetworkSettingsToken] = useState(0);
+  const [profileModalOpenMaterialAntiAliasingToken, setProfileModalOpenMaterialAntiAliasingToken] = useState(0);
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
@@ -449,10 +450,11 @@ export function TopBar({
     if (typeof window === 'undefined') return;
 
     const handleOpenProfileModal = (event: Event) => {
-      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean; openNetworkSettings?: boolean }>;
+      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean; openNetworkSettings?: boolean; openMaterialAntiAliasing?: boolean }>;
       const requestedTab = customEvent.detail?.tab;
       const shouldOpenPrinterLibrary = customEvent.detail?.openPrinterLibrary === true;
       const shouldOpenNetworkSettings = customEvent.detail?.openNetworkSettings === true;
+      const shouldOpenMaterialAntiAliasing = customEvent.detail?.openMaterialAntiAliasing === true;
       if (requestedTab === 'printer' || requestedTab === 'material') {
         setProfileModalTab(requestedTab);
       } else {
@@ -465,6 +467,10 @@ export function TopBar({
 
       if (shouldOpenNetworkSettings) {
         setProfileModalOpenNetworkSettingsToken((prev) => prev + 1);
+      }
+
+      if (shouldOpenMaterialAntiAliasing) {
+        setProfileModalOpenMaterialAntiAliasingToken((prev) => prev + 1);
       }
 
       setIsProfileModalOpen(true);
@@ -1301,6 +1307,7 @@ export function TopBar({
         initialTab={profileModalTab}
         openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
         openNetworkSettingsToken={profileModalOpenNetworkSettingsToken}
+        openMaterialAntiAliasingToken={profileModalOpenMaterialAntiAliasingToken}
       />
     </div>
   );
