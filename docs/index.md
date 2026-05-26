@@ -1,5 +1,5 @@
 ---
-description: Open-Source & High Performance Slicer for mSLA 3D Printers
+description: Open-Source & High Performance Slicer for Resin 3D Printers
 social:
   cards_layout: default/only/image
   cards_layout_options:
@@ -33,7 +33,7 @@ hide:
 
 <img class="df-home-wordmark" src="assets/branding/text_logo.svg" alt="DragonFruit" />
 
-<p class="df-home-tagline">Open-Source & High Performance Slicer for mSLA 3D Printers</p>
+<p class="df-home-tagline">Open-Source & High Performance Slicer for Resin 3D Printers</p>
 
 <div class="df-home-actions">
     <a class="md-button md-button--primary" id="download-now" href="https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest">Download Beta</a>

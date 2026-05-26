@@ -30,6 +30,19 @@
             return null;
       }
 
+      function detectArchitecture(assetName) {
+            const source = `${assetName || ''} ${navigator.userAgentData?.architecture || ''}`.toLowerCase();
+
+            if (source.includes('aarch64')) return 'aarch64';
+            if (source.includes('arm64')) return 'arm64';
+            if (source.includes('x86_64') || source.includes('amd64') || source.includes('x64')) return 'x64';
+
+            if (source.includes('arm')) return 'aarch64';
+            if (source.includes('64')) return 'x64';
+
+            return null;
+      }
+
       function isMobileDevice() {
             if (navigator.userAgentData?.mobile) return true;
 
@@ -206,16 +219,21 @@
 
             const preferredPlatform = detectPlatform();
             const preferredAsset = preferredPlatform ? pickBestAsset(stableRelease.assets || [], preferredPlatform) : null;
+            const architecture = detectArchitecture(preferredAsset?.name);
 
             if (preferredAsset) {
                   heroButton.href = preferredAsset.browser_download_url;
-                  heroButton.textContent = `Download Beta for ${PLATFORM_DEFS[preferredPlatform].label}`;
+                  heroButton.textContent = 'Download Beta';
             } else {
                   heroButton.href = stableRelease.html_url || LATEST_RELEASE_URL;
                   heroButton.textContent = 'Download Beta';
             }
 
-            versionLine.textContent = `${versionTag} · Published ${formatDate(stableRelease.published_at)}`;
+            const platformLabel = preferredPlatform ? PLATFORM_DEFS[preferredPlatform].label : null;
+            const platformContext = [platformLabel, architecture].filter(Boolean).join(' ');
+            const prefix = platformContext ? `${platformContext} ` : '';
+
+            versionLine.textContent = `${prefix}${versionTag} · Published ${formatDate(stableRelease.published_at)}`;
       }
 
       function initReleaseFeed() {
