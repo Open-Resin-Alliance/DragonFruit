@@ -29,6 +29,11 @@ extra_css:
   - stylesheets/dragonfruit-theme.css
 extra_javascript:
   - javascripts/homepage-release-feed.js
+plugins:
+  - search
+  - meta
+  - social:
+      cards_layout: default
 markdown_extensions:
   - admonition
   - attr_list
