@@ -2144,6 +2144,9 @@ export function SlicingPanel({
         zaaKernel: effectiveZaaKernel,
         zaaPattern: effectiveZaaPattern,
         zaaDuplicateZ: effectiveZaaDuplicateZ,
+        ditherEnabled: profileAntiAliasingSettings.ditherEnabled,
+        ditherBitDepth: profileAntiAliasingSettings.ditherBitDepth,
+        ditherDeviceGamma: profileAntiAliasingSettings.ditherDeviceGamma,
         minimumAaAlphaPercentOverride: shouldUseLutCurveForExport && effectiveAntiAliasingMode === 'Blur'
           ? 0
           : profileMinimumAaAlphaPercent,

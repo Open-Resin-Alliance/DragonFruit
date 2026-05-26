@@ -39,6 +39,7 @@ fn main() {
     cfg.anti_aliasing_level = parse_arg_string(&args, "--aa-level", &cfg.anti_aliasing_level);
     cfg.anti_aliasing_mode = parse_arg_string(&args, "--aa-mode", &cfg.anti_aliasing_mode);
     cfg.blur_brush_radius_px = parse_arg_u32(&args, "--blur-radius", cfg.blur_brush_radius_px);
+    cfg.dither_enabled = args.iter().any(|a| a == "--dither");
     cfg.minimum_aa_alpha_percent =
         parse_arg_f32(&args, "--min-aa-alpha", cfg.minimum_aa_alpha_percent);
 

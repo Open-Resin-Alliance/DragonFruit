@@ -195,13 +195,14 @@ struct PendingPerturbRleLayer {
 
 struct PerturbRlePostInput {
     layer_idx: u32,
-    model_runs: Vec<crate::rle::RleRun>,
+    model_receiver: std::sync::mpsc::Receiver<(Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>)>,
     support_runs: Option<Vec<crate::rle::RleRun>>,
 }
 
 struct PerturbRlePostOutput {
     layer_idx: u32,
-    runs: Vec<crate::rle::RleRun>,
+    runs: Option<Vec<crate::rle::RleRun>>,
+    encoded_bytes: Option<Vec<u8>>,
 }
 
 struct PerturbRlePostReadyTask {
@@ -509,7 +510,8 @@ fn finalize_perturb_rle_post_layer(
 
     PerturbRlePostOutput {
         layer_idx: task.layer_idx,
-        runs: final_runs,
+        runs: Some(final_runs),
+        encoded_bytes: None,
     }
 }
 
@@ -1210,7 +1212,7 @@ fn apply_tail_remap_and_support_merge(
 
     let remap_start = std::time::Instant::now();
     if let Some(palette) = dither_palette {
-        let row_width = bounds_row_width(bounds);
+        let row_width = bounds.1 - bounds.0 + 1;
         let row_height = bounds.3 - bounds.2 + 1;
         crate::dither::dither_mask_in_bounds(&mut mask, row_width, row_height, palette);
     } else if let Some(lut) = tail_lut {
@@ -3110,15 +3112,26 @@ pub fn slice_with_progress_v3(
                 // RLE-native perturbation 3DAA: raster emits grayscale RLE,
                 // then we apply XY blur, Z blur, LUT, and support merge in
                 // streaming order without materializing full-frame masks.
-                let mut rle_sink =
-                    |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
-                slice_and_rasterize_perturb_3daa_rle_v3(
+                let rle_enc_cell = std::cell::RefCell::new(rle_enc);
+                let parallel_encode_fn = rle_enc_cell.borrow().parallel_encode_fn();
+                let mut rle_sink = |idx: u32, runs: Vec<crate::rle::RleRun>| {
+                    rle_enc_cell.borrow_mut().consume_rle_layer(idx, runs)
+                };
+                let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
+                    rle_enc_cell.borrow_mut().store_encoded_layer(idx, bytes);
+                    Ok(())
+                };
+                let res = slice_and_rasterize_perturb_3daa_rle_v3(
                     job,
                     requires_area_stats,
                     &mut rle_sink,
+                    parallel_encode_fn,
+                    Some(&mut store_sink),
                     slicing_progress,
                     cancel_flag,
-                )?
+                );
+                rle_enc = rle_enc_cell.into_inner();
+                res?
             } else if let Some(encode_fn) = rle_enc.parallel_encode_fn() {
                 let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
                     rle_enc.store_encoded_layer(idx, bytes);
@@ -3463,6 +3476,8 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
     mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    parallel_encode_fn: Option<std::sync::Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>,
+    on_encoded_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -3522,15 +3537,12 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     let post_blur_ns_accum = Arc::new(AtomicU64::new(0));
     let support_merge_ns_accum = Arc::new(AtomicU64::new(0));
     let max_post_threads = choose_3daa_post_threads(width, height, job.total_layers);
-    let post_worker_count =
-        choose_3daa_post_buffer_depth(width, height, job.total_layers, max_post_threads)
-            .max(1)
-            .min(max_post_threads.max(1));
+    let post_worker_count = max_post_threads.max(1);
 
     let post_buffer = z_blur_radius
         .saturating_mul(2)
         .saturating_add(post_worker_count.saturating_mul(2))
-        .clamp(4, 32);
+        .clamp(4, 128);
     let (rendered_layers, layer_area_stats, mut perf) = std::thread::scope(
         |scope| -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
             let (post_tx, post_rx) = mpsc::sync_channel::<PerturbRlePostInput>(post_buffer);
@@ -3576,8 +3588,9 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         let post_blur_ns_worker = Arc::clone(&post_blur_ns_worker);
                         let support_merge_ns_worker = Arc::clone(&support_merge_ns_worker);
                         let active_dither = dither_palette.clone();
+                        let parallel_encode_fn = parallel_encode_fn.clone();
                         scope.spawn(move |_| {
-                            let output = finalize_perturb_rle_post_layer(
+                            let mut output = finalize_perturb_rle_post_layer(
                                 task,
                                 z_blur_radius,
                                 &z_blur_weights,
@@ -3588,7 +3601,21 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                                 &post_blur_ns_worker,
                                 &support_merge_ns_worker,
                             );
-                            let _ = post_out_tx.send(output);
+
+                            let mut encoded_bytes = None;
+                            let runs = output.runs.take().expect("runs must exist");
+                            if let Some(ref encode_fn) = parallel_encode_fn {
+                                if let Ok(bytes) = encode_fn(output.layer_idx, &runs) {
+                                    encoded_bytes = Some(bytes);
+                                }
+                            }
+
+                            let final_output = PerturbRlePostOutput {
+                                layer_idx: output.layer_idx,
+                                runs: if parallel_encode_fn.is_some() { None } else { Some(runs) },
+                                encoded_bytes,
+                            };
+                            let _ = post_out_tx.send(final_output);
                         });
                     };
 
@@ -3603,28 +3630,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
 
                 pool.scope(|post_scope| {
                     for input in post_rx {
-                        let (model_runs, model_bounds) = if blur_radius > 0 {
-                            let xy_blur_start = std::time::Instant::now();
-                            let result = blur_gray_rle_streaming_with_bounds(
-                                &input.model_runs,
-                                width,
-                                height,
-                                blur_radius,
-                                0,
-                            );
-                            post_blur_ns_worker.fetch_add(
-                                xy_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                                Ordering::Relaxed,
-                            );
-                            result
-                        } else {
-                            let model_bounds = if z_blur_radius > 0 {
-                                nonzero_bounds_from_rle_runs(&input.model_runs, width, height)
-                            } else {
-                                None
-                            };
-                            (input.model_runs, model_bounds)
-                        };
+                        let (model_runs, model_bounds) = input.model_receiver.recv().unwrap();
 
                         pending.push_back(PendingPerturbRleLayer {
                             layer_idx: input.layer_idx,
@@ -3654,9 +3660,20 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                  on_rle_layer: &mut dyn FnMut(
                     u32,
                     Vec<crate::rle::RleRun>,
-                ) -> Result<(), SlicerV3Error>|
+                ) -> Result<(), SlicerV3Error>,
+                 on_encoded_layer: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>|
                  -> Result<(), SlicerV3Error> {
-                    on_rle_layer(output.layer_idx, output.runs)?;
+                    if let Some(bytes) = output.encoded_bytes {
+                        if let Some(ref mut sink) = on_encoded_layer {
+                            sink(output.layer_idx, bytes)?;
+                        } else {
+                            return Err(SlicerV3Error::LayerPreview(
+                                "missing encoded layer sink for parallel RLE output".to_string(),
+                            ));
+                        }
+                    } else if let Some(runs) = output.runs {
+                        on_rle_layer(output.layer_idx, runs)?;
+                    }
                     emitted_progress_layers = emitted_progress_layers.saturating_add(1);
                     if let Some(cb) = on_progress.as_ref() {
                         cb(SliceProgressUpdateV3 {
@@ -3672,11 +3689,12 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                 |on_rle_layer: &mut dyn FnMut(
                     u32,
                     Vec<crate::rle::RleRun>,
-                ) -> Result<(), SlicerV3Error>|
+                ) -> Result<(), SlicerV3Error>,
+                 on_encoded_layer: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>|
                  -> Result<(), SlicerV3Error> {
                     loop {
                         match post_out_rx.try_recv() {
-                            Ok(output) => handle_post_output(output, on_rle_layer)?,
+                            Ok(output) => handle_post_output(output, on_rle_layer, on_encoded_layer)?,
                             Err(mpsc::TryRecvError::Empty)
                             | Err(mpsc::TryRecvError::Disconnected) => {
                                 break;
@@ -3686,17 +3704,40 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     Ok(())
                 };
 
+            let mut on_encoded_layer = on_encoded_layer;
             let mut wrapped = |layer_idx: u32,
                                model_runs: Vec<crate::rle::RleRun>,
                                support_runs: Option<Vec<crate::rle::RleRun>>|
-             -> Result<(), SlicerV3Error> {
+              -> Result<(), SlicerV3Error> {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<(Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>)>(1);
+                let post_blur_ns_worker = Arc::clone(&post_blur_ns_accum);
+                rayon::spawn(move || {
+                    let result = if blur_radius > 0 {
+                        let xy_blur_start = std::time::Instant::now();
+                        let res = blur_gray_rle_streaming_with_bounds(&model_runs, width, height, blur_radius, 0);
+                        post_blur_ns_worker.fetch_add(
+                            xy_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                            Ordering::Relaxed,
+                        );
+                        res
+                    } else {
+                        let model_bounds = if z_blur_radius > 0 {
+                            nonzero_bounds_from_rle_runs(&model_runs, width, height)
+                        } else {
+                            None
+                        };
+                        (model_runs, model_bounds)
+                    };
+                    let _ = tx.send(result);
+                });
+
                 let mut input = Some(PerturbRlePostInput {
                     layer_idx,
-                    model_runs,
+                    model_receiver: rx,
                     support_runs,
                 });
                 loop {
-                    drain_available(&mut on_rle_layer)?;
+                    drain_available(&mut on_rle_layer, &mut on_encoded_layer)?;
                     match post_tx.try_send(input.take().expect("post input should exist")) {
                         Ok(()) => break,
                         Err(mpsc::TrySendError::Full(returned_input)) => {
@@ -3730,7 +3771,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
             let final_result = match render_result {
                 Ok(rendered) => {
                     for output in post_out_rx {
-                        handle_post_output(output, &mut on_rle_layer)?;
+                        handle_post_output(output, &mut on_rle_layer, &mut on_encoded_layer)?;
                     }
                     Ok(rendered)
                 }
@@ -4172,15 +4213,26 @@ pub fn slice_with_progress_v3_to_path(
                 // RLE-native perturbation 3DAA: raster emits grayscale RLE,
                 // then we apply XY blur, Z blur, LUT, and support merge in
                 // streaming order without materializing full-frame masks.
-                let mut rle_sink =
-                    |idx: u32, runs: Vec<crate::rle::RleRun>| rle_enc.consume_rle_layer(idx, runs);
-                slice_and_rasterize_perturb_3daa_rle_v3(
+                let rle_enc_cell = std::cell::RefCell::new(rle_enc);
+                let parallel_encode_fn = rle_enc_cell.borrow().parallel_encode_fn();
+                let mut rle_sink = |idx: u32, runs: Vec<crate::rle::RleRun>| {
+                    rle_enc_cell.borrow_mut().consume_rle_layer(idx, runs)
+                };
+                let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
+                    rle_enc_cell.borrow_mut().store_encoded_layer(idx, bytes);
+                    Ok(())
+                };
+                let res = slice_and_rasterize_perturb_3daa_rle_v3(
                     job,
                     requires_area_stats,
                     &mut rle_sink,
+                    parallel_encode_fn,
+                    Some(&mut store_sink),
                     slicing_progress,
                     cancel_flag,
-                )?
+                );
+                rle_enc = rle_enc_cell.into_inner();
+                res?
             } else if let Some(encode_fn) = rle_enc.parallel_encode_fn() {
                 let mut store_sink = |idx: u32, bytes: Vec<u8>| -> Result<(), SlicerV3Error> {
                     rle_enc.store_encoded_layer(idx, bytes);
@@ -4529,6 +4581,8 @@ mod tests {
                 layer_runs[layer_idx as usize] = Some(runs);
                 Ok(())
             },
+            None,
+            None,
             None,
             None,
         )

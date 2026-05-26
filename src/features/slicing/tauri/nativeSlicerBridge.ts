@@ -61,6 +61,9 @@ export type NativeSolidSliceJobEnvelope = {
     maxZ: number;
   } | null;
   metadataJson: string;
+  ditherEnabled?: boolean;
+  ditherBitDepth?: number;
+  ditherDeviceGamma?: number;
 };
 
 type NativeSolidSlicePayload = {
@@ -114,6 +117,9 @@ type NativeSolidSlicePayload = {
     max_z: number;
   } | null;
   metadata_json: string;
+  dither_enabled?: boolean;
+  dither_bit_depth?: number | null;
+  dither_device_gamma?: number;
 };
 
 /** Metadata-only payload for the binary mesh staging path (no inline triangles). */
@@ -166,6 +172,9 @@ type NativeSolidSliceMetadataPayload = {
     max_z: number;
   } | null;
   metadata_json: string;
+  dither_enabled?: boolean;
+  dither_bit_depth?: number | null;
+  dither_device_gamma?: number;
 };
 
 type SliceProgressEvent = {
@@ -268,6 +277,9 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
         }
       : null,
     metadata_json: job.metadataJson,
+    dither_enabled: job.ditherEnabled ?? false,
+    dither_bit_depth: job.ditherBitDepth ?? null,
+    dither_device_gamma: job.ditherDeviceGamma ?? 3.0,
   };
 }
 
@@ -323,6 +335,9 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
         }
       : null,
     metadata_json: job.metadataJson,
+    dither_enabled: job.ditherEnabled ?? false,
+    dither_bit_depth: job.ditherBitDepth ?? null,
+    dither_device_gamma: job.ditherDeviceGamma ?? 3.0,
   };
 }
 

@@ -229,6 +229,9 @@ export type MaterialAntiAliasingSettings = {
   zBlendResinType: 'opaque' | 'clear' | 'custom';
   selectedLutCurveId: string;
   aaOnSupports: boolean;
+  ditherEnabled: boolean;
+  ditherBitDepth: number;
+  ditherDeviceGamma: number;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -258,6 +261,9 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
   zBlendResinType: 'opaque',
   selectedLutCurveId: 'default',
   aaOnSupports: false,
+  ditherEnabled: false,
+  ditherBitDepth: 3,
+  ditherDeviceGamma: 3.0,
 };
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
@@ -361,6 +367,9 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     zBlendResinType,
     selectedLutCurveId,
     aaOnSupports: typeof source.aaOnSupports === 'boolean' ? source.aaOnSupports : defaults.aaOnSupports,
+    ditherEnabled: typeof source.ditherEnabled === 'boolean' ? source.ditherEnabled : defaults.ditherEnabled,
+    ditherBitDepth: Math.round(clampNumber(source.ditherBitDepth, defaults.ditherBitDepth, 2, 7)),
+    ditherDeviceGamma: clampNumber(source.ditherDeviceGamma, defaults.ditherDeviceGamma, 0.5, 4.0),
   };
 }
 

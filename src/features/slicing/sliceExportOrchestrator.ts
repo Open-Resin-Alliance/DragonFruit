@@ -183,6 +183,9 @@ export type SliceExportOrchestratorOptions = {
   zaaDuplicateZ?: boolean;
   minimumAaAlphaPercentOverride?: number;
   aaOnSupports?: boolean;
+  ditherEnabled?: boolean;
+  ditherBitDepth?: number;
+  ditherDeviceGamma?: number;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
   abortSignal?: AbortSignal;
@@ -708,6 +711,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     ),
     mirrorX: solidMesh.mirrorX,
     mirrorY: solidMesh.mirrorY,
+    ditherEnabled: options.ditherEnabled ?? options.materialProfile.antiAliasingSettings?.ditherEnabled ?? false,
+    ditherBitDepth: options.ditherBitDepth ?? options.materialProfile.antiAliasingSettings?.ditherBitDepth ?? 3,
+    ditherDeviceGamma: options.ditherDeviceGamma ?? options.materialProfile.antiAliasingSettings?.ditherDeviceGamma ?? 3.0,
     modelTriangleCount: solidMesh.modelTriangleCount,
     containerCompressionLevel: resolveContainerCompressionLevel(resolvedPngStrategy),
     buildWidthMm: solidMesh.buildWidthMm,

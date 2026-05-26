@@ -523,6 +523,9 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
         zBlendResinType: 'opaque',
         selectedLutCurveId: 'default',
         aaOnSupports: false,
+        ditherEnabled: false,
+        ditherBitDepth: 3,
+        ditherDeviceGamma: 3.0,
       },
   };
 }
