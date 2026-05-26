@@ -1,6 +1,7 @@
 (function () {
       const OWNER = 'Open-Resin-Alliance';
       const REPO = 'DragonFruit';
+      const REPO_URL = `https://github.com/${OWNER}/${REPO}`;
       const RELEASES_URL = `https://github.com/${OWNER}/${REPO}/releases`;
       const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
       const RELEASES_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=12`;
@@ -27,6 +28,36 @@
             if (source.includes('mac') || source.includes('darwin')) return 'macos';
             if (source.includes('linux') || source.includes('x11')) return 'linux';
             return null;
+      }
+
+      function detectArchitecture(assetName) {
+            const source = `${assetName || ''} ${navigator.userAgentData?.architecture || ''}`.toLowerCase();
+
+            if (source.includes('aarch64')) return 'aarch64';
+            if (source.includes('arm64')) return 'arm64';
+            if (source.includes('x86_64') || source.includes('amd64') || source.includes('x64')) return 'x64';
+
+            if (source.includes('arm')) return 'aarch64';
+            if (source.includes('64')) return 'x64';
+
+            return null;
+      }
+
+      function isMobileDevice() {
+            if (navigator.userAgentData?.mobile) return true;
+
+            const source = `${navigator.userAgentData?.platform || ''} ${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
+            if (source.includes('android') || source.includes('iphone') || source.includes('ipad') || source.includes('ipod')) {
+                  return true;
+            }
+
+            if (source.includes('mobile')) return true;
+
+            if (source.includes('mac') && navigator.maxTouchPoints > 1) {
+                  return true;
+            }
+
+            return false;
       }
 
       function fetchJson(url) {
@@ -119,10 +150,18 @@
 
             const titleNodes = document.querySelectorAll('.md-header__title .md-ellipsis, .md-header__topic .md-ellipsis');
             titleNodes.forEach((node) => {
-                  if (node.textContent && node.textContent.trim() === 'DragonFruit') {
-                        node.textContent = 'Home';
-                  }
+                  node.textContent = 'Home';
             });
+      }
+
+      function syncHomepageHeaderHeight() {
+            if (!document.body.classList.contains('df-homepage-page')) return;
+
+            const header = document.querySelector('.md-header');
+            if (!header) return;
+
+            const height = Math.round(header.getBoundingClientRect().height);
+            document.documentElement.style.setProperty('--df-home-header-height', `${height}px`);
       }
 
       function renderDownloads(container, release, variant) {
@@ -158,6 +197,17 @@
             const versionLine = document.querySelector('#latest-release-version');
             if (!heroButton || !versionLine) return;
 
+            if (isMobileDevice()) {
+                  heroButton.href = REPO_URL;
+                  heroButton.textContent = 'Open GitHub';
+                  heroButton.classList.remove('md-button--primary');
+                  heroButton.classList.add('df-home-download--mobile');
+                  versionLine.textContent = 'Available on desktop.';
+                  return;
+            }
+
+            heroButton.classList.remove('df-home-download--mobile');
+
             if (!stableRelease) {
                   heroButton.href = LATEST_RELEASE_URL;
                   versionLine.textContent = 'Latest release unavailable right now.';
@@ -169,25 +219,48 @@
 
             const preferredPlatform = detectPlatform();
             const preferredAsset = preferredPlatform ? pickBestAsset(stableRelease.assets || [], preferredPlatform) : null;
+            const architecture = detectArchitecture(preferredAsset?.name);
 
             if (preferredAsset) {
                   heroButton.href = preferredAsset.browser_download_url;
-                  heroButton.textContent = `Download Beta for ${PLATFORM_DEFS[preferredPlatform].label}`;
+                  heroButton.textContent = 'Download Beta';
             } else {
                   heroButton.href = stableRelease.html_url || LATEST_RELEASE_URL;
                   heroButton.textContent = 'Download Beta';
             }
 
-            versionLine.textContent = `${versionTag} · Published ${formatDate(stableRelease.published_at)}`;
+            const platformLabel = preferredPlatform ? PLATFORM_DEFS[preferredPlatform].label : null;
+            const platformContext = [platformLabel, architecture].filter(Boolean).join(' ');
+            const prefix = platformContext ? `${platformContext} ` : '';
+
+            versionLine.textContent = `${prefix}${versionTag} · Published ${formatDate(stableRelease.published_at)}`;
       }
 
       function initReleaseFeed() {
-            if (document.querySelector('.df-homepage')) {
-                  document.body.classList.add('df-homepage-page');
+            const isHomepage = Boolean(document.querySelector('.df-homepage'));
+
+            document.body.classList.toggle('df-homepage-page', isHomepage);
+
+            if (isHomepage) {
                   document.documentElement.setAttribute('data-md-color-scheme', 'slate');
+                  document.documentElement.style.colorScheme = 'dark';
+            } else {
+                  document.documentElement.style.removeProperty('--df-home-header-height');
+                  document.documentElement.style.colorScheme = '';
+                  return;
             }
 
             setHomepageHeaderTitle();
+            syncHomepageHeaderHeight();
+
+            const header = document.querySelector('.md-header');
+            if (header && 'ResizeObserver' in window) {
+                  const observer = new ResizeObserver(() => {
+                        syncHomepageHeaderHeight();
+                  });
+                  observer.observe(header);
+                  window.addEventListener('resize', syncHomepageHeaderHeight, { passive: true });
+            }
 
             const heroButton = document.querySelector('#download-now');
             const versionLine = document.querySelector('#latest-release-version');
