@@ -1,6 +1,7 @@
 (function () {
       const OWNER = 'Open-Resin-Alliance';
       const REPO = 'DragonFruit';
+      const REPO_URL = `https://github.com/${OWNER}/${REPO}`;
       const RELEASES_URL = `https://github.com/${OWNER}/${REPO}/releases`;
       const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
       const RELEASES_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=12`;
@@ -27,6 +28,23 @@
             if (source.includes('mac') || source.includes('darwin')) return 'macos';
             if (source.includes('linux') || source.includes('x11')) return 'linux';
             return null;
+      }
+
+      function isMobileDevice() {
+            if (navigator.userAgentData?.mobile) return true;
+
+            const source = `${navigator.userAgentData?.platform || ''} ${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
+            if (source.includes('android') || source.includes('iphone') || source.includes('ipad') || source.includes('ipod')) {
+                  return true;
+            }
+
+            if (source.includes('mobile')) return true;
+
+            if (source.includes('mac') && navigator.maxTouchPoints > 1) {
+                  return true;
+            }
+
+            return false;
       }
 
       function fetchJson(url) {
@@ -119,9 +137,7 @@
 
             const titleNodes = document.querySelectorAll('.md-header__title .md-ellipsis, .md-header__topic .md-ellipsis');
             titleNodes.forEach((node) => {
-                  if (node.textContent && node.textContent.trim() === 'DragonFruit') {
-                        node.textContent = 'Home';
-                  }
+                  node.textContent = 'Home';
             });
       }
 
@@ -167,6 +183,17 @@
             const heroButton = document.querySelector('#download-now');
             const versionLine = document.querySelector('#latest-release-version');
             if (!heroButton || !versionLine) return;
+
+            if (isMobileDevice()) {
+                  heroButton.href = REPO_URL;
+                  heroButton.textContent = 'Open GitHub';
+                  heroButton.classList.remove('md-button--primary');
+                  heroButton.classList.add('df-home-download--mobile');
+                  versionLine.textContent = 'Available on desktop.';
+                  return;
+            }
+
+            heroButton.classList.remove('df-home-download--mobile');
 
             if (!stableRelease) {
                   heroButton.href = LATEST_RELEASE_URL;

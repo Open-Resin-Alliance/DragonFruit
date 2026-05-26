@@ -1,4 +1,4 @@
-site_name: DragonFruit
+site_name: DragonFruit Slicer
 site_description: Open-source resin slicer and support-authoring environment for practical print preparation.
 site_url: https://slicer.openresin.org/
 repo_name: Open-Resin-Alliance/DragonFruit
@@ -6,6 +6,7 @@ repo_url: https://github.com/Open-Resin-Alliance/DragonFruit
 theme:
   name: material
   logo: assets/branding/simple_icon.svg
+  favicon: assets/branding/simple_icon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default

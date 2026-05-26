@@ -308,6 +308,21 @@
   border-color: var(--df-accent-primary-hover);
 }
 
+.df-home-actions .md-button.df-home-download--mobile {
+  background: color-mix(in srgb, #0b0f14, white 4%);
+  border-color: color-mix(in srgb, #c8d0db, transparent 68%);
+  color: color-mix(in srgb, #fff, transparent 26%);
+  box-shadow: none;
+  opacity: 0.82;
+}
+
+.df-home-actions .md-button.df-home-download--mobile:hover,
+.df-home-actions .md-button.df-home-download--mobile:focus-visible {
+  background: color-mix(in srgb, #0b0f14, white 6%);
+  border-color: color-mix(in srgb, #c8d0db, transparent 58%);
+  color: #fff;
+}
+
 .df-home-release-version {
   color: var(--md-default-fg-color--lighter) !important;
   font-size: 0.88rem !important;

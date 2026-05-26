@@ -1,6 +1,5 @@
 ---
-title: DragonFruit
-description: Open-Source, High Performance Slicer for mSLA 3D Printers
+description: Open-Source & High Performance Slicer for mSLA 3D Printers
 social:
   cards_layout: default/only/image
   cards_layout_options:
