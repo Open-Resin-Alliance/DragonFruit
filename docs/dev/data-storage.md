@@ -116,7 +116,7 @@ This page is the developer-facing source of truth for client-side persistence us
 | `dragonfruit-local-backups:directory`         | localStorage | Selected local backup directory |
 
 !!! note
-Backup auth/session state uses secure cookies and server-side endpoints in addition to client-side setting keys.
+      Backup auth/session state uses secure cookies and server-side endpoints in addition to client-side setting keys.
 
 ## IndexedDB contract
 

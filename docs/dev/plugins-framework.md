@@ -10,7 +10,7 @@ DragonFruit supports two plugin classes with explicit trust boundaries.
 | Complex plugin | Repository contribution + build-time generation | Yes                      | Protocol handlers, upload flows, runtime integrations, native encoders |
 
 !!! note
-Core rule: runtime-installed plugins are data-only. Executable plugin code is build-time only.
+      Core rule: runtime-installed plugins are data-only. Executable plugin code is build-time only.
 
 ## Simple plugin contract
 

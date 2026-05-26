@@ -18,7 +18,7 @@ DragonFruit combines a central 3D workspace with mode-specific controls.
 - **Printing mode**: inspect sliced layers before printing (enabled when printing data is available).
 
 !!! note
-Some environments/profiles may temporarily gate parts of the Analysis workspace.
+      Some environments/profiles may temporarily gate parts of the Analysis workspace.
 
 ## Selection behavior
 

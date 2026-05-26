@@ -20,7 +20,7 @@ Download page:
 - https://github.com/Open-Resin-Alliance/DragonFruit/releases
 
 !!! note
-For general usage, prefer stable releases. Use pre-releases if you want earlier fixes/features.
+      For general usage, prefer stable releases. Use pre-releases if you want earlier fixes/features.
 
 If you want to build the latest bleeding-edge version instead, follow [Building from Source](building-from-source.md).
 
