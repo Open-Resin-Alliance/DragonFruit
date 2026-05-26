@@ -1,50 +1,35 @@
-# DragonFruit Documentation
+---
+title: DragonFruit
+hide:
+  - title
+  - navigation
+  - toc
+  - search
+---
 
-Welcome to the official DragonFruit documentation.
+<div class="df-homepage" markdown>
 
-DragonFruit is an open-source resin slicer and support-authoring environment focused on practical print preparation: model setup, support generation, island analysis, and export workflows.
+<div class="df-home-backdrop" aria-hidden="true">
+  <img src="assets/branding/screenshot_app.png" alt="" />
+</div>
 
-## Mission
+<a class="df-home-meta-chip df-home-project-chip" href="https://github.com/Open-Resin-Alliance" aria-label="An Open Resin Alliance Project">
+  An Open Resin Alliance Project
+</a>
 
-DragonFruit aims to be a modern 3D printing preparation environment that helps users understand, prepare, and validate models quickly and confidently.
+<a class="df-home-meta-chip df-home-license-badge" href="https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/LICENSE" aria-label="Licensed under AGPL-3.0-or-later">
+  AGPL-3.0-or-later
+</a>
 
-The focus is decision support and reliable outcomes rather than rendering alone. The docs are organized around clarity, speed, accuracy, and an architecture that can expand into adjacent domains like bracing, measurement, and export.
+<img class="df-home-wordmark" src="assets/branding/text_logo.svg" alt="DragonFruit" />
 
-!!! warning
-DragonFruit is under active development. Validate outputs before production printing, especially on new workflows.
+<p class="df-home-tagline">Open-Source, High Performance Slicer for mSLA 3D Printers</p>
 
-## Downloads
+<div class="df-home-actions">
+    <a class="md-button md-button--primary" id="download-now" href="https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest">Download Beta</a>
+  <a class="md-button" href="./getting-started/installation/">View Docs</a>
+</div>
 
-DragonFruit publishes desktop builds for both:
+<p class="df-home-release-version" id="latest-release-version">Fetching the latest release from GitHub…</p>
 
-- **Stable releases**
-- **Pre-releases**
-
-Build artifacts currently available:
-
-- **Windows:** `.exe` (NSIS installer)
-- **macOS:** `.dmg`
-- **Linux:** `.flatpak`
-
-- Releases: https://github.com/Open-Resin-Alliance/DragonFruit/releases
-- Install guide: [Getting Started → Installation](./getting-started/installation.md)
-
-## Documentation map
-
-- **Getting Started**: install, launch, and learn the interface.
-- **Workflows**: end-to-end user flows for model prep, supports, raft, and export.
-- **Features**: focused guides for advanced tools like island voxel visualization.
-- **Reference**: hotkeys, support type glossary, and file format overview.
-- **Troubleshooting**: known issues and practical fixes.
-- **Developer Guide**: architecture, algorithms, contracts, and implementation notes.
-
-## Screenshot placeholders
-
-You will find screenshot placeholders throughout this docs set.
-
-- Placeholder image path: `docs/assets/placeholders/...`
-- Replace each placeholder with final captures as they become available.
-
-![Documentation home placeholder](assets/placeholders/home-overview.png)
-
-> Screenshot placeholder: Main DragonFruit workspace with top bar, canvas, sidebar, and floating panels.
+</div>

@@ -1,14 +1,34 @@
-site_name: DragonFruit Documentation
-site_description: User and developer documentation for the DragonFruit resin slicer.
-site_url: https://open-resin-alliance.github.io/DragonFruit/
+site_name: DragonFruit
+site_description: Open-source resin slicer and support-authoring environment for practical print preparation.
+site_url: https://slicer.openresin.org/
 repo_name: Open-Resin-Alliance/DragonFruit
 repo_url: https://github.com/Open-Resin-Alliance/DragonFruit
 theme:
   name: material
+  logo: assets/branding/simple_icon.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   features:
     - navigation.sections
     - navigation.top
     - content.code.copy
+extra_css:
+  - stylesheets/dragonfruit-theme.css
+extra_javascript:
+  - javascripts/homepage-release-feed.js
 markdown_extensions:
   - admonition
   - attr_list
