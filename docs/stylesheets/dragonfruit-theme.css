@@ -63,6 +63,10 @@
   color: var(--df-accent-primary-hover);
 }
 
+.md-content__inner {
+  padding-top: 0;
+}
+
 .df-homepage-page .md-search {
   display: none;
 }
@@ -82,6 +86,7 @@
   margin-bottom: 0;
   padding-top: 0;
   padding-bottom: 0;
+  min-height: 100%;
 }
 
 .df-homepage-page,
@@ -92,21 +97,46 @@
 
 .df-homepage-page {
   background: #0b0f14;
+  color-scheme: dark;
+  --md-primary-fg-color: var(--df-accent-primary);
+  --md-primary-fg-color--light: #f26ba2;
+  --md-primary-fg-color--dark: #c11f61;
+
+  --md-accent-fg-color: var(--df-accent-secondary-dark);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--df-accent-secondary-dark), transparent 84%);
+
+  --md-default-bg-color: #0b0f14;
+  --md-default-fg-color: #e6ebf2;
+  --md-default-fg-color--light: #c3c7cf;
+  --md-default-fg-color--lighter: #a5acb8;
+  --md-default-fg-color--lightest: #7f8694;
+
+  --md-code-bg-color: #111216;
+  --md-typeset-a-color: var(--df-accent-primary);
 }
 
 .df-homepage-page .md-content__inner {
   width: 100%;
   max-width: none;
   margin: 0;
-  padding: 0;
+  padding: 0 !important;
 }
 
 .df-homepage-page .md-footer {
   display: none;
 }
 
+.md-grid {
+  max-width: 100%;
+}
+
+.md-sidebar--primary .md-nav[data-md-level='0'] > .md-nav__title {
+  display: none;
+}
+
 .df-homepage-page .md-content {
-  min-height: calc(100vh - 3.6rem);
+  height: calc(100dvh - var(--df-home-header-height, 3.6rem));
+  min-height: calc(100dvh - var(--df-home-header-height, 3.6rem));
 }
 
 .md-grid:has(.df-homepage) {
@@ -115,7 +145,8 @@
 
 .md-content__inner:has(.df-homepage) {
   position: relative;
-  min-height: calc(100vh - 3.6rem);
+  height: 100%;
+  min-height: 100%;
   display: grid;
   align-items: stretch;
   overflow: hidden;
@@ -147,10 +178,10 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center 42%;
+  object-position: center 50%;
   opacity: 1;
   filter: saturate(0.88) brightness(0.38) contrast(0.9) blur(0.75px);
-  transform: scale(1.32);
+  transform: scale(1.38);
 }
 
 .df-homepage {
@@ -163,7 +194,7 @@
   gap: 1.1rem;
   width: 100%;
   max-width: none;
-  min-height: calc(100vh - 3.6rem);
+  min-height: 100%;
   padding: 0;
   margin: 0;
   text-align: center;
@@ -287,15 +318,17 @@
 
 @media (max-width: 720px) {
   .df-homepage-page .md-content {
-    min-height: calc(100vh - 3.25rem);
+    height: calc(100dvh - var(--df-home-header-height, 3.25rem));
+    min-height: calc(100dvh - var(--df-home-header-height, 3.25rem));
   }
 
   .md-content__inner:has(.df-homepage) {
-    min-height: calc(100vh - 3.25rem);
+    height: 100%;
+    min-height: 100%;
   }
 
   .df-homepage {
-    min-height: calc(100vh - 3.25rem);
+    min-height: 100%;
     padding: 0;
   }
 

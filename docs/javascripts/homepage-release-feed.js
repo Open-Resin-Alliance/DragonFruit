@@ -125,6 +125,16 @@
             });
       }
 
+      function syncHomepageHeaderHeight() {
+            if (!document.body.classList.contains('df-homepage-page')) return;
+
+            const header = document.querySelector('.md-header');
+            if (!header) return;
+
+            const height = Math.round(header.getBoundingClientRect().height);
+            document.documentElement.style.setProperty('--df-home-header-height', `${height}px`);
+      }
+
       function renderDownloads(container, release, variant) {
             if (!container) return;
 
@@ -182,12 +192,30 @@
       }
 
       function initReleaseFeed() {
-            if (document.querySelector('.df-homepage')) {
-                  document.body.classList.add('df-homepage-page');
+            const isHomepage = Boolean(document.querySelector('.df-homepage'));
+
+            document.body.classList.toggle('df-homepage-page', isHomepage);
+
+            if (isHomepage) {
                   document.documentElement.setAttribute('data-md-color-scheme', 'slate');
+                  document.documentElement.style.colorScheme = 'dark';
+            } else {
+                  document.documentElement.style.removeProperty('--df-home-header-height');
+                  document.documentElement.style.colorScheme = '';
+                  return;
             }
 
             setHomepageHeaderTitle();
+            syncHomepageHeaderHeight();
+
+            const header = document.querySelector('.md-header');
+            if (header && 'ResizeObserver' in window) {
+                  const observer = new ResizeObserver(() => {
+                        syncHomepageHeaderHeight();
+                  });
+                  observer.observe(header);
+                  window.addEventListener('resize', syncHomepageHeaderHeight, { passive: true });
+            }
 
             const heroButton = document.querySelector('#download-now');
             const versionLine = document.querySelector('#latest-release-version');
