@@ -1850,6 +1850,38 @@ export function SceneCanvas({
     const viewDir = new THREE.Vector3();
     camera.getWorldDirection(viewDir);
     const viewAbsZ = Math.abs(viewDir.z);
+    const viewSignedZ = viewDir.z;
+    const isOrthographicCamera = camera instanceof THREE.OrthographicCamera;
+
+    if (isOrthographicCamera) {
+      // In orthographic mode, panning can move the camera through world Z
+      // without changing whether the view is above or below the plate.
+      // Use the signed view direction instead so culling tracks orbit angle,
+      // not pan offset.
+      const ORTHO_FADE_VISIBLE_VIEW_Z = -0.06;
+      const ORTHO_FADE_HIDDEN_VIEW_Z = 0.018;
+      const ORTHO_ENTER_BELOW_VIEW_Z = 0.008;
+      const ORTHO_EXIT_BELOW_VIEW_Z = -0.018;
+
+      const orthoFadeT = THREE.MathUtils.clamp(
+        (viewSignedZ - ORTHO_FADE_VISIBLE_VIEW_Z)
+          / Math.max(0.0001, ORTHO_FADE_HIDDEN_VIEW_Z - ORTHO_FADE_VISIBLE_VIEW_Z),
+        0,
+        1,
+      );
+      const orthoFade = orthoFadeT * orthoFadeT * (3 - 2 * orthoFadeT);
+      const orthoOpacity = 1 - orthoFade;
+
+      setBuildPlateOpacity((prev) => (Math.abs(prev - orthoOpacity) < 1e-4 ? prev : orthoOpacity));
+
+      setIsCameraBelowBuildPlate((prev) => {
+        const next = prev
+          ? viewSignedZ > ORTHO_EXIT_BELOW_VIEW_Z
+          : viewSignedZ >= ORTHO_ENTER_BELOW_VIEW_Z;
+        return prev === next ? prev : next;
+      });
+      return;
+    }
 
     // Culling thresholds (earlier than before) with hysteresis to avoid flicker.
     const ENTER_BELOW_Z = 4.8;
@@ -3654,6 +3686,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
+  const hideGridHelpers = plateContactCullActive;
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
   const isSpotlightHighlightActive =
     effectiveModelSelected
@@ -4882,7 +4915,7 @@ export function SceneCanvas({
           originMinX={activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -activeBuildVolumeSettings.widthMm * 0.5}
           originMinY={activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -activeBuildVolumeSettings.depthMm * 0.5}
           buildPlateOpacity={(!thumbnailCaptureActive || includeBuildPlateDuringCapture) ? buildPlateOpacity : 0}
-          showGrid={!thumbnailCaptureActive || includeHelpersGridDuringCapture}
+          showGrid={(!thumbnailCaptureActive || includeHelpersGridDuringCapture) && !hideGridHelpers}
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
           safetyMarginMm={activeBuildVolumeSettings.safetyMarginMm}
         />
