@@ -29,6 +29,7 @@ import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../int
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
 import type { BracePreviewData } from './bracePlacementState';
+import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -130,6 +131,49 @@ export function BracePlacementController() {
     const leafMeta = useMemo(() => {
         return buildLeafConeSnapMeta(supportState.leaves);
     }, [supportState.leaves]);
+
+    // Reverse lookup: twig segment id → owning twig. Lets the placement
+    // controller resolve the live twig taper diameter at the snap point so
+    // brace endpoint knots on twigs match the leaf-on-twig rule (1.10× of
+    // the local twig diameter, not the legacy +0.1mm offset).
+    const twigBySegmentId = useMemo(() => {
+        const map = new Map<string, typeof supportState.twigs[string]>();
+        for (const twig of Object.values(supportState.twigs)) {
+            for (const seg of twig.segments) {
+                map.set(seg.id, twig);
+            }
+        }
+        return map;
+    }, [supportState.twigs]);
+
+    // For brace placement on a tapered twig, the snap's `hostDiameterMm`
+    // initially carries the twig's placeholder shaft diameter (settings.tip
+    // contact diameter), not the local taper. Override here so downstream
+    // preview + knot sizing reflect the real local diameter.
+    const overrideHostDiameterForTwig = useCallback(
+        (segmentId: string | undefined | null, t: number | undefined | null, fallback: number | undefined): number | undefined => {
+            if (!segmentId || t === undefined || t === null) return fallback;
+            const twig = twigBySegmentId.get(segmentId);
+            if (!twig) return fallback;
+            const localDia = resolveTwigDiameterAtSegmentT(twig, segmentId, t);
+            return localDia ?? fallback;
+        },
+        [twigBySegmentId]
+    );
+
+    // For a brace endpoint knot, pick the diameter so it visually matches the
+    // host's joint sizing: twigs use 1.10× the local twig diameter (matching
+    // disk-end joints and leaf bases); every other host uses the legacy
+    // +0.1mm offset.
+    const resolveBraceEndpointKnotDiameter = useCallback(
+        (segmentId: string | undefined | null, hostDiameterMm: number): number => {
+            if (segmentId && twigBySegmentId.has(segmentId)) {
+                return twigJointDiameterForLocalDiameter(hostDiameterMm);
+            }
+            return hostDiameterMm + 0.1;
+        },
+        [twigBySegmentId]
+    );
 
     const resolveLeafSurface = useCallback((leafId: string, axisPoint: Vec3, coneT: number) => {
         const meta = leafMeta.get(leafId);
@@ -268,13 +312,18 @@ export function BracePlacementController() {
             const target = resolveNearestPathTarget(segmentId, point) ?? getTarget(segmentId);
             if (!target?.pathSegment) return null;
 
-            const hostDiameterMm = target.pathSegment.radius * 2;
+            let hostDiameterMm: number | undefined = target.pathSegment.radius * 2;
             const ownerModelId = segmentMeta.get(segmentId)?.modelId;
 
             const projected = projectPointToSnapTargetPath(target, point);
             if (!projected) return null;
 
             const { t, pos } = projected;
+
+            // On tapered twigs the segment's diameter is a placeholder; use
+            // the live local taper diameter so the resulting knot ball and
+            // brace endpoint shaft match the twig at this slide position.
+            hostDiameterMm = overrideHostDiameterForTwig(segmentId, t, hostDiameterMm) ?? hostDiameterMm;
 
             return {
                 kind: 'shaft' as const,
@@ -285,7 +334,7 @@ export function BracePlacementController() {
                 ownerModelId,
             };
         },
-        [getTarget, resolveNearestPathTarget, segmentMeta]
+        [getTarget, resolveNearestPathTarget, segmentMeta, overrideHostDiameterForTwig]
     );
 
     const resolveLeafSnapFromClick = useCallback(
@@ -419,6 +468,7 @@ export function BracePlacementController() {
                             }
                         }
                     }
+                    hostDia = overrideHostDiameterForTwig(resolvedSnap.targetId, resolvedSnap.t, hostDia) ?? hostDia;
                     // Zero-length preview: renders as a single sphere with green lights.
                     const preview = {
                         start: resolvedSnap.snappedPos,
@@ -542,6 +592,8 @@ export function BracePlacementController() {
                         ownerModelId = brace.modelId;
                     }
                 }
+
+                hostDiameterMm = overrideHostDiameterForTwig(resolvedSnap.targetId, resolvedSnap.t, hostDiameterMm) ?? hostDiameterMm;
 
                 const snapTarget = {
                     kind: 'shaft' as const,
@@ -697,7 +749,7 @@ export function BracePlacementController() {
                     parentShaftId: endSnap.segmentId,
                     t: endSnap.t,
                     pos: endSnap.snappedPos,
-                    diameter: endDiam + 0.1,
+                    diameter: resolveBraceEndpointKnotDiameter(endSnap.segmentId, endDiam),
                 };
 
                 const modelId = start.ownerModelId ?? endSnap.ownerModelId ?? 'unknown';
@@ -757,7 +809,7 @@ export function BracePlacementController() {
                 parentShaftId: start.segmentId,
                 t: start.t,
                 pos: start.snappedPos,
-                diameter: startDiam + 0.1,
+                diameter: resolveBraceEndpointKnotDiameter(start.segmentId, startDiam),
             };
 
             const endKnot: Knot = {
@@ -765,7 +817,7 @@ export function BracePlacementController() {
                 parentShaftId: endSnap.segmentId,
                 t: endSnap.t,
                 pos: endSnap.snappedPos,
-                diameter: endDiam + 0.1,
+                diameter: resolveBraceEndpointKnotDiameter(endSnap.segmentId, endDiam),
             };
 
             const modelId = startModelId ?? endModelId ?? 'unknown';
@@ -922,7 +974,7 @@ export function BracePlacementController() {
                 parentShaftId: start.segmentId,
                 t: start.t,
                 pos: start.snappedPos,
-                diameter: startDiam + 0.1,
+                diameter: resolveBraceEndpointKnotDiameter(start.segmentId, startDiam),
             };
 
             const endKnot: Knot = {

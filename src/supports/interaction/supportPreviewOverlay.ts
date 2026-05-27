@@ -157,7 +157,7 @@ interface CollectPreviewLeavesByIdOptions {
   previewKnotOverrides: Record<string, Knot>;
   leafIdsByParentKnotId: Map<string, string[]>;
   leavesById: Record<string, Leaf>;
-  recomputeLeafPreviewContactCone: (leaf: Leaf, previewKnotPos: { x: number; y: number; z: number }) => Leaf;
+  recomputeLeafPreviewContactCone: (leaf: Leaf, previewKnot: Knot) => Leaf;
 }
 
 export function collectPreviewLeavesById({
@@ -178,7 +178,7 @@ export function collectPreviewLeavesById({
     for (const leafId of leafIds) {
       const leaf = leavesById[leafId];
       if (!leaf) continue;
-      map.set(leaf.id, recomputeLeafPreviewContactCone(leaf, previewKnot.pos));
+      map.set(leaf.id, recomputeLeafPreviewContactCone(leaf, previewKnot));
     }
   }
   return map;

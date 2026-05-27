@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateBranch, getBranchById, subscribe } from '../../state';
+import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateLeaf, updateBranch, getBranchById, subscribe } from '../../state';
 import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../types';
 import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
@@ -15,6 +15,7 @@ import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { clearKnotDragPreview, emitKnotDragPreview } from '../../interaction/knotDragPreview';
+import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../../SupportTypes/Twig/twigTaper';
 
 interface ActiveHost {
     segmentId: string;
@@ -862,6 +863,40 @@ export function useKnotInteraction(enabled: boolean = true) {
                 if (knotAtEnd) updateKnot(knotAtEnd);
             }
 
+            // If the released knot lives on a twig, persist the leaf cone's
+            // updated wide-end (bodyDiameterMm) so the cone keeps the taper
+            // it visibly had during the drag preview.
+            if (
+                activeKnotIdAtEnd
+                && activeHostAtEnd?.containerType === 'twig'
+                && activeHostAtEnd.twig
+                && previewKnotAtEnd
+                && previewKnotAtEnd.t !== undefined
+            ) {
+                const localTwigDia = resolveTwigDiameterAtSegmentT(
+                    activeHostAtEnd.twig,
+                    activeHostAtEnd.segmentId,
+                    previewKnotAtEnd.t,
+                );
+                if (localTwigDia !== null) {
+                    const attachedLeaves = getLeaves().filter(l => l.parentKnotId === activeKnotIdAtEnd);
+                    for (const leaf of attachedLeaves) {
+                        if (!leaf.contactCone) continue;
+                        if (leaf.contactCone.profile.bodyDiameterMm === localTwigDia) continue;
+                        updateLeaf({
+                            ...leaf,
+                            contactCone: {
+                                ...leaf.contactCone,
+                                profile: {
+                                    ...leaf.contactCone.profile,
+                                    bodyDiameterMm: localTwigDia,
+                                },
+                            },
+                        });
+                    }
+                }
+            }
+
             if (activeHostAtEnd && initialEditSnapshotRef.current) {
                 const description =
                     activeHostAtEnd.containerType === 'leafCone'
@@ -1392,6 +1427,16 @@ export function useKnotInteraction(enabled: boolean = true) {
         // Update diameter when crossing into a segment with a different diameter
         if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace' || host.containerType === 'kickstand') {
             finalKnot.diameter = bestDiameter + 0.1;
+        }
+
+        // Twig override: a knot on a twig live-tracks the twig's continuous
+        // disk-A→disk-B taper at its exact slide T and is sized 10% larger
+        // than that local diameter (same rule as the disk-end joints).
+        if (host.containerType === 'twig' && host.twig) {
+            const localTwigDia = resolveTwigDiameterAtSegmentT(host.twig, host.segmentId, t);
+            if (localTwigDia !== null) {
+                finalKnot.diameter = twigJointDiameterForLocalDiameter(localTwigDia);
+            }
         }
 
         if (!lastAppliedKnotPosRef.current) {

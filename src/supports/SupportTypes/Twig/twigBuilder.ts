@@ -1,9 +1,17 @@
 import * as THREE from 'three';
 import { ContactDisk, Joint, Segment, Twig, Vec3 } from '../../types';
 import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/types';
-import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getSettings } from '../../Settings';
-import { getJointDiameter } from '../../constants';
+import { twigDiskJointStandoff } from './twigJointStandoff';
+import { twigJointDiameterForLocalDiameter } from './twigTaper';
+// DEBUG: temporary per-twig disk B diameter override. Remove with src/supports/__debug__/.
+import { getTwigDiskBOverrideMm } from '../../__debug__/twigDiameterOverride';
+
+// Twig-local sizing: a joint at a disk-end is 10% larger than that disk's
+// contact diameter. SSOT for the 10% rule lives in ./twigTaper.ts.
+function twigJointDiameterForDisk(diskContactDiameter: number): number {
+    return twigJointDiameterForLocalDiameter(diskContactDiameter);
+}
 
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -42,9 +50,20 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
     };
 
-    // Twig rule: shaft diameter equals tip contact diameter (thin connector)
+    // Twig sizing rule: each disk drives its own joint, and the shaft tapers
+    // between the two joints. Disk A keeps using the global tip.contactDiameterMm;
+    // disk B can be overridden via the temporary debug control to test taper.
+    const diskAContactDiameter = settings.tip.contactDiameterMm;
+    const diskBOverride = getTwigDiskBOverrideMm();
+    const diskBContactDiameter = diskBOverride ?? settings.tip.contactDiameterMm;
+
+    const jointDiameterA = twigJointDiameterForDisk(diskAContactDiameter);
+    const jointDiameterB = twigJointDiameterForDisk(diskBContactDiameter);
+
+    // Legacy uniform value for slicer/proxy and any consumer that reads
+    // segment.diameter. The actual visible taper is carried per-end by the
+    // joints and applied by TwigRenderer.
     const shaftDiameter = settings.tip.contactDiameterMm;
-    const jointDiameter = getJointDiameter(shaftDiameter);
 
     _aVec.set(aPos.x, aPos.y, aPos.z);
     _bVec.set(bPos.x, bPos.y, bPos.z);
@@ -54,8 +73,20 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     _axisA.normalize();
     _axisB.copy(_axisA).multiplyScalar(-1);
 
-    const diskThicknessA = calculateDiskThickness(aNormal, { x: _axisA.x, y: _axisA.y, z: _axisA.z }, diskProfile);
-    const diskThicknessB = calculateDiskThickness(bNormal, { x: _axisB.x, y: _axisB.y, z: _axisB.z }, diskProfile);
+    // Joint stand-off scales with joint diameter so a large disk-end joint
+    // never punches through the model.
+    const diskThicknessA = twigDiskJointStandoff({
+        surfaceNormal: aNormal,
+        coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
+        profile: diskProfile,
+        jointDiameterMm: jointDiameterA,
+    });
+    const diskThicknessB = twigDiskJointStandoff({
+        surfaceNormal: bNormal,
+        coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
+        profile: diskProfile,
+        jointDiameterMm: jointDiameterB,
+    });
 
     // Shaft connects to the center of the disk tip sphere at each end.
     const jointPosA: Vec3 = {
@@ -73,13 +104,13 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     const socketJointA: Joint = {
         id: uuid(),
         pos: jointPosA,
-        diameter: jointDiameter,
+        diameter: jointDiameterA,
     };
 
     const socketJointB: Joint = {
         id: uuid(),
         pos: jointPosB,
-        diameter: jointDiameter,
+        diameter: jointDiameterB,
     };
 
     const segment: Segment = {
@@ -94,8 +125,8 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         pos: aPos,
         surfaceNormal: aNormal,
         profile: diskProfile,
-        contactDiameterMm: settings.tip.contactDiameterMm,
-        diskLengthOverride: undefined,
+        contactDiameterMm: diskAContactDiameter,
+        diskLengthOverride: diskThicknessA,
         coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
     };
 
@@ -104,8 +135,8 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         pos: bPos,
         surfaceNormal: bNormal,
         profile: diskProfile,
-        contactDiameterMm: settings.tip.contactDiameterMm,
-        diskLengthOverride: undefined,
+        contactDiameterMm: diskBContactDiameter,
+        diskLengthOverride: diskThicknessB,
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
     };
 

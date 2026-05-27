@@ -96,6 +96,12 @@ export interface SupportTwigPayload {
   twig: Twig;
 }
 
+export interface SupportTwigRemovePayload {
+  twig: Twig;
+  knots: Knot[];
+  leaves: Leaf[];
+}
+
 export interface SupportStickPayload {
   stick: Stick;
 }

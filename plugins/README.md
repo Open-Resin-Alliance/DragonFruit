@@ -7,6 +7,8 @@ DragonFruit supports two plugin classes with intentionally different trust and c
 - **Simple plugins** (runtime-installed, data-only, GitHub manifest based)
 - **Complex plugins** (repository-contributed, compile-time integrated, code-capable)
 
+Plugin submodules under this folder are licensed separately under **MIT** and each plugin root includes its own `LICENSE` file.
+
 If you remember one rule, remember this one: **runtime-installed plugins are data; executable plugin code is build-time only**.
 
 ---

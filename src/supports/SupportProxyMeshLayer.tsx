@@ -13,7 +13,44 @@ import { InstancedContactConeGroup, type InstancedContactCone } from './SupportP
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportModelPointerHover } from './interaction/clickHandlers';
-import type { ContactDisk, Vec3 } from './types';
+import type { BezierSegment, ContactDisk, Segment, Vec3 } from './types';
+import { resolveTwigSegmentDiameters, twigJointDiameterForLocalDiameter } from './SupportTypes/Twig/twigTaper';
+import { toVector3 } from './Curves/BezierUtils';
+
+// Tapered straight shaft for the proxy. Rendered as a non-instanced
+// truncated-cone mesh (separate from the instanced uniform-shaft batch)
+// because three's InstancedMesh uses one shared geometry per group and
+// cannot represent per-instance start/end radii.
+interface ProxyTaperedShaft {
+    id: string;
+    supportId?: string;
+    modelId?: string;
+    start: Vec3;
+    end: Vec3;
+    diameterStart: number;
+    diameterEnd: number;
+}
+
+// Curved shaft for the proxy. Rendered as one continuous TubeGeometry per
+// bezier segment (same approach as the full SupportPage BezierRenderer) so
+// the silhouette is smooth instead of a stack of short cylinders with
+// abrupt diameter jumps.
+interface ProxyBezierShaft {
+    id: string;
+    supportId?: string;
+    modelId?: string;
+    start: Vec3;
+    end: Vec3;
+    control1: Vec3;
+    control2: Vec3;
+    resolution: number;
+    diameterStart: number;
+    diameterEnd: number;
+}
+
+function isBezierSegment(seg: Segment): seg is BezierSegment {
+    return (seg as BezierSegment).type === 'bezier';
+}
 
 interface SupportProxyMeshLayerProps {
   mode?: 'prepare' | 'analysis' | 'support' | 'export' | 'printing';
@@ -46,6 +83,8 @@ const PROXY_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 type ProxyModelGeometry = {
   modelId?: string;
   shafts: InstancedShaft[];
+  taperedShafts: ProxyTaperedShaft[];
+  bezierShafts: ProxyBezierShaft[];
   roots: InstancedRoot[];
   joints: InstancedJoint[];
   cones: InstancedContactCone[];
@@ -60,6 +99,8 @@ type VisibleModelEntry = {
 
 type FlatProxyGeometry = {
   shafts: InstancedShaft[];
+  taperedShafts: ProxyTaperedShaft[];
+  bezierShafts: ProxyBezierShaft[];
   roots: InstancedRoot[];
   joints: InstancedJoint[];
   cones: InstancedContactCone[];
@@ -125,6 +166,226 @@ function toProxyConeFromTwigDisk(disk: ContactDisk, supportId: string, modelId: 
       standoffAngleThreshold: disk.profile.standoffAngleThreshold,
     },
   };
+}
+
+// Non-instanced tapered-shaft renderer for the proxy. One mesh per shaft;
+// used for the relatively rare tapered straight rods (twigs, tapered braces).
+// Bezier rods go through ProxyBezierShaftGroup instead. Radial-segment count
+// matches the full-renderer ShaftRenderer default (16) so the silhouette
+// reads identically across pages.
+const TAPERED_SHAFT_RADIAL_SEGMENTS = 16;
+const TAPERED_UP = new THREE.Vector3(0, 1, 0);
+
+interface ProxyTaperedShaftGroupProps {
+    shafts: ProxyTaperedShaft[];
+    color: string;
+    emissive?: string;
+    emissiveIntensity?: number;
+    transparent?: boolean;
+    opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
+    onShaftClick?: (shaft: ProxyTaperedShaft) => void;
+    onShaftPointerMove?: (shaft: ProxyTaperedShaft) => void;
+    onShaftPointerOut?: () => void;
+}
+
+function ProxyTaperedShaftGroup({
+    shafts,
+    color,
+    emissive,
+    emissiveIntensity = 0,
+    transparent = false,
+    opacity = 1,
+    clippingPlanes = null,
+    onShaftClick,
+    onShaftPointerMove,
+    onShaftPointerOut,
+}: ProxyTaperedShaftGroupProps) {
+    if (shafts.length === 0) return null;
+    return (
+        <group>
+            {shafts.map((shaft) => {
+                const startVec = new THREE.Vector3(shaft.start.x, shaft.start.y, shaft.start.z);
+                const endVec = new THREE.Vector3(shaft.end.x, shaft.end.y, shaft.end.z);
+                const length = startVec.distanceTo(endVec);
+                if (length < 0.001) return null;
+                const midpoint = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5);
+                const direction = new THREE.Vector3().subVectors(endVec, startVec).normalize();
+                const quaternion = new THREE.Quaternion().setFromUnitVectors(TAPERED_UP, direction);
+                const radiusStart = Math.max(0.001, shaft.diameterStart / 2);
+                const radiusEnd = Math.max(0.001, shaft.diameterEnd / 2);
+                return (
+                    <mesh
+                        key={shaft.id}
+                        position={[midpoint.x, midpoint.y, midpoint.z]}
+                        quaternion={quaternion}
+                        onClick={onShaftClick ? (e) => { e.stopPropagation(); onShaftClick(shaft); } : undefined}
+                        onPointerMove={onShaftPointerMove ? (e) => { e.stopPropagation(); onShaftPointerMove(shaft); } : undefined}
+                        onPointerOut={onShaftPointerOut ? () => onShaftPointerOut() : undefined}
+                    >
+                        <cylinderGeometry args={[radiusEnd, radiusStart, length, TAPERED_SHAFT_RADIAL_SEGMENTS]} />
+                        <meshStandardMaterial
+                            color={color}
+                            emissive={emissive ?? '#000000'}
+                            emissiveIntensity={emissiveIntensity}
+                            transparent={transparent}
+                            opacity={opacity}
+                            depthWrite={!transparent}
+                            clippingPlanes={clippingPlanes ?? undefined}
+                        />
+                    </mesh>
+                );
+            })}
+        </group>
+    );
+}
+
+// Non-instanced bezier-shaft renderer for the proxy. Uses one continuous
+// TubeGeometry per curved segment — same approach as the full-renderer
+// BezierRenderer — so the curve reads as a smooth tube instead of a stack
+// of stepped cylinders. Diameter is linearly interpolated along the curve
+// to support tapered curved twigs/braces.
+interface ProxyBezierShaftGroupProps {
+    shafts: ProxyBezierShaft[];
+    color: string;
+    emissive?: string;
+    emissiveIntensity?: number;
+    transparent?: boolean;
+    opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
+    onShaftClick?: (shaft: ProxyBezierShaft) => void;
+    onShaftPointerMove?: (shaft: ProxyBezierShaft) => void;
+    onShaftPointerOut?: () => void;
+}
+
+function ProxyBezierShaftItem({
+    shaft,
+    color,
+    emissive,
+    emissiveIntensity,
+    transparent,
+    opacity,
+    clippingPlanes,
+    onShaftClick,
+    onShaftPointerMove,
+    onShaftPointerOut,
+}: {
+    shaft: ProxyBezierShaft;
+    color: string;
+    emissive?: string;
+    emissiveIntensity?: number;
+    transparent?: boolean;
+    opacity?: number;
+    clippingPlanes?: THREE.Plane[] | null;
+    onShaftClick?: (shaft: ProxyBezierShaft) => void;
+    onShaftPointerMove?: (shaft: ProxyBezierShaft) => void;
+    onShaftPointerOut?: () => void;
+}) {
+    const geometry = React.useMemo(() => {
+        const curve = new THREE.CubicBezierCurve3(
+            toVector3(shaft.start),
+            toVector3(shaft.control1),
+            toVector3(shaft.control2),
+            toVector3(shaft.end),
+        );
+        const tubularSegments = Math.max(8, Math.min(48, shaft.resolution ?? 16));
+        const radialSegments = 12;
+        const g = new THREE.TubeGeometry(curve, tubularSegments, 1, radialSegments, false);
+
+        const pos = g.getAttribute('position') as THREE.BufferAttribute;
+        const ringSize = radialSegments + 1;
+        const ringCount = tubularSegments + 1;
+        const rStart = Math.max(0.001, shaft.diameterStart / 2);
+        const rEnd = Math.max(0.001, shaft.diameterEnd / 2);
+
+        for (let i = 0; i < ringCount; i++) {
+            const u = i / tubularSegments;
+            const center = curve.getPointAt(u);
+            const r = THREE.MathUtils.lerp(rStart, rEnd, u);
+
+            for (let j = 0; j < ringSize; j++) {
+                const idx = i * ringSize + j;
+                const x = pos.getX(idx);
+                const y = pos.getY(idx);
+                const z = pos.getZ(idx);
+                const v = new THREE.Vector3(x, y, z);
+                const dir = v.sub(center);
+                const len = dir.length();
+                if (len > 0) dir.multiplyScalar(1 / len);
+                const nv = center.clone().add(dir.multiplyScalar(r));
+                pos.setXYZ(idx, nv.x, nv.y, nv.z);
+            }
+        }
+
+        pos.needsUpdate = true;
+        g.computeVertexNormals();
+        g.computeBoundingBox();
+        g.computeBoundingSphere();
+        return g;
+    }, [
+        shaft.start.x, shaft.start.y, shaft.start.z,
+        shaft.end.x, shaft.end.y, shaft.end.z,
+        shaft.control1.x, shaft.control1.y, shaft.control1.z,
+        shaft.control2.x, shaft.control2.y, shaft.control2.z,
+        shaft.diameterStart, shaft.diameterEnd, shaft.resolution,
+    ]);
+
+    React.useEffect(() => {
+        return () => { geometry.dispose(); };
+    }, [geometry]);
+
+    return (
+        <mesh
+            onClick={onShaftClick ? (e) => { e.stopPropagation(); onShaftClick(shaft); } : undefined}
+            onPointerMove={onShaftPointerMove ? (e) => { e.stopPropagation(); onShaftPointerMove(shaft); } : undefined}
+            onPointerOut={onShaftPointerOut ? () => onShaftPointerOut() : undefined}
+        >
+            <primitive object={geometry} attach="geometry" />
+            <meshStandardMaterial
+                color={color}
+                emissive={emissive ?? '#000000'}
+                emissiveIntensity={emissiveIntensity ?? 0}
+                transparent={transparent}
+                opacity={opacity ?? 1}
+                depthWrite={!transparent}
+                clippingPlanes={clippingPlanes ?? undefined}
+            />
+        </mesh>
+    );
+}
+
+function ProxyBezierShaftGroup({
+    shafts,
+    color,
+    emissive,
+    emissiveIntensity,
+    transparent,
+    opacity,
+    clippingPlanes,
+    onShaftClick,
+    onShaftPointerMove,
+    onShaftPointerOut,
+}: ProxyBezierShaftGroupProps) {
+    if (shafts.length === 0) return null;
+    return (
+        <group>
+            {shafts.map((shaft) => (
+                <ProxyBezierShaftItem
+                    key={shaft.id}
+                    shaft={shaft}
+                    color={color}
+                    emissive={emissive}
+                    emissiveIntensity={emissiveIntensity}
+                    transparent={transparent}
+                    opacity={opacity}
+                    clippingPlanes={clippingPlanes}
+                    onShaftClick={onShaftClick}
+                    onShaftPointerMove={onShaftPointerMove}
+                    onShaftPointerOut={onShaftPointerOut}
+                />
+            ))}
+        </group>
+    );
 }
 
 export function SupportProxyMeshLayer({
@@ -281,7 +542,7 @@ export function SupportProxyMeshLayer({
       const key = toModelKey(modelId);
       let existing = byModel.get(key);
       if (!existing) {
-        existing = { modelId, shafts: [], roots: [], joints: [], cones: [] };
+        existing = { modelId, shafts: [], taperedShafts: [], bezierShafts: [], roots: [], joints: [], cones: [] };
         byModel.set(key, existing);
       }
       return existing;
@@ -313,6 +574,72 @@ export function SupportProxyMeshLayer({
     const pushShaft = (shaft: InstancedShaft) => {
       ensureModel(shaft.modelId).shafts.push(shaft);
       registerSegmentMeta(shaft.id, shaft.modelId, shaft.supportId);
+    };
+
+    const pushTaperedShaft = (shaft: ProxyTaperedShaft) => {
+      ensureModel(shaft.modelId).taperedShafts.push(shaft);
+      registerSegmentMeta(shaft.id, shaft.modelId, shaft.supportId);
+    };
+
+    const pushBezierShaft = (shaft: ProxyBezierShaft) => {
+      ensureModel(shaft.modelId).bezierShafts.push(shaft);
+      registerSegmentMeta(shaft.id, shaft.modelId, shaft.supportId);
+    };
+
+    // Emit a (possibly bezier, possibly tapered) segment into the proxy.
+    // Straight uniform → instanced uniform shaft (fast path).
+    // Straight tapered → non-instanced truncated-cone mesh.
+    // Bezier → one continuous TubeGeometry along the curve. We do NOT sample
+    // the curve into a chain of short straight cylinders — that produces
+    // visible stepping/banding because every sub-cylinder has a uniform
+    // radius and meets its neighbour at a slightly different radius.
+    const emitSegment = (args: {
+      segment: Segment;
+      segmentId: string;
+      supportId: string;
+      modelId: string;
+      start: Vec3;
+      end: Vec3;
+      diameterStart: number;
+      diameterEnd: number;
+    }) => {
+      const { segment, segmentId, supportId, modelId, start, end, diameterStart, diameterEnd } = args;
+      if (isBezierSegment(segment)) {
+        pushBezierShaft({
+          id: segmentId,
+          supportId,
+          modelId,
+          start,
+          end,
+          control1: segment.controlPoint1,
+          control2: segment.controlPoint2,
+          resolution: segment.resolution,
+          diameterStart,
+          diameterEnd,
+        });
+        return;
+      }
+      const isTapered = Math.abs(diameterStart - diameterEnd) > 1e-4;
+      if (isTapered) {
+        pushTaperedShaft({
+          id: segmentId,
+          supportId,
+          modelId,
+          start,
+          end,
+          diameterStart,
+          diameterEnd,
+        });
+        return;
+      }
+      pushShaft({
+        id: segmentId,
+        supportId,
+        modelId,
+        start,
+        end,
+        diameter: diameterStart,
+      });
     };
 
     const pushRoot = (root: InstancedRoot) => {
@@ -397,13 +724,15 @@ export function SupportProxyMeshLayer({
         const end = segment.topJoint?.pos
           ?? (trunk.contactCone ? getFinalSocketPosition(trunk.contactCone) : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 5 });
 
-        pushShaft({
-          id: segment.id,
+        emitSegment({
+          segment,
+          segmentId: segment.id,
           supportId: trunk.id,
           modelId: trunk.modelId,
           start: currentStart,
           end,
-          diameter: segment.diameter,
+          diameterStart: segment.diameter,
+          diameterEnd: segment.diameter,
         });
 
         if (includeDetailedPrimitives && segment.topJoint) {
@@ -448,13 +777,15 @@ export function SupportProxyMeshLayer({
         const end = segment.topJoint?.pos
           ?? (branch.contactCone ? getFinalSocketPosition(branch.contactCone) : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 5 });
 
-        pushShaft({
-          id: segment.id,
+        emitSegment({
+          segment,
+          segmentId: segment.id,
           supportId: branch.id,
           modelId: branch.modelId,
           start: currentStart,
           end,
-          diameter: segment.diameter,
+          diameterStart: segment.diameter,
+          diameterEnd: segment.diameter,
         });
 
         if (includeDetailedPrimitives && segment.topJoint) {
@@ -480,6 +811,24 @@ export function SupportProxyMeshLayer({
           supportId: leaf.id,
           modelId: leaf.modelId,
         });
+
+        // Rod connecting the leaf's contact cone (on the model) to its
+        // parent knot on the host shaft. Without this the leaf appears as
+        // a floating cone in proxy views.
+        const parentKnot = supportKnots[leaf.parentKnotId];
+        if (parentKnot) {
+          const tipSocket = getFinalSocketPosition(leaf.contactCone);
+          const cone = leaf.contactCone;
+          const rodDiameter = Math.max(0.001, cone.profile.bodyDiameterMm ?? 0.5);
+          pushShaft({
+            id: `leafRod:${leaf.id}`,
+            supportId: leaf.id,
+            modelId: leaf.modelId,
+            start: tipSocket,
+            end: parentKnot.pos,
+            diameter: rodDiameter,
+          });
+        }
       }
     }
 
@@ -489,12 +838,22 @@ export function SupportProxyMeshLayer({
         pushCone(toProxyConeFromTwigDisk(twig.contactDiskB, twig.id, twig.modelId));
       }
 
+      // Per-segment cumulative-length taper from disk A to disk B (SSOT
+      // lives in twigTaper.ts). Each segment carries its own diameterStart
+      // / diameterEnd so the proxy shows the real tapered/curved rod.
+      const taperBySegment = resolveTwigSegmentDiameters(twig);
+
       for (const segment of twig.segments) {
+        const taper = taperBySegment.get(segment.id);
+        const diameterStart = taper?.diameterStart ?? segment.diameter;
+        const diameterEnd = taper?.diameterEnd ?? segment.diameter;
+
         if (includeDetailedPrimitives && segment.bottomJoint) {
+          // Twig joints follow the 1.10× rule based on local twig diameter.
           pushJoint({
             id: segment.bottomJoint.id,
             pos: segment.bottomJoint.pos,
-            diameter: segment.bottomJoint.diameter,
+            diameter: twigJointDiameterForLocalDiameter(diameterStart),
             supportId: twig.id,
             modelId: twig.modelId,
           });
@@ -503,20 +862,22 @@ export function SupportProxyMeshLayer({
         const start = segment.bottomJoint?.pos ?? getDiskTipCenter(twig.contactDiskA);
         const end = segment.topJoint?.pos ?? getDiskTipCenter(twig.contactDiskB);
 
-        pushShaft({
-          id: segment.id,
+        emitSegment({
+          segment,
+          segmentId: segment.id,
           supportId: twig.id,
           modelId: twig.modelId,
           start,
           end,
-          diameter: segment.diameter,
+          diameterStart,
+          diameterEnd,
         });
 
         if (includeDetailedPrimitives && segment.topJoint) {
           pushJoint({
             id: segment.topJoint.id,
             pos: segment.topJoint.pos,
-            diameter: segment.topJoint.diameter,
+            diameter: twigJointDiameterForLocalDiameter(diameterEnd),
             supportId: twig.id,
             modelId: twig.modelId,
           });
@@ -552,13 +913,15 @@ export function SupportProxyMeshLayer({
         const start = segment.bottomJoint?.pos ?? getFinalSocketPosition(stick.contactConeA);
         const end = segment.topJoint?.pos ?? getFinalSocketPosition(stick.contactConeB);
 
-        pushShaft({
-          id: segment.id,
+        emitSegment({
+          segment,
+          segmentId: segment.id,
           supportId: stick.id,
           modelId: stick.modelId,
           start,
           end,
-          diameter: segment.diameter,
+          diameterStart: segment.diameter,
+          diameterEnd: segment.diameter,
         });
 
         if (includeDetailedPrimitives && segment.topJoint) {
@@ -591,14 +954,45 @@ export function SupportProxyMeshLayer({
         (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
       );
 
-      pushShaft({
-        id: `braceSegment:${brace.id}`,
-        supportId: brace.id,
-        modelId: brace.modelId,
-        start: startKnot.pos,
-        end: endKnot.pos,
-        diameter: (startHostDiameter + endHostDiameter) * 0.5,
-      });
+      const segmentId = `braceSegment:${brace.id}`;
+      const bezier = brace.curve?.type === 'bezier' ? brace.curve : null;
+
+      if (bezier) {
+        // Render the curved brace as one continuous TubeGeometry mirroring
+        // the full-renderer path, so it shows a smooth taper instead of a
+        // stack of stepped cylinders.
+        pushBezierShaft({
+          id: segmentId,
+          supportId: brace.id,
+          modelId: brace.modelId,
+          start: startKnot.pos,
+          end: endKnot.pos,
+          control1: bezier.controlPoint1,
+          control2: bezier.controlPoint2,
+          resolution: bezier.resolution,
+          diameterStart: startHostDiameter,
+          diameterEnd: endHostDiameter,
+        });
+      } else if (Math.abs(startHostDiameter - endHostDiameter) > 1e-4) {
+        pushTaperedShaft({
+          id: segmentId,
+          supportId: brace.id,
+          modelId: brace.modelId,
+          start: startKnot.pos,
+          end: endKnot.pos,
+          diameterStart: startHostDiameter,
+          diameterEnd: endHostDiameter,
+        });
+      } else {
+        pushShaft({
+          id: segmentId,
+          supportId: brace.id,
+          modelId: brace.modelId,
+          start: startKnot.pos,
+          end: endKnot.pos,
+          diameter: startHostDiameter,
+        });
+      }
     }
 
     // Knots are interaction affordances (branch/brace attachment point drag handles) rendered
@@ -662,13 +1056,15 @@ export function SupportProxyMeshLayer({
         }
 
         const end = segment.topJoint?.pos ?? hostKnot.pos;
-        pushShaft({
-          id: segment.id,
+        emitSegment({
+          segment,
+          segmentId: segment.id,
           supportId: kickstand.id,
           modelId: kickstand.modelId,
           start: currentStart,
           end,
-          diameter: segment.diameter,
+          diameterStart: segment.diameter,
+          diameterEnd: segment.diameter,
         });
 
         if (includeDetailedPrimitives && segment.topJoint) {
@@ -832,6 +1228,30 @@ export function SupportProxyMeshLayer({
     setSupportHoverModel(shaft.modelId ?? null);
   }, [pointerHoverEnabled, setSupportHoverModel]);
 
+  const handleProxyTaperedShaftClick = React.useCallback((shaft: ProxyTaperedShaft) => {
+    if (!pointerSelectionEnabled) return;
+    if (!shaft.modelId) return;
+    if (hit.category === 'gizmo') return;
+    onModelPointerSelect?.(shaft.modelId);
+  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
+
+  const handleProxyTaperedShaftPointerMove = React.useCallback((shaft: ProxyTaperedShaft) => {
+    if (!pointerHoverEnabled) return;
+    setSupportHoverModel(shaft.modelId ?? null);
+  }, [pointerHoverEnabled, setSupportHoverModel]);
+
+  const handleProxyBezierShaftClick = React.useCallback((shaft: ProxyBezierShaft) => {
+    if (!pointerSelectionEnabled) return;
+    if (!shaft.modelId) return;
+    if (hit.category === 'gizmo') return;
+    onModelPointerSelect?.(shaft.modelId);
+  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
+
+  const handleProxyBezierShaftPointerMove = React.useCallback((shaft: ProxyBezierShaft) => {
+    if (!pointerHoverEnabled) return;
+    setSupportHoverModel(shaft.modelId ?? null);
+  }, [pointerHoverEnabled, setSupportHoverModel]);
+
   const handleProxyRootClick = React.useCallback((root: InstancedRoot) => {
     if (!pointerSelectionEnabled) return;
     if (!root.modelId) return;
@@ -901,7 +1321,7 @@ export function SupportProxyMeshLayer({
   // This restores the "singular mesh" performance characteristic that was lost when per-model
   // groups were introduced in the ZIP Import / Batch Export refactor.
   const flattenedGeometry = React.useMemo(() => {
-    const createEmpty = (): FlatProxyGeometry => ({ shafts: [], roots: [], joints: [], cones: [] });
+    const createEmpty = (): FlatProxyGeometry => ({ shafts: [], taperedShafts: [], bezierShafts: [], roots: [], joints: [], cones: [] });
     const base = createEmpty();
     const highlighted = createEmpty();
 
@@ -914,6 +1334,32 @@ export function SupportProxyMeshLayer({
         ...shaft,
         start: { x: shaft.start.x, y: shaft.start.y, z: shaft.start.z + zOffset },
         end: { x: shaft.end.x, y: shaft.end.y, z: shaft.end.z + zOffset },
+      });
+    };
+
+    const appendTaperedShaft = (target: FlatProxyGeometry, shaft: ProxyTaperedShaft, zOffset: number) => {
+      if (Math.abs(zOffset) < 1e-6) {
+        target.taperedShafts.push(shaft);
+        return;
+      }
+      target.taperedShafts.push({
+        ...shaft,
+        start: { x: shaft.start.x, y: shaft.start.y, z: shaft.start.z + zOffset },
+        end: { x: shaft.end.x, y: shaft.end.y, z: shaft.end.z + zOffset },
+      });
+    };
+
+    const appendBezierShaft = (target: FlatProxyGeometry, shaft: ProxyBezierShaft, zOffset: number) => {
+      if (Math.abs(zOffset) < 1e-6) {
+        target.bezierShafts.push(shaft);
+        return;
+      }
+      target.bezierShafts.push({
+        ...shaft,
+        start: { x: shaft.start.x, y: shaft.start.y, z: shaft.start.z + zOffset },
+        end: { x: shaft.end.x, y: shaft.end.y, z: shaft.end.z + zOffset },
+        control1: { x: shaft.control1.x, y: shaft.control1.y, z: shaft.control1.z + zOffset },
+        control2: { x: shaft.control2.x, y: shaft.control2.y, z: shaft.control2.z + zOffset },
       });
     };
 
@@ -955,6 +1401,8 @@ export function SupportProxyMeshLayer({
       const zOffset = entry.zOffset;
 
       for (const shaft of entry.geometry.shafts) appendShaft(target, shaft, zOffset);
+      for (const shaft of entry.geometry.taperedShafts) appendTaperedShaft(target, shaft, zOffset);
+      for (const shaft of entry.geometry.bezierShafts) appendBezierShaft(target, shaft, zOffset);
       for (const root of entry.geometry.roots) appendRoot(target, root, zOffset);
       if (includeDetailedPrimitives) {
         for (const joint of entry.geometry.joints) appendJoint(target, joint, zOffset);
@@ -970,10 +1418,14 @@ export function SupportProxyMeshLayer({
   }
 
   const hasBase = flattenedGeometry.base.shafts.length > 0
+    || flattenedGeometry.base.taperedShafts.length > 0
+    || flattenedGeometry.base.bezierShafts.length > 0
     || flattenedGeometry.base.roots.length > 0
     || (includeDetailedPrimitives && (flattenedGeometry.base.joints.length > 0 || flattenedGeometry.base.cones.length > 0));
 
   const hasHighlighted = flattenedGeometry.highlighted.shafts.length > 0
+    || flattenedGeometry.highlighted.taperedShafts.length > 0
+    || flattenedGeometry.highlighted.bezierShafts.length > 0
     || flattenedGeometry.highlighted.roots.length > 0
     || (includeDetailedPrimitives && (flattenedGeometry.highlighted.joints.length > 0 || flattenedGeometry.highlighted.cones.length > 0));
 
@@ -987,11 +1439,35 @@ export function SupportProxyMeshLayer({
               color={DEFAULT_SUPPORT_COLOR}
               transparent={proxyTransparent}
               opacity={proxyOpacity}
-              radialSegments={10}
+              radialSegments={16}
               clippingPlanes={clippingPlanes}
               outOfBoundsMaterial={outOfBoundsMaterial}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
               onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {flattenedGeometry.base.taperedShafts.length > 0 && (
+            <ProxyTaperedShaftGroup
+              shafts={flattenedGeometry.base.taperedShafts}
+              color={DEFAULT_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyTaperedShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyTaperedShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {flattenedGeometry.base.bezierShafts.length > 0 && (
+            <ProxyBezierShaftGroup
+              shafts={flattenedGeometry.base.bezierShafts}
+              color={DEFAULT_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyBezierShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyBezierShaftPointerMove : undefined}
               onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
@@ -1043,11 +1519,35 @@ export function SupportProxyMeshLayer({
               color={ACTIVE_SUPPORT_COLOR}
               transparent={proxyTransparent}
               opacity={proxyOpacity}
-              radialSegments={10}
+              radialSegments={16}
               clippingPlanes={clippingPlanes}
               outOfBoundsMaterial={outOfBoundsMaterial}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
               onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {flattenedGeometry.highlighted.taperedShafts.length > 0 && (
+            <ProxyTaperedShaftGroup
+              shafts={flattenedGeometry.highlighted.taperedShafts}
+              color={ACTIVE_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyTaperedShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyTaperedShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+          {flattenedGeometry.highlighted.bezierShafts.length > 0 && (
+            <ProxyBezierShaftGroup
+              shafts={flattenedGeometry.highlighted.bezierShafts}
+              color={ACTIVE_SUPPORT_COLOR}
+              transparent={proxyTransparent}
+              opacity={proxyOpacity}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyBezierShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyBezierShaftPointerMove : undefined}
               onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}
@@ -1105,10 +1605,40 @@ export function SupportProxyMeshLayer({
               emissiveIntensity={0.1}
               transparent={hoverOverlayTransparent}
               opacity={hoverOverlayOpacity}
-              radialSegments={10}
+              radialSegments={16}
               clippingPlanes={clippingPlanes}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
               onShaftPointerMove={pointerHoverEnabled ? handleProxyShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+
+          {hoveredOverlayEntry.geometry.taperedShafts.length > 0 && (
+            <ProxyTaperedShaftGroup
+              shafts={hoveredOverlayEntry.geometry.taperedShafts}
+              color={hoveredOverlayColor}
+              emissive={hoveredOverlayColor}
+              emissiveIntensity={0.1}
+              transparent={hoverOverlayTransparent}
+              opacity={hoverOverlayOpacity}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyTaperedShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyTaperedShaftPointerMove : undefined}
+              onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
+            />
+          )}
+
+          {hoveredOverlayEntry.geometry.bezierShafts.length > 0 && (
+            <ProxyBezierShaftGroup
+              shafts={hoveredOverlayEntry.geometry.bezierShafts}
+              color={hoveredOverlayColor}
+              emissive={hoveredOverlayColor}
+              emissiveIntensity={0.1}
+              transparent={hoverOverlayTransparent}
+              opacity={hoverOverlayOpacity}
+              clippingPlanes={clippingPlanes}
+              onShaftClick={pointerSelectionEnabled ? handleProxyBezierShaftClick : undefined}
+              onShaftPointerMove={pointerHoverEnabled ? handleProxyBezierShaftPointerMove : undefined}
               onShaftPointerOut={pointerHoverEnabled ? handleProxyPointerOut : undefined}
             />
           )}

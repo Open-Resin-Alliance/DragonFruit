@@ -11,6 +11,7 @@ import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
+import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
@@ -73,6 +74,7 @@ export function LeafPlacementController() {
                 includeTrunks: true,
                 includeBranches: true,
                 includeBraces: true,
+                includeTwigs: true,
             }),
             ...buildKickstandPathSnapTargets(kickstandState),
         ];
@@ -81,12 +83,25 @@ export function LeafPlacementController() {
         supportState.trunks,
         supportState.branches,
         supportState.braces,
+        supportState.twigs,
         kickstandState.kickstands,
     ]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
     }, [allTargets]);
+
+    // Reverse lookup: twig segment id → owning twig. Used to resolve a Leaf's
+    // base diameter against the twig's continuous taper as the knot slides.
+    const twigBySegmentId = useMemo(() => {
+        const map = new Map<string, typeof supportState.twigs[string]>();
+        for (const twig of Object.values(supportState.twigs)) {
+            for (const seg of twig.segments) {
+                map.set(seg.id, twig);
+            }
+        }
+        return map;
+    }, [supportState.twigs]);
 
     const getTarget = useCallback((id: string): SnapTarget | null => {
         return targetById.get(id) ?? null;
@@ -219,6 +234,14 @@ export function LeafPlacementController() {
                 }
             }
 
+            // If snapped to a twig segment, resolve the twig's continuous
+            // disk-A→disk-B taper at this exact slide position.
+            const snappedTwig = twigBySegmentId.get(resolvedSnap.targetId);
+            if (snappedTwig) {
+                const twigDia = resolveTwigDiameterAtSegmentT(snappedTwig, resolvedSnap.targetId, resolvedSnap.t);
+                if (twigDia !== null) hostDiameterMm = twigDia;
+            }
+
             leafPlacementStore.setSnapTarget({
                 targetId: resolvedSnap.targetId,
                 snappedPos: resolvedSnap.snappedPos,
@@ -266,6 +289,12 @@ export function LeafPlacementController() {
                             );
                             hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, projected.t);
                         }
+                    }
+
+                    const hoveredTwig = twigBySegmentId.get(segmentId);
+                    if (hoveredTwig) {
+                        const twigDia = resolveTwigDiameterAtSegmentT(hoveredTwig, segmentId, projected.t);
+                        if (twigDia !== null) hostDiameterMm = twigDia;
                     }
 
                     leafPlacementStore.setSnapTarget({
@@ -346,12 +375,26 @@ export function LeafPlacementController() {
             if (lastPreviewSignatureRef.current !== previewSignature) {
                 lastPreviewSignatureRef.current = previewSignature;
 
+                // On a twig, the parent knot is 10% larger than the local
+                // tapered diameter (matching the disk-end joint rule). On
+                // other hosts, the legacy +0.1mm offset is used. For the
+                // placement preview specifically, take whichever yields the
+                // larger ball so the visual feedback is consistently visible
+                // even on thin twig ends where 10% adds barely a fraction.
+                const previewKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
+                const previewKnotDiameter = previewKnotIsOnTwig
+                    ? Math.max(
+                        twigJointDiameterForLocalDiameter(resolvedHostDiameter),
+                        resolvedHostDiameter + 0.1,
+                    )
+                    : resolvedHostDiameter + 0.1;
+
                 const parentKnot: Knot = {
                     id: 'preview-knot',
                     parentShaftId: segmentId,
                     t,
                     pos: knotPos,
-                    diameter: resolvedHostDiameter + 0.1,
+                    diameter: previewKnotDiameter,
                 };
 
                 const buildResult = buildLeafData({
@@ -375,9 +418,13 @@ export function LeafPlacementController() {
                 const knotAboveTip = knotPos.z > tipPosition.z + epsilonZ;
                 const tooFlat = angleFromUpDeg > maxAngleDeg;
 
+                // Don't pass `angle` here: it triggers the orange→yellow→green
+                // surface-steepness gradient (calibrated for trunks). For leaves,
+                // the angle is already validated via tooFlat→warning, so the
+                // preview should fall through to the standard green / yellow /
+                // red error states like other knot placements.
                 leafPlacementStore.setPreviewData({
                     ...buildResult.supportData,
-                    angle: angleFromUpDeg,
                     error: knotAboveTip ? 'KNOT_ABOVE_TIP' : undefined,
                     warning: !knotAboveTip && tooFlat ? 'SHAFT_ANGLE_TOO_FLAT' : undefined,
                 });
@@ -410,12 +457,17 @@ export function LeafPlacementController() {
 
             if (!hostDiameterMm) return;
 
+            const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
+            const committedKnotDiameter = committedKnotIsOnTwig
+                ? twigJointDiameterForLocalDiameter(hostDiameterMm)
+                : hostDiameterMm + 0.1;
+
             const parentKnot: Knot = {
                 id: knotId,
                 parentShaftId: segmentId,
                 t: snapTarget.t,
                 pos: snapTarget.snappedPos,
-                diameter: hostDiameterMm + 0.1,
+                diameter: committedKnotDiameter,
             };
 
             const settings = getSettings();

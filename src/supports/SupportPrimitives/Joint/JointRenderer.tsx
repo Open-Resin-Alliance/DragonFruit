@@ -13,7 +13,7 @@ import { isSupportEditInteractionActive } from '../../interaction/gizmoInteracti
 interface JointRendererProps {
     joint: Joint;
     // Optional overrides from parent
-    color?: string; 
+    color?: string;
     emissive?: string;
     emissiveIntensity?: number;
     selectedColor?: string;
@@ -25,6 +25,11 @@ interface JointRendererProps {
     isParentSelected?: boolean;
     raycast?: any;
     enablePicking?: boolean;
+    // When set, this joint behaves as a visual extension of the named disk:
+    // skips its own picking/click/drag, and treats the disk's selection
+    // state as its own. Used for Twig disk-end joints so the joint and disk
+    // act as one selectable part.
+    attachedToDiskId?: string;
 }
 
 export function JointRenderer({ 
@@ -40,7 +45,8 @@ export function JointRenderer({
     isInteractable = true,
     isParentSelected = false,
     raycast,
-    enablePicking = true
+    enablePicking = true,
+    attachedToDiskId,
 }: JointRendererProps) {
     const resolvedDiameter = joint.diameter ?? 0;
     const blendedDiameter = Math.max(0.001, resolvedDiameter - JOINT_DIAMETER_OFFSET_MM * 0.75);
@@ -49,18 +55,22 @@ export function JointRenderer({
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
-    // State Subscription
+    // State Subscription. When attached to a disk, mirror the disk's selection
+    // state instead of having an independent one.
     const selectedId = useSyncExternalStore(subscribe, getSelectedId, getSelectedId);
-    const isSelected = selectedId === joint.id;
+    const isSelected = attachedToDiskId
+        ? selectedId === attachedToDiskId
+        : selectedId === joint.id;
 
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
     const { register, unregister, hit, onDragStart, onDragEnd, isDragging } = usePicking();
 
     // Register with picking system - only when parent is selected
-    // When parent is NOT selected, we don't register so picking falls through to the support
+    // When parent is NOT selected, we don't register so picking falls through to the support.
+    // When attached to a disk, the disk is the pick target; this joint never registers.
     useEffect(() => {
-        if (!groupRef.current || !enablePicking || !isParentSelected) {
+        if (!groupRef.current || !enablePicking || !isParentSelected || attachedToDiskId) {
             // Unregister if we were registered
             if (pickIdRef.current !== null) {
                 unregister(pickIdRef.current);
@@ -81,7 +91,7 @@ export function JointRenderer({
                 pickIdRef.current = null;
             }
         };
-    }, [register, unregister, joint.id, enablePicking, isParentSelected]);
+    }, [register, unregister, joint.id, enablePicking, isParentSelected, attachedToDiskId]);
 
     // Determine Hover State
     // Only show hover if parent is selected (editable mode) AND joint is not already selected
@@ -117,6 +127,10 @@ export function JointRenderer({
     };
 
     const handleClick = (e: any) => {
+        // When attached to a disk, the joint is purely visual; clicks should
+        // fall through to the disk's own handlers.
+        if (attachedToDiskId) return;
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
@@ -136,9 +150,12 @@ export function JointRenderer({
             if (onClick) onClick(e);
         });
     };
-    
+
     // Handle pointer down for direct dragging (left-click only)
     const handlePointerDown = (e: any) => {
+        // When attached to a disk, the joint is not independently draggable.
+        if (attachedToDiskId) return;
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
@@ -155,7 +172,7 @@ export function JointRenderer({
         if (e.button !== 0) return;
         const pointerOverJoint = isPointerOverThisJoint(e);
         if (!isParentSelected || !isInteractable || !pointerOverJoint) return;
-        
+
         e.stopPropagation();
         
         // Select this joint if not already selected
@@ -217,24 +234,29 @@ export function JointRenderer({
     
     const hitboxRadius = isParentSelected ? radius * 1.15 : radius;
 
+    // Joints attached to a disk must not absorb pointer events — those go
+    // straight to the disk so the joint+disk behave as one selectable part.
+    const noopRaycast = () => {};
+    const meshRaycast = attachedToDiskId ? (noopRaycast as any) : raycast;
+
     return (
-        <group 
+        <group
             ref={groupRef}
             position={[effectiveJointPos.x, effectiveJointPos.y, effectiveJointPos.z]}
             userData={{ supportPrimitiveType: 'joint' }}
-            onClick={handleClick}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerLeave={handlePointerLeave}
+            onClick={attachedToDiskId ? undefined : handleClick}
+            onPointerDown={attachedToDiskId ? undefined : handlePointerDown}
+            onPointerMove={attachedToDiskId ? undefined : handlePointerMove}
+            onPointerLeave={attachedToDiskId ? undefined : handlePointerLeave}
         >
             {/* Hitbox Mesh - Only expanded when parent is selected */}
-            <mesh raycast={raycast} userData={{ supportPrimitiveType: 'joint' }}>
+            <mesh raycast={meshRaycast} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[hitboxRadius, 16, 12]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
 
             {/* Visual Mesh - Purely display */}
-            <mesh raycast={raycast} userData={{ supportPrimitiveType: 'joint' }}>
+            <mesh raycast={meshRaycast} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[radius, 16, 12]} />
                 <meshStandardMaterial 
                     color={displayColor} 

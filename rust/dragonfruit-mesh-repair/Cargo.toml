@@ -3,6 +3,7 @@ name = "dragonfruit-mesh-repair"
 version = "0.1.0"
 edition = "2021"
 default-run = "dragonfruit-mesh-repair"
+license = "MIT"
 
 [lib]
 name = "dragonfruit_mesh_repair"

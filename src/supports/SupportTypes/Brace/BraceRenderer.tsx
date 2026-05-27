@@ -119,6 +119,29 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const shouldRenderDetailedBezier = isBezierBrace && (isSelected || !deferStraightShaftToSceneBatch);
     const shouldRenderDetailedStraight = !isBezierBrace && (isSelected || (!deferStraightShaftToSceneBatch && batchedStraightShafts.length === 0));
 
+    // Tapered + unselected straight braces render via ShaftRenderer in non-
+    // interaction mode (its pick mesh is omitted). Without a sized hitbox the
+    // GPU picker sees only the small starting radius — clicks on the wider end
+    // miss. Mirror the twig pattern: drop in an invisible truncated-cone shell
+    // matching the visible cylinder so the whole rod is pickable.
+    const renderTaperedPickShell = shouldRenderDetailedStraight && !isSelected && isTaperedBrace;
+    const taperedPickShell = useMemo(() => {
+        if (!renderTaperedPickShell) return null;
+        const length = startVec.distanceTo(endVec);
+        if (length < 0.001) return null;
+        const midpoint = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5);
+        const direction = new THREE.Vector3().subVectors(endVec, startVec).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+        return {
+            position: [midpoint.x, midpoint.y, midpoint.z] as [number, number, number],
+            quaternion,
+            length,
+            radiusStart: startHostDiameter / 2,
+            radiusEnd: endHostDiameter / 2,
+        };
+    }, [renderTaperedPickShell, startVec, endVec, startHostDiameter, endHostDiameter]);
+
     const handleClick = (e: BraceRendererClickEvent) => {
         if (!effectiveInteractable) return;
 
@@ -222,6 +245,16 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : null}
+                    {taperedPickShell && (
+                        <mesh
+                            position={taperedPickShell.position}
+                            quaternion={taperedPickShell.quaternion}
+                            userData={{ supportPrimitiveType: 'shaft', segmentId }}
+                        >
+                            <cylinderGeometry args={[taperedPickShell.radiusEnd, taperedPickShell.radiusStart, taperedPickShell.length, 16]} />
+                            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+                        </mesh>
+                    )}
                 </group>
             </group>
 

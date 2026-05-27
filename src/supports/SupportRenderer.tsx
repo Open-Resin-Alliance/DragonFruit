@@ -22,12 +22,14 @@ import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteracti
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
 import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
-import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectGhostedBraceIds, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
+import { useActiveTwigDragPreview } from './SupportTypes/Twig/twigDragPreview';
+import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf } from './types';
+import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf, type Twig } from './types';
+import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierToLineSegments, calculateAdaptiveBezierResolution } from './Curves/BezierUtils';
 import type { SupportData } from './rendering';
 import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
@@ -37,7 +39,8 @@ import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
 import { useResolvedSelectionState } from './interaction/shared/selection/resolvedSelectionStore';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
@@ -77,15 +80,37 @@ interface SupportRendererProps {
     kickstandPlacementPreview?: SupportData | null;
 }
 
+interface PlacementPreviewTaperedShaft {
+    id: string;
+    start: Vec3Like;
+    end: Vec3Like;
+    diameterStart: number;
+    diameterEnd: number;
+}
+
+interface PlacementPreviewDisk {
+    id: string;
+    pos: Vec3Like;
+    surfaceNormal: Vec3Like;
+    coneAxis: Vec3Like;
+    profile: ContactDiskProfile;
+    contactDiameterMm: number;
+    diskLengthOverride?: number;
+}
+
 interface PlacementPreviewBatch {
     id: string;
     color: string;
     opacity: number;
     shafts: InstancedShaft[];
+    taperedShafts: PlacementPreviewTaperedShaft[];
+    disks: PlacementPreviewDisk[];
     joints: InstancedJoint[];
     roots: InstancedRoot[];
     cones: InstancedContactCone[];
 }
+
+interface Vec3Like { x: number; y: number; z: number; }
 
 function applyBatchedBezierSeamOverlap(
     points: Array<{ x: number; y: number; z: number }>,
@@ -208,11 +233,13 @@ function tessellateBraceBezierToShafts(
 
 function recomputeLeafPreviewContactCone(
     leaf: Leaf,
-    previewKnotPos: { x: number; y: number; z: number },
+    previewKnot: Knot,
+    twigBySegmentId: Map<string, Twig>,
 ) {
     const cone = leaf.contactCone;
     if (!cone?.surfaceNormal) return leaf;
 
+    const previewKnotPos = previewKnot.pos;
     const tip = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
     const sn = new THREE.Vector3(cone.surfaceNormal.x, cone.surfaceNormal.y, cone.surfaceNormal.z);
     const knot = new THREE.Vector3(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
@@ -240,10 +267,25 @@ function recomputeLeafPreviewContactCone(
         }
     }
 
+    // If the parent knot sits on a tapered twig, the leaf's wide-end diameter
+    // (bodyDiameterMm) must live-track the twig's local diameter at the knot's
+    // current slide T. Otherwise the cone "neck" stays frozen at the placement
+    // diameter while the knot visibly grows/shrinks.
+    let nextBodyDiameterMm = cone.profile.bodyDiameterMm;
+    const hostTwig = previewKnot.parentShaftId ? twigBySegmentId.get(previewKnot.parentShaftId) : undefined;
+    if (hostTwig && previewKnot.t !== undefined) {
+        const localTwigDia = resolveTwigDiameterAtSegmentT(hostTwig, previewKnot.parentShaftId, previewKnot.t);
+        if (localTwigDia !== null) {
+            nextBodyDiameterMm = localTwigDia;
+        }
+    }
+
     const oldNormal = cone.normal;
     const oldLen = cone.profile.lengthMm;
+    const oldBodyDia = cone.profile.bodyDiameterMm;
     if (
         oldLen === finalLength
+        && oldBodyDia === nextBodyDiameterMm
         && oldNormal.x === axis.x
         && oldNormal.y === axis.y
         && oldNormal.z === axis.z
@@ -259,6 +301,7 @@ function recomputeLeafPreviewContactCone(
             profile: {
                 ...cone.profile,
                 lengthMm: finalLength,
+                bodyDiameterMm: nextBodyDiameterMm,
             },
         },
     };
@@ -303,8 +346,15 @@ function resolvePlacementPreviewMaterial(preview: SupportData): { color: string;
         };
     }
 
-    let angle = preview.angle;
-    if (angle === undefined && preview.contactCone) {
+    // Leaf previews have a knot + contactCone but no shaft segments. The
+    // surface-steepness gradient is calibrated for trunk-style placements;
+    // for leaves the angle has the opposite semantic and always resolves to
+    // orange. Treat leaves like trunks/branches and fall through to the
+    // standard green / yellow / red states.
+    const isLeafPreview = preview.segments.length === 0 && !!preview.knot && !!preview.contactCone;
+
+    let angle = isLeafPreview ? undefined : preview.angle;
+    if (!isLeafPreview && angle === undefined && preview.contactCone) {
         const normal = new THREE.Vector3(
             preview.contactCone.normal.x,
             preview.contactCone.normal.y,
@@ -358,9 +408,33 @@ function buildSupportPlacementPreviewBatch(
     raftThickness: number,
 ): PlacementPreviewBatch | null {
     const shafts: InstancedShaft[] = [];
+    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
+    const disks: PlacementPreviewDisk[] = [];
     const jointsMap = new Map<string, InstancedJoint>();
     const roots: InstancedRoot[] = [];
     const cones: InstancedContactCone[] = [];
+
+    // Twig placements carry two ContactDisks (one per end). The disks define
+    // the rod's true per-end diameters; segment.diameter is a placeholder.
+    // Use the disk contact diameters to draw a tapered shaft so the preview
+    // matches what the finished twig will look like.
+    const twigDiskA = preview.contactDisks && preview.contactDisks.length === 2 ? preview.contactDisks[0] : null;
+    const twigDiskB = preview.contactDisks && preview.contactDisks.length === 2 ? preview.contactDisks[1] : null;
+    const isTwigPreview = !!(twigDiskA && twigDiskB);
+
+    if (preview.contactDisks) {
+        for (const disk of preview.contactDisks) {
+            disks.push({
+                id: disk.id,
+                pos: disk.pos,
+                surfaceNormal: disk.surfaceNormal,
+                coneAxis: disk.coneAxis,
+                profile: disk.profile,
+                contactDiameterMm: disk.contactDiameterMm,
+                diskLengthOverride: disk.diskLengthOverride,
+            });
+        }
+    }
 
     let currentStart: THREE.Vector3;
 
@@ -402,7 +476,10 @@ function buildSupportPlacementPreviewBatch(
         currentStart = new THREE.Vector3(0, 0, 0);
     }
 
-    if (preview.knot && preview.segments.length > 0) {
+    if (preview.knot) {
+        // Leaves carry preview.knot but have no shaft segments — without
+        // including the knot here the preview's parent ball is invisible
+        // when snapping a leaf onto another support (trunk, twig, etc.).
         jointsMap.set(preview.knot.id, {
             id: preview.knot.id,
             pos: preview.knot.pos,
@@ -426,6 +503,37 @@ function buildSupportPlacementPreviewBatch(
                 pos: segment.topJoint.pos,
                 diameter: segment.topJoint.diameter,
                 supportId: id,
+            });
+        }
+    }
+
+    // Twig taper: precompute per-segment start/end diameters lerped along the
+    // cumulative-length parameter so a multi-segment twig still presents one
+    // continuous A→B taper.
+    let twigSegmentDiameters: Array<{ start: number; end: number }> | null = null;
+    if (isTwigPreview) {
+        const segLengths: number[] = [];
+        let total = 0;
+        for (const seg of preview.segments) {
+            const a = seg.bottomJoint?.pos;
+            const b = seg.topJoint?.pos;
+            if (!a || !b) { segLengths.push(0); continue; }
+            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+            const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            segLengths.push(len);
+            total += len;
+        }
+        twigSegmentDiameters = [];
+        const dA = twigDiskA!.contactDiameterMm;
+        const dB = twigDiskB!.contactDiameterMm;
+        let cursor = 0;
+        for (let i = 0; i < preview.segments.length; i++) {
+            const sStart = total > 1e-8 ? cursor / total : 0;
+            cursor += segLengths[i];
+            const sEnd = total > 1e-8 ? cursor / total : 1;
+            twigSegmentDiameters.push({
+                start: dA + (dB - dA) * sStart,
+                end: dA + (dB - dA) * sEnd,
             });
         }
     }
@@ -458,6 +566,15 @@ function buildSupportPlacementPreviewBatch(
                     id,
                 ),
             );
+        } else if (twigSegmentDiameters) {
+            const dia = twigSegmentDiameters[index];
+            taperedShafts.push({
+                id: segment.id,
+                start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                diameterStart: dia.start,
+                diameterEnd: dia.end,
+            });
         } else {
             shafts.push({
                 id: segment.id,
@@ -489,7 +606,7 @@ function buildSupportPlacementPreviewBatch(
         });
     });
 
-    if (shafts.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
+    if (shafts.length === 0 && taperedShafts.length === 0 && disks.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
         return null;
     }
 
@@ -499,6 +616,8 @@ function buildSupportPlacementPreviewBatch(
         color,
         opacity,
         shafts,
+        taperedShafts,
+        disks,
         joints: Array.from(jointsMap.values()),
         roots,
         cones,
@@ -527,14 +646,25 @@ function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData):
     ];
 
     const shafts: InstancedShaft[] = [];
+    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
     if (lenSq >= 1e-6) {
-        shafts.push({
-            id: `${id}:shaft`,
-            start,
-            end,
-            diameter: (startDiameter + endDiameter) / 2,
-            supportId: id,
-        });
+        if (Math.abs(startDiameter - endDiameter) > 1e-4) {
+            taperedShafts.push({
+                id: `${id}:shaft`,
+                start,
+                end,
+                diameterStart: startDiameter,
+                diameterEnd: endDiameter,
+            });
+        } else {
+            shafts.push({
+                id: `${id}:shaft`,
+                start,
+                end,
+                diameter: (startDiameter + endDiameter) / 2,
+                supportId: id,
+            });
+        }
 
         joints.push({
             id: `${id}:end-joint`,
@@ -549,6 +679,8 @@ function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData):
         color: PLACEMENT_PREVIEW_COLOR,
         opacity: PLACEMENT_PREVIEW_OPACITY,
         shafts,
+        taperedShafts,
+        disks: [],
         joints,
         roots: [],
         cones: [],
@@ -575,7 +707,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const useMultiSelectionDetail = hasSupportMultiSelection && effectiveSelectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
-    const enableTwigSceneBatching = false;
+    // Twigs participate in scene-batched shaft rendering like other supports.
+    // TwigRenderer still mounts (to draw the disks + joints, which have no
+    // scene-batched equivalent); it just defers its straight shafts to the
+    // batched pipeline via deferStraightShaftsToSceneBatch.
+    const enableTwigSceneBatching = true;
 
     const interactionHooksEnabled = !passive;
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
@@ -625,6 +761,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportIds = supportSelectionAndHoverSuppressed ? EMPTY_SUPPORT_ID_LIST : marqueeHover.supportIds;
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
     const activeKnotDragPreview = useActiveKnotDragPreview();
+    const activeTwigDragPreview = useActiveTwigDragPreview();
     const supportRenderLookupInput = useMemo(() => ({
         state: {
             roots: state.roots,
@@ -662,6 +799,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const branchList = useMemo(() => Object.values(state.branches), [state.branches]);
     const leafList = useMemo(() => Object.values(state.leaves), [state.leaves]);
     const twigList = useMemo(() => Object.values(state.twigs), [state.twigs]);
+    // Reverse lookup: twig segment id → owning twig. Used during knot drag to
+    // resolve a Leaf's wide-end (bodyDiameterMm) against the twig taper so the
+    // cone visibly tapers with the knot. While a disk drag is in flight, the
+    // live (not-yet-committed) twig is substituted so taper math reflects the
+    // live geometry.
+    const twigBySegmentId = useMemo(() => {
+        const map = new Map<string, Twig>();
+        for (const twig of twigList) {
+            const liveTwig = activeTwigDragPreview && activeTwigDragPreview.twigId === twig.id
+                ? activeTwigDragPreview.twig
+                : twig;
+            for (const seg of liveTwig.segments) {
+                map.set(seg.id, liveTwig);
+            }
+        }
+        return map;
+    }, [twigList, activeTwigDragPreview]);
     const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
     const anchorList = useMemo(() => Object.values(state.anchors), [state.anchors]);
@@ -1605,16 +1759,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const previewSeedKnotOverrides = useMemo(() => {
         const knotPreview = activeKnotDragPreview?.knot;
-        if (!knotPreview) return basePreviewKnotOverrides;
-        if (basePreviewKnotOverrides[knotPreview.id] === knotPreview) return basePreviewKnotOverrides;
-        return {
-            ...basePreviewKnotOverrides,
-            [knotPreview.id]: knotPreview,
-        };
-    }, [basePreviewKnotOverrides, activeKnotDragPreview]);
+        const twigKnots = activeTwigDragPreview?.knotsById;
+        const hasTwigKnots = !!twigKnots && Object.keys(twigKnots).length > 0;
+
+        if (!knotPreview && !hasTwigKnots) return basePreviewKnotOverrides;
+
+        const merged = { ...basePreviewKnotOverrides };
+        if (hasTwigKnots) {
+            for (const id in twigKnots) merged[id] = twigKnots[id];
+        }
+        if (knotPreview) merged[knotPreview.id] = knotPreview;
+        return merged;
+    }, [basePreviewKnotOverrides, activeKnotDragPreview, activeTwigDragPreview]);
 
     const shouldCascadeDependentPreview = !freezeDependentPreviewDuringJointDrag
-        && (!!activeJointDragPreview?.support || !!activeKnotDragPreview?.knot);
+        && (!!activeJointDragPreview?.support || !!activeKnotDragPreview?.knot || !!activeTwigDragPreview);
 
     const previewKnotOverrides = useMemo(() => {
         return computeCascadedPreviewKnotOverrides({
@@ -1637,9 +1796,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             previewKnotOverrides,
             leafIdsByParentKnotId,
             leavesById: state.leaves,
-            recomputeLeafPreviewContactCone,
+            recomputeLeafPreviewContactCone: (leaf, previewKnot) =>
+                recomputeLeafPreviewContactCone(leaf, previewKnot, twigBySegmentId),
         });
-    }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves]);
+    }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves, twigBySegmentId]);
 
     const activePreviewTrunk = activeJointDragPreview?.kind === 'trunk'
         ? (activeJointDragPreview.support as (typeof state.trunks)[string])
@@ -1661,15 +1821,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.leaves, previewLeavesById]);
 
     const renderBracesById = state.braces;
-    const ghostedBraceIdSet = useMemo(() => {
-        return collectGhostedBraceIds({
-            activeJointDragPreview,
-            previewKnotOverrideIds,
-            braceIdsByKnotId,
-            bracesById: state.braces,
-            isBraceVisible: (brace) => isModelVisible(brace.modelId, brace.id),
-        });
-    }, [activeJointDragPreview, hasPreviewKnotOverrides, previewKnotOverrideIds, braceIdsByKnotId, state.braces, isModelVisible]);
+    // Historically braces were ghosted during joint-drag preview because their
+    // live geometry couldn't be trusted. Now that brace endpoint knots ride
+    // the live preview overrides (see enableBraceLivePreview), the brace can
+    // render at its true live position instead of going transparent.
+    const ghostedBraceIdSet = useMemo(() => new Set<string>(), []);
     const renderKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return state.knots;
         const knots = Object.create(state.knots) as typeof state.knots;
@@ -1687,12 +1843,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return knots;
     }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
 
-    const activeKnotDragPreviewKnotId = activeKnotDragPreview?.knot.id ?? null;
-    const enableBraceLivePreviewForActiveBraceEdit = !!activeKnotDragPreviewKnotId
-        && (braceIdsByKnotId.get(activeKnotDragPreviewKnotId)?.length ?? 0) > 0;
+    // Live brace render: enable whenever any current preview override touches a
+    // brace endpoint knot, regardless of which interaction produced it (direct
+    // brace knot drag, host joint/trunk drag, twig curve reshape, twig disk
+    // drag, etc.). Without this the brace freezes mid-drag and only snaps to
+    // its new geometry on release.
+    const enableBraceLivePreview = useMemo(() => {
+        if (previewKnotOverrideIds.length === 0) return false;
+        for (const knotId of previewKnotOverrideIds) {
+            if ((braceIdsByKnotId.get(knotId)?.length ?? 0) > 0) return true;
+        }
+        return false;
+    }, [previewKnotOverrideIds, braceIdsByKnotId]);
     const braceRenderKnotsById = useMemo(() => {
-        return enableBraceLivePreviewForActiveBraceEdit ? renderKnotsById : state.knots;
-    }, [enableBraceLivePreviewForActiveBraceEdit, renderKnotsById, state.knots]);
+        return enableBraceLivePreview ? renderKnotsById : state.knots;
+    }, [enableBraceLivePreview, renderKnotsById, state.knots]);
 
     const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
     const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
@@ -1887,8 +2052,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const brace of renderBraceList) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
 
-            // Keep braces anchored to committed knots during non-brace edits,
-            // but allow live preview while the user is directly editing a brace knot.
+            // braceRenderKnotsById uses live preview overrides whenever any
+            // brace endpoint knot is being reflowed by an upstream drag — so
+            // braces follow live as their host moves (twig curve reshape, twig
+            // disk drag, trunk/branch joint drag, direct brace knot drag).
             const startKnot = braceRenderKnotsById[brace.startKnotId];
             const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
@@ -1967,15 +2134,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             for (const segment of twig.segments) {
                 let startPoint: THREE.Vector3;
                 let endPoint: THREE.Vector3;
-                let diameterStart = segment.diameter;
-                let diameterEnd = segment.diameter;
+                // Twig shaft tapers between the two contact disks (matches
+                // TwigRenderer). Batchability is decided by whether the two
+                // ends are equal.
+                const diameterStart = twig.contactDiskA.contactDiameterMm;
+                const diameterEnd = twig.contactDiskB.contactDiameterMm;
 
                 if (segment.bottomJoint) {
                     startPoint = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
                 } else {
                     const diskATipCenter = getDiskTipCenter(twig.contactDiskA);
                     startPoint = new THREE.Vector3(diskATipCenter.x, diskATipCenter.y, diskATipCenter.z);
-                    diameterStart = twig.contactDiskA.contactDiameterMm;
                 }
 
                 if (segment.topJoint) {
@@ -1983,7 +2152,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 } else {
                     const diskBTipCenter = getDiskTipCenter(twig.contactDiskB);
                     endPoint = new THREE.Vector3(diskBTipCenter.x, diskBTipCenter.y, diskBTipCenter.z);
-                    diameterEnd = twig.contactDiskB.contactDiameterMm;
                 }
 
                 const isUniformDiameter = Math.abs(diameterStart - diameterEnd) < 1e-6;
@@ -3758,6 +3926,57 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                             radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
                         />
                     )}
+                    {batch.taperedShafts.map((seg) => {
+                        const startVec = new THREE.Vector3(seg.start.x, seg.start.y, seg.start.z);
+                        const endVec = new THREE.Vector3(seg.end.x, seg.end.y, seg.end.z);
+                        const length = startVec.distanceTo(endVec);
+                        if (length < 0.001) return null;
+                        const midpoint = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5);
+                        const dir = new THREE.Vector3().subVectors(endVec, startVec).normalize();
+                        const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+                        return (
+                            <mesh key={`tapered-shaft:${batch.id}:${seg.id}`} position={[midpoint.x, midpoint.y, midpoint.z]} quaternion={quat}>
+                                <cylinderGeometry args={[seg.diameterEnd / 2, seg.diameterStart / 2, length, BATCHED_SHAFT_RADIAL_SEGMENTS]} />
+                                <meshStandardMaterial
+                                    color={batch.color}
+                                    emissive={batch.color}
+                                    emissiveIntensity={0.08}
+                                    transparent
+                                    opacity={batch.opacity}
+                                />
+                            </mesh>
+                        );
+                    })}
+                    {batch.disks.map((disk) => {
+                        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+                        const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
+                        const rotation = getDiskRotation(disk.surfaceNormal);
+                        const radius = disk.contactDiameterMm / 2;
+                        return (
+                            <group key={`preview-disk:${batch.id}:${disk.id}`} position={[center.x, center.y, center.z]} quaternion={rotation}>
+                                <mesh position={[0, 0, 0]}>
+                                    <cylinderGeometry args={[radius, radius, thickness, BATCHED_SHAFT_RADIAL_SEGMENTS]} />
+                                    <meshStandardMaterial
+                                        color={batch.color}
+                                        emissive={batch.color}
+                                        emissiveIntensity={0.08}
+                                        transparent
+                                        opacity={batch.opacity}
+                                    />
+                                </mesh>
+                                <mesh position={[0, thickness / 2, 0]}>
+                                    <sphereGeometry args={[radius, BATCHED_JOINT_WIDTH_SEGMENTS, BATCHED_JOINT_HEIGHT_SEGMENTS]} />
+                                    <meshStandardMaterial
+                                        color={batch.color}
+                                        emissive={batch.color}
+                                        emissiveIntensity={0.08}
+                                        transparent
+                                        opacity={batch.opacity}
+                                    />
+                                </mesh>
+                            </group>
+                        );
+                    })}
                     {batch.joints.length > 0 && (
                         <InstancedJointGroup
                             joints={batch.joints}
@@ -4038,13 +4257,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 );
             })}
 
-            {/* Render Twigs */}
+            {/* Render Twigs.
+             *
+             * Unlike Trunks/Branches, twigs always mount TwigRenderer (even
+             * when scene-batched), because the contact disks and joints have
+             * no scene-batched equivalent and would otherwise vanish for
+             * unselected twigs. TwigRenderer defers its shafts to the
+             * scene batch via deferStraightShaftsToSceneBatch.
+             */}
             {renderTwigList.map(twig => {
                 if (!isModelVisible(twig.modelId, twig.id)) return null;
                 const effectiveSelected = selectedTwigIds.has(twig.id);
                 const isTwigBatchable = twigShaftsBySupport.has(twig.id);
-                const renderDetailedTwig = effectiveSelected || !isTwigBatchable;
-                if (!renderDetailedTwig) return null;
 
                 const isTwigHovered = hoveredSupportIdForVisual === twig.id
                     || marqueeHoveredSupportIdSet.has(twig.id);

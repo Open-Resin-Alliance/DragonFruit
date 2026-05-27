@@ -12,6 +12,7 @@ import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { clearSupportDragPreview, emitSupportDragPreview } from '../../SupportPrimitives/Joint/jointDragRuntime';
+import { clearTwigDragPreview, computeTwigDragAttachmentUpdates, emitTwigDragPreview } from '../../SupportTypes/Twig/twigDragPreview';
 
 interface HandleContext {
     id: string; // Unique ID for key
@@ -75,6 +76,7 @@ export function BezierGizmoManager() {
         }
         if (liveTwigPreviewRef.current) {
             clearSupportDragPreview('twig', liveTwigPreviewRef.current.id);
+            clearTwigDragPreview();
             liveTwigPreviewRef.current = null;
         }
         if (liveStickPreviewRef.current) {
@@ -709,6 +711,7 @@ export function BezierGizmoManager() {
                     updateTwig(liveTwigPreviewRef.current);
                 }
                 clearSupportDragPreview('twig', ctx.twig.id);
+                clearTwigDragPreview();
                 liveTwigPreviewRef.current = null;
                 pushSupportEditHistory('Edit twig curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (ctx.stick) {
@@ -859,6 +862,30 @@ export function BezierGizmoManager() {
             const previewTwig = newParent as Twig;
             liveTwigPreviewRef.current = previewTwig;
             emitSupportDragPreview('twig', previewTwig.id, previewTwig);
+
+            // Live attachment follow: emit a TwigDragPreviewSnapshot so attached
+            // knots / leaves track the curve as it's reshaped, instead of
+            // jumping to the new curve only on drag release.
+            const snap = getSnapshot();
+            const segmentIdSet = new Set<string>(previewTwig.segments.map(s => s.id));
+            const attachedKnots = Object.values(snap.knots).filter(k => segmentIdSet.has(k.parentShaftId));
+            const leavesByParentKnotId = new Map<string, typeof snap.leaves[string][]>();
+            for (const leaf of Object.values(snap.leaves)) {
+                const list = leavesByParentKnotId.get(leaf.parentKnotId);
+                if (list) list.push(leaf);
+                else leavesByParentKnotId.set(leaf.parentKnotId, [leaf]);
+            }
+            const { knotsById, leavesById } = computeTwigDragAttachmentUpdates(
+                previewTwig,
+                attachedKnots,
+                leavesByParentKnotId,
+            );
+            emitTwigDragPreview({
+                twigId: previewTwig.id,
+                twig: previewTwig,
+                knotsById,
+                leavesById,
+            });
         } else if (stick) {
             const previewStick = newParent as Stick;
             liveStickPreviewRef.current = previewStick;

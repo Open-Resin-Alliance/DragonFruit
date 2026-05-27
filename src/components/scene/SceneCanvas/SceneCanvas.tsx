@@ -19,6 +19,8 @@ import { MeshClassificationRenderer } from '@/components/scene/MeshClassificatio
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { PickingDebugOverlay } from '@/components/picking';
+// DEBUG: temporary twig disk B diameter override — see src/supports/__debug__/
+import { TwigDebugOverrideCard } from '@/supports/__debug__/TwigDebugOverrideCard';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -1610,7 +1612,12 @@ export function SceneCanvas({
   const suppressSupportSelectionAndHover = !modelPickerEnabled || (mode === 'prepare' && transformMode === 'transform');
 
   const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
-  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive || supportHoverTargetActive || sceneHoveredSupportId !== null;
+  // When a placement mode is active, hovering a support is *intentional*
+  // (it's the snap target). The support-hover and scene-hover suppression
+  // conditions only apply outside placement mode. Contact-disk HUD
+  // interaction still overrides because it's a different gesture entirely.
+  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive
+    || (!supportCreationModeActive && (supportHoverTargetActive || sceneHoveredSupportId !== null));
 
   const queueSupportPlacementGuideZ = React.useCallback((nextZ: number | null) => {
     supportPlacementGuidePendingZRef.current = nextZ;
@@ -6315,6 +6322,14 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
+
+      {/* DEBUG: twig disk B diameter override. Hidden in normal builds — the
+          default twig is the tapered-twig code path with disk B forced equal
+          to disk A (achieved by leaving the override null). Lychee importer
+          bypasses buildTwig and can still produce asymmetric A/B. Re-mount
+          this card to expose the override for dev testing. */}
+      {false && <TwigDebugOverrideCard />}
+
 
       {showCrossSectionCapDebugPanel && (
         <div
