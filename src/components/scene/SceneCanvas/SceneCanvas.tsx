@@ -88,7 +88,6 @@ import { SupportPainterPanel } from '@/features/supportPainter/components/Suppor
 import { setClipBounds } from './clipBoundsStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { useSupportPainterManager } from '@/features/supportPainter/useSupportPainterManager';
-import { useRoiHighlightMaterial } from '@/features/supportPainter/shaders/roiHighlight';
 import { supportPainterStore, useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -837,12 +836,6 @@ export function SceneCanvas({
     if (!activeModelId) return null;
     return models.find((m) => m.id === activeModelId)?.geometry.geometry || null;
   }, [activeModelId, models]);
-
-  const roiHighlightMaterial = useRoiHighlightMaterial(
-    activeModelGeom,
-    painterState.isActive,
-    meshColor
-  );
 
   React.useEffect(() => {
     if (painterState.isActive && mode !== 'supportPainter') {
@@ -5087,14 +5080,11 @@ export function SceneCanvas({
                 if (shouldHideDuplicateSourceModel) return null;
                 if (arrangeArraySourceModelIdSet.has(model.id)) return null;
 
-                const materialOverride = model.id === activeModelId ? roiHighlightMaterial : null;
-
                 return (
                   <React.Fragment key={model.id}>
                     <StlMesh
                       modelId={model.id}
                       geometry={model.geometry.geometry}
-                      materialOverride={materialOverride}
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       meshColor={model.color || meshColor} // Use model color

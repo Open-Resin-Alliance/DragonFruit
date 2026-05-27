@@ -6,9 +6,10 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
-import { supportPainterStore } from '@/features/supportPainter/supportPainterStore';
+import { supportPainterStore, useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
 import { PAINT_ROI_ADD, PAINT_ROI_REMOVE } from '@/features/supportPainter/supportPainterHistoryTypes';
 import { pushHistory } from '@/history/historyStore';
+import { useRoiHighlightMaterial } from '@/features/supportPainter/shaders/roiHighlight';
 import {
   beginMeshSmoothingStroke,
   updateMeshSmoothingStroke,
@@ -253,6 +254,15 @@ function StlMeshComponent({
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
   const { camera } = useThree();
+
+  const painterState = useSupportPainterState();
+  const isPainterActive = !!(mode === 'supportPainter' && isActiveModel && painterState.isActive);
+  const localRoiMaterial = useRoiHighlightMaterial(
+    geometry,
+    isPainterActive,
+    meshColor
+  );
+  const finalMaterialOverride = materialOverride || localRoiMaterial;
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
   const supportDimCameraLocalPointRef = React.useRef(new THREE.Vector3());
@@ -1171,8 +1181,8 @@ if (uDitherAmount > 0.0) {
           }
         }}
       >
-        {materialOverride ? (
-          <primitive object={materialOverride} attach="material" />
+        {finalMaterialOverride ? (
+          <primitive object={finalMaterialOverride} attach="material" />
         ) : typeof revealGhostOpacity === 'number' ? (
           <meshStandardMaterial
             color={meshColor ?? '#c8c8ce'}
