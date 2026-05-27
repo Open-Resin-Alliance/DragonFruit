@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, OnceLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque, HashSet, BinaryHeap};
 use serde::{Serialize, Deserialize};
 use dragonfruit_mesh_repair::{IndexedMesh, core::halfedge::Topology, core::mesh::Vec3};
 
@@ -152,13 +152,61 @@ pub async fn clear_support_painter_model(model_id: String) -> Result<bool, Strin
 }
 
 /// Tauri IPC Command: Real-time region proposals debounced on mouse pointer move.
+/// Compute the centroid coordinates of a triangle.
+fn tri_centroid(mesh: &IndexedMesh, face: u32) -> Vec3 {
+    let [a, b, c] = mesh.tri_positions(face);
+    Vec3::new(
+        (a.x + b.x + c.x) / 3.0,
+        (a.y + b.y + c.y) / 3.0,
+        (a.z + b.z + c.z) / 3.0,
+    )
+}
+
+/// Retrieve unique adjacent faces for a given face by traversing its edges.
+fn adj_faces(mesh: &IndexedMesh, topology: &Topology, face: u32) -> Vec<u32> {
+    let tri = mesh.triangles[face as usize];
+    let mut adjs = Vec::with_capacity(3);
+    for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+        let edge_key = dragonfruit_mesh_repair::core::halfedge::edge_key(u, v);
+        if let Some(edge_info) = topology.edges.get(&edge_key) {
+            for &adj_fi in &edge_info.faces {
+                if adj_fi != face && !adjs.contains(&adj_fi) {
+                    adjs.push(adj_fi);
+                }
+            }
+        }
+    }
+    adjs
+}
+
+#[derive(Copy, Clone, PartialEq)]
+struct DijkstraState {
+    cost: f32,
+    face: u32,
+}
+
+impl Eq for DijkstraState {}
+
+impl Ord for DijkstraState {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.cost.partial_cmp(&self.cost).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+impl PartialOrd for DijkstraState {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Tauri IPC Command: Real-time region proposals debounced on mouse pointer move.
 /// Returns a Vec<u32> containing matching triangle IDs.
-/// Phase 2: Establishes a functional bridge returning the seed face plus its 1-ring neighbors.
+/// Phase 3: Implements smart-brush mathematical suites: MacroFace, Ridge, Cylinder, and Point.
 #[tauri::command]
 pub async fn propose_brush_region(
     model_id: String,
     seed_triangle_id: u32,
-    _brush_type: String,
+    brush_type: String,
 ) -> Result<Vec<u32>, String> {
     let cache_lock = get_model_cache().lock().map_err(|e| e.to_string())?;
     let cached = cache_lock.get(&model_id).ok_or_else(|| {
@@ -170,20 +218,130 @@ pub async fn propose_brush_region(
         return Err(format!("Seed triangle ID {} is out of mesh bounds.", seed_triangle_id));
     }
 
-    let mut proposed = vec![seed_triangle_id];
+    match brush_type.as_str() {
+        "MacroFace" => {
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+            let seed_normal = cached.normals[seed];
+            
+            queue.push_back(seed_triangle_id);
+            visited.insert(seed_triangle_id);
 
-    // Build 1-ring neighborhood for Phase 2 bridge verification
-    let tri = cached.mesh.triangles[seed];
-    for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-        let edge_key = dragonfruit_mesh_repair::core::halfedge::edge_key(u, v);
-        if let Some(edge_info) = cached.topology.edges.get(&edge_key) {
-            for &adj_fi in &edge_info.faces {
-                if adj_fi != seed_triangle_id && !proposed.contains(&adj_fi) {
-                    proposed.push(adj_fi);
+            while let Some(curr) = queue.pop_front() {
+                let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
+                for adj in adjs {
+                    if !visited.contains(&adj) {
+                        let n_adj = cached.normals[adj as usize];
+                        // 15 degrees = 0.26 radians normal deviation tolerance
+                        let normal_deviation = seed_normal.dot(n_adj).clamp(-1.0, 1.0).acos();
+
+                        let n_curr = cached.normals[curr as usize];
+                        // 25 degrees = 0.43 radians edge-guard dihedral tolerance
+                        let edge_dihedral = n_curr.dot(n_adj).clamp(-1.0, 1.0).acos();
+
+                        if normal_deviation < 0.26 && edge_dihedral < 0.43 {
+                            visited.insert(adj);
+                            queue.push_back(adj);
+                        }
+                    }
                 }
             }
+            Ok(visited.into_iter().collect())
+        }
+        "Ridge" => {
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+
+            if cached.curvatures[seed].k1 > 0.15 {
+                queue.push_back(seed_triangle_id);
+                visited.insert(seed_triangle_id);
+
+                while let Some(curr) = queue.pop_front() {
+                    let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
+                    for adj in adjs {
+                        if !visited.contains(&adj) {
+                            if cached.curvatures[adj as usize].k1 > 0.15 {
+                                visited.insert(adj);
+                                queue.push_back(adj);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(visited.into_iter().collect())
+        }
+        "Cylinder" => {
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+
+            let seed_curv = &cached.curvatures[seed];
+            if seed_curv.k1 > 0.05 && seed_curv.k2 < 0.02 {
+                queue.push_back(seed_triangle_id);
+                visited.insert(seed_triangle_id);
+
+                while let Some(curr) = queue.pop_front() {
+                    let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
+                    for adj in adjs {
+                        if !visited.contains(&adj) {
+                            let curv = &cached.curvatures[adj as usize];
+                            if curv.k1 > 0.05 && curv.k2 < 0.02 {
+                                visited.insert(adj);
+                                queue.push_back(adj);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(visited.into_iter().collect())
+        }
+        "Point" => {
+            let mut proposed = Vec::new();
+            let mut dists = HashMap::new();
+            let mut heap = BinaryHeap::new();
+
+            let r_limit = 8.0f32; // Geodesic radius limit in mm
+            dists.insert(seed_triangle_id, 0.0f32);
+            heap.push(DijkstraState { cost: 0.0, face: seed_triangle_id });
+
+            while let Some(DijkstraState { cost, face }) = heap.pop() {
+                if cost > r_limit {
+                    continue;
+                }
+                if !proposed.contains(&face) {
+                    proposed.push(face);
+                }
+
+                let centroid_curr = tri_centroid(&cached.mesh, face);
+                let adjs = adj_faces(&cached.mesh, &cached.topology, face);
+                for adj in adjs {
+                    let centroid_adj = tri_centroid(&cached.mesh, adj);
+                    let step_cost = centroid_curr.sub(centroid_adj).length();
+                    let next_cost = cost + step_cost;
+
+                    let current_best = *dists.get(&adj).unwrap_or(&f32::INFINITY);
+                    if next_cost < current_best && next_cost <= r_limit {
+                        dists.insert(adj, next_cost);
+                        heap.push(DijkstraState { cost: next_cost, face: adj });
+                    }
+                }
+            }
+            Ok(proposed)
+        }
+        _ => {
+            // Fallback: return seed face + 1-ring neighbors (Phase 2 legacy)
+            let mut proposed = vec![seed_triangle_id];
+            let tri = cached.mesh.triangles[seed];
+            for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                let edge_key = dragonfruit_mesh_repair::core::halfedge::edge_key(u, v);
+                if let Some(edge_info) = cached.topology.edges.get(&edge_key) {
+                    for &adj_fi in &edge_info.faces {
+                        if adj_fi != seed_triangle_id && !proposed.contains(&adj_fi) {
+                            proposed.push(adj_fi);
+                        }
+                    }
+                }
+            }
+            Ok(proposed)
         }
     }
-
-    Ok(proposed)
 }
