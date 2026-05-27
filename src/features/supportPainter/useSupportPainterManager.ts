@@ -166,6 +166,9 @@ export function useSupportPainterManager(
       return;
     }
 
+    // Set lock immediately to prevent redundant parallel executions
+    initializedModelIdRef.current = activeModelId;
+
     let active = true;
 
     const initModel = async () => {
@@ -174,7 +177,7 @@ export function useSupportPainterManager(
 
       try {
         console.log(`[SupportPainterManager] Initializing topology for model ${activeModelId}`);
-        const positions = expandGeometryToTriangleSoup(geometry);
+        const positions = Array.from(expandGeometryToTriangleSoup(geometry));
         
         await invoke('initialize_support_painter_model', {
           modelId: activeModelId,
@@ -182,11 +185,14 @@ export function useSupportPainterManager(
         });
 
         if (active) {
-          initializedModelIdRef.current = activeModelId;
           console.log(`[SupportPainterManager] Topology initialization completed for model ${activeModelId}`);
         }
       } catch (err) {
         console.error('[SupportPainterManager] Initialization failed', err);
+        if (active) {
+          // Clear lock on failure to allow retry
+          initializedModelIdRef.current = null;
+        }
       }
     };
 
