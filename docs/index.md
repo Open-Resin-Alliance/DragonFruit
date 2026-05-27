@@ -36,10 +36,12 @@ hide:
 <p class="df-home-tagline">Open-Source & High Performance Slicer for Resin 3D Printers</p>
 
 <div class="df-home-actions">
-    <a class="md-button md-button--primary" id="download-now" href="https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest">Download Beta</a>
+  <a class="md-button md-button--primary" id="download-now" href="https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest">Download Beta</a>
   <a class="md-button" href="./getting-started/installation/">View Docs</a>
 </div>
 
 <p class="df-home-release-version" id="latest-release-version">Fetching the latest release from GitHub…</p>
+
+<p><a href="https://discord.com/invite/beFeTaPH6v">Join our Discord</a></p>
 
 </div>

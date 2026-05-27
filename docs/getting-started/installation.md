@@ -2,6 +2,8 @@
 
 For most users, the easiest way to get started is installing a prebuilt release.
 
+**Need help getting set up? [Join our Discord](https://discord.com/invite/beFeTaPH6v).**
+
 ## Install prebuilt releases (recommended)
 
 DragonFruit publishes desktop installers/packages for both:
