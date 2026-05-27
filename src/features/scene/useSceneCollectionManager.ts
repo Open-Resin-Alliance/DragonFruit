@@ -1942,6 +1942,7 @@ export function useSceneCollectionManager() {
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
           const geom = await loadMeshGeometry(url, file.name, {
+            nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
             onNativeProcessingStage: (stage) => {
               if (stage === 'repairing') {
                 setImportProgress({

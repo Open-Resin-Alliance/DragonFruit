@@ -5,6 +5,7 @@ export type ImportDefaultsSettings = {
   raftBottomMode: RaftBottomMode;
   raftWallEnabled: boolean;
   rootsEnabled: boolean;
+  autoRepair: boolean;
   autoRepairScenes: boolean;
 };
 
@@ -14,6 +15,7 @@ export const DEFAULT_IMPORT_DEFAULTS_SETTINGS: ImportDefaultsSettings = {
   raftBottomMode: 'solid',
   raftWallEnabled: true,
   rootsEnabled: true,
+  autoRepair: false,
   autoRepairScenes: false,
 };
 
@@ -42,6 +44,9 @@ export function normalizeImportDefaultsSettings(value: unknown): ImportDefaultsS
       ? raw.raftWallEnabled
       : DEFAULT_IMPORT_DEFAULTS_SETTINGS.raftWallEnabled,
     rootsEnabled,
+    autoRepair: typeof raw.autoRepair === 'boolean'
+      ? raw.autoRepair
+      : DEFAULT_IMPORT_DEFAULTS_SETTINGS.autoRepair,
     autoRepairScenes: typeof raw.autoRepairScenes === 'boolean'
       ? raw.autoRepairScenes
       : DEFAULT_IMPORT_DEFAULTS_SETTINGS.autoRepairScenes,
