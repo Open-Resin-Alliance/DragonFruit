@@ -2,6 +2,7 @@
 
 mod mesh_repair;
 mod network;
+mod support_painter;
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
@@ -3251,7 +3252,10 @@ fn main() {
             mesh_repair::mesh_repair_from_path,
             mesh_repair::mesh_repair_staged,
             mesh_repair::mesh_classify_staged,
-            mesh_repair::mesh_repair_read_positions
+            mesh_repair::mesh_repair_read_positions,
+            support_painter::initialize_support_painter_model,
+            support_painter::propose_brush_region,
+            support_painter::clear_support_painter_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");

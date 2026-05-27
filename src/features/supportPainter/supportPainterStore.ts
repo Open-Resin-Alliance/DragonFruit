@@ -152,6 +152,13 @@ export const supportPainterStore = {
     notify();
   },
 
+  setProposedTriangleIds(ids: number[] | Set<number>) {
+    proposedTriangleIds = new Set(ids);
+    triangleColorMap = _recomputeTriangleColorMap();
+    updateSnapshot();
+    notify();
+  },
+
   setInteractionPhase(phase: BrushInteractionPhase) {
     if (interactionPhase === phase) return;
     interactionPhase = phase;
@@ -161,11 +168,15 @@ export const supportPainterStore = {
 
   commitRegion(payload: CommitRegionPayload): string {
     const id = crypto.randomUUID?.() || Math.random().toString(36).substring(2);
+    const triangleIds = proposedTriangleIds.size > 0
+      ? new Set(proposedTriangleIds)
+      : new Set([payload.seedTriangleId]);
+
     const newRegion: ROIRegion = {
       id,
       brushType: payload.brushType,
       seedTriangleId: payload.seedTriangleId,
-      triangleIds: new Set([payload.seedTriangleId]), // Phase 1: single seed triangle only
+      triangleIds,
       color: BRUSH_COLORS[payload.brushType],
       proposedOnly: false,
       createdAt: Date.now(),

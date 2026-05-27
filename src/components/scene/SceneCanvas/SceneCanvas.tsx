@@ -828,14 +828,14 @@ export function SceneCanvas({
 
   const colorActiveModelId = React.useMemo(() => committedActiveModelId, [committedActiveModelId]);
 
-  // Support Painter Hook Invocations & Synchronization
-  const painterState = useSupportPainterState();
-  useSupportPainterManager(painterState.isActive);
-
   const activeModelGeom = React.useMemo(() => {
     if (!activeModelId) return null;
     return models.find((m) => m.id === activeModelId)?.geometry.geometry || null;
   }, [activeModelId, models]);
+
+  // Support Painter Hook Invocations & Synchronization
+  const painterState = useSupportPainterState();
+  useSupportPainterManager(painterState.isActive, activeModelId, activeModelGeom);
 
   React.useEffect(() => {
     if (painterState.isActive && mode !== 'supportPainter') {
