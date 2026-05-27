@@ -223,7 +223,7 @@ pub async fn propose_brush_region(
             let mut queue = VecDeque::new();
             let mut visited = HashSet::new();
             
-            if cached.normals[seed].z < 0.0 {
+            if cached.normals[seed].z <= 0.2 {
                 let seed_normal = cached.normals[seed];
                 queue.push_back(seed_triangle_id);
                 visited.insert(seed_triangle_id);
@@ -233,7 +233,7 @@ pub async fn propose_brush_region(
                     for adj in adjs {
                         if !visited.contains(&adj) {
                             let n_adj = cached.normals[adj as usize];
-                            if n_adj.z < 0.0 {
+                            if n_adj.z <= 0.2 {
                                 // 35 degrees = 0.61 radians normal deviation tolerance
                                 let normal_deviation = seed_normal.dot(n_adj).clamp(-1.0, 1.0).acos();
 
@@ -250,12 +250,15 @@ pub async fn propose_brush_region(
                     }
                 }
             }
-            Ok(visited.into_iter().collect())
+            let filtered: Vec<u32> = visited.into_iter()
+                .filter(|&adj| cached.normals[adj as usize].z <= 0.0)
+                .collect();
+            Ok(filtered)
         }
         "Ridge" => {
             let mut visited = HashSet::new();
 
-            if cached.normals[seed].z < 0.0 && cached.curvatures[seed].k1 > 0.15 {
+            if cached.normals[seed].z <= 0.2 && cached.curvatures[seed].k1 > 0.10 {
                 visited.insert(seed_triangle_id);
 
                 // Get adjacent faces of the seed
@@ -263,7 +266,7 @@ pub async fn propose_brush_region(
                 let mut candidates: Vec<u32> = adjs.into_iter()
                     .filter(|&adj| {
                         let idx = adj as usize;
-                        cached.normals[idx].z < 0.0 && cached.curvatures[idx].k1 > 0.15
+                        cached.normals[idx].z <= 0.2 && cached.curvatures[idx].k1 > 0.10
                     })
                     .collect();
 
@@ -282,7 +285,7 @@ pub async fn propose_brush_region(
                         let mut next_candidates: Vec<u32> = adjs_a.into_iter()
                             .filter(|&adj| {
                                 let idx = adj as usize;
-                                !visited.contains(&adj) && cached.normals[idx].z < 0.0 && cached.curvatures[idx].k1 > 0.15
+                                !visited.contains(&adj) && cached.normals[idx].z <= 0.2 && cached.curvatures[idx].k1 > 0.10
                             })
                             .collect();
                         if next_candidates.is_empty() {
@@ -307,7 +310,7 @@ pub async fn propose_brush_region(
                         let mut next_candidates: Vec<u32> = adjs_b.into_iter()
                             .filter(|&adj| {
                                 let idx = adj as usize;
-                                !visited.contains(&adj) && cached.normals[idx].z < 0.0 && cached.curvatures[idx].k1 > 0.15
+                                !visited.contains(&adj) && cached.normals[idx].z <= 0.2 && cached.curvatures[idx].k1 > 0.10
                             })
                             .collect();
                         if next_candidates.is_empty() {
@@ -322,14 +325,17 @@ pub async fn propose_brush_region(
                     }
                 }
             }
-            Ok(visited.into_iter().collect())
+            let filtered: Vec<u32> = visited.into_iter()
+                .filter(|&adj| cached.normals[adj as usize].z <= 0.0)
+                .collect();
+            Ok(filtered)
         }
         "CylinderSides" => {
             let mut queue = VecDeque::new();
             let mut visited = HashSet::new();
 
             let seed_curv = &cached.curvatures[seed];
-            if cached.normals[seed].z < 0.0 && seed_curv.k1 > 0.05 && seed_curv.k2 < 0.02 {
+            if cached.normals[seed].z <= 0.2 && seed_curv.k1 > 0.02 && seed_curv.k2 < 0.05 {
                 queue.push_back(seed_triangle_id);
                 visited.insert(seed_triangle_id);
 
@@ -338,9 +344,9 @@ pub async fn propose_brush_region(
                     for adj in adjs {
                         if !visited.contains(&adj) {
                             let idx = adj as usize;
-                            if cached.normals[idx].z < 0.0 {
+                            if cached.normals[idx].z <= 0.2 {
                                 let curv = &cached.curvatures[idx];
-                                if curv.k1 > 0.05 && curv.k2 < 0.02 {
+                                if curv.k1 > 0.02 && curv.k2 < 0.05 {
                                     visited.insert(adj);
                                     queue.push_back(adj);
                                 }
@@ -349,13 +355,16 @@ pub async fn propose_brush_region(
                     }
                 }
             }
-            Ok(visited.into_iter().collect())
+            let filtered: Vec<u32> = visited.into_iter()
+                .filter(|&adj| cached.normals[adj as usize].z <= 0.0)
+                .collect();
+            Ok(filtered)
         }
         "CylinderMinima" => {
             let mut visited = HashSet::new();
 
             let seed_curv = &cached.curvatures[seed];
-            if cached.normals[seed].z < 0.0 && seed_curv.k1 > 0.05 && seed_curv.k2 < 0.02 {
+            if cached.normals[seed].z <= 0.2 && seed_curv.k1 > 0.02 && seed_curv.k2 < 0.05 {
                 visited.insert(seed_triangle_id);
 
                 // Get adjacent faces of the seed
@@ -364,7 +373,7 @@ pub async fn propose_brush_region(
                     .filter(|&adj| {
                         let idx = adj as usize;
                         let curv = &cached.curvatures[idx];
-                        cached.normals[idx].z < 0.0 && curv.k1 > 0.05 && curv.k2 < 0.02
+                        cached.normals[idx].z <= 0.2 && curv.k1 > 0.02 && curv.k2 < 0.05
                     })
                     .collect();
 
@@ -384,7 +393,7 @@ pub async fn propose_brush_region(
                             .filter(|&adj| {
                                 let idx = adj as usize;
                                 let curv = &cached.curvatures[idx];
-                                !visited.contains(&adj) && cached.normals[idx].z < 0.0 && curv.k1 > 0.05 && curv.k2 < 0.02
+                                !visited.contains(&adj) && cached.normals[idx].z <= 0.2 && curv.k1 > 0.02 && curv.k2 < 0.05
                             })
                             .collect();
                         if next_candidates.is_empty() {
@@ -410,7 +419,7 @@ pub async fn propose_brush_region(
                             .filter(|&adj| {
                                 let idx = adj as usize;
                                 let curv = &cached.curvatures[idx];
-                                !visited.contains(&adj) && cached.normals[idx].z < 0.0 && curv.k1 > 0.05 && curv.k2 < 0.02
+                                !visited.contains(&adj) && cached.normals[idx].z <= 0.2 && curv.k1 > 0.02 && curv.k2 < 0.05
                             })
                             .collect();
                         if next_candidates.is_empty() {
@@ -425,14 +434,17 @@ pub async fn propose_brush_region(
                     }
                 }
             }
-            Ok(visited.into_iter().collect())
+            let filtered: Vec<u32> = visited.into_iter()
+                .filter(|&adj| cached.normals[adj as usize].z <= 0.0)
+                .collect();
+            Ok(filtered)
         }
         "Point" => {
             let mut proposed = Vec::new();
             let mut dists = HashMap::new();
             let mut heap = BinaryHeap::new();
 
-            if cached.normals[seed].z < 0.0 {
+            if cached.normals[seed].z <= 0.2 {
                 let r_limit = 8.0f32; // Geodesic radius limit in mm
                 dists.insert(seed_triangle_id, 0.0f32);
                 heap.push(DijkstraState { cost: 0.0, face: seed_triangle_id });
@@ -449,7 +461,7 @@ pub async fn propose_brush_region(
                     let adjs = adj_faces(&cached.mesh, &cached.topology, face);
                     for adj in adjs {
                         let idx = adj as usize;
-                        if cached.normals[idx].z < 0.0 {
+                        if cached.normals[idx].z <= 0.2 {
                             let centroid_adj = tri_centroid(&cached.mesh, adj);
                             let step_cost = centroid_curr.sub(centroid_adj).length();
                             let next_cost = cost + step_cost;
@@ -463,13 +475,16 @@ pub async fn propose_brush_region(
                     }
                 }
             }
-            Ok(proposed)
+            let filtered: Vec<u32> = proposed.into_iter()
+                .filter(|&adj| cached.normals[adj as usize].z <= 0.0)
+                .collect();
+            Ok(filtered)
         }
         "Ring" => {
             let mut queue = VecDeque::new();
             let mut visited = HashSet::new();
 
-            if cached.normals[seed].z < 0.0 {
+            if cached.normals[seed].z <= 0.2 {
                 let seed_centroid = tri_centroid(&cached.mesh, seed_triangle_id);
                 let seed_z = seed_centroid.z;
 
@@ -480,14 +495,16 @@ pub async fn propose_brush_region(
                     let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
                     for adj in adjs {
                         if !visited.contains(&adj) {
-                            let [a, b, c] = cached.mesh.tri_positions(adj);
-                            let min_z = a.z.min(b.z).min(c.z);
-                            let max_z = a.z.max(b.z).max(c.z);
+                            if cached.normals[adj as usize].z <= 0.2 {
+                                let [a, b, c] = cached.mesh.tri_positions(adj);
+                                let min_z = a.z.min(b.z).min(c.z);
+                                let max_z = a.z.max(b.z).max(c.z);
 
-                            // Contiguous check within Z +- 1.0mm thickness
-                            if min_z <= seed_z + 1.0 && max_z >= seed_z - 1.0 {
-                                visited.insert(adj);
-                                queue.push_back(adj);
+                                // Contiguous check within Z +- 1.0mm thickness
+                                if min_z <= seed_z + 1.0 && max_z >= seed_z - 1.0 {
+                                    visited.insert(adj);
+                                    queue.push_back(adj);
+                                }
                             }
                         }
                     }
@@ -504,7 +521,7 @@ pub async fn propose_brush_region(
         _ => {
             // Fallback: return seed face + 1-ring neighbors (Phase 2 legacy) if normal points below horizontal
             let mut proposed = Vec::new();
-            if cached.normals[seed].z < 0.0 {
+            if cached.normals[seed].z <= 0.2 {
                 proposed.push(seed_triangle_id);
                 let tri = cached.mesh.triangles[seed];
                 for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
@@ -512,7 +529,7 @@ pub async fn propose_brush_region(
                     if let Some(edge_info) = cached.topology.edges.get(&edge_key) {
                         for &adj_fi in &edge_info.faces {
                             if adj_fi != seed_triangle_id && !proposed.contains(&adj_fi) {
-                                if cached.normals[adj_fi as usize].z < 0.0 {
+                                if cached.normals[adj_fi as usize].z <= 0.2 {
                                     proposed.push(adj_fi);
                                 }
                             }
@@ -520,7 +537,10 @@ pub async fn propose_brush_region(
                     }
                 }
             }
-            Ok(proposed)
+            let filtered: Vec<u32> = proposed.into_iter()
+                .filter(|&adj| cached.normals[adj as usize].z <= 0.0)
+                .collect();
+            Ok(filtered)
         }
     }
 }

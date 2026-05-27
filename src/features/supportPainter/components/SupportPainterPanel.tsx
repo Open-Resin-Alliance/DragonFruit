@@ -83,7 +83,6 @@ export function SupportPainterPanel({
     try {
       await generateSupportsFromPainter(activeModelId, mesh, Array.from(state.regions.values()));
       supportPainterStore.clearAll();
-      handleExit();
     } catch (err) {
       console.error('[SupportPainterPanel] Generation failed', err);
     } finally {

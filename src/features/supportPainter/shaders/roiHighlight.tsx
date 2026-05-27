@@ -85,13 +85,15 @@ export function useRoiHighlightMaterial(
   const material = useMemo(() => {
     if (!renderingGeometry || totalTriangleCount === 0 || !isActive) return null;
 
-    // 1. Create a 1D DataTexture: Width = totalTriangleCount, Height = 1
-    const size = totalTriangleCount * 4; // RGBA
+    // 1. Create a 2D DataTexture to avoid GPU WebGL MAX_TEXTURE_SIZE limitations on large models
+    const texWidth = 2048;
+    const texHeight = Math.ceil(totalTriangleCount / texWidth);
+    const size = texWidth * texHeight * 4; // RGBA
     const data = new Uint8Array(size);
     const texture = new THREE.DataTexture(
       data,
-      totalTriangleCount,
-      1,
+      texWidth,
+      texHeight,
       THREE.RGBAFormat,
       THREE.UnsignedByteType
     );
@@ -105,7 +107,8 @@ export function useRoiHighlightMaterial(
     const mat = new THREE.ShaderMaterial({
       uniforms: {
         uRoiMap: { value: texture },
-        uRoiMapWidth: { value: totalTriangleCount },
+        uRoiMapWidth: { value: texWidth },
+        uRoiMapHeight: { value: texHeight },
         uTime: { value: 0 },
         uBaseColor: { value: baseColor },
       },
@@ -123,6 +126,7 @@ export function useRoiHighlightMaterial(
       fragmentShader: `
         uniform sampler2D uRoiMap;
         uniform float uRoiMapWidth;
+        uniform float uRoiMapHeight;
         uniform float uTime;
         uniform vec3 uBaseColor;
 
@@ -130,9 +134,11 @@ export function useRoiHighlightMaterial(
         varying vec3 vNormal;
 
         void main() {
-          // Half-texel offset for accurate nearest sampling
-          float u = (vTriangleId + 0.5) / uRoiMapWidth;
-          vec4 roi = texture2D(uRoiMap, vec2(u, 0.5));
+          // Calculate 2D coordinates for the triangle ID with half-texel offset for accurate nearest sampling
+          float x = mod(vTriangleId, uRoiMapWidth) + 0.5;
+          float y = floor(vTriangleId / uRoiMapWidth) + 0.5;
+          vec2 uv = vec2(x / uRoiMapWidth, y / uRoiMapHeight);
+          vec4 roi = texture2D(uRoiMap, uv);
 
           vec3 finalColor = uBaseColor;
           float blendFactor = 0.0;

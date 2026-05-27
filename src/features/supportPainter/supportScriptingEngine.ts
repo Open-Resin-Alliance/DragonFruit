@@ -158,6 +158,12 @@ export async function generateSupportsFromPainter(
   const infillSpacing = spacing;
   const minimaSuppressionRadius = spacing;
 
+  const distance2D = (a: THREE.Vector3, b: THREE.Vector3) => {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
   // 1. Capture snapshot before execution for single-stroke history undo
   const beforeState = getSupportSnapshot();
 
@@ -399,7 +405,7 @@ export async function generateSupportsFromPainter(
     for (const cand of localMinima) {
       let tooClose = false;
       for (const accepted of regionMinima) {
-        if (cand.pos.distanceTo(accepted.pos) < minimaSuppressionRadius) {
+        if (distance2D(cand.pos, accepted.pos) < minimaSuppressionRadius) {
           tooClose = true;
           break;
         }
@@ -468,13 +474,13 @@ export async function generateSupportsFromPainter(
         }
       }
 
-      // Suppress infill candidates too close to perimeters, heavy anchors, or other infills
+      // Suppress infill candidates too close to perimeters, heavy anchors, or other infills (in 2D horizontal plane)
       for (const cand of infillCandidates) {
         let tooClose = false;
 
         // Against Z-minima anchors
         for (const anchor of regionMinima) {
-          if (cand.pos.distanceTo(anchor.pos) < minimaSuppressionRadius) {
+          if (distance2D(cand.pos, anchor.pos) < minimaSuppressionRadius) {
             tooClose = true;
             break;
           }
@@ -483,7 +489,7 @@ export async function generateSupportsFromPainter(
 
         // Against perimeter columns
         for (const peri of regionPerimeterPoints) {
-          if (cand.pos.distanceTo(peri.pos) < minimaSuppressionRadius) {
+          if (distance2D(cand.pos, peri.pos) < minimaSuppressionRadius) {
             tooClose = true;
             break;
           }
@@ -492,7 +498,7 @@ export async function generateSupportsFromPainter(
 
         // Against accepted infill
         for (const accepted of allInfillColumns) {
-          if (cand.pos.distanceTo(accepted.pos) < infillSpacing) {
+          if (distance2D(cand.pos, accepted.pos) < infillSpacing) {
             tooClose = true;
             break;
           }
@@ -502,6 +508,21 @@ export async function generateSupportsFromPainter(
           allInfillColumns.push(cand);
         }
       }
+    }
+  }
+
+  // Filter out any perimeter columns that are too close to heavy anchors (Z-minima) in the horizontal plane (2D)
+  const filteredPerimeterColumns: SampledPoint[] = [];
+  for (const peri of allPerimeterColumns) {
+    let tooCloseToAnchor = false;
+    for (const anchor of allHeavyAnchors) {
+      if (distance2D(peri.pos, anchor.pos) < minimaSuppressionRadius) {
+        tooCloseToAnchor = true;
+        break;
+      }
+    }
+    if (!tooCloseToAnchor) {
+      filteredPerimeterColumns.push(peri);
     }
   }
 
@@ -522,7 +543,7 @@ export async function generateSupportsFromPainter(
     }
 
     // 4b. Place perimeter and infill columns (Trunks)
-    const allColumns = [...allPerimeterColumns, ...allInfillColumns];
+    const allColumns = [...filteredPerimeterColumns, ...allInfillColumns];
     for (const col of allColumns) {
       const build = buildTrunkData({
         tipPos: col.pos,
@@ -531,8 +552,8 @@ export async function generateSupportsFromPainter(
         mesh,
       });
 
-      // Avoid placing stagnated or faulty routed supports that fail collision completely
-      if (build?.trunk && !build.stagnated && !build.exhaustedBudget) {
+      // Avoid placing stagnated, out-of-bound, or faulty routed supports that fail validation/safeguards (Issue 1)
+      if (build?.trunk && !build.stagnated && !build.exhaustedBudget && !build.error) {
         addRoot(build.root);
         addTrunk(build.trunk);
       }
