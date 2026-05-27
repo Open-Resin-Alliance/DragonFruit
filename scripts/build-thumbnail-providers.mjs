@@ -76,17 +76,16 @@ function run(cmd, args, cwd) {
 // ---------------------------------------------------------------------------
 // macOS universal — build both Apple arches as thin per-arch sidecars
 // ---------------------------------------------------------------------------
-// Verified empirically: a `tauri build --target universal-apple-darwin` compiles
-// each arch separately and resolves externalBin PER ARCH — the build sets
-// TAURI_ENV_TARGET_TRIPLE=<arch> and looks for
-//   ../rust/dragonfruit-voxl-thumbnail/target/release/dragonfruit-voxl-thumbnailer-<arch>
-// (e.g. ...-aarch64-apple-darwin, then ...-x86_64-apple-darwin), NOT a
-// ...-universal-apple-darwin file. Tauri lipos the per-arch .apps — sidecar
-// included — into the universal .app itself. So we emit a thin per-arch sidecar
-// for each arch into target/release/ and let Tauri do the merge.
+// Tauri resolves externalBin using the target triple suffix. For the universal
+// macOS target that means it looks for
+//   ../rust/dragonfruit-voxl-thumbnail/target/release/dragonfruit-voxl-thumbnailer-universal-apple-darwin
+// so we build both thin arch binaries, then `lipo` them into the universal
+// sidecar Tauri expects. We keep the thin copies too because other scripts and
+// debugging workflows inspect them directly.
 if (isUniversal) {
       const externalBinDir = path.join(cliCrateDir, 'target', 'release');
       mkdirSync(externalBinDir, { recursive: true });
+      const archBins = [];
       for (const archTriple of ['x86_64-apple-darwin', 'aarch64-apple-darwin']) {
             run(
                   'cargo',
@@ -96,8 +95,18 @@ if (isUniversal) {
             const archBin = path.join(cliCrateDir, 'target', archTriple, 'release', 'dragonfruit-voxl-thumbnailer');
             const sidecarDst = path.join(externalBinDir, `dragonfruit-voxl-thumbnailer-${archTriple}`);
             copyFileSync(archBin, sidecarDst);
+            archBins.push(sidecarDst);
             console.log(`[build-thumbnail-providers] Per-arch sidecar → ${path.relative(projectRoot, sidecarDst)}`);
       }
+
+      const universalSidecar = path.join(externalBinDir, 'dragonfruit-voxl-thumbnailer-universal-apple-darwin');
+      const lipoResult = spawnSync('lipo', ['-create', ...archBins, '-output', universalSidecar], {
+            stdio: 'inherit',
+      });
+      if (lipoResult.status !== 0) {
+            process.exit(lipoResult.status ?? 1);
+      }
+      console.log(`[build-thumbnail-providers] Universal sidecar → ${path.relative(projectRoot, universalSidecar)}`);
 }
 
 // ---------------------------------------------------------------------------
