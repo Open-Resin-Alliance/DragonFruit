@@ -35,7 +35,7 @@ export function useRoiHighlightMaterial(
 
   // Parse mesh base color
   const baseColor = useMemo(() => {
-    return new THREE.Color(meshColor);
+    return new THREE.Color(meshColor || '#c8c8ce');
   }, [meshColor]);
 
   // Compute non-indexed rendering geometry copy if original is indexed
@@ -107,6 +107,11 @@ export function useRoiHighlightMaterial(
     // 2. Define Custom Shader Material with basic Diffuse shading for beautiful premium visuals
     const mat = new THREE.ShaderMaterial({
       precision: 'highp', // Enforce highp for high-density mesh indexing
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
       uniforms: {
         uRoiMap: { value: texture },
         uRoiMapWidth: { value: texWidth },
@@ -121,7 +126,9 @@ export function useRoiHighlightMaterial(
         varying vec3 vNormal;
 
         void main() {
-          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          // Microscopic dilation along normal (0.05mm) to pull the overlay in front
+          vec3 dilatedPosition = position + normal * 0.05;
+          vec4 mvPosition = modelViewMatrix * vec4(dilatedPosition, 1.0);
           #include <clipping_planes_vertex>
           vTriangleId = aTriangleId;
           vNormal = normalize(normalMatrix * normal);
@@ -149,41 +156,44 @@ export function useRoiHighlightMaterial(
           vec2 uv = vec2(x / uRoiMapWidth, y / uRoiMapHeight);
           vec4 roi = texture2D(uRoiMap, uv);
 
-          vec3 finalColor = uBaseColor;
-          float blendFactor = 0.0;
-
-          if (roi.a > 0.01) {
-            if (roi.a < 0.6) {
-              // Proposed preview (flashing/pulsing hover)
-              float pulse = 0.5 + 0.5 * sin(uTime * 8.0);
-              finalColor = roi.rgb;
-              blendFactor = pulse * 0.75;
-            } else {
-              // Committed ROI color
-              finalColor = roi.rgb;
-              blendFactor = 0.70;
-            }
+          if (roi.a <= 0.01) {
+            discard;
           }
 
-          // Blend ROI color with base mesh color
-          vec3 blendedColor = mix(uBaseColor, finalColor, blendFactor);
+          vec3 finalColor = roi.rgb;
+          float blendFactor = 0.0;
+
+          if (roi.a < 0.6) {
+            // Proposed preview (flashing/pulsing hover with 0.35 opacity floor)
+            float pulse = 0.35 + 0.5 * sin(uTime * 8.0);
+            blendFactor = pulse * 0.85;
+          } else {
+            // Committed ROI color
+            blendFactor = 0.75;
+          }
+
+          vec3 normalVec = vNormal;
+          if (length(normalVec) < 0.001) {
+            normalVec = vec3(0.0, 0.0, 1.0);
+          }
+          vec3 normalizedNormal = normalize(normalVec);
 
           // Harmonic Diffuse Lambertian Lighting
           vec3 lightDir = normalize(vec3(0.5, 0.75, 1.0));
-          float diffuse = max(0.28, dot(normalize(vNormal), lightDir));
-          vec3 litColor = blendedColor * diffuse;
+          float diffuse = max(0.28, dot(normalizedNormal, lightDir));
+          vec3 litColor = finalColor * diffuse;
+
+          // Boost self-emissive glow for high contrast
+          litColor += finalColor * 0.35 * blendFactor;
 
           // Add a subtle rim light/ambient glow to the selection
-          if (blendFactor > 0.01) {
-            float rim = 1.0 - max(0.0, dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)));
-            litColor += finalColor * pow(rim, 4.0) * blendFactor * 0.25;
-          }
+          float rim = 1.0 - max(0.0, dot(normalizedNormal, vec3(0.0, 0.0, 1.0)));
+          litColor += finalColor * pow(rim, 4.0) * blendFactor * 0.35;
 
-          gl_FragColor = vec4(litColor, 1.0);
+          gl_FragColor = vec4(litColor, blendFactor);
         }
       `,
       side: THREE.FrontSide,
-      depthWrite: true,
       clipping: true,
     });
 

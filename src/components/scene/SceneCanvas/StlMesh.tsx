@@ -284,8 +284,8 @@ function StlMeshComponent({
     meshColor,
     planes
   ) || {};
-  const finalGeometry = isPainterActive && paintGeometry ? paintGeometry : geometry;
-  const finalMaterialOverride = materialOverride || localRoiMaterial;
+  const finalGeometry = geometry;
+  const finalMaterialOverride = materialOverride;
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
   const supportDimCameraLocalPointRef = React.useRef(new THREE.Vector3());
@@ -824,7 +824,7 @@ if (uDitherAmount > 0.0) {
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
           if (node) applyRaycastDisabledState();
         }}
-        key={isPainterActive ? 'paint-mesh' : 'standard-mesh'}
+        key="standard-mesh"
         userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
         geometry={finalGeometry}
         position={meshLocalOffset}
@@ -1246,6 +1246,18 @@ if (uDitherAmount > 0.0) {
           />
         )}
       </mesh>
+
+      {isPainterActive && localRoiMaterial && paintGeometry && (
+        <mesh
+          key={`paint-overlay-${paintGeometry.uuid}`}
+          geometry={paintGeometry}
+          position={meshLocalOffset}
+          renderOrder={3}
+          raycast={() => null}
+        >
+          <primitive object={localRoiMaterial} attach="material" />
+        </mesh>
+      )}
 
       {showOpaqueWireOverlay && (
         <mesh geometry={finalGeometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
