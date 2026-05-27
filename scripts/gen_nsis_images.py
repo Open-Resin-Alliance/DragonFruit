@@ -1,16 +1,14 @@
 from PIL import Image, ImageDraw, ImageFont
 import json
 
-ASSETS = "e:/Open-Resin-Alliance/DragonFruit"
-
-with open(f"{ASSETS}/package.json", "r", encoding="utf-8") as f:
+with open(f"package.json", "r", encoding="utf-8") as f:
     _pkg = json.load(f)
 APP_VERSION = _pkg.get("version", "")
-OUT_DIR = f"{ASSETS}/src-tauri/nsis/assets"
+OUT_DIR = f"src-tauri/nsis/assets"
 
 # Load source assets
-dragon = Image.open(f"{ASSETS}/src-tauri/icons/128x128.png").convert("RGBA")
-ora = Image.open(f"{ASSETS}/public/dragonfruit_assets/branding/open_resin_alliance_logo_darkmode.png").convert("RGBA")
+dragon = Image.open(f"src-tauri/icons/128x128.png").convert("RGBA")
+ora = Image.open(f"public/dragonfruit_assets/branding/open_resin_alliance_logo_darkmode.png").convert("RGBA")
 
 
 def load_font(*paths, size):
@@ -124,7 +122,7 @@ draw = ImageDraw.Draw(dmg_bg)
 
 paint_brand_gradient(draw, W_D, H_D)
 
-footer_text = "Open Resin Alliance  -  All Rights Reserved."
+footer_text = "Open Resin Alliance  -  AGPL-3.0-or-later"
 footer_bbox = draw.textbbox((0, 0), footer_text, font=font_footer)
 footer_w = footer_bbox[2] - footer_bbox[0]
 footer_h = footer_bbox[3] - footer_bbox[1]
