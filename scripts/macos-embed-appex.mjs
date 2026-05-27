@@ -25,7 +25,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -139,12 +139,16 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
     const dmgPath = path.join(dmgDir, dmgEntry);
     const bundleDmgSh = path.join(dmgDir, "bundle_dmg.sh");
     if (!existsSync(bundleDmgSh)) break;
+    const backupDmgPath = `${dmgPath}.bak`;
 
     const appBundleName = path.basename(appBundle); // "DragonFruit.app"
     const appName = path.basename(appBundle, ".app"); // "DragonFruit"
     const volIcon = path.join(dmgDir, "icon.icns");
 
-    rmSync(dmgPath, { force: true });
+    // Keep the last-good DMG until we have a replacement. If both rebuild
+    // paths fail, restore it so the bundle is still usable for inspection.
+    rmSync(backupDmgPath, { force: true });
+    renameSync(dmgPath, backupDmgPath);
 
     // Mirror the exact args tauri uses (from dmg/mod.rs). Defaults:
     //   window-size 660x400, app at (180,170), Applications link at (480,170)
@@ -164,22 +168,52 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
       cwd: path.dirname(appBundle),
       stdio: "pipe",
     });
-    // bundle_dmg.sh writes the DMG next to DragonFruit.app; move it to dmg/
     const producedDmg = path.join(path.dirname(appBundle), dmgEntry);
-    if (existsSync(producedDmg) && producedDmg !== dmgPath) {
-      cpSync(producedDmg, dmgPath);
-      rmSync(producedDmg, { force: true });
+
+    if (dmgResult.status === 0 && existsSync(producedDmg)) {
+      if (producedDmg !== dmgPath) {
+        cpSync(producedDmg, dmgPath);
+        rmSync(producedDmg, { force: true });
+      }
+      rmSync(backupDmgPath, { force: true });
+      console.log(`[embed-appex] Bundled ${appBundleName} + ${dmgEntry} with QuickLook extension.`);
+      break;
     }
-    // The old DMG was already rmSync'd above, so a failed rebuild leaves no DMG.
-    // Fail loudly rather than logging a success that didn't happen.
-    if (dmgResult.status !== 0 || !existsSync(dmgPath)) {
-      return {
-        ok: false,
-        reason: `DMG rebuild failed (status ${dmgResult.status}, ${existsSync(dmgPath) ? "dmg present" : "dmg missing"}): ${(dmgResult.stderr?.toString() || "").trim()}`,
-      };
+
+    // Fallback: build a plain DMG without the Finder/AppleScript layout step.
+    // This avoids the statusbar AppleScript failure in headless or restricted
+    // environments while still shipping a valid disk image.
+    rmSync(dmgPath, { force: true });
+    const fallbackDmg = spawnSync(
+      "hdiutil",
+      [
+        "create",
+        "-ov",
+        "-format",
+        "UDZO",
+        "-volname",
+        appName,
+        "-srcfolder",
+        appBundle,
+        dmgPath,
+      ],
+      { encoding: "utf8" }
+    );
+    if (fallbackDmg.status === 0 && existsSync(dmgPath)) {
+      rmSync(backupDmgPath, { force: true });
+      console.warn(
+        `[embed-appex] bundle_dmg.sh failed; fell back to a plain DMG (${path.basename(dmgPath)}).`
+      );
+      break;
     }
-    console.log(`[embed-appex] Bundled ${appBundleName} + ${dmgEntry} with QuickLook extension.`);
-    break;
+
+    renameSync(backupDmgPath, dmgPath);
+    return {
+      ok: false,
+      reason:
+        `DMG rebuild failed (bundle_dmg.sh status ${dmgResult.status}, fallback status ${fallbackDmg.status}): ` +
+        `${(dmgResult.stderr?.toString() || "").trim()}${fallbackDmg.stderr ? ` | ${fallbackDmg.stderr.trim()}` : ""}`,
+    };
   }
 
   return { ok: true };
