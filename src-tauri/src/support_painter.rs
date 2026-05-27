@@ -222,37 +222,9 @@ pub async fn propose_brush_region(
         "MacroFace" => {
             let mut queue = VecDeque::new();
             let mut visited = HashSet::new();
-            let seed_normal = cached.normals[seed];
             
-            queue.push_back(seed_triangle_id);
-            visited.insert(seed_triangle_id);
-
-            while let Some(curr) = queue.pop_front() {
-                let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
-                for adj in adjs {
-                    if !visited.contains(&adj) {
-                        let n_adj = cached.normals[adj as usize];
-                        // 15 degrees = 0.26 radians normal deviation tolerance
-                        let normal_deviation = seed_normal.dot(n_adj).clamp(-1.0, 1.0).acos();
-
-                        let n_curr = cached.normals[curr as usize];
-                        // 25 degrees = 0.43 radians edge-guard dihedral tolerance
-                        let edge_dihedral = n_curr.dot(n_adj).clamp(-1.0, 1.0).acos();
-
-                        if normal_deviation < 0.26 && edge_dihedral < 0.43 {
-                            visited.insert(adj);
-                            queue.push_back(adj);
-                        }
-                    }
-                }
-            }
-            Ok(visited.into_iter().collect())
-        }
-        "Ridge" => {
-            let mut queue = VecDeque::new();
-            let mut visited = HashSet::new();
-
-            if cached.curvatures[seed].k1 > 0.15 {
+            if cached.normals[seed].z < 0.0 {
+                let seed_normal = cached.normals[seed];
                 queue.push_back(seed_triangle_id);
                 visited.insert(seed_triangle_id);
 
@@ -260,11 +232,93 @@ pub async fn propose_brush_region(
                     let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
                     for adj in adjs {
                         if !visited.contains(&adj) {
-                            if cached.curvatures[adj as usize].k1 > 0.15 {
-                                visited.insert(adj);
-                                queue.push_back(adj);
+                            let n_adj = cached.normals[adj as usize];
+                            if n_adj.z < 0.0 {
+                                // 35 degrees = 0.61 radians normal deviation tolerance
+                                let normal_deviation = seed_normal.dot(n_adj).clamp(-1.0, 1.0).acos();
+
+                                let n_curr = cached.normals[curr as usize];
+                                // 25 degrees = 0.43 radians edge-guard dihedral tolerance
+                                let edge_dihedral = n_curr.dot(n_adj).clamp(-1.0, 1.0).acos();
+
+                                if normal_deviation < 0.61 && edge_dihedral < 0.43 {
+                                    visited.insert(adj);
+                                    queue.push_back(adj);
+                                }
                             }
                         }
+                    }
+                }
+            }
+            Ok(visited.into_iter().collect())
+        }
+        "Ridge" => {
+            let mut visited = HashSet::new();
+
+            if cached.normals[seed].z < 0.0 && cached.curvatures[seed].k1 > 0.15 {
+                visited.insert(seed_triangle_id);
+
+                // Get adjacent faces of the seed
+                let adjs = adj_faces(&cached.mesh, &cached.topology, seed_triangle_id);
+                let mut candidates: Vec<u32> = adjs.into_iter()
+                    .filter(|&adj| {
+                        let idx = adj as usize;
+                        cached.normals[idx].z < 0.0 && cached.curvatures[idx].k1 > 0.15
+                    })
+                    .collect();
+
+                // Sort candidates by curvature k1 descending (sharpest crease first)
+                candidates.sort_by(|&a, &b| {
+                    cached.curvatures[b as usize].k1.partial_cmp(&cached.curvatures[a as usize].k1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // Follow branch A (the sharpest neighboring crease)
+                if candidates.len() > 0 {
+                    let mut curr_a = candidates[0];
+                    visited.insert(curr_a);
+
+                    loop {
+                        let adjs_a = adj_faces(&cached.mesh, &cached.topology, curr_a);
+                        let mut next_candidates: Vec<u32> = adjs_a.into_iter()
+                            .filter(|&adj| {
+                                let idx = adj as usize;
+                                !visited.contains(&adj) && cached.normals[idx].z < 0.0 && cached.curvatures[idx].k1 > 0.15
+                            })
+                            .collect();
+                        if next_candidates.is_empty() {
+                            break;
+                        }
+                        // Greedily pick the neighbor with the maximum curvature
+                        next_candidates.sort_by(|&a, &b| {
+                            cached.curvatures[b as usize].k1.partial_cmp(&cached.curvatures[a as usize].k1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        curr_a = next_candidates[0];
+                        visited.insert(curr_a);
+                    }
+                }
+
+                // Follow branch B (the second sharpest neighboring crease, extending in the opposite direction)
+                if candidates.len() > 1 {
+                    let mut curr_b = candidates[1];
+                    visited.insert(curr_b);
+
+                    loop {
+                        let adjs_b = adj_faces(&cached.mesh, &cached.topology, curr_b);
+                        let mut next_candidates: Vec<u32> = adjs_b.into_iter()
+                            .filter(|&adj| {
+                                let idx = adj as usize;
+                                !visited.contains(&adj) && cached.normals[idx].z < 0.0 && cached.curvatures[idx].k1 > 0.15
+                            })
+                            .collect();
+                        if next_candidates.is_empty() {
+                            break;
+                        }
+                        // Greedily pick the neighbor with the maximum curvature
+                        next_candidates.sort_by(|&a, &b| {
+                            cached.curvatures[b as usize].k1.partial_cmp(&cached.curvatures[a as usize].k1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        curr_b = next_candidates[0];
+                        visited.insert(curr_b);
                     }
                 }
             }
@@ -275,7 +329,7 @@ pub async fn propose_brush_region(
             let mut visited = HashSet::new();
 
             let seed_curv = &cached.curvatures[seed];
-            if seed_curv.k1 > 0.05 && seed_curv.k2 < 0.02 {
+            if cached.normals[seed].z < 0.0 && seed_curv.k1 > 0.05 && seed_curv.k2 < 0.02 {
                 queue.push_back(seed_triangle_id);
                 visited.insert(seed_triangle_id);
 
@@ -283,10 +337,13 @@ pub async fn propose_brush_region(
                     let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
                     for adj in adjs {
                         if !visited.contains(&adj) {
-                            let curv = &cached.curvatures[adj as usize];
-                            if curv.k1 > 0.05 && curv.k2 < 0.02 {
-                                visited.insert(adj);
-                                queue.push_back(adj);
+                            let idx = adj as usize;
+                            if cached.normals[idx].z < 0.0 {
+                                let curv = &cached.curvatures[idx];
+                                if curv.k1 > 0.05 && curv.k2 < 0.02 {
+                                    visited.insert(adj);
+                                    queue.push_back(adj);
+                                }
                             }
                         }
                     }
@@ -299,44 +356,83 @@ pub async fn propose_brush_region(
             let mut dists = HashMap::new();
             let mut heap = BinaryHeap::new();
 
-            let r_limit = 8.0f32; // Geodesic radius limit in mm
-            dists.insert(seed_triangle_id, 0.0f32);
-            heap.push(DijkstraState { cost: 0.0, face: seed_triangle_id });
+            if cached.normals[seed].z < 0.0 {
+                let r_limit = 8.0f32; // Geodesic radius limit in mm
+                dists.insert(seed_triangle_id, 0.0f32);
+                heap.push(DijkstraState { cost: 0.0, face: seed_triangle_id });
 
-            while let Some(DijkstraState { cost, face }) = heap.pop() {
-                if cost > r_limit {
-                    continue;
-                }
-                if !proposed.contains(&face) {
-                    proposed.push(face);
-                }
+                while let Some(DijkstraState { cost, face }) = heap.pop() {
+                    if cost > r_limit {
+                        continue;
+                    }
+                    if !proposed.contains(&face) {
+                        proposed.push(face);
+                    }
 
-                let centroid_curr = tri_centroid(&cached.mesh, face);
-                let adjs = adj_faces(&cached.mesh, &cached.topology, face);
-                for adj in adjs {
-                    let centroid_adj = tri_centroid(&cached.mesh, adj);
-                    let step_cost = centroid_curr.sub(centroid_adj).length();
-                    let next_cost = cost + step_cost;
+                    let centroid_curr = tri_centroid(&cached.mesh, face);
+                    let adjs = adj_faces(&cached.mesh, &cached.topology, face);
+                    for adj in adjs {
+                        let idx = adj as usize;
+                        if cached.normals[idx].z < 0.0 {
+                            let centroid_adj = tri_centroid(&cached.mesh, adj);
+                            let step_cost = centroid_curr.sub(centroid_adj).length();
+                            let next_cost = cost + step_cost;
 
-                    let current_best = *dists.get(&adj).unwrap_or(&f32::INFINITY);
-                    if next_cost < current_best && next_cost <= r_limit {
-                        dists.insert(adj, next_cost);
-                        heap.push(DijkstraState { cost: next_cost, face: adj });
+                            let current_best = *dists.get(&adj).unwrap_or(&f32::INFINITY);
+                            if next_cost < current_best && next_cost <= r_limit {
+                                dists.insert(adj, next_cost);
+                                heap.push(DijkstraState { cost: next_cost, face: adj });
+                            }
+                        }
                     }
                 }
             }
             Ok(proposed)
         }
+        "Ring" => {
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+
+            if cached.normals[seed].z < 0.0 {
+                let seed_centroid = tri_centroid(&cached.mesh, seed_triangle_id);
+                let seed_z = seed_centroid.z;
+
+                queue.push_back(seed_triangle_id);
+                visited.insert(seed_triangle_id);
+
+                while let Some(curr) = queue.pop_front() {
+                    let adjs = adj_faces(&cached.mesh, &cached.topology, curr);
+                    for adj in adjs {
+                        if !visited.contains(&adj) {
+                            let idx = adj as usize;
+                            if cached.normals[idx].z < 0.0 {
+                                let centroid = tri_centroid(&cached.mesh, adj);
+                                if (centroid.z - seed_z).abs() <= 1.0 {
+                                    visited.insert(adj);
+                                    queue.push_back(adj);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(visited.into_iter().collect())
+        }
         _ => {
-            // Fallback: return seed face + 1-ring neighbors (Phase 2 legacy)
-            let mut proposed = vec![seed_triangle_id];
-            let tri = cached.mesh.triangles[seed];
-            for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                let edge_key = dragonfruit_mesh_repair::core::halfedge::edge_key(u, v);
-                if let Some(edge_info) = cached.topology.edges.get(&edge_key) {
-                    for &adj_fi in &edge_info.faces {
-                        if adj_fi != seed_triangle_id && !proposed.contains(&adj_fi) {
-                            proposed.push(adj_fi);
+            // Fallback: return seed face + 1-ring neighbors (Phase 2 legacy) if normal points below horizontal
+            let mut proposed = Vec::new();
+            if cached.normals[seed].z < 0.0 {
+                proposed.push(seed_triangle_id);
+                let tri = cached.mesh.triangles[seed];
+                for &(u, v) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                    let edge_key = dragonfruit_mesh_repair::core::halfedge::edge_key(u, v);
+                    if let Some(edge_info) = cached.topology.edges.get(&edge_key) {
+                        for &adj_fi in &edge_info.faces {
+                            if adj_fi != seed_triangle_id && !proposed.contains(&adj_fi) {
+                                if cached.normals[adj_fi as usize].z < 0.0 {
+                                    proposed.push(adj_fi);
+                                }
+                            }
                         }
                     }
                 }

@@ -187,7 +187,7 @@ export function useRoiHighlightMaterial(
     return () => {
       unsubscribe();
     };
-  }, [totalTriangleCount, isActive]);
+  }, [totalTriangleCount, isActive, material]);
 
   // Drive the pulse animations in useFrame
   useFrame((state) => {

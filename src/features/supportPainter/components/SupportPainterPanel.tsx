@@ -74,7 +74,7 @@ export function SupportPainterPanel({
           Select Smart Brush
         </span>
         <div className="grid grid-cols-2 gap-2">
-          {(['MacroFace', 'Ridge', 'Point', 'Cylinder'] as BrushType[]).map((brush) => {
+          {(['MacroFace', 'Ridge', 'Point', 'Cylinder', 'Ring'] as BrushType[]).map((brush) => {
             const isSelected = state.activeBrush === brush;
             const brushColor = BRUSH_COLORS[brush];
             return (
