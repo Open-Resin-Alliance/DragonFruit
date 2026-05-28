@@ -1177,7 +1177,12 @@ export class ExportManager {
 
     const thumbnailBytes = sceneContext?.exportThumbnailPng;
     const painterState = supportPainterStore.getSnapshot();
-    const hasROIs = painterState.regions.size > 0;
+    const allRegions = supportPainterStore.getAllRegionsByModel();
+    let totalROIs = 0;
+    for (const modelRegions of allRegions.values()) {
+      totalROIs += modelRegions.size;
+    }
+    const hasROIs = totalROIs > 0;
 
     let voxlExtensions: Record<string, any> | undefined = undefined;
 
@@ -1194,7 +1199,7 @@ export class ExportManager {
       if (hasROIs && painterState.roiTrackingMode === 'voxl') {
         const activeModelId = sceneContext?.activeModelId;
         if (activeModelId) {
-          voxlExtensions['dragonfruit.roi'] = serializeROIsForVoxl(painterState.regions, activeModelId);
+          voxlExtensions['dragonfruit.roi'] = serializeROIsForVoxl(allRegions, activeModelId);
         }
       }
     }

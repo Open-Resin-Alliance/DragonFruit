@@ -21,6 +21,8 @@ let activeBrush: BrushType = 'MacroFace';
 let interactionPhase: BrushInteractionPhase = 'Idle';
 let modifierKeys: BrushModifierKeys = { alt: false, shift: false };
 let regions = new Map<string, ROIRegion>();
+const regionsByModel = new Map<string, Map<string, ROIRegion>>();
+let activeModelId: string | null = null;
 let triangleColorMap: TriangleColorMap = new Map();
 let hoveredTriangleId: number | null = null;
 let proposedTriangleIds = new Set<number>();
@@ -274,18 +276,60 @@ export const supportPainterStore = {
     return foundId;
   },
 
+  setActiveModelId(modelId: string | null) {
+    if (activeModelId === modelId) return;
+    activeModelId = modelId;
+    if (modelId) {
+      let modelRegions = regionsByModel.get(modelId);
+      if (!modelRegions) {
+        modelRegions = new Map<string, ROIRegion>();
+        regionsByModel.set(modelId, modelRegions);
+      }
+      regions = modelRegions;
+    } else {
+      regions = new Map<string, ROIRegion>();
+    }
+    proposedTriangleIds.clear();
+    hoveredTriangleId = null;
+    triangleColorMap = _recomputeTriangleColorMap();
+    updateSnapshot();
+    notify();
+  },
+
   restoreRegions(nextRegions: Map<string, ROIRegion>) {
     regions = new Map(nextRegions);
+    if (activeModelId) {
+      regionsByModel.set(activeModelId, regions);
+    }
     triangleColorMap = _recomputeTriangleColorMap();
     updateSnapshot();
     notify();
   },
 
   loadFromVoxl(ext: VoxlROIExtension) {
-    regions = deserializeROIsFromVoxl(ext);
+    const loadedRegions = deserializeROIsFromVoxl(ext);
+    for (const [mId, mRegions] of loadedRegions.entries()) {
+      regionsByModel.set(mId, mRegions);
+    }
+    if (activeModelId) {
+      let modelRegions = regionsByModel.get(activeModelId);
+      if (!modelRegions) {
+        modelRegions = new Map<string, ROIRegion>();
+        regionsByModel.set(activeModelId, modelRegions);
+      }
+      regions = modelRegions;
+    } else {
+      regions = new Map<string, ROIRegion>();
+    }
+    proposedTriangleIds.clear();
+    hoveredTriangleId = null;
     triangleColorMap = _recomputeTriangleColorMap();
     updateSnapshot();
     notify();
+  },
+
+  getAllRegionsByModel(): Map<string, Map<string, ROIRegion>> {
+    return new Map(regionsByModel);
   },
 
   clearAll() {
@@ -359,7 +403,16 @@ export const supportPainterStore = {
 
   stripRoiData(modelId?: string | null) {
     // Purges active ROI map globally or for the specific model.
-    regions.clear();
+    if (modelId) {
+      regionsByModel.delete(modelId);
+      if (modelId === activeModelId) {
+        regions = new Map<string, ROIRegion>();
+        regionsByModel.set(modelId, regions);
+      }
+    } else {
+      regionsByModel.clear();
+      regions.clear();
+    }
     proposedTriangleIds.clear();
     hoveredTriangleId = null;
     triangleColorMap = _recomputeTriangleColorMap();

@@ -49,43 +49,60 @@ export function decompressRLE(spans: VoxlROIRunLength[]): number[] {
  * Converts in-memory ROIRegion map into a JSON-safe VoxlROIExtension object.
  * Supports Version 2 boundary-loops and RLE fallback.
  */
+/**
+ * Converts all in-memory ROIRegions across all models into a JSON-safe VoxlROIExtension object.
+ * Supports Version 2 boundary-loops, RLE fallback, and model-specific grouping.
+ */
 export function serializeROIsForVoxl(
-  regions: Map<string, ROIRegion>,
-  modelId: string
+  regionsByModel: Map<string, Map<string, ROIRegion>>,
+  activeModelId: string
 ): VoxlROIExtension {
-  const list: VoxlROIRegion[] = Array.from(regions.values()).map((r) => {
-    // RLE is always saved as a reliable, fast fallback.
-    const rleSpans = r.rleSpans || compressRLE(Array.from(r.triangleIds));
-    return {
-      id: r.id,
-      brushType: r.brushType,
-      seedTriangleId: r.seedTriangleId,
-      color: r.color,
-      createdAt: r.createdAt,
-      loops: r.loops,
-      rleSpans,
-      brush: r.brush,
-      support: r.support,
-    };
-  });
+  const list: VoxlROIRegion[] = [];
+
+  for (const [modelId, modelRegions] of regionsByModel.entries()) {
+    for (const r of modelRegions.values()) {
+      const rleSpans = r.rleSpans || compressRLE(Array.from(r.triangleIds));
+      list.push({
+        id: r.id,
+        brushType: r.brushType,
+        seedTriangleId: r.seedTriangleId,
+        color: r.color,
+        createdAt: r.createdAt,
+        triangleIds: Array.from(r.triangleIds), // Retain raw triangle array for backwards compatibility
+        loops: r.loops,
+        rleSpans,
+        brush: r.brush,
+        support: r.support,
+        modelId, // Save the model ID per region
+      });
+    }
+  }
 
   return {
     kind: 'support-painter-rois',
-    version: 2, // Upgraded version supporting persistent RLE & Loops
-    modelId,
+    version: 1, // Keep version at 1 for backwards compatibility with prior loaders
+    modelId: activeModelId,
     regions: list,
   };
 }
 
 /**
- * Converts VoxlROIExtension back into a Map<string, ROIRegion>.
- * Reconstructs triangle sets from RLE or loops.
+ * Converts VoxlROIExtension back into a grouped Map<string, Map<string, ROIRegion>>.
+ * Reconstructs triangle sets from RLE or loops grouped by their target modelId.
  */
 export function deserializeROIsFromVoxl(
   ext: VoxlROIExtension
-): Map<string, ROIRegion> {
-  const map = new Map<string, ROIRegion>();
+): Map<string, Map<string, ROIRegion>> {
+  const result = new Map<string, Map<string, ROIRegion>>();
+
   for (const r of ext.regions) {
+    const targetModelId = r.modelId || ext.modelId; // Fallback to primary modelId if not present
+    let modelMap = result.get(targetModelId);
+    if (!modelMap) {
+      modelMap = new Map<string, ROIRegion>();
+      result.set(targetModelId, modelMap);
+    }
+
     // Reconstruct triangle IDs using either RLE spans or triangleIds (fallback for legacy files)
     let triangleIdsList: number[] = [];
     if (r.rleSpans && r.rleSpans.length > 0) {
@@ -94,7 +111,7 @@ export function deserializeROIsFromVoxl(
       triangleIdsList = r.triangleIds;
     }
 
-    map.set(r.id, {
+    modelMap.set(r.id, {
       id: r.id,
       brushType: r.brushType,
       seedTriangleId: r.seedTriangleId,
@@ -106,9 +123,10 @@ export function deserializeROIsFromVoxl(
       rleSpans: r.rleSpans,
       brush: r.brush,
       support: r.support,
+      modelId: targetModelId,
     });
   }
-  return map;
+  return result;
 }
 
 /**

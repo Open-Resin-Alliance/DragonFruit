@@ -307,7 +307,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
   // ── Chunk reader helpers ──────────────────────────────────────────────
 
   function readChunk(entry: ChunkDirEntry): Uint8Array {
-    const raw = data.subarray(entry.offset, entry.offset + entry.compressedSize);
+    const raw = data.slice(entry.offset, entry.offset + entry.compressedSize);
 
     if (entry.compression === COMPRESSION_ZLIB) {
       const inflated = unzlibSync(raw);

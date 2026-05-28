@@ -555,6 +555,7 @@ export async function generateSupportsFromPainter(
       },
     };
 
+    const activeSettings = getSettings();
     const support: SupportGenerationMetadata = {
       presetId: 'default',
       presetName: 'Default Preset',
@@ -568,6 +569,17 @@ export async function generateSupportsFromPainter(
           perimeter: { ...suppressionSettings.perimeter },
           infill: { ...suppressionSettings.infill },
         },
+        tipContactDiameterMm: activeSettings.tip.contactDiameterMm,
+        tipBodyDiameterMm: activeSettings.tip.bodyDiameterMm,
+        tipLengthMm: activeSettings.tip.lengthMm,
+        tipConeAngleDeg: activeSettings.tip.coneAngleDeg,
+        rootsDiameterMm: activeSettings.roots.diameterMm,
+        rootsDiskHeightMm: activeSettings.roots.diskHeightMm,
+        rootsConeHeightMm: activeSettings.roots.coneHeightMm,
+        baseFlareEnabled: activeSettings.baseFlare.enabled,
+        baseFlareDiameterMm: activeSettings.baseFlare.diameterMm,
+        baseFlareHeightMm: activeSettings.baseFlare.heightMm,
+        shaftMaxAngleDeg: activeSettings.shaft.maxAngleDeg,
       },
     };
 
@@ -578,7 +590,11 @@ export async function generateSupportsFromPainter(
   }
 
   // Save mutated regions with loops, RLE spans, and metadata back to the store
-  supportPainterStore.restoreRegions(new Map(regions.map(r => [r.id, r])));
+  const currentRegions = new Map(supportPainterStore.getSnapshot().regions);
+  for (const r of regions) {
+    currentRegions.set(r.id, r);
+  }
+  supportPainterStore.restoreRegions(currentRegions);
 
   // ─── Configurable Stage-Based Suppression Sequencer [SUPPRESSION_SEQUENCER] ───
   // [AGENT_NOTE] Processed sequentially across all ROIs based on target rules.

@@ -3842,9 +3842,14 @@ export function useSceneCollectionManager() {
       const roiExt = document.extensions?.['dragonfruit.roi'];
       if (roiExt && isVoxlROIExtension(roiExt)) {
         const mappedModelId = idMap.get(roiExt.modelId) || roiExt.modelId;
+        const remappedRegions = roiExt.regions.map((r) => ({
+          ...r,
+          modelId: idMap.get(r.modelId || roiExt.modelId) || r.modelId || roiExt.modelId,
+        }));
         const remappedRoiExt = {
           ...roiExt,
           modelId: mappedModelId,
+          regions: remappedRegions,
         };
         supportPainterStore.loadFromVoxl(remappedRoiExt);
       } else {

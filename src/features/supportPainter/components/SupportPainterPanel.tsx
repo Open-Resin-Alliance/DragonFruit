@@ -85,6 +85,11 @@ export function SupportPainterPanel({
     };
   }, []);
 
+  // Synchronize active model ID to support painter store
+  useEffect(() => {
+    supportPainterStore.setActiveModelId(activeModelId || null);
+  }, [activeModelId]);
+
   // Chevron is the mode-switch control
   const handleToggle = () => {
     const next = !expanded;
@@ -106,7 +111,7 @@ export function SupportPainterPanel({
     setIsGenerating(true);
     try {
       await generateSupportsFromPainter(activeModelId, mesh, Array.from(state.regions.values()));
-      supportPainterStore.clearAll();
+      // Preserve ROIs in store for non-destructive recalculation/dashboard
     } catch (err) {
       console.error('[SupportPainterPanel] Generation failed', err);
     } finally {
@@ -427,6 +432,36 @@ export function SupportPainterPanel({
                                 {regionTwigs.length > 0 && <div>Twigs: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionTwigs.length}</span></div>}
                                 {regionSticks.length > 0 && <div>Sticks: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionSticks.length}</span></div>}
                                 {regionAnchors.length > 0 && <div>Anchors: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionAnchors.length}</span></div>}
+                              </div>
+                            )}
+
+                            {/* Parameters Used */}
+                            {region.support && (
+                              <div className="mt-2 border-t pt-2 flex flex-col gap-1 text-[9px]">
+                                <div className="font-bold text-[9px] uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-strong)' }}>
+                                  Parameters at Last Generation
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-2 gap-y-1 font-medium text-[9px] leading-normal">
+                                  <div>Preset: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.presetName}</span></div>
+                                  <div>Shaft Width: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.shaftDiameterMm.toFixed(2)} mm</span></div>
+                                  <div>Perim Spacing: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.perimeterSpacingMm.toFixed(2)} mm</span></div>
+                                  <div>Infill Spacing: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.infillSpacingMm.toFixed(2)} mm</span></div>
+                                  {region.support.parameters.tipContactDiameterMm !== undefined && (
+                                    <div>Tip Contact Ø: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.tipContactDiameterMm.toFixed(2)} mm</span></div>
+                                  )}
+                                  {region.support.parameters.tipLengthMm !== undefined && (
+                                    <div>Tip Length: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.tipLengthMm.toFixed(2)} mm</span></div>
+                                  )}
+                                  {region.support.parameters.rootsDiameterMm !== undefined && (
+                                    <div>Roots Base Ø: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.rootsDiameterMm.toFixed(2)} mm</span></div>
+                                  )}
+                                  {region.support.parameters.shaftMaxAngleDeg !== undefined && (
+                                    <div>Max Overhang: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.shaftMaxAngleDeg}°</span></div>
+                                  )}
+                                  {region.support.parameters.baseFlareEnabled !== undefined && (
+                                    <div>Base Flare: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{region.support.parameters.baseFlareEnabled ? 'Enabled' : 'Disabled'}</span></div>
+                                  )}
+                                </div>
                               </div>
                             )}
                           </div>

@@ -44,6 +44,7 @@ export interface ROIRegion {
   rleSpans?:       VoxlROIRunLength[];
   brush?:          BrushMetadata;
   support?:        SupportGenerationMetadata;
+  modelId?:        string;          // Optional model reference for multi-model sheets
 }
 
 // ─── Stage-Based Suppression Configurations [STAGE_SUPPRESSION] ───────────────
@@ -155,6 +156,17 @@ export interface SupportGenerationMetadata {
     infillSpacingMm: number;
     minimaSuppressionRadiusMm: number;
     suppressionSettings: SuppressionSettings;
+    tipContactDiameterMm?: number;
+    tipBodyDiameterMm?: number;
+    tipLengthMm?: number;
+    tipConeAngleDeg?: number;
+    rootsDiameterMm?: number;
+    rootsDiskHeightMm?: number;
+    rootsConeHeightMm?: number;
+    baseFlareEnabled?: boolean;
+    baseFlareDiameterMm?: number;
+    baseFlareHeightMm?: number;
+    shaftMaxAngleDeg?: number;
   };
 }
 
@@ -171,6 +183,7 @@ export interface VoxlROIRegion {
   rleSpans?:       VoxlROIRunLength[];
   brush?:          BrushMetadata;
   support?:        SupportGenerationMetadata;
+  modelId?:        string;          // Optional model reference for multi-model sheets
 }
 
 export interface VoxlROIExtension {
