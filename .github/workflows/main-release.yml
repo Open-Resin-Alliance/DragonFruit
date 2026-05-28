@@ -86,16 +86,22 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
+            build_kind: tauri
             args: --target universal-apple-darwin --bundles app,dmg
             artifact_name: dragonfruit-macos-universal
             cmake_archs: "arm64;x86_64"
             df_build_triple: universal-apple-darwin
           - platform: ubuntu-22.04
+            build_kind: tauri
             args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
             artifact_name: dragonfruit-linux-x64
           - platform: windows-latest
+            build_kind: tauri
             args: --target x86_64-pc-windows-msvc --bundles msi,nsis
             artifact_name: dragonfruit-windows-x64
+          - platform: ubuntu-22.04
+            build_kind: flatpak
+            artifact_name: dragonfruit-linux-flatpak-x64
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Add SSH private keys for submodule repositories
@@ -143,6 +149,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri bundle
+        if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
         env:
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
@@ -158,79 +165,20 @@ jobs:
           node scripts/macos-embed-appex.mjs --target ${{ matrix.df_build_triple }}
           node scripts/verify-universal-bundle.mjs
 
-      - name: Upload bundle artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: |
-            src-tauri/target/release/bundle/**
-            src-tauri/target/*/release/bundle/**
-          if-no-files-found: error
-
-  build-flatpak:
-    name: Build dragonfruit-linux-flatpak-x64
-    needs:
-      - detect-version-bump
-    if: needs.detect-version-bump.outputs.should_release == 'true'
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Add SSH private keys for submodule repositories
-        uses: webfactory/ssh-agent@v0.10.0
-        with:
-          ssh-private-key: |
-            ${{ secrets.CTB_DEPLOY }}
-            ${{ secrets.ELEGOO_DEPLOY }}
-            ${{ secrets.SDCP_V3_DEPLOY }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Checkout submodules
-        run: |
-          git submodule sync
-          git submodule update --init --recursive
-
-      - name: Install Linux system dependencies for Tauri/CEF
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20.18.0"
-          cache: npm
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: ./src-tauri -> target
-
-      - name: Install frontend dependencies
-        run: npm ci
-
       - name: Install AppStream + desktop-file validators
+        if: matrix.build_kind == 'flatpak'
         run: sudo apt-get install -y appstream desktop-file-utils
 
-      - name: Validate metainfo.xml
-        run: appstreamcli validate --no-net flatpak/org.openresinalliance.dragonfruit.metainfo.xml
-
-      - name: Validate .desktop
-        run: desktop-file-validate flatpak/org.openresinalliance.dragonfruit.desktop
-
       - name: Build Tauri app (CEF variant on Linux)
-        run: node scripts/tauri-build.mjs --bundles none
+        if: matrix.build_kind == 'flatpak'
+        run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --bundles none
 
       - name: Stage CEF libraries next to binary
+        if: matrix.build_kind == 'flatpak'
         run: bash scripts/bundle-cef-libs.sh
 
       - name: Build Flatpak bundle
+        if: matrix.build_kind == 'flatpak'
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: dragonfruit.flatpak
@@ -239,9 +187,20 @@ jobs:
           run-tests: false
 
       - name: Upload bundle artifact
+        if: matrix.build_kind == 'tauri'
         uses: actions/upload-artifact@v4
         with:
-          name: dragonfruit-linux-flatpak-x64
+          name: ${{ matrix.artifact_name }}
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/*/release/bundle/**
+          if-no-files-found: error
+
+      - name: Upload flatpak artifact
+        if: matrix.build_kind == 'flatpak'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
           path: dragonfruit.flatpak
           if-no-files-found: error
 
@@ -250,7 +209,6 @@ jobs:
     needs:
       - detect-version-bump
       - build-tauri
-      - build-flatpak
     if: needs.detect-version-bump.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:

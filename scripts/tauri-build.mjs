@@ -55,8 +55,19 @@ function resolveDefaultTargetTriple() {
 }
 
 const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-const cmdArgs = ["tauri", "build", ...passThroughArgs];
-const hasBundlesArg = passThroughArgs.includes("--bundles");
+
+// --bundles none is a script-level sentinel meaning "compile only; let Tauri
+// use its configured defaults without an explicit --bundles flag". Tauri itself
+// does not accept "none" as a bundle type and will error if it is forwarded.
+const bundlesIdx = passThroughArgs.indexOf("--bundles");
+const bundlesValue = bundlesIdx !== -1 ? passThroughArgs[bundlesIdx + 1] : null;
+const noBundles = bundlesValue === "none";
+const filteredPassThroughArgs = noBundles
+  ? passThroughArgs.filter((_, i) => i !== bundlesIdx && i !== bundlesIdx + 1)
+  : passThroughArgs;
+
+const cmdArgs = ["tauri", "build", ...filteredPassThroughArgs];
+const hasBundlesArg = filteredPassThroughArgs.includes("--bundles");
 
 // Universal builds target universal-apple-darwin (Tauri lipos both arches)
 // unless the caller already pinned an explicit --target.
@@ -65,7 +76,7 @@ if (isUniversal && !passThroughArgs.includes("--target")) {
 }
 
 if (isLinux) {
-  if (!hasBundlesArg) {
+  if (!hasBundlesArg && !noBundles) {
     cmdArgs.push("--bundles", "deb,rpm");
   }
   cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
@@ -86,9 +97,9 @@ const tauriEnv = {
   // to emit a universal sidecar. Respect a caller-provided CMAKE_OSX_ARCHITECTURES.
   ...(isUniversal
     ? {
-        CMAKE_OSX_ARCHITECTURES: process.env.CMAKE_OSX_ARCHITECTURES ?? "arm64;x86_64",
-        DF_BUILD_TARGET_TRIPLE: "universal-apple-darwin",
-      }
+      CMAKE_OSX_ARCHITECTURES: process.env.CMAKE_OSX_ARCHITECTURES ?? "arm64;x86_64",
+      DF_BUILD_TARGET_TRIPLE: "universal-apple-darwin",
+    }
     : {}),
 };
 
