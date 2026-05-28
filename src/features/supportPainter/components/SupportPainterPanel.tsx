@@ -10,6 +10,7 @@ import {
   WandSparkles,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Trash2,
 } from 'lucide-react';
 import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
@@ -17,6 +18,9 @@ import { supportPainterStore, useSupportPainterState } from '../supportPainterSt
 import { type BrushType, BRUSH_COLORS } from '../supportPainterTypes';
 import { generateSupportsFromPainter } from '../supportScriptingEngine';
 import { subscribeToSettings, getSettings } from '@/supports/Settings';
+import { subscribe as subscribeToSupports, getSnapshot as getSupportsSnapshot } from '@/supports/state';
+import { PAINT_ROI_STRIP } from '../supportPainterHistoryTypes';
+import { pushHistory } from '@/history/historyStore';
 
 const BRUSH_DETAILS: Record<
   BrushType,
@@ -65,6 +69,8 @@ export function SupportPainterPanel({
 }) {
   const state = useSupportPainterState();
   const activeSettings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
+  const supportState = useSyncExternalStore(subscribeToSupports, getSupportsSnapshot, getSupportsSnapshot);
+  const [expandedRegions, setExpandedRegions] = useState<Record<string, boolean>>({});
   const trunkWidth = activeSettings.shaft.diameterMm;
   const defaultSpacing = trunkWidth * 4.0;
 
@@ -165,6 +171,38 @@ export function SupportPainterPanel({
                 }}
               />
             </button>
+          </div>
+
+          {/* ROI Storage Mode Dropdown */}
+          <div
+            className="flex flex-col gap-2 p-2.5 rounded-lg border text-xs"
+            style={{
+              background: 'var(--surface-2)',
+              borderColor: 'var(--border-subtle)',
+            }}
+          >
+            <div className="flex flex-col gap-0.5">
+              <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                ROI Storage Mode
+              </span>
+              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                Controls how ROI data is saved/loaded
+              </span>
+            </div>
+            <select
+              value={state.roiTrackingMode}
+              onChange={(e) => supportPainterStore.setRoiTrackingMode(e.target.value as any)}
+              className="w-full text-[11px] px-2 py-1.5 rounded border outline-none font-medium transition-colors cursor-pointer"
+              style={{
+                background: 'var(--surface-1)',
+                borderColor: 'var(--border-subtle)',
+                color: 'var(--text-strong)',
+              }}
+            >
+              <option value="voxl">Persistent VOXL (Recommended)</option>
+              <option value="session">Session-Only</option>
+              <option value="none">None (Purge on change)</option>
+            </select>
           </div>
 
           {/* Brush Selection */}
@@ -277,58 +315,162 @@ export function SupportPainterPanel({
                   .sort((a, b) => b.createdAt - a.createdAt)
                   .map((region) => {
                     const details = BRUSH_DETAILS[region.brushType];
+                    const isRegionExpanded = !!expandedRegions[region.id];
+
+                    // Fetch generated support entities for this ROI region
+                    const regionTrunks = Object.values(supportState.trunks).filter(t => t.roiId === region.id);
+                    const regionBranches = Object.values(supportState.branches).filter(b => b.roiId === region.id);
+                    const regionLeaves = Object.values(supportState.leaves).filter(l => l.roiId === region.id);
+                    const regionTwigs = Object.values(supportState.twigs).filter(t => t.roiId === region.id);
+                    const regionSticks = Object.values(supportState.sticks).filter(s => s.roiId === region.id);
+                    const regionAnchors = Object.values(supportState.anchors).filter(a => a.roiId === region.id);
+                    const totalChildSupports = regionTrunks.length + regionBranches.length + regionLeaves.length + regionTwigs.length + regionSticks.length + regionAnchors.length;
+
                     return (
                       <div
                         key={region.id}
-                        className="flex items-center justify-between p-2 rounded-lg border text-xs"
+                        className="flex flex-col p-2 rounded-lg border text-xs gap-1"
                         style={{
                           background: 'var(--surface-2)',
                           borderColor: 'var(--border-subtle)',
                         }}
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div
-                            className="w-3 h-3 rounded border flex-shrink-0"
-                            style={{
-                              backgroundColor: region.color,
-                              borderColor: 'var(--border-subtle)',
-                            }}
-                          />
-                          <div className="flex flex-col min-w-0">
-                            <span
-                              className="font-semibold truncate"
-                              style={{ color: 'var(--text-strong)' }}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {/* Chevron Toggle button */}
+                            <IconButton
+                              onClick={() => {
+                                setExpandedRegions(prev => ({
+                                  ...prev,
+                                  [region.id]: !prev[region.id],
+                                }));
+                              }}
+                              className="!p-0.5"
+                              title={isRegionExpanded ? "Collapse breakdown" : "Expand breakdown"}
                             >
-                              {details?.label || region.brushType}
+                              {isRegionExpanded ? (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              )}
+                            </IconButton>
+
+                            <div
+                              className="w-3 h-3 rounded border flex-shrink-0"
+                              style={{
+                                backgroundColor: region.color,
+                                borderColor: 'var(--border-subtle)',
+                              }}
+                            />
+                            <div className="flex flex-col min-w-0">
+                              <span
+                                className="font-semibold truncate"
+                                style={{ color: 'var(--text-strong)' }}
+                              >
+                                {details?.label || region.brushType}
+                              </span>
+                              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                Seed #{region.seedTriangleId}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded border font-semibold"
+                              style={{
+                                background: 'var(--surface-1)',
+                                borderColor: 'var(--border-subtle)',
+                                color: 'var(--text-muted)',
+                              }}
+                            >
+                              {region.triangleIds.size} tri
                             </span>
-                            <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                              Seed #{region.seedTriangleId}
-                            </span>
+                            <IconButton
+                              onClick={() => supportPainterStore.removeRegion(region.id)}
+                              className="!p-1"
+                              title="Delete region"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </IconButton>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <span
-                            className="text-[10px] px-1.5 py-0.5 rounded border"
-                            style={{
-                              background: 'var(--surface-1)',
-                              borderColor: 'var(--border-subtle)',
-                              color: 'var(--text-muted)',
-                            }}
+
+                        {/* Collapsible Support Child Breakdown */}
+                        {isRegionExpanded && (
+                          <div
+                            className="mt-1 pl-6 pr-1 py-1.5 flex flex-col gap-1 border-t text-[10px]"
+                            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
                           >
-                            {region.triangleIds.size} tri
-                          </span>
-                          <IconButton
-                            onClick={() => supportPainterStore.removeRegion(region.id)}
-                            className="!p-1"
-                            title="Delete region"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </IconButton>
-                        </div>
+                            <div className="font-bold text-[9px] uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-strong)' }}>
+                              Child Support Breakdown ({totalChildSupports})
+                            </div>
+                            {totalChildSupports === 0 ? (
+                              <span className="italic">No supports generated yet.</span>
+                            ) : (
+                              <div className="grid grid-cols-2 gap-x-2 gap-y-1 font-medium">
+                                {regionTrunks.length > 0 && <div>Trunks: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionTrunks.length}</span></div>}
+                                {regionBranches.length > 0 && <div>Branches: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionBranches.length}</span></div>}
+                                {regionLeaves.length > 0 && <div>Leaves: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionLeaves.length}</span></div>}
+                                {regionTwigs.length > 0 && <div>Twigs: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionTwigs.length}</span></div>}
+                                {regionSticks.length > 0 && <div>Sticks: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionSticks.length}</span></div>}
+                                {regionAnchors.length > 0 && <div>Anchors: <span className="font-bold" style={{ color: 'var(--text-strong)' }}>{regionAnchors.length}</span></div>}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })
               )}
+            </div>
+          </div>
+
+          {/* ROI Maintenance Utilities */}
+          <div
+            className="flex flex-col gap-2 border-t pt-2.5"
+            style={{ borderColor: 'var(--border-subtle)' }}
+          >
+            <span
+              className="text-[10px] uppercase tracking-wider font-bold"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Maintenance Utilities
+            </span>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  const beforeRegions = new Map(state.regions);
+                  pushHistory({
+                    type: PAINT_ROI_STRIP,
+                    description: 'Strip model ROI regions',
+                    payload: { beforeRegions },
+                  });
+                  supportPainterStore.stripRoiData(activeModelId);
+                }}
+                className="w-full !text-[10px] py-1"
+                disabled={state.regions.size === 0}
+              >
+                Strip ROI (Model)
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  const beforeRegions = new Map(state.regions);
+                  pushHistory({
+                    type: PAINT_ROI_STRIP,
+                    description: 'Strip all ROI regions',
+                    payload: { beforeRegions },
+                  });
+                  supportPainterStore.stripRoiData();
+                }}
+                className="w-full !text-[10px] py-1"
+                disabled={state.regions.size === 0}
+              >
+                Strip ROI (Global)
+              </Button>
             </div>
           </div>
 

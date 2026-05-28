@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { supportPainterStore, useSupportPainterState } from './supportPainterStore';
-import { PAINT_ROI_ADD, PAINT_ROI_REMOVE } from './supportPainterHistoryTypes';
+import { PAINT_ROI_ADD, PAINT_ROI_REMOVE, PAINT_ROI_STRIP } from './supportPainterHistoryTypes';
 import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import { type ROIRegion } from './supportPainterTypes';
 import { buildClientAdjacencyMap, proposeRegionOnClient } from './useClientAdjacencyMap';
@@ -46,9 +46,19 @@ export function useSupportPainterManager(
       }
     });
 
+    const undoStrip = registerHistoryHandler(PAINT_ROI_STRIP, (action, direction) => {
+      const { beforeRegions } = action.payload as { beforeRegions: Map<string, ROIRegion> };
+      if (direction === 'undo') {
+        supportPainterStore.restoreRegions(beforeRegions);
+      } else {
+        supportPainterStore.stripRoiData();
+      }
+    });
+
     return () => {
       undoAdd();
       undoRemove();
+      undoStrip();
     };
   }, [isActive]);
 
