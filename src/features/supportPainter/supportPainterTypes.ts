@@ -39,6 +39,35 @@ export interface ROIRegion {
   createdAt:       number;          // Date.now()
 }
 
+// ─── Stage-Based Suppression Configurations [STAGE_SUPPRESSION] ───────────────
+// [AGENT_NOTE] Declarative suppression rules used by the scripting engine.
+// Allows decoupling candidate generation from spacing/filtering strategies.
+
+export interface StageSuppressionConfig {
+  /**
+   * Suppression scope:
+   * - 'none': No proximity suppression
+   * - 'current': Only suppress against accepted points in the same ROI region
+   * - 'all': Suppress against accepted points in any ROI region (cross-ROI)
+   */
+  mode: 'none' | 'current' | 'all';
+  /**
+   * Candidate stages that will trigger suppression against this stage.
+   */
+  types: ('minima' | 'perimeter' | 'infill')[];
+}
+
+export interface SuppressionSettings {
+  minima: StageSuppressionConfig;
+  perimeter: StageSuppressionConfig;
+  infill: StageSuppressionConfig;
+}
+
+export interface SupportPainterToast {
+  id: number;
+  lines: string[];
+}
+
 // ─── Shader Data Types ───────────────────────────────────────────────────────
 
 // Flat map from triangle index → packed RGBA color (for DataTexture upload).
@@ -63,6 +92,13 @@ export interface SupportPainterState {
   proposedTriangleIds:    Set<number>;  // preview highlight before user commits
 
   directGenEnabled:       boolean; // Action B: Direct Click-to-Generate toggle
+
+  // ─── Extended Spacing & Suppression Parameters ───
+  // [AGENT_NOTE] Custom spacing values in mm. Null indicates fallback to default calculation.
+  perimeterSpacingOverride: number | null;
+  infillSpacingOverride:    number | null;
+  suppressionSettings:      SuppressionSettings;
+  toast:                    SupportPainterToast | null;
 }
 
 // ─── Store Action Payloads ───────────────────────────────────────────────────

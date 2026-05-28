@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { type ROIRegion } from './supportPainterTypes';
+import { type ROIRegion, type BrushType } from './supportPainterTypes';
+import { supportPainterStore } from './supportPainterStore';
 import {
   getSnapshot as getSupportSnapshot,
   setSnapshot as setSupportSnapshot,
@@ -23,6 +24,17 @@ import { decideGridPlacement } from '@/supports/PlacementLogic/Grid/gridPlacemen
 import { computeAndApplyTrunkDiameterProfile } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
 import { buildTwig } from '@/supports/SupportTypes/Twig/twigBuilder';
 import { buildStick } from '@/supports/SupportTypes/Stick/stickBuilder';
+
+// ─── Brush Metadata for Toasts ───
+// [AGENT_NOTE] Display names used for summary reporting in the toast component.
+const BRUSH_DETAILS: Record<BrushType, { label: string }> = {
+  MacroFace:      { label: 'MacroFace' },
+  Ridge:          { label: 'Ridge Crease' },
+  Point:          { label: 'Point Geodesic' },
+  CylinderSides:  { label: 'Cyl. Sides' },
+  CylinderMinima: { label: 'Cyl. Minima' },
+  Ring:           { label: 'Z-Plane Ring' },
+};
 
 function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -60,9 +72,19 @@ interface WeldedTriangle {
   centroid: THREE.Vector3; // World space
 }
 
-interface SampledPoint {
+interface BasicSampledPoint {
   pos: THREE.Vector3;
   normal: THREE.Vector3;
+}
+
+// ─── Extended SampledPoint [CANDIDATE_METADATA] ───
+// [AGENT_NOTE] Carries original painted region context to allow per-ROI/per-stage suppression 
+// and precise tracking of attempted vs placed statistics.
+interface SampledPoint extends BasicSampledPoint {
+  regionId: string;
+  regionType: BrushType;
+  regionTriCount: number;
+  stage: 'minima' | 'perimeter' | 'infill';
 }
 
 // 2D Point-in-Triangle test using Barycentric Coordinates
@@ -110,10 +132,10 @@ function samplePolylineWithNormals(
   spacing: number,
   uniqueVertices: THREE.Vector3[],
   vertexNormals: Map<number, THREE.Vector3>
-): SampledPoint[] {
+): BasicSampledPoint[] {
   if (indices.length < 2) return [];
 
-  const samples: SampledPoint[] = [];
+  const samples: BasicSampledPoint[] = [];
 
   // Always add first point
   const firstIdx = indices[0];
@@ -161,11 +183,16 @@ export async function generateSupportsFromPainter(
 ): Promise<void> {
   if (!mesh || !regions || regions.length === 0) return;
 
+  // ─── Spacing Override Core Configuration [SPACING_OVERRIDES] ───
+  // [AGENT_NOTE] Spacing is fetched from supportPainterStore. If null, falls back to dynamic 4.0 * shaftDiameter.
+  const state = supportPainterStore.getSnapshot();
   const trunkWidth = getShaftProfile()?.diameterMm ?? 1.5;
-  const spacing = trunkWidth * 4.0; // center-to-center interval
-  const perimeterSpacing = spacing;
-  const infillSpacing = spacing;
-  const minimaSuppressionRadius = spacing;
+  const defaultSpacing = trunkWidth * 4.0; // center-to-center interval
+
+  const perimeterSpacing = state.perimeterSpacingOverride !== null ? state.perimeterSpacingOverride : defaultSpacing;
+  const infillSpacing = state.infillSpacingOverride !== null ? state.infillSpacingOverride : defaultSpacing;
+  const minimaSuppressionRadius = defaultSpacing; // Z-minima keeps its default spacing for local stability
+  const suppressionSettings = state.suppressionSettings;
 
   const distance2D = (a: THREE.Vector3, b: THREE.Vector3) => {
     const dx = a.x - b.x;
@@ -236,10 +263,11 @@ export async function generateSupportsFromPainter(
     });
   }
 
-  // Collections for support placement
-  const allHeavyAnchors: SampledPoint[] = [];
-  const allPerimeterColumns: SampledPoint[] = [];
-  const allInfillColumns: SampledPoint[] = [];
+  // ─── Raw Unfiltered Candidates Collections ───
+  // [AGENT_NOTE] Collected first across all ROIs without immediate suppression.
+  const rawMinima: SampledPoint[] = [];
+  const rawPerimeter: SampledPoint[] = [];
+  const rawInfill: SampledPoint[] = [];
 
   // 3. Process each committed region
   for (const region of regions) {
@@ -314,7 +342,6 @@ export async function generateSupportsFromPainter(
     }
 
     const visitedEdges = new Set<string>();
-    const regionPerimeters: SampledPoint[][] = [];
 
     for (const key of boundaryEdges) {
       if (visitedEdges.has(key)) continue;
@@ -355,16 +382,44 @@ export async function generateSupportsFromPainter(
         }
       }
 
-      // Sample along this polyline
-      const samples = samplePolylineWithNormals(path, perimeterSpacing, uniqueVertices, vertexNormals);
-      if (samples.length > 0) {
-        regionPerimeters.push(samples);
-        allPerimeterColumns.push(...samples);
+      // ─── Perimeter Minima Alignment [PERIMETER_MINIMA] ───
+      // [AGENT_NOTE] Shift/rotate the boundary path so the vertex with the lowest Z coordinate is first.
+      const isClosed = path.length > 1 && path[0] === path[path.length - 1];
+      let finalPath = path;
+
+      if (isClosed && path.length > 2) {
+        const loopVertices = path.slice(0, -1);
+        let minZIndex = 0;
+        let minZ = Infinity;
+        for (let j = 0; j < loopVertices.length; j++) {
+          const z = uniqueVertices[loopVertices[j]].z;
+          if (z < minZ) {
+            minZ = z;
+            minZIndex = j;
+          }
+        }
+        // Rotate loopVertices so that minZIndex is at 0
+        const rotated = [
+          ...loopVertices.slice(minZIndex),
+          ...loopVertices.slice(0, minZIndex)
+        ];
+        rotated.push(rotated[0]); // Maintain closed loop
+        finalPath = rotated;
+      }
+
+      // Sample along this aligned polyline
+      const samples = samplePolylineWithNormals(finalPath, perimeterSpacing, uniqueVertices, vertexNormals);
+      for (const sample of samples) {
+        rawPerimeter.push({
+          pos: sample.pos,
+          normal: sample.normal,
+          regionId: region.id,
+          regionType: region.brushType,
+          regionTriCount: region.triangleIds.size,
+          stage: 'perimeter',
+        });
       }
     }
-
-    // Flat list of all perimeter positions for this region
-    const regionPerimeterPoints = regionPerimeters.flat();
 
     // 3c. Local Z-Minima (Tip Snapping / Heavy Anchors)
     const vertexAdj = new Map<number, Set<number>>();
@@ -388,7 +443,6 @@ export async function generateSupportsFromPainter(
       addVertexAdj(tri.idx0, tri.idx2);
     }
 
-    const localMinima: { pos: THREE.Vector3; normal: THREE.Vector3 }[] = [];
     for (const idx of vertexAdj.keys()) {
       const pos = uniqueVertices[idx];
       const neighbors = vertexAdj.get(idx)!;
@@ -400,32 +454,18 @@ export async function generateSupportsFromPainter(
         }
       }
       if (isMin) {
-        localMinima.push({
-          pos,
-          normal: vertexNormals.get(idx) || new THREE.Vector3(0, 0, 1),
+        rawMinima.push({
+          pos: pos.clone(),
+          normal: (vertexNormals.get(idx) || new THREE.Vector3(0, 0, 1)).clone(),
+          regionId: region.id,
+          regionType: region.brushType,
+          regionTriCount: region.triangleIds.size,
+          stage: 'minima',
         });
       }
     }
 
-    // Sort by Z coordinate ascending (lowest first) and suppress within 5.0mm
-    localMinima.sort((a, b) => a.pos.z - b.pos.z);
-    const regionMinima: typeof localMinima = [];
-
-    for (const cand of localMinima) {
-      let tooClose = false;
-      for (const accepted of regionMinima) {
-        if (distance2D(cand.pos, accepted.pos) < minimaSuppressionRadius) {
-          tooClose = true;
-          break;
-        }
-      }
-      if (!tooClose) {
-        regionMinima.push(cand);
-        allHeavyAnchors.push(cand);
-      }
-    }
-
-    // 3d. Poisson-Disc Infill Sampling (spacing = 6.0 mm)
+    // 3d. Poisson-Disc Infill Sampling
     // Only populated for large surfaces (MacroFace / Cylinder)
     if (region.brushType === 'MacroFace' || region.brushType === 'CylinderSides') {
       const minXY = new THREE.Vector2(Infinity, Infinity);
@@ -441,8 +481,6 @@ export async function generateSupportsFromPainter(
           maxXY.y = Math.max(maxXY.y, v.y);
         }
       }
-
-      const infillCandidates: SampledPoint[] = [];
 
       const startX = minXY.x + infillSpacing / 2;
       const startY = minXY.y + infillSpacing / 2;
@@ -475,63 +513,72 @@ export async function generateSupportsFromPainter(
           }
 
           if (matchingTri && bary) {
-            infillCandidates.push({
+            rawInfill.push({
               pos: new THREE.Vector3(px, py, bestZ),
               normal: matchingTri.normal.clone(),
+              regionId: region.id,
+              regionType: region.brushType,
+              regionTriCount: region.triangleIds.size,
+              stage: 'infill',
             });
           }
-        }
-      }
-
-      // Suppress infill candidates too close to perimeters, heavy anchors, or other infills (in 2D horizontal plane)
-      for (const cand of infillCandidates) {
-        let tooClose = false;
-
-        // Against Z-minima anchors
-        for (const anchor of regionMinima) {
-          if (distance2D(cand.pos, anchor.pos) < minimaSuppressionRadius) {
-            tooClose = true;
-            break;
-          }
-        }
-        if (tooClose) continue;
-
-        // Against perimeter columns
-        for (const peri of regionPerimeterPoints) {
-          if (distance2D(cand.pos, peri.pos) < minimaSuppressionRadius) {
-            tooClose = true;
-            break;
-          }
-        }
-        if (tooClose) continue;
-
-        // Against accepted infill
-        for (const accepted of allInfillColumns) {
-          if (distance2D(cand.pos, accepted.pos) < infillSpacing) {
-            tooClose = true;
-            break;
-          }
-        }
-
-        if (!tooClose) {
-          allInfillColumns.push(cand);
         }
       }
     }
   }
 
-  // Filter out any perimeter columns that are too close to heavy anchors (Z-minima) in the horizontal plane (2D)
-  const filteredPerimeterColumns: SampledPoint[] = [];
-  for (const peri of allPerimeterColumns) {
-    let tooCloseToAnchor = false;
-    for (const anchor of allHeavyAnchors) {
-      if (distance2D(peri.pos, anchor.pos) < minimaSuppressionRadius) {
-        tooCloseToAnchor = true;
-        break;
+  // ─── Configurable Stage-Based Suppression Sequencer [SUPPRESSION_SEQUENCER] ───
+  // [AGENT_NOTE] Processed sequentially across all ROIs based on target rules.
+  // Dynamic radius applies: perimeter checks use perimeterSpacing, infill uses infillSpacing, minima uses minimaSuppressionRadius.
+  const acceptedMinima: SampledPoint[] = [];
+  const acceptedPerimeter: SampledPoint[] = [];
+  const acceptedInfill: SampledPoint[] = [];
+
+  // helper evaluator
+  const evaluateSuppression = (cand: SampledPoint, config: typeof suppressionSettings.minima): boolean => {
+    if (config.mode === 'none') return false;
+
+    const allAccepted = [...acceptedMinima, ...acceptedPerimeter, ...acceptedInfill];
+    for (const accepted of allAccepted) {
+      if (config.types.includes(accepted.stage)) {
+        // ROI scope check
+        if (config.mode === 'current' && accepted.regionId !== cand.regionId) {
+          continue;
+        }
+        // Match suppression radius to the compared target point
+        const radius = accepted.stage === 'perimeter'
+          ? perimeterSpacing
+          : accepted.stage === 'infill'
+            ? infillSpacing
+            : minimaSuppressionRadius;
+
+        if (distance2D(cand.pos, accepted.pos) < radius) {
+          return true; // Suppressed!
+        }
       }
     }
-    if (!tooCloseToAnchor) {
-      filteredPerimeterColumns.push(peri);
+    return false;
+  };
+
+  // Stage 1: Evaluate Minima (sorted by Z ascending, lowest Z wins)
+  const sortedMinima = [...rawMinima].sort((a, b) => a.pos.z - b.pos.z);
+  for (const cand of sortedMinima) {
+    if (!evaluateSuppression(cand, suppressionSettings.minima)) {
+      acceptedMinima.push(cand);
+    }
+  }
+
+  // Stage 2: Evaluate Perimeter
+  for (const cand of rawPerimeter) {
+    if (!evaluateSuppression(cand, suppressionSettings.perimeter)) {
+      acceptedPerimeter.push(cand);
+    }
+  }
+
+  // Stage 3: Evaluate Infill
+  for (const cand of rawInfill) {
+    if (!evaluateSuppression(cand, suppressionSettings.infill)) {
+      acceptedInfill.push(cand);
     }
   }
 
@@ -606,12 +653,51 @@ export async function generateSupportsFromPainter(
     return { kind: 'stick', stick };
   };
 
+  // ─── Placement Statistics Tracking [STATS_TRACKING] ───
+  // [AGENT_NOTE] Compiles exact attempt and placement stats mapped back to ROIs.
+  const statsMap = new Map<string, {
+    label: string;
+    attempted: number;
+    placed: number;
+    stages: Record<'minima' | 'perimeter' | 'infill', { attempted: number; placed: number }>;
+  }>();
+
+  const registerAttempt = (col: SampledPoint) => {
+    let stats = statsMap.get(col.regionId);
+    if (!stats) {
+      const label = `${BRUSH_DETAILS[col.regionType]?.label || col.regionType} ${col.regionTriCount} tri`;
+      stats = {
+        label,
+        attempted: 0,
+        placed: 0,
+        stages: {
+          minima: { attempted: 0, placed: 0 },
+          perimeter: { attempted: 0, placed: 0 },
+          infill: { attempted: 0, placed: 0 },
+        }
+      };
+      statsMap.set(col.regionId, stats);
+    }
+    stats.attempted += 1;
+    stats.stages[col.stage].attempted += 1;
+  };
+
+  const registerPlacement = (col: SampledPoint) => {
+    const stats = statsMap.get(col.regionId);
+    if (stats) {
+      stats.placed += 1;
+      stats.stages[col.stage].placed += 1;
+    }
+  };
+
   // 5. Perform Support Generation inside a Transaction Batch leveraging the high quality grid placement solver
   beginSupportStateBatch();
 
   const settings = getSettings();
 
   const processPointPlacement = (col: SampledPoint) => {
+    registerAttempt(col);
+
     const build = buildTrunkData({
       tipPos: col.pos,
       tipNormal: col.normal,
@@ -626,8 +712,10 @@ export async function generateSupportsFromPainter(
         if (cavity) {
           if (cavity.kind === 'twig' && cavity.twig) {
             addTwig(cavity.twig);
+            registerPlacement(col);
           } else if (cavity.kind === 'stick' && cavity.stick) {
             addStick(cavity.stick);
+            registerPlacement(col);
           }
         }
       }
@@ -651,6 +739,7 @@ export async function generateSupportsFromPainter(
       if (tb?.trunk && !tb.stagnated && !tb.exhaustedBudget && !tb.error) {
         addRoot(tb.root);
         addTrunk(tb.trunk);
+        registerPlacement(col);
       }
     } else if (decision.kind === 'place_branch') {
       addKnot(decision.knot);
@@ -667,8 +756,10 @@ export async function generateSupportsFromPainter(
           updateTrunk(applied.trunk);
         }
       }
+      registerPlacement(col);
     } else if (decision.kind === 'place_anchor') {
       addAnchor(decision.anchor);
+      registerPlacement(col);
     } else if (decision.kind === 'replace_trunk') {
       addKnot(decision.promoteKnot);
       addBranch(decision.promoteBranch);
@@ -677,18 +768,19 @@ export async function generateSupportsFromPainter(
       if (tb?.trunk) {
         addRoot(tb.root);
         addTrunk(tb.trunk);
+        registerPlacement(col);
       }
     }
   };
 
   try {
     // 5a. Place Z-minima heavy anchors
-    for (const anchorPoint of allHeavyAnchors) {
+    for (const anchorPoint of acceptedMinima) {
       processPointPlacement(anchorPoint);
     }
 
     // 5b. Place perimeter and infill columns
-    const allColumns = [...filteredPerimeterColumns, ...allInfillColumns];
+    const allColumns = [...acceptedPerimeter, ...acceptedInfill];
     for (const col of allColumns) {
       processPointPlacement(col);
     }
@@ -697,7 +789,6 @@ export async function generateSupportsFromPainter(
   } finally {
     endSupportStateBatch();
   }
-
 
   // 5. Capture snapshot after execution and push a unified history step
   const afterState = getSupportSnapshot();
@@ -710,7 +801,28 @@ export async function generateSupportsFromPainter(
     },
   });
 
+  // ─── Trigger Toast Statistics Summary [TOAST_DISPATCH] ───
+  // [AGENT_NOTE] Sends summary strings to the store to trigger visual notifications.
+  const toastLines: string[] = [];
+  for (const stats of statsMap.values()) {
+    toastLines.push(`${stats.label}: placed ${stats.placed}/${stats.attempted} candidates`);
+    const activeStages = (Object.keys(stats.stages) as ('minima' | 'perimeter' | 'infill')[]).filter(
+      s => stats.stages[s].attempted > 0
+    );
+    if (activeStages.length > 1) {
+      const stageDetails = activeStages.map(s => {
+        const name = s === 'minima' ? 'minima' : s === 'perimeter' ? 'perimeter' : 'infill';
+        return `${name} ${stats.stages[s].placed}/${stats.stages[s].attempted}`;
+      }).join(', ');
+      toastLines.push(`  (${stageDetails})`);
+    }
+  }
+
+  if (toastLines.length > 0) {
+    supportPainterStore.showToast(toastLines);
+  }
+
   console.log(
-    `[SupportScriptingEngine] Complete! Generated: ${allHeavyAnchors.length} anchors, ${allPerimeterColumns.length} perimeter columns, ${allInfillColumns.length} infill columns.`
+    `[SupportScriptingEngine] Complete! Attempted: ${rawMinima.length} raw minima, ${rawPerimeter.length} raw perimeters, ${rawInfill.length} raw infills. Placed successfully: ${acceptedMinima.length} anchors, ${acceptedPerimeter.length} perimeter columns, ${acceptedInfill.length} infill columns.`
   );
 }

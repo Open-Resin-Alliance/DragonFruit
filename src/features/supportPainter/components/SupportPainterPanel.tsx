@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import {
   Focus,
@@ -12,10 +12,11 @@ import {
   ChevronRight,
   Trash2,
 } from 'lucide-react';
-import { Card, CardHeader, IconButton, Button } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
 import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
 import { type BrushType, BRUSH_COLORS } from '../supportPainterTypes';
 import { generateSupportsFromPainter } from '../supportScriptingEngine';
+import { subscribeToSettings, getSettings } from '@/supports/Settings';
 
 const BRUSH_DETAILS: Record<
   BrushType,
@@ -63,6 +64,10 @@ export function SupportPainterPanel({
   onModeChange?: (mode: 'support' | 'supportPainter') => void;
 }) {
   const state = useSupportPainterState();
+  const activeSettings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
+  const trunkWidth = activeSettings.shaft.diameterMm;
+  const defaultSpacing = trunkWidth * 4.0;
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [expanded, setExpanded] = useState(false);  // collapsed = support mode, expanded = painter mode
 
@@ -327,6 +332,85 @@ export function SupportPainterPanel({
             </div>
           </div>
 
+          {/* Spacing Overrides [SPACING_OVERRIDES_UI] */}
+          {/* [AGENT_NOTE] User-customizable spacing overrides separately for perimeter and infill. */}
+          <div
+            className="flex flex-col gap-2 border-t pt-2.5"
+            style={{ borderColor: 'var(--border-subtle)' }}
+          >
+            <span
+              className="text-[10px] uppercase tracking-wider font-bold"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Spacing Overrides
+            </span>
+            <div className="grid grid-cols-2 gap-3">
+              {/* Perimeter Spacing */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-medium" style={{ color: 'var(--text-strong)' }}>
+                  Perimeter Spacing
+                </span>
+                <div className="relative flex items-center">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    placeholder={defaultSpacing.toFixed(1)}
+                    value={state.perimeterSpacingOverride !== null ? state.perimeterSpacingOverride : ''}
+                    onChange={(e) => {
+                      const val = e.target.value === '' ? null : Math.max(0.1, parseFloat(e.target.value));
+                      supportPainterStore.setPerimeterSpacingOverride(val);
+                    }}
+                    className="w-full text-[11px] pl-2 pr-6 py-1 rounded border outline-none font-medium transition-colors"
+                    style={{
+                      background: 'var(--surface-1)',
+                      borderColor: 'var(--border-subtle)',
+                      color: 'var(--text-strong)',
+                    }}
+                  />
+                  <span className="absolute right-2 text-[9px] pointer-events-none" style={{ color: 'var(--text-muted)' }}>
+                    mm
+                  </span>
+                </div>
+                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                  Default: <span className="font-medium">{defaultSpacing.toFixed(1)} mm</span>
+                </span>
+              </div>
+
+              {/* Infill Spacing */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-medium" style={{ color: 'var(--text-strong)' }}>
+                  Infill Spacing
+                </span>
+                <div className="relative flex items-center">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    placeholder={defaultSpacing.toFixed(1)}
+                    value={state.infillSpacingOverride !== null ? state.infillSpacingOverride : ''}
+                    onChange={(e) => {
+                      const val = e.target.value === '' ? null : Math.max(0.1, parseFloat(e.target.value));
+                      supportPainterStore.setInfillSpacingOverride(val);
+                    }}
+                    className="w-full text-[11px] pl-2 pr-6 py-1 rounded border outline-none font-medium transition-colors"
+                    style={{
+                      background: 'var(--surface-1)',
+                      borderColor: 'var(--border-subtle)',
+                      color: 'var(--text-strong)',
+                    }}
+                  />
+                  <span className="absolute right-2 text-[9px] pointer-events-none" style={{ color: 'var(--text-muted)' }}>
+                    mm
+                  </span>
+                </div>
+                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                  Default: <span className="font-medium">{defaultSpacing.toFixed(1)} mm</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
           {/* Generate Button */}
           <Button
             variant="accent"
@@ -339,6 +423,46 @@ export function SupportPainterPanel({
           </Button>
 
         </div>
+      )}
+
+      {/* ─── Support Painter Toast Notification [TOAST_NOTIFICATION] ─── */}
+      {/* [AGENT_NOTE] Mounts a floating toast viewport showing attempted vs placed counts upon completion. */}
+      {state.toast && (
+        <ToastViewport position="top-center" zIndex={9999} style={{ top: '1.25rem' }}>
+          <Toast
+            tone="info"
+            shape="rounded"
+            visible={true}
+            enterOffsetPx={8}
+            className="flex flex-col gap-1 items-start text-xs font-semibold py-2.5 px-4 shadow-xl border select-none transition-all duration-200"
+            style={{
+              animation: 'fadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+              minWidth: '240px',
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-0)',
+              color: 'var(--text-strong)',
+            }}
+          >
+            <div
+              className="font-bold border-b pb-1 mb-0.5 w-full text-left"
+              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
+            >
+              Support Placement Summary
+            </div>
+            {state.toast.lines.map((line, idx) => (
+              <div
+                key={idx}
+                className="text-left w-full whitespace-pre-wrap leading-relaxed font-medium"
+                style={{
+                  color: line.startsWith('  ') ? 'var(--text-muted)' : 'var(--text-strong)',
+                  paddingLeft: line.startsWith('  ') ? '0.5rem' : '0',
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </Toast>
+        </ToastViewport>
       )}
     </Card>
   );

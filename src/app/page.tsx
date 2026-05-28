@@ -10923,7 +10923,7 @@ export default function Home() {
   });
 
   // 5. Supports
-  const supports = useSupportInteractionManager({ mode: scene.mode });
+  const supports = useSupportInteractionManager({ mode: scene.mode, activeModelId: scene.activeModelId });
 
   const handleModeChange = React.useCallback((nextMode: typeof scene.mode) => {
     if (scene.models.length === 0 && nextMode !== 'prepare') {

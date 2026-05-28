@@ -46,6 +46,7 @@ import { resolveSupportPlacementRouting } from '@/supports/interaction/shared/pl
 
 interface SupportInteractionOptions {
   mode: SupportMode;
+  activeModelId?: string | null;
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -74,19 +75,27 @@ function resolveSupportCategoryFromSnapshot(id: string) {
   return null;
 }
 
-function collectAllSupportIds() {
+function collectAllSupportIds(activeModelId: string | null = null) {
   const snapshot = getSnapshot();
   const kickstandSnapshot = getKickstandSnapshot();
 
+  const filterByModel = <T extends { id: string; modelId: string }>(items: Record<string, T>) => {
+    const values = Object.values(items);
+    if (activeModelId) {
+      return values.filter((item) => item.modelId === activeModelId).map((item) => item.id);
+    }
+    return values.map((item) => item.id);
+  };
+
   return [
-    ...Object.keys(snapshot.trunks),
-    ...Object.keys(snapshot.branches),
-    ...Object.keys(snapshot.leaves),
-    ...Object.keys(snapshot.twigs),
-    ...Object.keys(snapshot.sticks),
-    ...Object.keys(snapshot.braces),
-    ...Object.keys(snapshot.anchors),
-    ...Object.keys(kickstandSnapshot.kickstands),
+    ...filterByModel(snapshot.trunks),
+    ...filterByModel(snapshot.branches),
+    ...filterByModel(snapshot.leaves),
+    ...filterByModel(snapshot.twigs),
+    ...filterByModel(snapshot.sticks),
+    ...filterByModel(snapshot.braces),
+    ...filterByModel(snapshot.anchors),
+    ...filterByModel(kickstandSnapshot.kickstands),
   ];
 }
 
@@ -155,7 +164,7 @@ function getNativeEventSource(source: unknown): unknown {
   return (source as { nativeEvent?: unknown }).nativeEvent ?? null;
 }
 
-export function useSupportInteractionManager({ mode }: SupportInteractionOptions) {
+export function useSupportInteractionManager({ mode, activeModelId = null }: SupportInteractionOptions) {
   // V2 Trunk Placement
   const trunkPlacementV2 = useTrunkPlacementV2();
   const branchPlacement = useBranchPlacement();
@@ -715,7 +724,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         e.stopPropagation();
-        const allSupportIds = collectAllSupportIds();
+        const allSupportIds = collectAllSupportIds(activeModelId);
         selectSupportIds(allSupportIds);
         return;
       }

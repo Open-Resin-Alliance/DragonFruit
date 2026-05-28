@@ -7,6 +7,8 @@ import {
   type SupportPainterState,
   type CommitRegionPayload,
   type VoxlROIExtension,
+  type SuppressionSettings,
+  type SupportPainterToast,
   BRUSH_COLORS,
 } from './supportPainterTypes';
 import { type ClientAdjacencyMap } from './useClientAdjacencyMap';
@@ -24,6 +26,30 @@ let proposedTriangleIds = new Set<number>();
 let directGenEnabled = false;
 let clientAdjacencyMap: ClientAdjacencyMap | null = null;
 
+// ─── Extended Spacing & Suppression Parameters [STORE_STATE] ───
+// [AGENT_NOTE] Stored in local module variables and exposed via the store snapshot.
+let perimeterSpacingOverride: number | null = null;
+let infillSpacingOverride:    number | null = null;
+
+const DEFAULT_SUPPRESSION_SETTINGS: SuppressionSettings = {
+  minima: {
+    mode: 'current',
+    types: ['minima'],
+  },
+  perimeter: {
+    mode: 'none',
+    types: [],
+  },
+  infill: {
+    mode: 'all',
+    types: ['minima', 'perimeter', 'infill'],
+  },
+};
+
+let suppressionSettings: SuppressionSettings = { ...DEFAULT_SUPPRESSION_SETTINGS };
+let toast: SupportPainterToast | null = null;
+let toastTimeout: NodeJS.Timeout | null = null;
+
 let storeSnapshot: SupportPainterState = {
   isActive,
   activeBrush,
@@ -34,6 +60,10 @@ let storeSnapshot: SupportPainterState = {
   hoveredTriangleId,
   proposedTriangleIds,
   directGenEnabled,
+  perimeterSpacingOverride,
+  infillSpacingOverride,
+  suppressionSettings: { ...suppressionSettings },
+  toast: null,
 };
 
 function notify() {
@@ -57,6 +87,10 @@ function updateSnapshot() {
     hoveredTriangleId,
     proposedTriangleIds: new Set(proposedTriangleIds),
     directGenEnabled,
+    perimeterSpacingOverride,
+    infillSpacingOverride,
+    suppressionSettings: { ...suppressionSettings },
+    toast: toast ? { ...toast } : null,
   };
 }
 
@@ -265,6 +299,49 @@ export const supportPainterStore = {
     proposedTriangleIds.clear();
     hoveredTriangleId = null;
     triangleColorMap = _recomputeTriangleColorMap();
+    updateSnapshot();
+    notify();
+  },
+
+  // ─── Extended Spacing, Suppression & Toast Actions ───
+  // [AGENT_NOTE] Invoked by the UI panels and support scripting engine to coordinate updates.
+
+  setPerimeterSpacingOverride(val: number | null) {
+    if (perimeterSpacingOverride === val) return;
+    perimeterSpacingOverride = val;
+    updateSnapshot();
+    notify();
+  },
+
+  setInfillSpacingOverride(val: number | null) {
+    if (infillSpacingOverride === val) return;
+    infillSpacingOverride = val;
+    updateSnapshot();
+    notify();
+  },
+
+  setSuppressionSettings(settings: SuppressionSettings) {
+    suppressionSettings = { ...settings };
+    updateSnapshot();
+    notify();
+  },
+
+  showToast(lines: string[]) {
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toast = { id: Date.now(), lines };
+    updateSnapshot();
+    notify();
+
+    toastTimeout = setTimeout(() => {
+      toast = null;
+      updateSnapshot();
+      notify();
+    }, 4500);
+  },
+
+  clearToast() {
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toast = null;
     updateSnapshot();
     notify();
   },
