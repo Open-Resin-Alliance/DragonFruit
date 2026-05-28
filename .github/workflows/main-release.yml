@@ -46,7 +46,7 @@ jobs:
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "version=$current_version" >> "$GITHUB_OUTPUT"
             echo "tag_name=v${current_version}" >> "$GITHUB_OUTPUT"
-            echo "release_name=DragonFruit v${current_version}" >> "$GITHUB_OUTPUT"
+            echo "release_name=Pre-Release v${current_version}" >> "$GITHUB_OUTPUT"
             {
               echo "release_body<<EOF"
               echo "Manually triggered release for version ${current_version} from the main branch."
@@ -69,7 +69,7 @@ jobs:
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "version=$current_version" >> "$GITHUB_OUTPUT"
           echo "tag_name=v${current_version}" >> "$GITHUB_OUTPUT"
-          echo "release_name=DragonFruit v${current_version}" >> "$GITHUB_OUTPUT"
+          echo "release_name=Pre-Release v${current_version}" >> "$GITHUB_OUTPUT"
           {
             echo "release_body<<EOF"
             echo "Automated release for version ${current_version} from the main branch."
@@ -91,13 +91,9 @@ jobs:
             artifact_name: dragonfruit-macos-universal
             cmake_archs: "arm64;x86_64"
             df_build_triple: universal-apple-darwin
-          - platform: ubuntu-22.04
-            build_kind: tauri
-            args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
-            artifact_name: dragonfruit-linux-x64
           - platform: windows-latest
             build_kind: tauri
-            args: --target x86_64-pc-windows-msvc --bundles msi,nsis
+            args: --target x86_64-pc-windows-msvc --bundles nsis
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -197,14 +193,12 @@ jobs:
         if: matrix.build_kind == 'flatpak'
         run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
 
-      - name: Upload bundle artifact
-        if: matrix.build_kind == 'tauri'
+      - name: Upload installer artifact
+        if: matrix.build_kind == 'tauri' && (matrix.platform == 'macos-latest' || matrix.platform == 'windows-latest')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            src-tauri/target/release/bundle/**
-            src-tauri/target/*/release/bundle/**
+          path: ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/*/release/bundle/dmg/*.dmg' || 'src-tauri/target/*/release/bundle/nsis/*-setup.exe' }}
           if-no-files-found: error
 
       - name: Upload flatpak artifact
