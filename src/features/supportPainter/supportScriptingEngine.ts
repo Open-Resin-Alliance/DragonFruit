@@ -31,6 +31,7 @@ import { decideGridPlacement } from '@/supports/PlacementLogic/Grid/gridPlacemen
 import { computeAndApplyTrunkDiameterProfile } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
 import { buildTwig } from '@/supports/SupportTypes/Twig/twigBuilder';
 import { buildStick } from '@/supports/SupportTypes/Stick/stickBuilder';
+import { deleteSupportsForRoi } from '@/supports/PlacementLogic/SupportModelLinker';
 
 // ─── Brush Metadata for Toasts ───
 // [AGENT_NOTE] Display names used for summary reporting in the toast component.
@@ -887,3 +888,31 @@ export async function generateSupportsFromPainter(
     `[SupportScriptingEngine] Complete! Attempted: ${rawMinima.length} raw minima, ${rawPerimeter.length} raw perimeters, ${rawInfill.length} raw infills. Placed successfully: ${acceptedMinima.length} anchors, ${acceptedPerimeter.length} perimeter columns, ${acceptedInfill.length} infill columns.`
   );
 }
+
+/**
+ * Selective regeneration for a single ROI region.
+ * Purges its existing generated supports first, then re-runs generation.
+ */
+export async function regenerateSupportsForRoi(
+  modelId: string,
+  mesh: THREE.Mesh,
+  regionId: string
+): Promise<void> {
+  const regionsMap = supportPainterStore.getSnapshot().regions;
+  const region = regionsMap.get(regionId);
+  if (!region) {
+    console.warn(`[SupportScriptingEngine] Cannot regenerate, region ${regionId} not found in store.`);
+    return;
+  }
+
+  // 1. Purge existing supports linked to this ROI
+  const beforeState = getSupportSnapshot();
+  const nextState = deleteSupportsForRoi(beforeState, regionId);
+  setSupportSnapshot(nextState);
+
+  // 2. Re-run support generation for this single region using its saved parameters
+  // Note: generateSupportsFromPainter will automatically handle normal calculations, boundary walks,
+  // placement, and push a history transaction.
+  await generateSupportsFromPainter(modelId, mesh, [region]);
+}
+

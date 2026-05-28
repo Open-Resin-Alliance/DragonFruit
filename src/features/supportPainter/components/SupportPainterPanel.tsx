@@ -12,11 +12,12 @@ import {
   ChevronRight,
   ChevronUp,
   Trash2,
+  RefreshCw,
 } from 'lucide-react';
 import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
 import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
 import { type BrushType, BRUSH_COLORS } from '../supportPainterTypes';
-import { generateSupportsFromPainter } from '../supportScriptingEngine';
+import { generateSupportsFromPainter, regenerateSupportsForRoi } from '../supportScriptingEngine';
 import { subscribeToSettings, getSettings } from '@/supports/Settings';
 import { subscribe as subscribeToSupports, getSnapshot as getSupportsSnapshot } from '@/supports/state';
 import { PAINT_ROI_STRIP } from '../supportPainterHistoryTypes';
@@ -386,6 +387,18 @@ export function SupportPainterPanel({
                               {region.triangleIds.size} tri
                             </span>
                             <IconButton
+                              onClick={async () => {
+                                const activeMesh = getActiveMesh?.();
+                                if (activeModelId && activeMesh) {
+                                  await regenerateSupportsForRoi(activeModelId, activeMesh, region.id);
+                                }
+                              }}
+                              className="!p-1"
+                              title="Recalculate supports for this region"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </IconButton>
+                            <IconButton
                               onClick={() => supportPainterStore.removeRegion(region.id)}
                               className="!p-1"
                               title="Delete region"
@@ -472,6 +485,24 @@ export function SupportPainterPanel({
                 Strip ROI (Global)
               </Button>
             </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                const activeMesh = getActiveMesh?.();
+                if (activeModelId && activeMesh && state.regions.size > 0) {
+                  // Batch regenerate supports sequentially for each region
+                  for (const regionId of state.regions.keys()) {
+                    await regenerateSupportsForRoi(activeModelId, activeMesh, regionId);
+                  }
+                }
+              }}
+              className="w-full !text-[10px] py-1 flex items-center justify-center gap-1.5 mt-0.5"
+              disabled={state.regions.size === 0}
+            >
+              <RefreshCw className="w-3 h-3" />
+              Recalculate All Supports
+            </Button>
           </div>
 
           {/* Spacing Overrides [SPACING_OVERRIDES_UI] */}

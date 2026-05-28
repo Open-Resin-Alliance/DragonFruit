@@ -247,3 +247,103 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
 
     return removedCount;
 }
+
+/**
+ * Filter and remove all support entities belonging to a specific ROI region.
+ * Cascades removal of attached segments, knots, and braces.
+ */
+export function deleteSupportsForRoi(state: SupportState, roiId: string): SupportState {
+    const rootsToRemove = new Set<string>();
+    const trunksToRemove = new Set<string>();
+    const branchesToRemove = new Set<string>();
+    const bracesToRemove = new Set<string>();
+    const leavesToRemove = new Set<string>();
+    const twigsToRemove = new Set<string>();
+    const sticksToRemove = new Set<string>();
+    const anchorsToRemove = new Set<string>();
+
+    // 1. Gather all main support entities belonging to this ROI
+    for (const [id, root] of Object.entries(state.roots)) {
+        if (root.roiId === roiId) rootsToRemove.add(id);
+    }
+    for (const [id, trunk] of Object.entries(state.trunks)) {
+        if (trunk.roiId === roiId) trunksToRemove.add(id);
+    }
+    for (const [id, branch] of Object.entries(state.branches)) {
+        if (branch.roiId === roiId) branchesToRemove.add(id);
+    }
+    for (const [id, twig] of Object.entries(state.twigs)) {
+        if (twig.roiId === roiId) twigsToRemove.add(id);
+    }
+    for (const [id, stick] of Object.entries(state.sticks)) {
+        if (stick.roiId === roiId) sticksToRemove.add(id);
+    }
+    for (const [id, anchor] of Object.entries(state.anchors)) {
+        if (anchor.roiId === roiId) anchorsToRemove.add(id);
+    }
+
+    // 2. Identify segments to remove
+    const segmentsToRemove = new Set<string>();
+    for (const trunkId of trunksToRemove) {
+        const trunk = state.trunks[trunkId];
+        if (!trunk) continue;
+        for (const segment of trunk.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const branchId of branchesToRemove) {
+        const branch = state.branches[branchId];
+        if (!branch) continue;
+        for (const segment of branch.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const twigId of twigsToRemove) {
+        const twig = state.twigs[twigId];
+        if (!twig) continue;
+        for (const segment of twig.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const stickId of sticksToRemove) {
+        const stick = state.sticks[stickId];
+        if (!stick) continue;
+        for (const segment of stick.segments) segmentsToRemove.add(segment.id);
+    }
+
+    // 3. Identify attached knots to remove
+    const knotsToRemove = new Set<string>();
+    for (const [knotId, knot] of Object.entries(state.knots)) {
+        const parentShaftId = knot.parentShaftId;
+        const removeByShaft = segmentsToRemove.has(parentShaftId);
+        const removeByLeafCone = parentShaftId.startsWith('leafCone:')
+            && leavesToRemove.has(parentShaftId.slice('leafCone:'.length));
+        const removeByBraceSegment = parentShaftId.startsWith('braceSegment:')
+            && bracesToRemove.has(parentShaftId.slice('braceSegment:'.length));
+        if (removeByShaft || removeByLeafCone || removeByBraceSegment) {
+            knotsToRemove.add(knotId);
+        }
+    }
+
+    // 4. Helper record filter
+    const filterRecord = <T>(record: Record<string, T>, shouldRemove: (id: string) => boolean): Record<string, T> => {
+        const next: Record<string, T> = {};
+        for (const [id, value] of Object.entries(record)) {
+            if (shouldRemove(id)) continue;
+            next[id] = value;
+        }
+        return next;
+    };
+
+    // 5. Compile next state
+    return {
+        ...state,
+        roots: filterRecord(state.roots, (id) => rootsToRemove.has(id)),
+        trunks: filterRecord(state.trunks, (id) => trunksToRemove.has(id)),
+        branches: filterRecord(state.branches, (id) => branchesToRemove.has(id)),
+        leaves: filterRecord(state.leaves, (id) => leavesToRemove.has(id)),
+        twigs: filterRecord(state.twigs, (id) => twigsToRemove.has(id)),
+        sticks: filterRecord(state.sticks, (id) => sticksToRemove.has(id)),
+        braces: filterRecord(state.braces, (id) => bracesToRemove.has(id)),
+        anchors: filterRecord(state.anchors, (id) => anchorsToRemove.has(id)),
+        knots: filterRecord(state.knots, (id) => knotsToRemove.has(id)),
+        selectedId: null,
+        selectedCategory: null,
+        hoveredId: null,
+    };
+}
+
