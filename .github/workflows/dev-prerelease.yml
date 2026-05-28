@@ -217,7 +217,7 @@ jobs:
         run: bash scripts/bundle-cef-libs.sh
 
       - name: Build Flatpak bundle
-        uses: flathub-infra/flatpak-github-actions/flatpak-builder@v6
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: dragonfruit.flatpak
           manifest-path: flatpak/org.openresinalliance.dragonfruit.yml
