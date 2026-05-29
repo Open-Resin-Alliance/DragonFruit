@@ -13,25 +13,12 @@ import {
   setSnapshot as setSupportSnapshot,
   beginSupportStateBatch,
   endSupportStateBatch,
-  addRoot,
-  addTrunk,
-  addAnchor,
-  addBranch,
-  addKnot,
-  updateKnot,
-  updateTrunk,
-  addTwig,
-  addStick,
 } from '@/supports/state';
 import { getShaftProfile, getSettings } from '@/supports/Settings';
-import { buildTrunkData } from '@/supports/SupportTypes/Trunk/trunkBuilder';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
-import { decideGridPlacement } from '@/supports/PlacementLogic/Grid/gridPlacement';
-import { computeAndApplyTrunkDiameterProfile } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
-import { buildTwig } from '@/supports/SupportTypes/Twig/twigBuilder';
-import { buildStick } from '@/supports/SupportTypes/Stick/stickBuilder';
 import { deleteSupportsForRoi } from '@/supports/PlacementLogic/SupportModelLinker';
+import { placeSupportUnified, validateSupportPlacement } from '@/supports/PlacementLogic/UnifiedPlacement';
 
 // ─── Brush Metadata for Toasts ───
 // [AGENT_NOTE] Display names used for summary reporting in the toast component.
@@ -1270,76 +1257,44 @@ export async function generateSupportsFromPainter(
     }
   }
 
-  // 4. Helper function to compile and route cavity sticks straight down when pathfinding gets trapped
-  const _cavityRaycaster = new THREE.Raycaster();
-  const _downDir = new THREE.Vector3(0, 0, -1);
-
-  const buildCavityStick = (
-    tipPos: { x: number; y: number; z: number },
-    tipNormal: { x: number; y: number; z: number },
-    modelId: string,
+  // 4. Helper function to project perturbed horizontal coordinates back onto the local surface sheet
+  function findSurfaceProjectedPoint(
     mesh: THREE.Mesh,
-  ) => {
-    _cavityRaycaster.set(
-      new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z),
-      _downDir,
-    );
-    const OFFSET_MM = 0.5;
-    _cavityRaycaster.ray.origin.addScaledVector(
-      new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
-      OFFSET_MM,
-    );
-    _cavityRaycaster.ray.origin.z -= OFFSET_MM * 0.1;
+    targetX: number,
+    targetY: number,
+    approxZ: number,
+    originalNormal: THREE.Vector3
+  ): { pos: THREE.Vector3; normal: THREE.Vector3 } | null {
+    const raycaster = new THREE.Raycaster();
+    const origin = new THREE.Vector3(targetX, targetY, approxZ + 10);
+    const direction = new THREE.Vector3(0, 0, -1);
+    raycaster.set(origin, direction);
+    raycaster.far = 20;
 
-    const hits = _cavityRaycaster.intersectObject(mesh, false);
+    const hits = raycaster.intersectObject(mesh, false);
     if (hits.length === 0) return null;
 
-    const BELOW_EPS_MM = 0.1;
-    const FLOOR_Z_MIN = 0.35;
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    let bestHit: THREE.Intersection | null = null;
+    let minDistance = Infinity;
 
-    type Candidate = { hit: THREE.Intersection; normal: THREE.Vector3 };
-    const MAX_HIT_SCAN = 64;
-    let scanned = 0;
-    let firstBelowCandidate: Candidate | null = null;
-    let floorCandidate: Candidate | null = null;
-
-    for (const h of hits) {
-      scanned += 1;
-      if (scanned > MAX_HIT_SCAN) break;
-      if (h.point.z >= tipPos.z - BELOW_EPS_MM) continue;
-      if (!h.face) continue;
-      const n = h.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
-      const candidate = { hit: h, normal: n };
-      if (!firstBelowCandidate) firstBelowCandidate = candidate;
-      if (n.z >= FLOOR_Z_MIN) {
-        floorCandidate = candidate;
-        break;
+    for (const hit of hits) {
+      const dist = Math.abs(hit.point.z - approxZ);
+      if (dist < minDistance && hit.face) {
+        minDistance = dist;
+        bestHit = hit;
       }
     }
 
-    const chosen = floorCandidate ?? firstBelowCandidate;
-    if (!chosen) return null;
+    if (!bestHit || !bestHit.face) return null;
 
-    const bPos = { x: chosen.hit.point.x, y: chosen.hit.point.y, z: chosen.hit.point.z };
-    const bNormal = { x: chosen.normal.x, y: chosen.normal.y, z: chosen.normal.z };
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    const normal = bestHit.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
 
-    const settings = getSettings();
-    const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
-    const dx = tipPos.x - bPos.x;
-    const dy = tipPos.y - bPos.y;
-    const dz = tipPos.z - bPos.z;
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
-
-    if (kind === 'twig') {
-      const { twig } = buildTwig({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
-      return { kind, twig };
-    }
-
-    const { stick } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
-    return { kind: 'stick', stick };
-  };
+    return {
+      pos: bestHit.point.clone(),
+      normal,
+    };
+  }
 
   // ─── Placement Statistics Tracking [STATS_TRACKING] ───
   // [AGENT_NOTE] Compiles exact attempt and placement stats mapped back to ROIs.
@@ -1386,87 +1341,62 @@ export async function generateSupportsFromPainter(
   const processPointPlacement = (col: SampledPoint) => {
     registerAttempt(col);
 
-    const build = buildTrunkData({
-      tipPos: col.pos,
-      tipNormal: col.normal,
-      modelId,
-      mesh,
-    });
+    let finalPos = col.pos.clone();
+    let finalNormal = col.normal.clone();
+    let isAccepted = validateSupportPlacement(finalPos, finalNormal, modelId, mesh);
 
-    // Check closed cavity or self-overhang pathfinding failures and fall back to cavity sticks/twigs
-    if (build.stagnated || build.exhaustedBudget) {
-      if (mesh) {
-        const cavity = buildCavityStick(col.pos, col.normal, modelId, mesh);
-        if (cavity) {
-          if (cavity.kind === 'twig' && cavity.twig) {
-            cavity.twig.roiId = col.regionId;
-            addTwig(cavity.twig);
-            registerPlacement(col);
-          } else if (cavity.kind === 'stick' && cavity.stick) {
-            cavity.stick.roiId = col.regionId;
-            addStick(cavity.stick);
-            registerPlacement(col);
+    if (!isAccepted && mesh) {
+      console.log(`[SupportScriptingEngine] Proposed tip at (${col.pos.x.toFixed(2)},${col.pos.y.toFixed(2)},${col.pos.z.toFixed(2)}) is unprintable or collides. Perturbing tip destination...`);
+      
+      let foundAcceptablePerturbation = false;
+      const searchRadiusSteps = [0.4, 0.8, 1.2, 1.6];
+      const searchDirections = 8;
+      const angleStep = (Math.PI * 2) / searchDirections;
+
+      perturbLoop: for (const radius of searchRadiusSteps) {
+        for (let d = 0; d < searchDirections; d++) {
+          const angle = d * angleStep;
+          const offsetX = Math.cos(angle) * radius;
+          const offsetY = Math.sin(angle) * radius;
+
+          const proj = findSurfaceProjectedPoint(
+            mesh,
+            col.pos.x + offsetX,
+            col.pos.y + offsetY,
+            col.pos.z,
+            col.normal
+          );
+
+          if (!proj) continue;
+
+          const isValid = validateSupportPlacement(proj.pos, proj.normal, modelId, mesh);
+          if (isValid) {
+            console.log(`[SupportScriptingEngine] Found accepted perturbed tip at (${proj.pos.x.toFixed(2)},${proj.pos.y.toFixed(2)},${proj.pos.z.toFixed(2)}) at radius ${radius}mm!`);
+            finalPos = proj.pos;
+            finalNormal = proj.normal;
+            isAccepted = true;
+            foundAcceptablePerturbation = true;
+            break perturbLoop;
           }
         }
       }
-      return;
+
+      if (!foundAcceptablePerturbation) {
+        console.warn(`[SupportScriptingEngine] Could not find any valid perturbed tip. Proposing original coordinate as fallback.`);
+      }
     }
 
-    // Standard high quality grid placement solver
-    const snapshot = getSupportSnapshot();
-    const decision = decideGridPlacement({
-      settings,
-      snapshot,
-      candidate: build,
-      tipPos: col.pos,
-      tipNormal: col.normal,
+    // Call unified placement API to route, snap, and place the support
+    const res = placeSupportUnified({
+      tipPos: finalPos,
+      tipNormal: finalNormal,
       modelId,
       mesh,
+      roiId: col.regionId,
     });
 
-    if (decision.kind === 'place_trunk') {
-      const tb = decision.trunkBuild;
-      if (tb?.trunk && !tb.stagnated && !tb.exhaustedBudget && !tb.error) {
-        if (tb.root) tb.root.roiId = col.regionId;
-        tb.trunk.roiId = col.regionId;
-        addRoot(tb.root);
-        addTrunk(tb.trunk);
-        registerPlacement(col);
-      }
-    } else if (decision.kind === 'place_branch') {
-      decision.branch.roiId = col.regionId;
-      addKnot(decision.knot);
-      addBranch(decision.branch);
-
-      const snapshotAfterAdd = getSupportSnapshot();
-      const hostTrunk = snapshotAfterAdd.trunks[decision.hostTrunkId];
-      if (hostTrunk) {
-        const applied = computeAndApplyTrunkDiameterProfile(snapshotAfterAdd, decision.hostTrunkId);
-        if (applied) {
-          for (const u of applied.knotUpdates) {
-            updateKnot(u.after);
-          }
-          updateTrunk(applied.trunk);
-        }
-      }
+    if (res.success) {
       registerPlacement(col);
-    } else if (decision.kind === 'place_anchor') {
-      decision.anchor.roiId = col.regionId;
-      addAnchor(decision.anchor);
-      registerPlacement(col);
-    } else if (decision.kind === 'replace_trunk') {
-      decision.promoteBranch.roiId = col.regionId;
-      addKnot(decision.promoteKnot);
-      addBranch(decision.promoteBranch);
-
-      const tb = decision.trunkBuild;
-      if (tb?.trunk) {
-        if (tb.root) tb.root.roiId = col.regionId;
-        tb.trunk.roiId = col.regionId;
-        addRoot(tb.root);
-        addTrunk(tb.trunk);
-        registerPlacement(col);
-      }
     }
   };
 

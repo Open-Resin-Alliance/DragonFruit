@@ -91,6 +91,65 @@ function scaleExpansionsForStep(baseExpansionsAt2mm: number, stepMm: number): nu
     return Math.max(1, Math.round((baseExpansionsAt2mm * LEGACY_BASE_STEP_MM) / stepMm));
 }
 
+/**
+ * Evaluates whether a resolved waypoint chain is printable (monotonic descent, minimal overhang angles, and smooth bend joints).
+ * Chain runs from high-Z (socketPos/tip) to low-Z (rootTopTarget/base).
+ */
+function isChainPrintable(points: Vec3[]): { printable: boolean; reason?: string } {
+    if (points.length < 2) return { printable: true };
+
+    // 1. Strict Z-monotonicity: Z must decrease as we go from points[i] to points[i+1]
+    for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (b.z >= a.z - 0.001) {
+            return { printable: false, reason: `non-monotonic Z descent (from ${a.z.toFixed(2)} to ${b.z.toFixed(2)})` };
+        }
+    }
+
+    // 2. Strict Segment Slope: No segment can exceed 35 degrees from vertical
+    for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dz = a.z - b.z; // positive Z drop
+        const horizontal = Math.sqrt(dx * dx + dy * dy);
+        const angleFromVertical = Math.atan2(horizontal, Math.max(dz, 0.0001)) * (180 / Math.PI);
+        if (angleFromVertical > 35) {
+            return { printable: false, reason: `segment ${i} angle too steep (${angleFromVertical.toFixed(1)}° from vertical)` };
+        }
+    }
+
+    // 3. Smooth Knee Bends: No joint can have a bend angle exceeding 30 degrees
+    for (let i = 1; i < points.length - 1; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+        const next = points[i + 1];
+
+        // Normalised segment vectors (from top to bottom)
+        const v1x = curr.x - prev.x;
+        const v1y = curr.y - prev.y;
+        const v1z = curr.z - prev.z;
+        const l1 = Math.sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
+
+        const v2x = next.x - curr.x;
+        const v2y = next.y - curr.y;
+        const v2z = next.z - curr.z;
+        const l2 = Math.sqrt(v2x * v2x + v2y * v2y + v2z * v2z);
+
+        if (l1 > 1e-4 && l2 > 1e-4) {
+            const dot = (v1x * v2x + v1y * v2y + v1z * v2z) / (l1 * l2);
+            const bendAngle = Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI);
+            if (bendAngle > 30) {
+                return { printable: false, reason: `sharp knee bend of ${bendAngle.toFixed(1)}° at joint ${i}` };
+            }
+        }
+    }
+
+    return { printable: true };
+}
+
 // ---------- Roots cone volume check ----------
 
 /**
@@ -877,6 +936,12 @@ export function calculateSmartPlacementV2(
                 }
             }
             if (_angleOk) {
+                const printability = isChainPrintable(_allSegs);
+                if (!printability.printable) {
+                    _angleOk = false;
+                }
+            }
+            if (_angleOk) {
                 if (!isPreview) {
                     const _wideChain = [socketPos, ..._finalJoints, _finalRootTop];
                     const _wideSegs = _wideChain.slice(0,-1).map((p,i) => {
@@ -1235,6 +1300,15 @@ export function calculateSmartPlacementV2(
                 error: 'COLLISION_WITH_MODEL',
             };
         }
+    }
+
+    // Add printability check
+    const printability = isChainPrintable(finalChainPoints);
+    if (!printability.printable) {
+        return {
+            ...standard,
+            error: 'COLLISION_WITH_MODEL',
+        };
     }
 
     // 9. Build the result
