@@ -15,10 +15,12 @@ import {
   Trash,
   RefreshCw,
   Eraser,
+  Plus,
+  Sliders,
 } from 'lucide-react';
 import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
 import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
-import { type BrushType, BRUSH_COLORS } from '../supportPainterTypes';
+import { type BrushType, type CustomBrushTemplate, BRUSH_COLORS } from '../supportPainterTypes';
 import { generateSupportsFromPainter, regenerateSupportsForRoi } from '../supportScriptingEngine';
 import { subscribeToSettings, getSettings } from '@/supports/Settings';
 import {
@@ -30,6 +32,7 @@ import { deleteSupportsForRoi } from '@/supports/PlacementLogic/SupportModelLink
 import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
 import { PAINT_ROI_STRIP } from '../supportPainterHistoryTypes';
 import { pushHistory } from '@/history/historyStore';
+import { CustomBrushModal } from './CustomBrushModal';
 
 const BRUSH_DETAILS: Record<
   BrushType,
@@ -85,6 +88,8 @@ export function SupportPainterPanel({
   const defaultSpacing = trunkWidth * 4.0;
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const [showCustomBrushModal, setShowCustomBrushModal] = useState(false);
+  const [editingCustomBrush, setEditingCustomBrush] = useState<CustomBrushTemplate | null>(null);
   const [expanded, setExpanded] = useState(false);  // collapsed = support mode, expanded = painter mode
 
   // Partition regions into Pending vs Completed/Saved History
@@ -330,7 +335,7 @@ export function SupportPainterPanel({
             </span>
             <div className="grid grid-cols-2 gap-1.5">
               {(Object.keys(BRUSH_DETAILS) as BrushType[]).map((brush) => {
-                const isSelected = state.activeBrush === brush;
+                const isSelected = state.activeBrush === brush && state.activeCustomBrushId === null;
                 const details = BRUSH_DETAILS[brush];
                 const brushColor = BRUSH_COLORS[brush];
                 const Icon = details.icon;
@@ -338,7 +343,10 @@ export function SupportPainterPanel({
                   <IconButton
                     key={brush}
                     active={isSelected}
-                    onClick={() => supportPainterStore.setActiveBrush(brush)}
+                    onClick={() => {
+                      supportPainterStore.setActiveBrush(brush);
+                      supportPainterStore.setActiveCustomBrushId(null);
+                    }}
                     className="w-full !justify-start gap-2 !p-2"
                     title={details.desc}
                   >
@@ -351,6 +359,83 @@ export function SupportPainterPanel({
                   </IconButton>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Custom Brushes Selection Section */}
+          <div className="flex flex-col gap-2 border-t pt-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
+            <span
+              className="text-[10px] uppercase tracking-wider font-bold"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Select Custom Brush
+            </span>
+            <div className="flex flex-col gap-1.5">
+              {Array.from(state.customBrushes.values()).map((c) => {
+                const isSelected = state.activeCustomBrushId === c.id;
+                return (
+                  <div
+                    key={c.id}
+                    className="flex items-center gap-1.5 w-full rounded-lg border p-1 text-xs transition-colors"
+                    style={{
+                      background: isSelected ? 'var(--surface-0, #111827)' : 'var(--surface-2, #1f2937)',
+                      borderColor: isSelected ? 'var(--accent, #4a90e2)' : 'var(--border-subtle, #374151)',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        supportPainterStore.setActiveCustomBrushId(c.id);
+                        supportPainterStore.setActiveBrush('MacroFace'); // Custom selections backed by MacroFace mesh walks
+                      }}
+                      className="flex-1 flex items-center gap-2 p-1.5 text-left font-medium text-[11px] min-w-0"
+                    >
+                      <div
+                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                        style={{ background: c.color }}
+                      />
+                      <span className="truncate flex-1" style={{ color: 'var(--text-strong, #f3f4f6)' }}>
+                        {c.name}
+                      </span>
+                    </button>
+
+                    <div className="flex items-center gap-1 flex-shrink-0 pr-1">
+                      <IconButton
+                        onClick={() => {
+                          setEditingCustomBrush(c);
+                          setShowCustomBrushModal(true);
+                        }}
+                        className="!p-1 hover:bg-black/20"
+                        title="Edit Custom Brush"
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                      </IconButton>
+                      <IconButton
+                        onClick={() => {
+                          supportPainterStore.deleteCustomBrush(c.id);
+                        }}
+                        className="!p-1 hover:bg-black/20"
+                        title="Delete Custom Brush"
+                      >
+                        <Trash className="w-3.5 h-3.5" style={{ color: 'var(--danger, #ef4444)' }} />
+                      </IconButton>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setEditingCustomBrush(null);
+                  setShowCustomBrushModal(true);
+                }}
+                className="w-full !text-[10px] py-1.5 flex items-center justify-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" style={{ color: 'var(--accent, #4a90e2)' }} />
+                Create Custom Brush
+              </Button>
             </div>
           </div>
 
@@ -972,6 +1057,25 @@ export function SupportPainterPanel({
             ))}
           </Toast>
         </ToastViewport>
+      )}
+
+      {showCustomBrushModal && (
+        <CustomBrushModal
+          initialBrush={editingCustomBrush}
+          onClose={() => {
+            setShowCustomBrushModal(false);
+            setEditingCustomBrush(null);
+          }}
+          onSave={(updated) => {
+            if (editingCustomBrush) {
+              supportPainterStore.updateCustomBrush(updated.id, updated);
+            } else {
+              supportPainterStore.addCustomBrush(updated);
+            }
+            setShowCustomBrushModal(false);
+            setEditingCustomBrush(null);
+          }}
+        />
       )}
     </Card>
   );
