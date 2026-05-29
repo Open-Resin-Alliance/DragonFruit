@@ -168,6 +168,9 @@ export function useSupportPainterManager(
   }, [isActive, activeModelId, geometry, initializedModelId]);
 
   // 4. Synchronous, Low-Latency Client-Side Region Proposal (runs in <1ms!)
+  const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
+  const customBrushParamsJson = activeCustomBrush ? JSON.stringify(activeCustomBrush.selection) : '';
+
   useEffect(() => {
     if (!isActive || !activeModelId || hoveredTriangleId === null || initializedModelId !== activeModelId) {
       if (isActive && hoveredTriangleId === null) {
@@ -199,5 +202,15 @@ export function useSupportPainterManager(
     } catch (err) {
       console.error('[SupportPainterManager] Client proposal failed', err);
     }
-  }, [isActive, activeModelId, hoveredTriangleId, activeBrush, initializedModelId, meshResolver, brushRadiusMm, activeCustomBrushId, customBrushes]);
+  }, [
+    isActive,
+    activeModelId,
+    hoveredTriangleId,
+    activeBrush,
+    initializedModelId,
+    meshResolver,
+    brushRadiusMm,
+    activeCustomBrushId,
+    customBrushParamsJson,
+  ]);
 }
