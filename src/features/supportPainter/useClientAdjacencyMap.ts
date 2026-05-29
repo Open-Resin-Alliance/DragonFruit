@@ -144,7 +144,8 @@ export function proposeRegionOnClient(
   map: ClientAdjacencyMap,
   seedFaceIndex: number,
   brushType: BrushType,
-  matrixWorld: THREE.Matrix4
+  matrixWorld: THREE.Matrix4,
+  brushRadiusMm: number = 4.0
 ): number[] {
   if (seedFaceIndex < 0 || seedFaceIndex >= map.faceCount) return [];
 
@@ -166,7 +167,11 @@ export function proposeRegionOnClient(
     case 'CylinderMinima':
       return walkCylinderMinima(map, seedFaceIndex, localUp);
     case 'Point':
-      return walkPoint(map, seedFaceIndex, localUp, worldScale);
+      return walkManualCircle(map, seedFaceIndex, localUp, worldScale, brushRadiusMm);
+    case 'ManualCircle':
+      return walkManualCircle(map, seedFaceIndex, localUp, worldScale, brushRadiusMm);
+    case 'ManualSquare':
+      return walkManualSquare(map, seedFaceIndex, localUp, worldScale, brushRadiusMm);
     case 'Ring':
       return walkRing(map, seedFaceIndex, localUp, matrixWorld);
     default:
@@ -364,7 +369,13 @@ function walkCylinderMinima(map: ClientAdjacencyMap, seed: number, localUp: THRE
   return Array.from(visited).filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
 }
 
-function walkPoint(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3, worldScale: number): number[] {
+function walkManualCircle(
+  map: ClientAdjacencyMap,
+  seed: number,
+  localUp: THREE.Vector3,
+  worldScale: number,
+  radiusMm: number
+): number[] {
   const proposed: number[] = [];
   const dists = new Map<number, number>();
   
@@ -375,7 +386,6 @@ function walkPoint(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3
 
   const queue: DijkstraState[] = [];
   if (map.faceNormals[seed].dot(localUp) <= 0.2) {
-    const rLimit = 4.0; // mm
     dists.set(seed, 0);
     queue.push({ cost: 0, face: seed });
 
@@ -383,7 +393,7 @@ function walkPoint(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3
       queue.sort((a, b) => a.cost - b.cost);
       const { cost, face } = queue.shift()!;
 
-      if (cost > rLimit) continue;
+      if (cost > radiusMm) continue;
       if (!proposed.includes(face)) {
         proposed.push(face);
       }
@@ -398,10 +408,82 @@ function walkPoint(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3
           const nextCost = cost + stepCost;
 
           const currentBest = dists.get(adj) ?? Infinity;
-          if (nextCost < currentBest && nextCost <= rLimit) {
+          if (nextCost < currentBest && nextCost <= radiusMm) {
             dists.set(adj, nextCost);
             queue.push({ cost: nextCost, face: adj });
           }
+        }
+      }
+    }
+  }
+
+  return proposed.filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
+}
+
+function walkManualSquare(
+  map: ClientAdjacencyMap,
+  seed: number,
+  localUp: THREE.Vector3,
+  worldScale: number,
+  radiusMm: number
+): number[] {
+  const proposed: number[] = [];
+  const dists = new Map<number, number>();
+  
+  const seedNormal = map.faceNormals[seed];
+  const seedCentroid = map.faceCentroids[seed];
+  
+  if (seedNormal.dot(localUp) > 0.2) return [];
+
+  // Construct local orthonormal tangent coordinate axes on the seed plane
+  const tangentU = new THREE.Vector3(1, 0, 0).cross(seedNormal);
+  if (tangentU.lengthSq() < 1e-4) {
+    tangentU.copy(new THREE.Vector3(0, 1, 0).cross(seedNormal));
+  }
+  tangentU.normalize();
+  const tangentV = new THREE.Vector3().crossVectors(seedNormal, tangentU).normalize();
+
+  interface DijkstraState {
+    cost: number;
+    face: number;
+  }
+
+  const queue: DijkstraState[] = [];
+  dists.set(seed, 0);
+  queue.push({ cost: 0, face: seed });
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => a.cost - b.cost);
+    const { cost, face } = queue.shift()!;
+
+    if (cost > radiusMm * 1.414) continue; // Diagonal max bound guard
+
+    // Project face centroid vector onto seed tangent plane
+    const faceCentroid = map.faceCentroids[face];
+    const diff = new THREE.Vector3().subVectors(faceCentroid, seedCentroid).multiplyScalar(worldScale);
+    const du = diff.dot(tangentU);
+    const dv = diff.dot(tangentV);
+
+    // Apply square boundary clamp: |du| <= R and |dv| <= R
+    if (Math.abs(du) <= radiusMm && Math.abs(dv) <= radiusMm) {
+      if (!proposed.includes(face)) {
+        proposed.push(face);
+      }
+    }
+
+    const centroidCurr = map.faceCentroids[face];
+    const adjs = map.faceToFaces[face];
+
+    for (const adj of adjs) {
+      if (map.faceNormals[adj].dot(localUp) <= 0.2) {
+        const centroidAdj = map.faceCentroids[adj];
+        const stepCost = centroidCurr.distanceTo(centroidAdj) * worldScale;
+        const nextCost = cost + stepCost;
+
+        const currentBest = dists.get(adj) ?? Infinity;
+        if (nextCost < currentBest && nextCost <= radiusMm * 1.414) {
+          dists.set(adj, nextCost);
+          queue.push({ cost: nextCost, face: adj });
         }
       }
     }

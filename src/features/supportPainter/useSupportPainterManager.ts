@@ -18,7 +18,7 @@ export function useSupportPainterManager(
   geometry: THREE.BufferGeometry | null = null,
   meshResolver?: () => THREE.Mesh | null
 ) {
-  const { hoveredTriangleId, activeBrush } = useSupportPainterState();
+  const { hoveredTriangleId, activeBrush, brushRadiusMm } = useSupportPainterState();
   const [initializedModelId, setInitializedModelId] = useState<string | null>(null);
 
   // 1. Register history undo/redo handlers for painting
@@ -89,6 +89,13 @@ export function useSupportPainterManager(
       if (Object.keys(keys).length > 0) {
         supportPainterStore.setModifierKeys(keys);
       }
+
+      if (e.key === '[') {
+        supportPainterStore.adjustBrushRadiusMm(-0.5);
+      }
+      if (e.key === ']') {
+        supportPainterStore.adjustBrushRadiusMm(0.5);
+      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -103,6 +110,12 @@ export function useSupportPainterManager(
 
     const handlePointerUp = () => {
       supportPainterStore.setInteractionPhase('Idle');
+
+      // Post-stroke connected-component orphan pruning
+      const snapshot = supportPainterStore.getSnapshot();
+      if (snapshot.selectedRegionId) {
+        supportPainterStore.pruneOrphans(snapshot.selectedRegionId);
+      }
     };
 
     const handleBlur = () => {
@@ -177,12 +190,12 @@ export function useSupportPainterManager(
       console.log(`[SupportPainterManager] Running proposal on seed: ${hoveredTriangleId}, active brush: ${activeBrush}, mesh resolved: ${!!mesh}`);
       
       // Execute the brush walk synchronously in JavaScript using the live transform
-      const proposedIds = proposeRegionOnClient(map, hoveredTriangleId, activeBrush, matrixWorld);
+      const proposedIds = proposeRegionOnClient(map, hoveredTriangleId, activeBrush, matrixWorld, brushRadiusMm);
       
       console.log(`[SupportPainterManager] Smart brush search returned ${proposedIds.length} triangles.`);
       supportPainterStore.setProposedTriangleIds(proposedIds);
     } catch (err) {
       console.error('[SupportPainterManager] Client proposal failed', err);
     }
-  }, [isActive, activeModelId, hoveredTriangleId, activeBrush, initializedModelId, meshResolver]);
+  }, [isActive, activeModelId, hoveredTriangleId, activeBrush, initializedModelId, meshResolver, brushRadiusMm]);
 }

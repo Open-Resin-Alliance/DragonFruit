@@ -1,6 +1,6 @@
 // ─── Brush Identity ─────────────────────────────────────────────────────────
 
-export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'CylinderMinima' | 'Ring';
+export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'CylinderMinima' | 'Ring' | 'ManualCircle' | 'ManualSquare';
 
 // ─── Custom Support Operations & Pipeline Typings ───────────────────────────
 
@@ -64,6 +64,8 @@ export const BRUSH_COLORS: Record<BrushType, string> = {
   CylinderSides:  '#9B59B6',   // purple
   CylinderMinima: '#A569BD',   // light purple/lavender
   Ring:           '#FF5B6F',   // pink/red
+  ManualCircle:   '#06B6D4',   // teal/cyan
+  ManualSquare:   '#F59E0B',   // amber/gold
 };
 
 // ─── Interaction Phase State Machine ────────────────────────────────────────
@@ -175,6 +177,9 @@ export interface SupportPainterState {
   // ─── Version 3 Custom Support Brushes State ───
   customBrushes:          Map<string, CustomBrushTemplate>;
   activeCustomBrushId:    string | null;
+
+  // ─── Version 4 Manual Geodesic Brushes State ───
+  brushRadiusMm:          number;
 }
 
 // ─── Store Action Payloads ───────────────────────────────────────────────────

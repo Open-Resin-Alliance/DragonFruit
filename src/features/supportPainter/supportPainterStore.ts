@@ -14,6 +14,9 @@ import {
 } from './supportPainterTypes';
 import { type ClientAdjacencyMap } from './useClientAdjacencyMap';
 import { deserializeROIsFromVoxl } from './voxlCodec';
+import { getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot } from '@/supports/state';
+import { pushHistory } from '@/history/historyStore';
+import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
 
 const listeners = new Set<() => void>();
 
@@ -61,6 +64,9 @@ let roiTrackingMode: 'none' | 'session' | 'voxl' = 'voxl'; // Default persistent
 // ─── Version 3 Custom Support Brushes State ───
 let customBrushes = new Map<string, CustomBrushTemplate>();
 let activeCustomBrushId: string | null = null;
+
+// ─── Version 4 Manual Geodesic Brushes State ───
+let brushRadiusMm = 4.0;
 
 const LOCAL_STORAGE_KEY = 'dragonfruit.support-painter.custom-brushes';
 
@@ -113,6 +119,7 @@ let storeSnapshot: SupportPainterState = {
   selectedRegionId,
   customBrushes: new Map(customBrushes),
   activeCustomBrushId,
+  brushRadiusMm,
 };
 
 function notify() {
@@ -144,6 +151,7 @@ function updateSnapshot() {
     selectedRegionId,
     customBrushes: new Map(customBrushes),
     activeCustomBrushId,
+    brushRadiusMm,
   };
 }
 
@@ -516,6 +524,147 @@ export const supportPainterStore = {
     activeCustomBrushId = id;
     updateSnapshot();
     notify();
+  },
+
+  setBrushRadiusMm(radius: number) {
+    const clamped = Math.max(0.5, Math.min(50, radius));
+    if (brushRadiusMm === clamped) return;
+    brushRadiusMm = clamped;
+    updateSnapshot();
+    notify();
+  },
+
+  adjustBrushRadiusMm(delta: number) {
+    const clamped = Math.max(0.5, Math.min(50, brushRadiusMm + delta));
+    if (brushRadiusMm === clamped) return;
+    brushRadiusMm = clamped;
+    updateSnapshot();
+    notify();
+  },
+
+  booleanOperate(type: 'union' | 'subtract' | 'intersect', roiIdA: string, roiIdB: string) {
+    const rA = regions.get(roiIdA);
+    const rB = regions.get(roiIdB);
+    if (!rA || !rB) return;
+
+    // Capture states before operation for history transaction
+    const beforeState = new Map(regions);
+    const beforeSupport = getSupportSnapshot();
+
+    const nextRegions = new Map(regions);
+    const nextRA = { ...rA };
+
+    if (type === 'union') {
+      nextRA.triangleIds = new Set([...rA.triangleIds, ...rB.triangleIds]);
+      nextRegions.set(roiIdA, nextRA);
+      nextRegions.delete(roiIdB);
+    } else if (type === 'subtract') {
+      const nextSet = new Set<number>();
+      for (const id of rA.triangleIds) {
+        if (!rB.triangleIds.has(id)) {
+          nextSet.add(id);
+        }
+      }
+      nextRA.triangleIds = nextSet;
+      if (nextSet.size === 0) {
+        nextRegions.delete(roiIdA);
+      } else {
+        nextRegions.set(roiIdA, nextRA);
+      }
+    } else if (type === 'intersect') {
+      const nextSet = new Set<number>();
+      for (const id of rA.triangleIds) {
+        if (rB.triangleIds.has(id)) {
+          nextSet.add(id);
+        }
+      }
+      nextRA.triangleIds = nextSet;
+      if (nextSet.size === 0) {
+        nextRegions.delete(roiIdA);
+      } else {
+        nextRegions.set(roiIdA, nextRA);
+      }
+    }
+
+    regions = nextRegions;
+    triangleColorMap = _recomputeTriangleColorMap();
+    updateSnapshot();
+    notify();
+
+    pushHistory({
+      type: SUPPORT_EDIT_REPLACE,
+      description: `Boolean ROI ${type}`,
+      payload: {
+        before: beforeSupport,
+        after: getSupportSnapshot(),
+        painterRegionsBefore: beforeState,
+        painterRegionsAfter: nextRegions,
+      },
+    });
+  },
+
+  pruneOrphans(regionId: string) {
+    const region = regions.get(regionId);
+    if (!region || !clientAdjacencyMap || region.triangleIds.size === 0) return;
+
+    const triangleIds = region.triangleIds;
+    const seed = region.seedTriangleId;
+
+    let mainComponent = new Set<number>();
+
+    if (triangleIds.has(seed)) {
+      const queue: number[] = [seed];
+      mainComponent.add(seed);
+
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        const adjs = clientAdjacencyMap.faceToFaces[curr] || [];
+        for (const adj of adjs) {
+          if (triangleIds.has(adj) && !mainComponent.has(adj)) {
+            mainComponent.add(adj);
+            queue.push(adj);
+          }
+        }
+      }
+    } else {
+      const visited = new Set<number>();
+      let largestComponent = new Set<number>();
+
+      for (const triId of triangleIds) {
+        if (visited.has(triId)) continue;
+
+        const currentComponent = new Set<number>();
+        const queue: number[] = [triId];
+        currentComponent.add(triId);
+        visited.add(triId);
+
+        while (queue.length > 0) {
+          const curr = queue.shift()!;
+          const adjs = clientAdjacencyMap.faceToFaces[curr] || [];
+          for (const adj of adjs) {
+            if (triangleIds.has(adj) && !currentComponent.has(adj)) {
+              currentComponent.add(adj);
+              visited.add(adj);
+              queue.push(adj);
+            }
+          }
+        }
+
+        if (currentComponent.size > largestComponent.size) {
+          largestComponent = currentComponent;
+        }
+      }
+      mainComponent = largestComponent;
+    }
+
+    if (mainComponent.size < triangleIds.size) {
+      console.log(`[SupportPainterStore] Pruning ${triangleIds.size - mainComponent.size} isolated triangles.`);
+      const nextRegion = { ...region, triangleIds: mainComponent };
+      regions.set(regionId, nextRegion);
+      triangleColorMap = _recomputeTriangleColorMap();
+      updateSnapshot();
+      notify();
+    }
   },
 };
 

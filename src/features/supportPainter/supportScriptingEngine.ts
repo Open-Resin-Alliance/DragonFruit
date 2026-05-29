@@ -42,6 +42,8 @@ const BRUSH_DETAILS: Record<BrushType, { label: string }> = {
   CylinderSides:  { label: 'Cyl. Sides' },
   CylinderMinima: { label: 'Cyl. Minima' },
   Ring:           { label: 'Z-Plane Ring' },
+  ManualCircle:   { label: 'Manual Circle' },
+  ManualSquare:   { label: 'Manual Square' },
 };
 
 function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {

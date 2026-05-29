@@ -17,6 +17,7 @@ import {
   Eraser,
   Plus,
   Sliders,
+  Square,
 } from 'lucide-react';
 import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
 import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
@@ -68,6 +69,16 @@ const BRUSH_DETAILS: Record<
     desc: 'Horizontal Z-plane slice',
     icon: Circle,
   },
+  ManualCircle: {
+    label: 'Manual Circle',
+    desc: 'Manual circular geodesic brush',
+    icon: Circle,
+  },
+  ManualSquare: {
+    label: 'Manual Square',
+    desc: 'Manual square geodesic brush',
+    icon: Square,
+  },
 };
 
 export function SupportPainterPanel({
@@ -91,6 +102,8 @@ export function SupportPainterPanel({
   const [showCustomBrushModal, setShowCustomBrushModal] = useState(false);
   const [editingCustomBrush, setEditingCustomBrush] = useState<CustomBrushTemplate | null>(null);
   const [expanded, setExpanded] = useState(false);  // collapsed = support mode, expanded = painter mode
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const activeSelectedIds = selectedIds.filter(id => state.regions.has(id));
 
   // Partition regions into Pending vs Completed/Saved History
   const regionsArray = Array.from(state.regions.values());
@@ -643,6 +656,21 @@ export function SupportPainterPanel({
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-1.5 min-w-0">
+                                {/* Multi-select Checkbox */}
+                                <input
+                                  type="checkbox"
+                                  checked={activeSelectedIds.includes(region.id)}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    if (e.target.checked) {
+                                      setSelectedIds(prev => [...prev, region.id]);
+                                    } else {
+                                      setSelectedIds(prev => prev.filter(id => id !== region.id));
+                                    }
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-3.5 h-3.5 rounded border border-subtle bg-surface cursor-pointer flex-shrink-0 accent-[#ec4899]"
+                                />
                                 {/* Chevron Toggle button */}
                                 <IconButton
                                   onClick={(e) => {
@@ -770,7 +798,65 @@ export function SupportPainterPanel({
                         );
                       })
                   )}
-                </div>                {/* Selected ROI Actions */}
+                </div>
+                
+                {/* Boolean Operators Action Bar */}
+                {activeSelectedIds.length >= 2 && (
+                  <div
+                    className="flex flex-col gap-2 p-2.5 rounded-lg border text-xs my-2.5"
+                    style={{
+                      background: 'var(--surface-3, #2a2b36)',
+                      borderColor: 'var(--accent, #ec4899)',
+                      boxShadow: '0 0 10px rgba(236, 72, 153, 0.25)',
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[10px] uppercase tracking-wider text-[#ec4899]">
+                        Boolean Operators
+                      </span>
+                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        {activeSelectedIds.length} regions selected
+                      </span>
+                    </div>
+                    <div className="flex gap-2 justify-stretch">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          supportPainterStore.booleanOperate('union', activeSelectedIds[0], activeSelectedIds[1]);
+                          setSelectedIds([]);
+                        }}
+                        className="flex-1 py-1 rounded bg-[#ec4899] text-white font-bold hover:bg-[#db2777] transition-all text-center"
+                        title="Merge regions (A ∪ B)"
+                      >
+                        Union (∪)
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          supportPainterStore.booleanOperate('subtract', activeSelectedIds[0], activeSelectedIds[1]);
+                          setSelectedIds([]);
+                        }}
+                        className="flex-1 py-1 rounded text-white font-bold hover:bg-[#4b5563] border border-[#ec4899]/50 transition-all text-center"
+                        style={{ background: 'var(--surface-2, #374151)' }}
+                        title="Subtract B from A (A \ B)"
+                      >
+                        Subtract (∖)
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          supportPainterStore.booleanOperate('intersect', activeSelectedIds[0], activeSelectedIds[1]);
+                          setSelectedIds([]);
+                        }}
+                        className="flex-1 py-1 rounded text-white font-bold hover:bg-[#4b5563] border border-[#ec4899]/50 transition-all text-center"
+                        style={{ background: 'var(--surface-2, #374151)' }}
+                        title="Intersect A and B (A ∩ B)"
+                      >
+                        Intersect (∩)
+                      </button>
+                    </div>
+                  </div>
+                )}                {/* Selected ROI Actions */}
                 {(() => {
                   const selectedRegion = state.selectedRegionId ? completedRegions.find(r => r.id === state.selectedRegionId) : null;
 
