@@ -2,6 +2,59 @@
 
 export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'CylinderMinima' | 'Ring';
 
+// ─── Custom Support Operations & Pipeline Typings ───────────────────────────
+
+export interface CustomSupportOperation {
+  type: 'minima' | 'perimeter' | 'infill';
+  enabled: boolean;
+  
+  // Suppression rules for this specific operation
+  suppression: {
+    enabled: boolean;
+    distanceMm: number;
+    suppressAgainst: ('minima' | 'perimeter' | 'infill')[];
+  };
+
+  // Spacing configurations
+  spacing: {
+    baseSpacingMm: number;
+    
+    // Sequence-based spacing (e.g., [1.0, 2.0] for perimeter)
+    sequence?: number[]; 
+    
+    // Advanced perimeter solver modes
+    solverMode?: 'standard' | 'closest' | 'add' | 'remove';
+    useInflectionPoints?: boolean;
+    
+    // Infill-specific configurations
+    infillPattern?: 'PoissonDisc' | 'Grid' | 'Honeycomb' | 'Concentric';
+    seedFromMinima?: boolean;
+  };
+}
+
+export interface CustomBrushTemplate {
+  id: string;
+  name: string;
+  color: string;
+  
+  // Topology selection parameters
+  selection: {
+    // Symmetrical normal cone range relative to local vertex normal
+    normalConeAngleMinDeg: number;
+    normalConeAngleMaxDeg: number;
+    // Overhang slope ranges relative to vertical Z-axis
+    overhangSlopeMinDeg: number;
+    overhangSlopeMaxDeg: number;
+    
+    curvatureMin: number;
+    curvatureMax: number;
+    dihedralAngleToleranceDeg: number;
+  };
+
+  // Ordered operational pipeline
+  operations: CustomSupportOperation[];
+}
+
 // Each brush type maps to a fixed display color in the shader.
 // Colors are defined as CSS hex strings here; converted to vec3 for GLSL.
 export const BRUSH_COLORS: Record<BrushType, string> = {
@@ -48,6 +101,9 @@ export interface ROIRegion {
   loadedFromVoxl?: boolean;         // True if imported from a VOXL file
   placedCount?:    number;
   attemptedCount?: number;
+
+  // ─── Version 3 Custom Support Brushes ───
+  customBrush?:    CustomBrushTemplate;
 }
 
 // ─── Stage-Based Suppression Configurations [STAGE_SUPPRESSION] ───────────────
@@ -115,6 +171,10 @@ export interface SupportPainterState {
   // [AGENT_NOTE] Governs persistence of ROIs: 'none' (transient), 'session' (in-memory only), 'voxl' (serialized to file).
   roiTrackingMode:          'none' | 'session' | 'voxl';
   selectedRegionId:         string | null;
+
+  // ─── Version 3 Custom Support Brushes State ───
+  customBrushes:          Map<string, CustomBrushTemplate>;
+  activeCustomBrushId:    string | null;
 }
 
 // ─── Store Action Payloads ───────────────────────────────────────────────────
@@ -189,6 +249,9 @@ export interface VoxlROIRegion {
   modelId?:        string;          // Optional model reference for multi-model sheets
   placedCount?:    number;
   attemptedCount?: number;
+
+  // ─── Version 3 Custom Support Brushes Serialization ───
+  customBrush?:    CustomBrushTemplate;
 }
 
 export interface VoxlROIExtension {

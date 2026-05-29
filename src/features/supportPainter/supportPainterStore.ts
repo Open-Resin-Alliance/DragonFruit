@@ -9,6 +9,7 @@ import {
   type VoxlROIExtension,
   type SuppressionSettings,
   type SupportPainterToast,
+  type CustomBrushTemplate,
   BRUSH_COLORS,
 } from './supportPainterTypes';
 import { type ClientAdjacencyMap } from './useClientAdjacencyMap';
@@ -57,6 +58,43 @@ let toastTimeout: NodeJS.Timeout | null = null;
 // ─── Granular Storage / Tracking Mode State ───
 let roiTrackingMode: 'none' | 'session' | 'voxl' = 'voxl'; // Default persistent mode
 
+// ─── Version 3 Custom Support Brushes State ───
+let customBrushes = new Map<string, CustomBrushTemplate>();
+let activeCustomBrushId: string | null = null;
+
+const LOCAL_STORAGE_KEY = 'dragonfruit.support-painter.custom-brushes';
+
+function saveCustomBrushesToLocalStorage() {
+  try {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const list = Array.from(customBrushes.values());
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
+    }
+  } catch (err) {
+    console.error('[SupportPainterStore] Failed to persist custom brushes', err);
+  }
+}
+
+function loadCustomBrushesFromLocalStorage() {
+  try {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (raw) {
+        const list = JSON.parse(raw) as CustomBrushTemplate[];
+        customBrushes.clear();
+        for (const brush of list) {
+          customBrushes.set(brush.id, brush);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[SupportPainterStore] Failed to restore custom brushes', err);
+  }
+}
+
+// Initial invocation on module load
+loadCustomBrushesFromLocalStorage();
+
 let storeSnapshot: SupportPainterState = {
   isActive,
   activeBrush,
@@ -73,6 +111,8 @@ let storeSnapshot: SupportPainterState = {
   toast: null,
   roiTrackingMode,
   selectedRegionId,
+  customBrushes: new Map(customBrushes),
+  activeCustomBrushId,
 };
 
 function notify() {
@@ -102,6 +142,8 @@ function updateSnapshot() {
     toast: toast ? { ...toast } : null,
     roiTrackingMode,
     selectedRegionId,
+    customBrushes: new Map(customBrushes),
+    activeCustomBrushId,
   };
 }
 
@@ -428,6 +470,46 @@ export const supportPainterStore = {
     if (selectedRegionId === id) return;
     selectedRegionId = id;
     triangleColorMap = _recomputeTriangleColorMap();
+    updateSnapshot();
+    notify();
+  },
+
+  addCustomBrush(brush: CustomBrushTemplate) {
+    customBrushes.set(brush.id, brush);
+    saveCustomBrushesToLocalStorage();
+    updateSnapshot();
+    notify();
+  },
+
+  updateCustomBrush(id: string, updates: Partial<CustomBrushTemplate>) {
+    const existing = customBrushes.get(id);
+    if (!existing) return;
+    const updated = {
+      ...existing,
+      ...updates,
+      selection: { ...existing.selection, ...updates.selection },
+      operations: updates.operations ? [...updates.operations] : existing.operations,
+    };
+    customBrushes.set(id, updated);
+    saveCustomBrushesToLocalStorage();
+    updateSnapshot();
+    notify();
+  },
+
+  deleteCustomBrush(id: string) {
+    if (!customBrushes.has(id)) return;
+    customBrushes.delete(id);
+    if (activeCustomBrushId === id) {
+      activeCustomBrushId = null;
+    }
+    saveCustomBrushesToLocalStorage();
+    updateSnapshot();
+    notify();
+  },
+
+  setActiveCustomBrushId(id: string | null) {
+    if (activeCustomBrushId === id) return;
+    activeCustomBrushId = id;
     updateSnapshot();
     notify();
   },
