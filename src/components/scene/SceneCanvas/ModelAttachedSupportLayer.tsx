@@ -8,6 +8,7 @@ import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import type { SupportData } from '@/supports/rendering';
 import type { BracePreviewData } from '@/supports/SupportTypes/Brace/bracePlacementState';
+import { useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
 
 export type ModelAttachedSupportLayerProps = {
   mode?: SupportMode;
@@ -88,9 +89,12 @@ export function ModelAttachedSupportLayer({
   bracePlacementPreview = null,
   kickstandPlacementPreview = null,
 }: ModelAttachedSupportLayerProps) {
+  const painterState = useSupportPainterState();
+  const isPainterShift = mode === 'supportPainter' && painterState.modifierKeys.shift;
+
   // Performance policy: use proxy support/raft rendering everywhere except
   // support workspace, where full editable primitives are required.
-  const useUltraLazySupports = mode !== 'support';
+  const useUltraLazySupports = mode !== 'support' && !isPainterShift;
   const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
 

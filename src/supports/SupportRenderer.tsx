@@ -38,6 +38,7 @@ import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
 import { useResolvedSelectionState } from './interaction/shared/selection/resolvedSelectionStore';
+import { useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
@@ -689,6 +690,7 @@ function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData):
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0, trunkPlacementPreview = null, branchPlacementPreview = null, leafPlacementPreview = null, bracePlacementPreview = null, kickstandPlacementPreview = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const painterState = useSupportPainterState();
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
@@ -3158,7 +3160,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         : BATCHED_SHAFT_RADIAL_SEGMENTS;
 
     const placementPreviewBatches = useMemo(() => {
-        if (mode !== 'support') return [] as PlacementPreviewBatch[];
+        const isSupportOrPainterShift = mode === 'support' || (mode === 'supportPainter' && painterState.modifierKeys.shift);
+        if (!isSupportOrPainterShift) return [] as PlacementPreviewBatch[];
 
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
         const raftThickness = raftSettings.thickness ?? 0;
@@ -3193,6 +3196,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return next;
     }, [
         mode,
+        painterState.modifierKeys.shift,
         trunkPlacementPreview,
         branchPlacementPreview,
         leafPlacementPreview,

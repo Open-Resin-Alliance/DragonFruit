@@ -1681,12 +1681,14 @@ export function SceneCanvas({
   }, []);
 
   React.useEffect(() => {
-    if (mode === 'support' && !blockSupportPlacement) return;
+    const isSupportOrPainterShift = mode === 'support' || (mode === 'supportPainter' && painterState.modifierKeys.shift);
+    if (isSupportOrPainterShift && !blockSupportPlacement) return;
     queueSupportPlacementGuideZ(null);
-  }, [blockSupportPlacement, mode, queueSupportPlacementGuideZ]);
+  }, [blockSupportPlacement, mode, painterState.modifierKeys.shift, queueSupportPlacementGuideZ]);
 
   const handleSupportHover = React.useCallback((hit: THREE.Intersection | null) => {
-    if (mode === 'support' && !blockSupportPlacement) {
+    const isSupportOrPainterShift = mode === 'support' || (mode === 'supportPainter' && painterState.modifierKeys.shift);
+    if (isSupportOrPainterShift && !blockSupportPlacement) {
       const nextZ = hit && Number.isFinite(hit.point.z) ? hit.point.z : null;
       queueSupportPlacementGuideZ(nextZ);
     } else {
@@ -1694,13 +1696,14 @@ export function SceneCanvas({
     }
 
     onSupportHover?.(hit);
-  }, [blockSupportPlacement, mode, onSupportHover, queueSupportPlacementGuideZ]);
+  }, [blockSupportPlacement, mode, painterState.modifierKeys.shift, onSupportHover, queueSupportPlacementGuideZ]);
 
   const supportPlacementIndicatorPlaneZ = React.useMemo(() => {
-    if (mode !== 'support' || blockSupportPlacement) return null;
+    const isSupportOrPainterShift = mode === 'support' || (mode === 'supportPainter' && painterState.modifierKeys.shift);
+    if (!isSupportOrPainterShift || blockSupportPlacement) return null;
     if (supportPlacementGuideZ == null || !Number.isFinite(supportPlacementGuideZ)) return null;
     return supportPlacementGuideZ;
-  }, [blockSupportPlacement, mode, supportPlacementGuideZ]);
+  }, [blockSupportPlacement, mode, painterState.modifierKeys.shift, supportPlacementGuideZ]);
 
   const supportPlacementGuideLineWidthMm = React.useMemo(() => {
     const toGuideWidthMm = (contactDiameterMm: number) => Math.max(0.01, contactDiameterMm * 0.3);
