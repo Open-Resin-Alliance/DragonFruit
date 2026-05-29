@@ -12,6 +12,7 @@ import {
   ChevronRight,
   ChevronUp,
   Trash2,
+  Trash,
   RefreshCw,
   Eraser,
 } from 'lucide-react';
@@ -201,6 +202,26 @@ export function SupportPainterPanel({
       payload: {
         before: beforeState,
         after: nextState,
+        painterRegionsBefore: beforeRegions,
+        painterRegionsAfter: nextRegions,
+      },
+    });
+  };
+
+  const handleRemoveRoiOnly = (regionId: string) => {
+    const beforeState = getSupportsSnapshot();
+    const beforeRegions = new Map(supportPainterStore.getSnapshot().regions);
+    const nextRegions = new Map(beforeRegions);
+    nextRegions.delete(regionId);
+
+    supportPainterStore.restoreRegions(nextRegions);
+
+    pushHistory({
+      type: SUPPORT_EDIT_REPLACE,
+      description: 'Remove ROI Only',
+      payload: {
+        before: beforeState,
+        after: beforeState,
         painterRegionsBefore: beforeRegions,
         painterRegionsAfter: nextRegions,
       },
@@ -664,20 +685,22 @@ export function SupportPainterPanel({
                         );
                       })
                   )}
-                </div>
+                </div>                {/* Selected ROI Actions */}
+                {(() => {
+                  const selectedRegion = state.selectedRegionId ? completedRegions.find(r => r.id === state.selectedRegionId) : null;
 
-                {/* Selected ROI Actions */}
-                {state.selectedRegionId !== null && (() => {
-                  const selectedRegion = completedRegions.find(r => r.id === state.selectedRegionId);
-                  if (!selectedRegion) return null;
+                  let totalChildSupports = 0;
+                  if (selectedRegion) {
+                    const regionTrunks = Object.values(supportState.trunks).filter(t => t.roiId === selectedRegion.id);
+                    const regionBranches = Object.values(supportState.branches).filter(b => b.roiId === selectedRegion.id);
+                    const regionLeaves = Object.values(supportState.leaves).filter(l => l.roiId === selectedRegion.id);
+                    const regionTwigs = Object.values(supportState.twigs).filter(t => t.roiId === selectedRegion.id);
+                    const regionSticks = Object.values(supportState.sticks).filter(s => s.roiId === selectedRegion.id);
+                    const regionAnchors = Object.values(supportState.anchors).filter(a => a.roiId === selectedRegion.id);
+                    totalChildSupports = regionTrunks.length + regionBranches.length + regionLeaves.length + regionTwigs.length + regionSticks.length + regionAnchors.length;
+                  }
 
-                  const regionTrunks = Object.values(supportState.trunks).filter(t => t.roiId === selectedRegion.id);
-                  const regionBranches = Object.values(supportState.branches).filter(b => b.roiId === selectedRegion.id);
-                  const regionLeaves = Object.values(supportState.leaves).filter(l => l.roiId === selectedRegion.id);
-                  const regionTwigs = Object.values(supportState.twigs).filter(t => t.roiId === selectedRegion.id);
-                  const regionSticks = Object.values(supportState.sticks).filter(s => s.roiId === selectedRegion.id);
-                  const regionAnchors = Object.values(supportState.anchors).filter(a => a.roiId === selectedRegion.id);
-                  const totalChildSupports = regionTrunks.length + regionBranches.length + regionLeaves.length + regionTwigs.length + regionSticks.length + regionAnchors.length;
+                  const isBtnDisabled = selectedRegion === null;
 
                   return (
                     <div
@@ -694,27 +717,54 @@ export function SupportPainterPanel({
                         <Button
                           variant="secondary"
                           size="sm"
-                          onClick={() => handleRemoveSupportsForRoi(selectedRegion.id)}
+                          onClick={() => selectedRegion && handleRemoveSupportsForRoi(selectedRegion.id)}
                           className="w-full !text-[10px] py-1 flex items-center justify-center gap-1.5"
-                          disabled={totalChildSupports === 0}
+                          disabled={isBtnDisabled || totalChildSupports === 0}
                           style={{
-                            opacity: totalChildSupports === 0 ? 0.5 : 1,
+                            opacity: (isBtnDisabled || totalChildSupports === 0) ? 0.4 : 1,
+                            cursor: (isBtnDisabled || totalChildSupports === 0) ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          <Eraser className="w-3.5 h-3.5" style={{ color: totalChildSupports === 0 ? 'var(--text-muted)' : 'var(--warning, #f59e0b)' }} />
+                          <Eraser className="w-3.5 h-3.5" style={{ color: (isBtnDisabled || totalChildSupports === 0) ? 'var(--text-muted)' : 'var(--warning, #f59e0b)' }} />
                           Erase ROI Supports
                         </Button>
                         <Button
                           variant="secondary"
                           size="sm"
                           onClick={() => {
-                            handleDeleteRegion(selectedRegion.id);
-                            supportPainterStore.setSelectedRegionId(null);
+                            if (selectedRegion) {
+                              handleDeleteRegion(selectedRegion.id);
+                              supportPainterStore.setSelectedRegionId(null);
+                            }
                           }}
                           className="w-full !text-[10px] py-1 flex items-center justify-center gap-1.5"
+                          disabled={isBtnDisabled}
+                          style={{
+                            opacity: isBtnDisabled ? 0.4 : 1,
+                            cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
+                          }}
                         >
-                          <Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--danger, #ef4444)' }} />
+                          <Trash2 className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--danger, #ef4444)' }} />
                           Delete ROI &amp; Supports
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            if (selectedRegion) {
+                              handleRemoveRoiOnly(selectedRegion.id);
+                              supportPainterStore.setSelectedRegionId(null);
+                            }
+                          }}
+                          className="col-span-2 w-full !text-[10px] py-1 flex items-center justify-center gap-1.5"
+                          disabled={isBtnDisabled}
+                          style={{
+                            opacity: isBtnDisabled ? 0.4 : 1,
+                            cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          <Trash className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--text-strong)' }} />
+                          Remove ROI Only
                         </Button>
                       </div>
                     </div>
