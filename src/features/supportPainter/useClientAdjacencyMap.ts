@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BrushType } from './supportPainterTypes';
+import { BrushType, CustomBrushTemplate } from './supportPainterTypes';
 
 export interface ClientAdjacencyMap {
   faceCount: number;
@@ -145,7 +145,8 @@ export function proposeRegionOnClient(
   seedFaceIndex: number,
   brushType: BrushType,
   matrixWorld: THREE.Matrix4,
-  brushRadiusMm: number = 4.0
+  brushRadiusMm: number = 4.0,
+  customBrush?: CustomBrushTemplate
 ): number[] {
   if (seedFaceIndex < 0 || seedFaceIndex >= map.faceCount) return [];
 
@@ -159,7 +160,7 @@ export function proposeRegionOnClient(
 
   switch (brushType) {
     case 'MacroFace':
-      return walkMacroFace(map, seedFaceIndex, localUp);
+      return walkMacroFace(map, seedFaceIndex, localUp, customBrush);
     case 'Ridge':
       return walkRidge(map, seedFaceIndex, localUp);
     case 'CylinderSides':
@@ -186,13 +187,41 @@ export function proposeRegionOnClient(
 
 // --- Smart Brush Graph Search Walks ---
 
-function walkMacroFace(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3): number[] {
+function getFaceCurvature(map: ClientAdjacencyMap, faceIdx: number): number {
+  const norm = map.faceNormals[faceIdx];
+  const neighbors = map.faceToFaces[faceIdx];
+  if (neighbors.length === 0) return 0;
+  let maxAngle = 0;
+  for (const adj of neighbors) {
+    const angle = norm.angleTo(map.faceNormals[adj]);
+    if (angle > maxAngle) maxAngle = angle;
+  }
+  return maxAngle;
+}
+
+function walkMacroFace(
+  map: ClientAdjacencyMap,
+  seed: number,
+  localUp: THREE.Vector3,
+  customBrush?: CustomBrushTemplate
+): number[] {
   const visited = new Set<number>();
   const queue: number[] = [seed];
   visited.add(seed);
 
   const seedNormal = map.faceNormals[seed];
-  if (seedNormal.dot(localUp) > 0.2) return [];
+  const selection = customBrush?.selection;
+  const degToRad = Math.PI / 180;
+
+  // Overhang slope check for seed
+  if (selection) {
+    const minSlopeRad = selection.overhangSlopeMinDeg * degToRad;
+    const maxSlopeRad = selection.overhangSlopeMaxDeg * degToRad;
+    const seedSlope = seedNormal.angleTo(localUp);
+    if (seedSlope < minSlopeRad || seedSlope > maxSlopeRad) return [];
+  } else {
+    if (seedNormal.dot(localUp) > 0.2) return [];
+  }
 
   while (queue.length > 0) {
     const curr = queue.shift()!;
@@ -201,22 +230,65 @@ function walkMacroFace(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vec
     for (const adj of adjs) {
       if (!visited.has(adj)) {
         const nAdj = map.faceNormals[adj];
-        if (nAdj.dot(localUp) <= 0.2) {
+        
+        let slopeOk = false;
+        if (selection) {
+          const minSlopeRad = selection.overhangSlopeMinDeg * degToRad;
+          const maxSlopeRad = selection.overhangSlopeMaxDeg * degToRad;
+          const adjSlope = nAdj.angleTo(localUp);
+          slopeOk = adjSlope >= minSlopeRad && adjSlope <= maxSlopeRad;
+        } else {
+          slopeOk = nAdj.dot(localUp) <= 0.2;
+        }
+
+        if (slopeOk) {
           const normalDeviation = seedNormal.angleTo(nAdj);
           const nCurr = map.faceNormals[curr];
           const edgeDihedral = nCurr.angleTo(nAdj);
 
-          // 35 deg = 0.61 rad, 25 deg = 0.43 rad
-          if (normalDeviation < 0.61 && edgeDihedral < 0.43) {
-            visited.add(adj);
-            queue.push(adj);
+          if (selection) {
+            let curvatureOk = true;
+            if (selection.curvatureMin !== undefined || selection.curvatureMax !== undefined) {
+              const maxDihedral = getFaceCurvature(map, adj);
+              const curvMin = selection.curvatureMin ?? 0;
+              const curvMax = selection.curvatureMax ?? 1;
+              curvatureOk = maxDihedral >= curvMin && maxDihedral <= curvMax;
+            }
+
+            const minConeRad = selection.normalConeAngleMinDeg * degToRad;
+            const maxConeRad = selection.normalConeAngleMaxDeg * degToRad;
+            const dihedralTolRad = selection.dihedralAngleToleranceDeg * degToRad;
+
+            const normalConeOk = normalDeviation >= minConeRad && normalDeviation <= maxConeRad;
+            const dihedralOk = edgeDihedral <= dihedralTolRad;
+
+            if (normalConeOk && dihedralOk && curvatureOk) {
+              visited.add(adj);
+              queue.push(adj);
+            }
+          } else {
+            // 35 deg = 0.61 rad, 25 deg = 0.43 rad
+            if (normalDeviation < 0.61 && edgeDihedral < 0.43) {
+              visited.add(adj);
+              queue.push(adj);
+            }
           }
         }
       }
     }
   }
 
-  return Array.from(visited).filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
+  if (selection) {
+    const minSlopeRad = selection.overhangSlopeMinDeg * degToRad;
+    const maxSlopeRad = selection.overhangSlopeMaxDeg * degToRad;
+    return Array.from(visited).filter((idx) => {
+      if (idx === seed) return true;
+      const slope = map.faceNormals[idx].angleTo(localUp);
+      return slope >= minSlopeRad && slope <= maxSlopeRad;
+    });
+  } else {
+    return Array.from(visited).filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
+  }
 }
 
 function walkRidge(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3): number[] {

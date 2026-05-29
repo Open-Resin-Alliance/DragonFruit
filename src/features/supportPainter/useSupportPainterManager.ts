@@ -18,7 +18,7 @@ export function useSupportPainterManager(
   geometry: THREE.BufferGeometry | null = null,
   meshResolver?: () => THREE.Mesh | null
 ) {
-  const { hoveredTriangleId, activeBrush, brushRadiusMm } = useSupportPainterState();
+  const { hoveredTriangleId, activeBrush, brushRadiusMm, activeCustomBrushId, customBrushes } = useSupportPainterState();
   const [initializedModelId, setInitializedModelId] = useState<string | null>(null);
 
   // 1. Register history undo/redo handlers for painting
@@ -189,13 +189,15 @@ export function useSupportPainterManager(
       
       console.log(`[SupportPainterManager] Running proposal on seed: ${hoveredTriangleId}, active brush: ${activeBrush}, mesh resolved: ${!!mesh}`);
       
+      const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
+
       // Execute the brush walk synchronously in JavaScript using the live transform
-      const proposedIds = proposeRegionOnClient(map, hoveredTriangleId, activeBrush, matrixWorld, brushRadiusMm);
+      const proposedIds = proposeRegionOnClient(map, hoveredTriangleId, activeBrush, matrixWorld, brushRadiusMm, activeCustomBrush);
       
       console.log(`[SupportPainterManager] Smart brush search returned ${proposedIds.length} triangles.`);
       supportPainterStore.setProposedTriangleIds(proposedIds);
     } catch (err) {
       console.error('[SupportPainterManager] Client proposal failed', err);
     }
-  }, [isActive, activeModelId, hoveredTriangleId, activeBrush, initializedModelId, meshResolver, brushRadiusMm]);
+  }, [isActive, activeModelId, hoveredTriangleId, activeBrush, initializedModelId, meshResolver, brushRadiusMm, activeCustomBrushId, customBrushes]);
 }
