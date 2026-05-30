@@ -73,7 +73,7 @@ let brushRadiusMm = 4.0;
 let scannedMinima: LocalMinimum[] = [];
 
 // ─── Marker Brush State ───
-let markerRadiusMm = 1.5;
+let markerRadiusMm = 0.2;
 let markerTipShape: 'circle' | 'line' | 'rectangle' | 'square' | 'hexagon' = 'circle';
 let markerTipRotationDeg = 0;
 let markerEraserMode = false;
@@ -81,7 +81,7 @@ let markerCollisionMode: 'fence' | 'push' | 'merge' = 'fence';
 
 // ─── Point Path Brush State ───
 let pointPathPoints: { point: [number, number, number]; faceIndex: number }[] = [];
-let pointPathWidthMm = 2.0;
+let pointPathWidthMm = 0.2;
 let pointPathMode: 'line' | 'polygon' = 'line';
 let pointPathClosed = false;
 

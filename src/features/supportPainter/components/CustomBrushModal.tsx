@@ -97,7 +97,7 @@ const presets: Record<BrushType, Partial<CustomBrushTemplate['selection']>> = {
     zHeightEnvelopeToleranceMm: 0.1,
   },
   Marker: {
-    markerRadiusMm: 1.5,
+    markerRadiusMm: 0.2,
     markerTipShape: 'circle',
     markerTipRotationDeg: 0,
     markerEraserMode: false,
@@ -108,7 +108,7 @@ const presets: Record<BrushType, Partial<CustomBrushTemplate['selection']>> = {
   ManualCircle: {},
   ManualSquare: {},
   PointPath: {
-    pointPathWidthMm: 2.0,
+    pointPathWidthMm: 0.2,
     pointPathMode: 'line',
   },
 };

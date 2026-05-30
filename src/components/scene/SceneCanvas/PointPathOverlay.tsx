@@ -43,11 +43,11 @@ export default function PointPathOverlay() {
   // Color assignments
   const firstPointColor = useMemo(() => {
     // Green glow when in closing range, otherwise orange
-    return new THREE.Color(isInClosingRange ? '#10B981' : '#F59E0B');
+    return new THREE.Color(isInClosingRange ? '#00FF66' : '#FF5B00');
   }, [isInClosingRange]);
 
   const standardOrangeColor = useMemo(() => {
-    return new THREE.Color('#F59E0B'); // Orange placing glow
+    return new THREE.Color('#FF5B00'); // Orange placing glow
   }, []);
 
   // Line segment path rendering setup
@@ -65,7 +65,7 @@ export default function PointPathOverlay() {
 
   const lineMaterial = useMemo(() => {
     return new THREE.LineBasicMaterial({
-      color: 0x10B981,
+      color: 0x00FF66,
       depthTest: false,
       depthWrite: false,
       transparent: true,

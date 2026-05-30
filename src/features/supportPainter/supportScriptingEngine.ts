@@ -985,14 +985,15 @@ export async function generateSupportsFromPainter(
         });
       }
     } else {
+      const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker';
       pipeline.push({
         type: 'minima',
-        enabled: true,
+        enabled: !isPointPathOrMarker,
         spacing: { baseSpacingMm: minimaSuppressionRadius },
       });
       pipeline.push({
         type: 'perimeter',
-        enabled: true,
+        enabled: !isPointPathOrMarker,
         spacing: { baseSpacingMm: perimeterSpacing },
       });
       pipeline.push({
