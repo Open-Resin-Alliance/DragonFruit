@@ -317,8 +317,15 @@ export function solvePerimeterWithInflections(
     const curr = qSmoothed[i];
     const next = qSmoothed[(i + 1) % qSmoothed.length];
 
+    /* ORIGINAL:
     const t1 = new THREE.Vector2().subVectors(curr, prev).normalize();
     const t2 = new THREE.Vector2().subVectors(next, curr).normalize();
+    */
+    const diffVec1 = new THREE.Vector2().subVectors(curr, prev);
+    const t1 = diffVec1.lengthSq() < 1e-8 ? new THREE.Vector2(1, 0) : diffVec1.normalize();
+    
+    const diffVec2 = new THREE.Vector2().subVectors(next, curr);
+    const t2 = diffVec2.lengthSq() < 1e-8 ? new THREE.Vector2(1, 0) : diffVec2.normalize();
 
     let diff = Math.atan2(t2.y, t2.x) - Math.atan2(t1.y, t1.x);
     if (diff < -Math.PI) diff += 2 * Math.PI;
@@ -538,7 +545,15 @@ export async function generateSupportsFromPainter(
       }
     }
     for (const idx of vertexNormals.keys()) {
+      /* ORIGINAL:
       vertexNormals.get(idx)!.normalize();
+      */
+      const norm = vertexNormals.get(idx)!;
+      if (norm.lengthSq() < 1e-8) {
+        norm.set(0, 0, 1);
+      } else {
+        norm.normalize();
+      }
     }
     regionVertexNormals.set(region.id, vertexNormals);
 

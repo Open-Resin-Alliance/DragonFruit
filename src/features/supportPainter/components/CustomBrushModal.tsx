@@ -11,6 +11,10 @@ import { OverhangArcGauge } from './OverhangArcGauge';
 import { SupportPipelineEditor } from './SupportPipelineEditor';
 import { type CustomBrushTemplate, type CustomSupportOperation, type BrushType } from '../supportPainterTypes';
 
+const safeNum = (val: number | undefined, fallback: number): number => {
+  return val === undefined || isNaN(val) ? fallback : val;
+};
+
 interface CustomBrushModalProps {
   initialBrush?: CustomBrushTemplate | null;
   onClose: () => void;
@@ -438,7 +442,10 @@ export function CustomBrushModal({
                           max="1"
                           step="0.05"
                           disabled={!brush.selection.enableCurvatureLimit}
+                          /* ORIGINAL:
                           value={brush.selection.curvatureMax}
+                          */
+                          value={safeNum(brush.selection.curvatureMax, 1.0)}
                           onChange={e => updateSelection({ curvatureMax: parseFloat(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer disabled:opacity-50"
                         />
@@ -465,7 +472,10 @@ export function CustomBrushModal({
                           max="60"
                           step="5"
                           disabled={brush.selection.enableDihedralLimit === false}
+                          /* ORIGINAL:
                           value={brush.selection.dihedralAngleToleranceDeg}
+                          */
+                          value={safeNum(brush.selection.dihedralAngleToleranceDeg, 30)}
                           onChange={e =>
                             updateSelection({ dihedralAngleToleranceDeg: parseInt(e.target.value) })
                           }
@@ -492,7 +502,10 @@ export function CustomBrushModal({
                           min="2"
                           max="40"
                           step="1"
+                          /* ORIGINAL:
                           value={brush.selection.creaseSeedAngleDeg ?? 8}
+                          */
+                          value={safeNum(brush.selection.creaseSeedAngleDeg, 8)}
                           onChange={e => updateSelection({ creaseSeedAngleDeg: parseInt(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer"
                         />
@@ -510,7 +523,10 @@ export function CustomBrushModal({
                           min="1"
                           max="30"
                           step="1"
+                          /* ORIGINAL:
                           value={brush.selection.creasePropagateAngleDeg ?? 3}
+                          */
+                          value={safeNum(brush.selection.creasePropagateAngleDeg, 3)}
                           onChange={e => updateSelection({ creasePropagateAngleDeg: parseInt(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer"
                         />
@@ -530,7 +546,10 @@ export function CustomBrushModal({
                           min="0.1"
                           max="0.9"
                           step="0.05"
+                          /* ORIGINAL:
                           value={brush.selection.ridgeAlignmentTolerance ?? 0.3}
+                          */
+                          value={safeNum(brush.selection.ridgeAlignmentTolerance, 0.3)}
                           onChange={e => updateSelection({ ridgeAlignmentTolerance: parseFloat(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer"
                         />
@@ -579,7 +598,10 @@ export function CustomBrushModal({
                           min="0.05"
                           max="2.0"
                           step="0.05"
+                          /* ORIGINAL:
                           value={brush.selection.zHeightEnvelopeToleranceMm ?? 0.1}
+                          */
+                          value={safeNum(brush.selection.zHeightEnvelopeToleranceMm, 0.1)}
                           onChange={e => updateSelection({ zHeightEnvelopeToleranceMm: parseFloat(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer"
                         />
@@ -604,7 +626,10 @@ export function CustomBrushModal({
                           min="0.1"
                           max="50.0"
                           step="0.1"
+                          /* ORIGINAL:
                           value={brush.selection.markerRadiusMm ?? 1.5}
+                          */
+                          value={safeNum(brush.selection.markerRadiusMm, 1.5)}
                           onChange={e => updateSelection({ markerRadiusMm: parseFloat(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer"
                         />
@@ -645,7 +670,10 @@ export function CustomBrushModal({
                           max="360"
                           step="5"
                           disabled={brush.selection.markerTipShape === 'circle'}
+                          /* ORIGINAL:
                           value={brush.selection.markerTipRotationDeg ?? 0}
+                          */
+                          value={safeNum(brush.selection.markerTipRotationDeg, 0)}
                           onChange={e => updateSelection({ markerTipRotationDeg: parseInt(e.target.value) })}
                           className="flex-1 accent-accent cursor-pointer disabled:opacity-50"
                         />
@@ -717,7 +745,10 @@ export function CustomBrushModal({
                             min="0.5"
                             max="20.0"
                             step="0.5"
+                            /* ORIGINAL:
                             value={brush.selection.pointPathWidthMm ?? 2.0}
+                            */
+                            value={safeNum(brush.selection.pointPathWidthMm, 2.0)}
                             onChange={e => updateSelection({ pointPathWidthMm: parseFloat(e.target.value) })}
                             className="flex-1 accent-accent cursor-pointer"
                           />

@@ -187,12 +187,21 @@ export function SupportPipelineEditor({
                             type="number"
                             step="0.1"
                             min="0.5"
+                            /* ORIGINAL:
                             value={op.spacing.baseSpacingMm}
                             onChange={e =>
                               updateOpSpacing(index, {
                                 baseSpacingMm: parseFloat(e.target.value),
                               })
                             }
+                            */
+                            value={isNaN(op.spacing.baseSpacingMm) ? '' : op.spacing.baseSpacingMm}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value);
+                              updateOpSpacing(index, {
+                                baseSpacingMm: isNaN(val) ? 0 : val,
+                              });
+                            }}
                             className="px-2.5 py-1.5 rounded border font-medium outline-none"
                             style={{
                               background: 'var(--surface-1, #151a22)',
@@ -365,12 +374,21 @@ export function SupportPipelineEditor({
                               type="number"
                               step="0.1"
                               min="0.5"
+                              /* ORIGINAL:
                               value={op.suppression.distanceMm}
                               onChange={e =>
                                 updateOpSuppression(index, {
                                   distanceMm: parseFloat(e.target.value),
                                 })
                               }
+                              */
+                              value={isNaN(op.suppression.distanceMm) ? '' : op.suppression.distanceMm}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateOpSuppression(index, {
+                                  distanceMm: isNaN(val) ? 0 : val,
+                                });
+                              }}
                               className="px-2.5 py-1.5 rounded border font-medium outline-none"
                               style={{
                                 background: 'var(--surface-1, #151a22)',
