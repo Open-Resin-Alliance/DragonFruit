@@ -18,9 +18,16 @@ import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacement
  * The actual snapping and preview is handled by BranchPlacementController
  * which runs inside the Canvas.
  */
-export function useBranchPlacement() {
+export function useBranchPlacement(options?: { mode?: string }) {
+    const mode = options?.mode;
     const { getHotkey } = useHotkeyConfig();
     const binding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
+    const painterBinding = {
+        ...binding,
+        modifier: binding.modifier ? `${binding.modifier}+shift` : 'shift',
+    };
+    const activeBinding = mode === 'supportPainter' ? painterBinding : binding;
+
     const pointerFreshSinceIdleActivationRef = useRef(false);
 
     const { isPlacementHardDisabled } = useInteractionStatus();
@@ -28,7 +35,7 @@ export function useBranchPlacement() {
 
     // Track branch placement hotkey globally
     useEffect(() => {
-        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(binding);
+        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(activeBinding);
 
         const cancelBranchMode = () => {
             pointerFreshSinceIdleActivationRef.current = false;
@@ -37,7 +44,7 @@ export function useBranchPlacement() {
         };
 
         const down = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyDown(e, binding);
+            const matches = matchesConfiguredHotkeyDown(e, activeBinding);
             if (matches) {
                 e.preventDefault();
                 pointerFreshSinceIdleActivationRef.current = false;
@@ -45,7 +52,7 @@ export function useBranchPlacement() {
             }
         };
         const up = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyUp(e, binding);
+            const matches = matchesConfiguredHotkeyUp(e, activeBinding);
             if (matches) {
                 e.preventDefault();
                 cancelBranchMode();
@@ -58,7 +65,7 @@ export function useBranchPlacement() {
 
         const pointerMove = (e: PointerEvent) => {
             const snapshot = branchPlacementStore.getSnapshot();
-            const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(e));
+            const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(activeBinding, getSupportPlacementModifierState(e));
 
             if (modifierResolvable && (snapshot.altActive || snapshot.stage === 'awaitingBase') && !bindingHeld) {
                 cancelBranchMode();
@@ -83,7 +90,7 @@ export function useBranchPlacement() {
             window.removeEventListener('blur', blur);
             window.removeEventListener('pointermove', pointerMove, true);
         };
-    }, [binding]);
+    }, [activeBinding]);
 
     // Escape to cancel
     useEffect(() => {
@@ -119,7 +126,7 @@ export function useBranchPlacement() {
         if (isPlacementHardDisabled || !hit) return;
 
         const snapshot = branchPlacementStore.getSnapshot();
-        const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(hit));
+        const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(activeBinding, getSupportPlacementModifierState(hit));
         if (!snapshot.altActive && !bindingHeld) return;
 
         if (!snapshot.altActive) {
@@ -137,7 +144,7 @@ export function useBranchPlacement() {
         branchPlacementStore.setTip(pos, normal, modelId);
 
         console.log('[BranchPlacement] Tip set at', pos, 'awaiting base click on support');
-    }, [binding, isPlacementHardDisabled]);
+    }, [activeBinding, isPlacementHardDisabled]);
 
     // These are no-ops - snapping is handled by BranchPlacementController
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);

@@ -7,15 +7,16 @@ export function useCurveHotkey(mode: string) {
     const { getHotkey } = useHotkeyConfig();
     const binding = getHotkey('SUPPORTS', 'CURVE_MODE');
     useEffect(() => {
-        // Only enable in support mode? Or globally?
-        // Presumably support mode.
-        // if (mode !== 'support') return; // Uncomment if restricted to support mode
+        if (mode !== 'support' && mode !== 'supportPainter') return;
 
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
             if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
 
-            if (e.key.toLowerCase() === binding.key.toLowerCase() && !e.repeat) {
+            const matchesKey = e.key.toLowerCase() === binding.key.toLowerCase();
+            const matchesModifier = mode === 'supportPainter' ? e.shiftKey : !e.shiftKey;
+
+            if (matchesKey && matchesModifier && !e.repeat) {
                 curveInteractionStore.setIsActive(true);
             }
         };

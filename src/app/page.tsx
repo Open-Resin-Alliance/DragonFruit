@@ -14699,9 +14699,7 @@ export default function Home() {
         ) : (scene.mode === 'support' || scene.mode === 'supportPainter') ? (
           <>
             <SupportSidebar key="support-settings" onModeChange={handleModeChange} />
-            {scene.mode === 'supportPainter' && (
-              <SupportPainterTooltipCard key="support-painter-tooltip" />
-            )}
+            <SupportPainterTooltipCard key="support-painter-tooltip" mode={scene.mode} />
           </>
         ) : scene.mode === 'printing' ? (
           <>

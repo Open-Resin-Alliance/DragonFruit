@@ -6,14 +6,17 @@ export function useJointCreationHotkey(mode: string) {
     const { getHotkey } = useHotkeyConfig();
     const binding = getHotkey('SUPPORTS', 'JOINT_CREATION');
     useEffect(() => {
-        if (mode !== 'support') return;
+        if (mode !== 'support' && mode !== 'supportPainter') return;
 
         const handleKeyDown = (e: KeyboardEvent) => {
             // Ignore if typing in an input
             const target = e.target as HTMLElement;
             if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
 
-            if (e.key.toLowerCase() === binding.key.toLowerCase() && !e.repeat) {
+            const matchesKey = e.key.toLowerCase() === binding.key.toLowerCase();
+            const matchesModifier = mode === 'supportPainter' ? e.shiftKey : !e.shiftKey;
+
+            if (matchesKey && matchesModifier && !e.repeat) {
                 jointCreationStore.setIsActive(true);
             }
         };

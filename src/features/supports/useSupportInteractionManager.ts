@@ -167,10 +167,10 @@ function getNativeEventSource(source: unknown): unknown {
 export function useSupportInteractionManager({ mode, activeModelId = null }: SupportInteractionOptions) {
   // V2 Trunk Placement
   const trunkPlacementV2 = useTrunkPlacementV2();
-  const branchPlacement = useBranchPlacement();
-  const leafPlacement = useLeafPlacement();
+  const branchPlacement = useBranchPlacement({ mode });
+  const leafPlacement = useLeafPlacement({ mode });
   const bracePlacement = useBracePlacement();
-  const kickstandPlacement = useKickstandPlacement();
+  const kickstandPlacement = useKickstandPlacement({ mode });
   const { getHotkey } = useHotkeyConfig();
 
   const altDownRef = useRef(false);
@@ -190,7 +190,23 @@ export function useSupportInteractionManager({ mode, activeModelId = null }: Sup
   const selectedJointId = globalSelectedCategory === 'joint' ? globalSelectedId : null;
 
   const resolvePlacementRouting = useCallback((source: unknown) => {
-    const bindings = resolveSupportPlacementHotkeyBindings(getHotkey);
+    let bindings = resolveSupportPlacementHotkeyBindings(getHotkey);
+    if (mode === 'supportPainter') {
+      bindings = {
+        branchFamily: {
+          ...bindings.branchFamily,
+          modifier: bindings.branchFamily.modifier ? `${bindings.branchFamily.modifier}+shift` : 'shift'
+        },
+        leaf: {
+          ...bindings.leaf,
+          modifier: bindings.leaf.modifier ? `${bindings.leaf.modifier}+shift` : 'shift'
+        },
+        kickstand: {
+          ...bindings.kickstand,
+          modifier: bindings.kickstand.modifier ? `${bindings.kickstand.modifier}+shift` : 'shift'
+        }
+      };
+    }
     return resolveSupportPlacementRouting({
       bindings,
       modifierState: getSupportPlacementModifierState(source),
@@ -204,7 +220,7 @@ export function useSupportInteractionManager({ mode, activeModelId = null }: Sup
         kickstandHotkeyActive: kickstandPlacement.hotkeyActive,
       },
     });
-  }, [getHotkey, branchPlacement.altActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, bracePlacement.altActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
+  }, [mode, getHotkey, branchPlacement.altActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, bracePlacement.altActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
 
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
