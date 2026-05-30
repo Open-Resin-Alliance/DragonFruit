@@ -68,7 +68,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
-import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
+import { computeProjectedFootprintHull, computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
@@ -385,7 +385,6 @@ function installReactDevtoolsSemverGuard() {
 if (typeof window !== 'undefined') {
   initializeBVH();
   installReactDevtoolsSemverGuard();
-  console.log('[App] BVH acceleration initialized');
 }
 
 type ExportThumbnailRenderOptions = {
@@ -11268,6 +11267,94 @@ export default function Home() {
     };
   }, [getArrangeTransform, supportBoundsByModelId]);
 
+  const getModelSupportAwareFootprintPolygon = React.useCallback((
+    model: (typeof scene.models)[number],
+    rotationZOverride?: number,
+    transformOverride?: (typeof scene.models)[number]['transform'],
+  ) => {
+    const t = transformOverride ?? getArrangeTransform(model);
+    const effectiveTransform = {
+      position: t.position.clone(),
+      rotation: new THREE.Euler(
+        t.rotation.x,
+        t.rotation.y,
+        rotationZOverride ?? t.rotation.z,
+        t.rotation.order,
+      ),
+      scale: t.scale.clone(),
+    };
+
+    const points = computeProjectedFootprintHull(
+      model.geometry,
+      effectiveTransform.rotation,
+      effectiveTransform.scale,
+    ).map((point) => new THREE.Vector2(
+      point.x + effectiveTransform.position.x,
+      point.y + effectiveTransform.position.y,
+    ));
+
+    const supportBoundsBase = supportBoundsByModelId.get(model.id);
+    if (supportBoundsBase && !supportBoundsBase.isEmpty()) {
+      const sourceMatrix = new THREE.Matrix4().compose(
+        model.transform.position,
+        new THREE.Quaternion().setFromEuler(model.transform.rotation),
+        model.transform.scale,
+      );
+      const targetMatrix = new THREE.Matrix4().compose(
+        effectiveTransform.position,
+        new THREE.Quaternion().setFromEuler(effectiveTransform.rotation),
+        effectiveTransform.scale,
+      );
+      const delta = new THREE.Matrix4().multiplyMatrices(targetMatrix, sourceMatrix.clone().invert());
+      const transformedSupportBounds = supportBoundsBase.clone().applyMatrix4(delta);
+      points.push(
+        new THREE.Vector2(transformedSupportBounds.min.x, transformedSupportBounds.min.y),
+        new THREE.Vector2(transformedSupportBounds.max.x, transformedSupportBounds.min.y),
+        new THREE.Vector2(transformedSupportBounds.max.x, transformedSupportBounds.max.y),
+        new THREE.Vector2(transformedSupportBounds.min.x, transformedSupportBounds.max.y),
+      );
+    }
+
+    if (points.length < 3) {
+      const dims = getModelSupportAwareDimensionsMm(model, rotationZOverride, transformOverride);
+      return [
+        new THREE.Vector2(effectiveTransform.position.x - dims.width * 0.5, effectiveTransform.position.y - dims.depth * 0.5),
+        new THREE.Vector2(effectiveTransform.position.x + dims.width * 0.5, effectiveTransform.position.y - dims.depth * 0.5),
+        new THREE.Vector2(effectiveTransform.position.x + dims.width * 0.5, effectiveTransform.position.y + dims.depth * 0.5),
+        new THREE.Vector2(effectiveTransform.position.x - dims.width * 0.5, effectiveTransform.position.y + dims.depth * 0.5),
+      ];
+    }
+
+    const sorted = points
+      .map((point) => point.clone())
+      .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+    const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) =>
+      (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower: THREE.Vector2[] = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+        lower.pop();
+      }
+      lower.push(point);
+    }
+    const upper: THREE.Vector2[] = [];
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      const point = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+        upper.pop();
+      }
+      upper.push(point);
+    }
+    upper.pop();
+    lower.pop();
+    return lower.concat(upper);
+  }, [getArrangeTransform, getModelSupportAwareDimensionsMm, supportBoundsByModelId]);
+
+  const getModelSupportAwareFootprintPolygonRef = React.useRef(getModelSupportAwareFootprintPolygon);
+  React.useEffect(() => {
+    getModelSupportAwareFootprintPolygonRef.current = getModelSupportAwareFootprintPolygon;
+  }, [getModelSupportAwareFootprintPolygon]);
+
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
   }), []);
@@ -12669,7 +12756,6 @@ export default function Home() {
     transformMgr.setIsTransforming(false);
 
     if (operation === 'rotate') {
-      console.log('[Rotation] Clearing scan data - rotation invalidates island detection');
       islands.clearScanData();
       applyPostRotateLift();
     } else {
@@ -12848,24 +12934,6 @@ export default function Home() {
           scale: entry.after.scale.clone(),
         },
       }));
-
-    const formatVec3 = (v: THREE.Vector3) => `(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`;
-    console.groupCollapsed(`[MultiGizmo][Page] ${payload.operation} commit`);
-    console.log('selected models:', payload.entries.map((entry) => entry.modelId));
-    console.log('model positions:', payload.entries.map((entry) => ({
-      modelId: entry.modelId,
-      position: formatVec3(entry.before.position),
-    })));
-    const draggedEntry = payload.entries.find((entry) => entry.modelId === scene.activeModelId) ?? payload.entries[0] ?? null;
-    console.log('model dragged to:', draggedEntry ? {
-      modelId: draggedEntry.modelId,
-      position: formatVec3(draggedEntry.after.position),
-    } : null);
-    console.log('model updated position:', updates.map((entry) => ({
-      modelId: entry.id,
-      position: formatVec3(entry.transform.position),
-    })));
-    console.groupEnd();
 
     if (updates.length === 0) {
       beginSupportDragSyncTransaction([], {
@@ -13306,30 +13374,37 @@ export default function Home() {
       const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
       const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
 
-      type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
-
-      // Use a tiny tolerance to allow touching (not overlapping) rects when spacing = 0
-      const COLLISION_TOLERANCE = 0.01;
-      const intersectsRect = (a: Rect2D, b: Rect2D) => {
-        return !(a.maxX <= b.minX + COLLISION_TOLERANCE || a.minX + COLLISION_TOLERANCE >= b.maxX || 
-                 a.maxY <= b.minY + COLLISION_TOLERANCE || a.minY + COLLISION_TOLERANCE >= b.maxY);
+      const projectPolygon = (poly: THREE.Vector2[], axis: THREE.Vector2) => {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const point of poly) {
+          const projected = point.dot(axis);
+          min = Math.min(min, projected);
+          max = Math.max(max, projected);
+        }
+        return { min, max };
       };
 
-      const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-        const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
-        const mW = dims.width;
-        const mD = dims.depth;
-        return {
-          minX: m.transform.position.x - (mW * 0.5),
-          maxX: m.transform.position.x + (mW * 0.5),
-          minY: m.transform.position.y - (mD * 0.5),
-          maxY: m.transform.position.y + (mD * 0.5),
+      const polygonsOverlap = (a: THREE.Vector2[], b: THREE.Vector2[]) => {
+        const testAxes = (poly: THREE.Vector2[]) => {
+          for (let i = 0; i < poly.length; i += 1) {
+            const p0 = poly[i];
+            const p1 = poly[(i + 1) % poly.length];
+            const edge = new THREE.Vector2(p1.x - p0.x, p1.y - p0.y);
+            if (edge.lengthSq() <= 1e-10) continue;
+            const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
+            const pa = projectPolygon(a, axis);
+            const pb = projectPolygon(b, axis);
+            if (pa.max <= pb.min + spacing || pb.max <= pa.min + spacing) return false;
+          }
+          return true;
         };
+        return testAxes(a) && testAxes(b);
       };
 
-      const blockedRects = scene.models
+      const blockedPolygons = scene.models
         .filter((m) => m.visible && m.id !== model.id)
-        .map(modelToRect);
+        .map((m) => getModelSupportAwareFootprintPolygonRef.current(m, undefined, m.transform));
 
       const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
       for (let row = 0; row < maxRows; row += 1) {
@@ -13348,19 +13423,19 @@ export default function Home() {
       for (const candidate of candidateCenters) {
         if (chosenCenters.length >= totalCount) break;
 
-        const rect: Rect2D = {
-          minX: candidate.x - (width * 0.5),
-          maxX: candidate.x + (width * 0.5),
-          minY: candidate.y - (depth * 0.5),
-          maxY: candidate.y + (depth * 0.5),
+        const candidateTransform = {
+          position: new THREE.Vector3(candidate.x, candidate.y, model.transform.position.z),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
         };
+        const candidatePolygon = getModelSupportAwareFootprintPolygonRef.current(model, undefined, candidateTransform);
 
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+        if (blockedPolygons.some((blocked) => polygonsOverlap(candidatePolygon, blocked))) {
           continue;
         }
 
         chosenCenters.push({ x: candidate.x, y: candidate.y });
-        blockedRects.push(rect);
+        blockedPolygons.push(candidatePolygon);
       }
 
       for (const center of chosenCenters) {
@@ -13687,30 +13762,37 @@ export default function Home() {
     const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
     const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
 
-    type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
-
-    // Use a tiny tolerance to allow touching (not overlapping) rects when spacing = 0
-    const COLLISION_TOLERANCE = 0.01;
-    const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX <= b.minX + COLLISION_TOLERANCE || a.minX + COLLISION_TOLERANCE >= b.maxX || 
-               a.maxY <= b.minY + COLLISION_TOLERANCE || a.minY + COLLISION_TOLERANCE >= b.maxY);
+    const projectPolygon = (poly: THREE.Vector2[], axis: THREE.Vector2) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const point of poly) {
+        const projected = point.dot(axis);
+        min = Math.min(min, projected);
+        max = Math.max(max, projected);
+      }
+      return { min, max };
     };
 
-    const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-      const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
-      const mW = dims.width;
-      const mD = dims.depth;
-      return {
-        minX: m.transform.position.x - (mW * 0.5),
-        maxX: m.transform.position.x + (mW * 0.5),
-        minY: m.transform.position.y - (mD * 0.5),
-        maxY: m.transform.position.y + (mD * 0.5),
+    const polygonsOverlap = (a: THREE.Vector2[], b: THREE.Vector2[]) => {
+      const testAxes = (poly: THREE.Vector2[]) => {
+        for (let i = 0; i < poly.length; i += 1) {
+          const p0 = poly[i];
+          const p1 = poly[(i + 1) % poly.length];
+          const edge = new THREE.Vector2(p1.x - p0.x, p1.y - p0.y);
+          if (edge.lengthSq() <= 1e-10) continue;
+          const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
+          const pa = projectPolygon(a, axis);
+          const pb = projectPolygon(b, axis);
+          if (pa.max <= pb.min + spacing || pb.max <= pa.min + spacing) return false;
+        }
+        return true;
       };
+      return testAxes(a) && testAxes(b);
     };
 
-    const blockedRects = scene.models
+    const blockedPolygons = scene.models
       .filter((m) => m.visible && m.id !== model.id)
-      .map(modelToRect);
+      .map((m) => getModelSupportAwareFootprintPolygonRef.current(m, undefined, m.transform));
 
     const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
     for (let row = 0; row < maxRows; row += 1) {
@@ -13726,18 +13808,18 @@ export default function Home() {
 
     let capacity = 0;
     for (const candidate of candidateCenters) {
-      const rect: Rect2D = {
-        minX: candidate.x - (width * 0.5),
-        maxX: candidate.x + (width * 0.5),
-        minY: candidate.y - (depth * 0.5),
-        maxY: candidate.y + (depth * 0.5),
+      const candidateTransform = {
+        position: new THREE.Vector3(candidate.x, candidate.y, model.transform.position.z),
+        rotation: model.transform.rotation.clone(),
+        scale: model.transform.scale.clone(),
       };
+      const candidatePolygon = getModelSupportAwareFootprintPolygonRef.current(model, undefined, candidateTransform);
 
-      if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+      if (blockedPolygons.some((blocked) => polygonsOverlap(candidatePolygon, blocked))) {
         continue;
       }
 
-      blockedRects.push(rect);
+      blockedPolygons.push(candidatePolygon);
       capacity += 1;
     }
 
@@ -13830,11 +13912,8 @@ export default function Home() {
     const { modelId, flips, previewTransform, initialGeometry } = session;
     const anyFlip = flips.x || flips.y || flips.z;
 
-    console.log('[Mirror] finalizeMirrorSession:', { modelId, flips, anyFlip });
-
     if (!anyFlip) {
       // Net-zero session (e.g. user clicked X twice). Nothing to commit.
-      console.log('[Mirror] No flips to commit, returning');
       return;
     }
 
@@ -13845,9 +13924,7 @@ export default function Home() {
       console.error('[Mirror] bakeWithFlips threw during finalize, preserving live mirrored state:', error);
       return;
     }
-    console.log('[Mirror] bakeWithFlips result:', { baked, isValid: !!baked });
     if (!baked) {
-      console.log('[Mirror] bakeWithFlips returned null, aborting');
       return;
     }
 
@@ -13884,11 +13961,9 @@ export default function Home() {
     // direct state and the final batched React state has both the correct geometry
     // AND the correct transform.
     const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
-    console.log('[Mirror] Replacing geometry with axes:', axes);
     scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
       includeSupportState: !flips.z,
     });
-    console.log('[Mirror] Applying finalized mirrored transform');
     scene.setModelTransformRaw(modelId, {
       position: finalizedTransform.position.clone(),
       rotation: finalizedTransform.rotation.clone(),
@@ -14071,9 +14146,7 @@ export default function Home() {
   React.useEffect(() => {
     const wasActive = mirrorPrevToolActiveRef.current;
     mirrorPrevToolActiveRef.current = mirrorToolActive;
-    console.log('[Mirror] useEffect check - wasActive:', wasActive, 'mirrorToolActive:', mirrorToolActive);
     if (wasActive && !mirrorToolActive) {
-      console.log('[Mirror] Calling flushPendingBake from useEffect');
       flushPendingBake();
     }
   }, [mirrorToolActive, flushPendingBake]);
@@ -14084,11 +14157,8 @@ export default function Home() {
     const model = scene.models.find((m) => m.id === modelId);
     if (!model) return;
 
-    console.log('[Mirror] handleMirror called, axis:', axis, 'modelId:', modelId);
-
     if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
       // Finalize any prior session that was for a different model first.
-      console.log('[Mirror] Creating new session');
       if (mirrorSessionRef.current) flushPendingBake();
       mirrorSessionRef.current = {
         modelId,
@@ -14112,7 +14182,6 @@ export default function Home() {
 
     const performMirror = () => {
       session.flips[axis] = !session.flips[axis];
-      console.log('[Mirror] performMirror axis:', axis, 'flips now:', session.flips);
 
       // Reflect the model's transform across the world-space axis through the
       // model's world bbox center. This produces a true world-space mirror

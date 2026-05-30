@@ -10,7 +10,7 @@ import { computeFootprint } from '../geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '../geometry/computeRaftOuterBoundary';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { computeProjectedFootprintHull } from '@/utils/modelFootprint';
 
 interface FootprintBorderRendererProps {
   modelGeometry: GeometryWithBounds | null;
@@ -18,6 +18,18 @@ interface FootprintBorderRendererProps {
   modelId?: string | null;
   color?: string;
 }
+
+const FOOTPRINT_BORDER_Z = 0.001;
+const FOOTPRINT_BORDER_MARGIN_MAX_MM = 0.05;
+const FOOTPRINT_BORDER_OUTLINE_PADDING_MM = 0.1;
+const FOOTPRINT_SILHOUETTE_CACHE_MAX_ENTRIES = 32;
+
+const sharedFootprintSilhouetteCache = new Map<string, THREE.Vector2[]>();
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
 
 /**
  * Convex hull using monotonic chain algorithm
@@ -96,10 +108,82 @@ function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE
   return result;
 }
 
+function transformKeyPart(value: number | undefined): string {
+  return Number.isFinite(value) ? (value as number).toFixed(5) : '0';
+}
+
+function makeFootprintSilhouetteCacheKey(
+  modelGeometry: GeometryWithBounds,
+  modelTransform: ModelTransform,
+): string {
+  return [
+    modelGeometry.geometry.uuid,
+    transformKeyPart(modelTransform.rotation.x),
+    transformKeyPart(modelTransform.rotation.y),
+    transformKeyPart(modelTransform.rotation.z),
+    transformKeyPart(modelTransform.scale.x),
+    transformKeyPart(modelTransform.scale.y),
+    transformKeyPart(modelTransform.scale.z),
+  ].join('|');
+}
+
+function cloneFootprint(points: THREE.Vector2[]): THREE.Vector2[] {
+  return points.map((point) => point.clone());
+}
+
+function rememberFootprintSilhouette(cacheKey: string, hull: THREE.Vector2[]): THREE.Vector2[] {
+  const cachedHull = cloneFootprint(hull);
+  sharedFootprintSilhouetteCache.set(cacheKey, cachedHull);
+
+  while (sharedFootprintSilhouetteCache.size > FOOTPRINT_SILHOUETTE_CACHE_MAX_ENTRIES) {
+    const oldestKey = sharedFootprintSilhouetteCache.keys().next().value;
+    if (!oldestKey) break;
+    sharedFootprintSilhouetteCache.delete(oldestKey);
+  }
+
+  return cloneFootprint(cachedHull);
+}
+
+function getCachedFootprintSilhouette(cacheKey: string): THREE.Vector2[] | null {
+  const cached = sharedFootprintSilhouetteCache.get(cacheKey);
+  if (!cached) return null;
+
+  // Refresh insertion order for simple LRU behavior.
+  sharedFootprintSilhouetteCache.delete(cacheKey);
+  sharedFootprintSilhouetteCache.set(cacheKey, cached);
+  return cloneFootprint(cached);
+}
+
+function computeLocalModelFootprintHull(
+  modelGeometry: GeometryWithBounds,
+  modelTransform: ModelTransform,
+): THREE.Vector2[] {
+  return computeProjectedFootprintHull(
+    modelGeometry,
+    modelTransform.rotation,
+    modelTransform.scale,
+  );
+}
+
+function getOrComputeLocalModelFootprintHull(
+  modelGeometry: GeometryWithBounds,
+  modelTransform: ModelTransform,
+  cacheKey: string,
+): THREE.Vector2[] {
+  const cached = getCachedFootprintSilhouette(cacheKey);
+  if (cached) return cached;
+
+  return rememberFootprintSilhouette(
+    cacheKey,
+    computeLocalModelFootprintHull(modelGeometry, modelTransform),
+  );
+}
+
 /**
  * FootprintBorderRenderer
  * - Renders a blue line border showing combined model + raft footprint with margin
- * - Uses BVH-accelerated raycasting for accurate model footprint ("100 little lights" approach)
+ * - Uses bounded silhouette candidates from the model's transformed XY projection
+ *   so the outline tracks wide overhangs without loading-time vertex-cloud churn.
  */
 export default function FootprintBorderRenderer({
   modelGeometry,
@@ -107,17 +191,12 @@ export default function FootprintBorderRenderer({
   modelId = null,
   color = '#3b82f6',
 }: FootprintBorderRendererProps) {
-  const FOOTPRINT_BORDER_Z = 0.001;
-  const FOOTPRINT_BORDER_MARGIN_MAX_MM = 0.05;
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const [localModelFootprintHull, setLocalModelFootprintHull] = React.useState<THREE.Vector2[]>([]);
+  const hullCacheKeyRef = React.useRef<string | null>(null);
 
-  const borderLine = React.useMemo(() => {
-    if (raft.bottomMode === 'off' || !raft.showFootprintBorder) return null;
-
-    const allPoints: THREE.Vector2[] = [];
-
-    // 1. Add raft outer boundary points
+  const supportFootprintPoints = React.useMemo(() => {
     const circles: SupportBaseCircle[] = [
       ...Object.values(supportState.roots)
         .filter((root) => !modelId || root.modelId === modelId)
@@ -135,105 +214,98 @@ export default function FootprintBorderRenderer({
         })),
     ];
 
-    if (circles.length > 0) {
-      const baseProfile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
-      if (baseProfile && baseProfile.length >= 3) {
-        const raftOuterBoundary = computeRaftOuterBoundary(baseProfile, raft);
-        if (raftOuterBoundary && raftOuterBoundary.length >= 3) {
-          allPoints.push(...raftOuterBoundary);
-        }
-      }
+    if (circles.length === 0) return [];
+
+    const baseProfile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
+    if (!baseProfile || baseProfile.length < 3) return [];
+
+    const raftOuterBoundary = computeRaftOuterBoundary(baseProfile, raft);
+    return raftOuterBoundary && raftOuterBoundary.length >= 3 ? raftOuterBoundary : [];
+  }, [modelId, raft, supportState.anchors, supportState.roots]);
+
+  React.useEffect(() => {
+    if (!modelGeometry || !modelTransform) {
+      hullCacheKeyRef.current = null;
+      setLocalModelFootprintHull([]);
+      return;
     }
 
-    // 2. Add model footprint using raycasting
-    if (modelGeometry && modelTransform) {
+    const cacheKey = makeFootprintSilhouetteCacheKey(modelGeometry, modelTransform);
+    hullCacheKeyRef.current = cacheKey;
 
-      // Build transform matrix
-      const bbox = modelGeometry.geometry.boundingBox ??
-        new THREE.Box3().setFromBufferAttribute(
-          modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute
-        );
-      const center = bbox.getCenter(new THREE.Vector3());
+    const cachedHull = getCachedFootprintSilhouette(cacheKey);
+    if (cachedHull) {
+      setLocalModelFootprintHull(cachedHull);
+      return;
+    }
 
-      const transformMatrix = new THREE.Matrix4();
-      transformMatrix.compose(
-        modelTransform.position,
-        quaternionFromGlobalEuler(modelTransform.rotation),
-        modelTransform.scale
-      );
-      const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-      transformMatrix.multiply(offsetMatrix);
+    setLocalModelFootprintHull([]);
 
-      // Compute world-space bounds
-      const corners = [
-        new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.min.z),
-        new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.max.z),
-        new THREE.Vector3(bbox.min.x, bbox.max.y, bbox.min.z),
-        new THREE.Vector3(bbox.min.x, bbox.max.y, bbox.max.z),
-        new THREE.Vector3(bbox.max.x, bbox.min.y, bbox.min.z),
-        new THREE.Vector3(bbox.max.x, bbox.min.y, bbox.max.z),
-        new THREE.Vector3(bbox.max.x, bbox.max.y, bbox.min.z),
-        new THREE.Vector3(bbox.max.x, bbox.max.y, bbox.max.z),
-      ];
+    let cancelled = false;
+    const idleWindow = typeof window !== 'undefined' ? window as IdleWindow : null;
+    const run = () => {
+      if (cancelled) return;
+      const nextHull = getOrComputeLocalModelFootprintHull(modelGeometry, modelTransform, cacheKey);
+      if (!cancelled && hullCacheKeyRef.current === cacheKey) setLocalModelFootprintHull(nextHull);
+    };
 
-      let minX = Infinity, maxX = -Infinity;
-      let minY = Infinity, maxY = -Infinity;
-      let maxZ = -Infinity;
+    let cancelSchedule: () => void;
+    if (idleWindow?.requestIdleCallback) {
+      const delayHandle = window.setTimeout(() => {
+        if (cancelled) return;
+        const handle = idleWindow.requestIdleCallback(run);
+        cancelSchedule = () => idleWindow.cancelIdleCallback?.(handle);
+      }, 1400);
+      cancelSchedule = () => window.clearTimeout(delayHandle);
+    } else if (typeof window !== 'undefined') {
+      const handle = window.setTimeout(run, 1400);
+      cancelSchedule = () => window.clearTimeout(handle);
+    } else {
+      run();
+      cancelSchedule = () => {};
+    }
 
-      for (const corner of corners) {
-        corner.applyMatrix4(transformMatrix);
-        minX = Math.min(minX, corner.x);
-        maxX = Math.max(maxX, corner.x);
-        minY = Math.min(minY, corner.y);
-        maxY = Math.max(maxY, corner.y);
-        maxZ = Math.max(maxZ, corner.z);
-      }
+    return () => {
+      cancelled = true;
+      cancelSchedule();
+    };
+  }, [
+    modelGeometry,
+    modelTransform?.rotation.x,
+    modelTransform?.rotation.y,
+    modelTransform?.rotation.z,
+    modelTransform?.scale.x,
+    modelTransform?.scale.y,
+    modelTransform?.scale.z,
+  ]);
 
-      // @ts-ignore - BVH is added by three-mesh-bvh
-      const bvh = modelGeometry.geometry.boundsTree;
+  const modelFootprintHull = React.useMemo(() => {
+    if (!modelTransform || localModelFootprintHull.length < 3) return [];
+    const offsetX = modelTransform.position.x;
+    const offsetY = modelTransform.position.y;
+    return localModelFootprintHull.map((point) => new THREE.Vector2(
+      point.x + offsetX,
+      point.y + offsetY,
+    ));
+  }, [
+    localModelFootprintHull,
+    modelTransform?.position.x,
+    modelTransform?.position.y,
+  ]);
 
-      if (bvh) {
-        // RAYCAST APPROACH: Cast rays from above in a grid
-        const GRID_SIZE = 50; // 50x50 = 2,500 rays (increased for better accuracy)
-        const stepX = (maxX - minX) / GRID_SIZE;
-        const stepY = (maxY - minY) / GRID_SIZE;
+  const borderLine = React.useMemo(() => {
+    if (raft.bottomMode === 'off' || !raft.showFootprintBorder) return null;
 
-        const raycaster = new THREE.Raycaster();
-        const rayOrigin = new THREE.Vector3();
-        const rayDir = new THREE.Vector3(0, 0, -1);
-        const inverseMatrix = transformMatrix.clone().invert();
+    const allPoints: THREE.Vector2[] = [];
 
-        for (let i = 0; i <= GRID_SIZE; i++) {
-          for (let j = 0; j <= GRID_SIZE; j++) {
-            const worldX = minX + i * stepX;
-            const worldY = minY + j * stepY;
+    // 1. Add raft outer boundary points
+    if (supportFootprintPoints.length >= 3) {
+      allPoints.push(...supportFootprintPoints);
+    }
 
-            // Set up ray in world space
-            rayOrigin.set(worldX, worldY, maxZ + 10);
-            raycaster.ray.origin.copy(rayOrigin);
-            raycaster.ray.direction.copy(rayDir);
-
-            // Transform to local space for BVH query
-            raycaster.ray.applyMatrix4(inverseMatrix);
-
-            // Cast ray
-            // @ts-ignore
-            const hit = bvh.raycastFirst(raycaster.ray, THREE.DoubleSide);
-
-            if (hit) {
-              // Transform hit back to world space
-              const worldHit = hit.point.clone().applyMatrix4(transformMatrix);
-              allPoints.push(new THREE.Vector2(worldHit.x, worldHit.y));
-            }
-          }
-        }
-      } else {
-        // FALLBACK: Use bbox corners if no BVH
-        for (const corner of corners) {
-          allPoints.push(new THREE.Vector2(corner.x, corner.y));
-        }
-      }
-
+    // 2. Add cached model XY silhouette.
+    if (modelFootprintHull.length >= 3) {
+      allPoints.push(...modelFootprintHull);
     }
 
     if (allPoints.length < 3) return null;
@@ -244,7 +316,10 @@ export default function FootprintBorderRenderer({
 
     // 4. Add margin
     const margin = Math.min(FOOTPRINT_BORDER_MARGIN_MAX_MM, Math.max(0, raft.footprintBorderMargin || 0));
-    const borderProfile = offsetPolygonOutward(combinedHull, margin);
+    const borderProfile = offsetPolygonOutward(
+      combinedHull,
+      FOOTPRINT_BORDER_OUTLINE_PADDING_MM + margin
+    );
     if (!borderProfile || borderProfile.length < 3) return null;
 
     // 5. Create line geometry
@@ -255,11 +330,17 @@ export default function FootprintBorderRenderer({
     points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, FOOTPRINT_BORDER_Z));
 
     return new THREE.BufferGeometry().setFromPoints(points);
-  }, [FOOTPRINT_BORDER_MARGIN_MAX_MM, FOOTPRINT_BORDER_Z, modelGeometry, modelId, modelTransform, supportState, raft]);
+  }, [
+    modelFootprintHull,
+    raft,
+    supportFootprintPoints,
+  ]);
 
-  if (raft.bottomMode === 'off' || !raft.showFootprintBorder || !borderLine) {
-    return null;
-  }
+  React.useEffect(() => {
+    return () => {
+      borderLine?.dispose();
+    };
+  }, [borderLine]);
 
   const borderObject = React.useMemo(() => {
     if (!borderLine) return null;
@@ -276,10 +357,22 @@ export default function FootprintBorderRenderer({
       ...(line.userData ?? {}),
       thumbnailHelperType: 'footprintBorder',
     };
+    line.frustumCulled = false;
     return line;
   }, [borderLine, color]);
 
-  if (!borderObject) {
+  React.useEffect(() => {
+    return () => {
+      const material = borderObject?.material;
+      if (Array.isArray(material)) {
+        material.forEach((item) => item.dispose());
+      } else {
+        material?.dispose();
+      }
+    };
+  }, [borderObject]);
+
+  if (raft.bottomMode === 'off' || !raft.showFootprintBorder || !borderObject) {
     return null;
   }
 

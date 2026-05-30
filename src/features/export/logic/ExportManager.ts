@@ -859,8 +859,6 @@ export class ExportManager {
     sceneContext?: ExportSceneContext,
     saveTarget?: ExportSceneSaveTarget,
   ): Promise<string | null> {
-    console.log('[ExportManager] Starting export...', options);
-
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
 
