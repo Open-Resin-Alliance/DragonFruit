@@ -115,6 +115,7 @@ const presets: Record<BrushType, Partial<CustomBrushTemplate['selection']>> = {
     pointPathWidthMm: 0.2,
     pointPathMode: 'line',
   },
+  MinimaIslands: {},
 };
 
 const DEFAULT_TEMPLATE: CustomBrushTemplate = {

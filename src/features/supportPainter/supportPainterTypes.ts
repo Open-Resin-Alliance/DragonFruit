@@ -1,6 +1,6 @@
 // ─── Brush Identity ─────────────────────────────────────────────────────────
 
-export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'CylinderMinima' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath';
+export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'CylinderMinima' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands';
 
 // ─── Custom Support Operations & Pipeline Typings ───────────────────────────
 
@@ -93,6 +93,7 @@ export const BRUSH_COLORS: Record<BrushType, string> = {
   ManualSquare:   '#F59E0B',   // amber/gold
   Marker:         '#E11D48',   // premium rose/red
   PointPath:      '#10B981',   // emerald/mint green
+  MinimaIslands:  '#7ED321',   // bright neon green of Point Geodesic
 };
 
 // ─── Interaction Phase State Machine ────────────────────────────────────────

@@ -91,6 +91,11 @@ const BRUSH_DETAILS: Record<
     desc: 'Select points to draw paths or closed loops',
     icon: GitCommit,
   },
+  MinimaIslands: {
+    label: 'Minima Islands',
+    desc: 'Auto-detected local vertical minima islands',
+    icon: WandSparkles,
+  },
 };
 
 function getSupportTips(supportState: any, activeModelId: string): THREE.Vector3[] {
@@ -782,7 +787,7 @@ export function SupportPainterPanel({
             </span>
             <div className="grid grid-cols-2 gap-1.5">
               {(Object.keys(BRUSH_DETAILS) as BrushType[])
-                .filter((brush) => brush !== 'ManualCircle' && brush !== 'ManualSquare')
+                .filter((brush) => brush !== 'ManualCircle' && brush !== 'ManualSquare' && brush !== 'MinimaIslands')
                 .map((brush) => {
                 const isSelected = state.activeBrush === brush && state.activeCustomBrushId === null;
                 const details = BRUSH_DETAILS[brush];

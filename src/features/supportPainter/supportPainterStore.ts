@@ -1046,10 +1046,10 @@ export const supportPainterStore = {
     const regionId = `auto-minima-${Date.now()}`;
     const newRegion: ROIRegion = {
       id: regionId,
-      brushType: 'ManualCircle',
+      brushType: 'MinimaIslands',
       seedTriangleId: primarySeed,
       triangleIds: mergedTriangles,
-      color: '#06B6D4', // Cyan color
+      color: BRUSH_COLORS.MinimaIslands,
       proposedOnly: false,
       createdAt: Date.now(),
     };
