@@ -1032,7 +1032,8 @@ if (uDitherAmount > 0.0) {
               } else if (isActiveModel) {
                 const faceIndex = e.faceIndex;
                 if (typeof faceIndex === 'number') {
-                  supportPainterStore.setHoveredTriangle(faceIndex);
+                  const clickPoint = e.point.clone();
+                  supportPainterStore.setHoveredTriangle(faceIndex, [clickPoint.x, clickPoint.y, clickPoint.z]);
 
                    // Continuous drag painting/erasing when click-and-dragging
                   const snap = supportPainterStore.getSnapshot();
@@ -1188,7 +1189,7 @@ if (uDitherAmount > 0.0) {
                 if (snap.pointPathMode === 'polygon' && snap.pointPathPoints.length >= 3) {
                   const firstPos = new THREE.Vector3(...snap.pointPathPoints[0].point);
                   const distToFirst = clickPoint.distanceTo(firstPos);
-                  if (distToFirst < 4.0) {
+                  if (distToFirst < 0.3) {
                     supportPainterStore.setPointPathClosed(true);
                     const map = supportPainterStore.getClientAdjacencyMap();
                     if (map) {

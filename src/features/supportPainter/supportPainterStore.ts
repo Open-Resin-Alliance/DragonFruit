@@ -31,6 +31,7 @@ const regionsByModel = new Map<string, Map<string, ROIRegion>>();
 let activeModelId: string | null = null;
 let triangleColorMap: TriangleColorMap = new Map();
 let hoveredTriangleId: number | null = null;
+let hoveredWorldPoint: [number, number, number] | null = null;
 let proposedTriangleIds = new Set<number>();
 let directGenEnabled = false;
 let selectedRegionId: string | null = null;
@@ -126,6 +127,7 @@ let storeSnapshot: SupportPainterState = {
   scannedMinima: [],
   triangleColorMap,
   hoveredTriangleId,
+  hoveredWorldPoint,
   proposedTriangleIds,
   directGenEnabled,
   perimeterSpacingOverride,
@@ -168,6 +170,7 @@ function updateSnapshot() {
     scannedMinima: [...scannedMinima],
     triangleColorMap: new Map(triangleColorMap),
     hoveredTriangleId,
+    hoveredWorldPoint,
     proposedTriangleIds: new Set(proposedTriangleIds),
     directGenEnabled,
     perimeterSpacingOverride,
@@ -297,16 +300,30 @@ export const supportPainterStore = {
     }
   },
 
-  setHoveredTriangle(id: number | null) {
-    if (hoveredTriangleId === id) return;
-    hoveredTriangleId = id;
-    proposedTriangleIds.clear();
-    if (id !== null) {
-      proposedTriangleIds.add(id);
+  setHoveredTriangle(id: number | null, worldPoint?: [number, number, number] | null) {
+    let changed = false;
+    if (hoveredTriangleId !== id) {
+      hoveredTriangleId = id;
+      changed = true;
     }
-    triangleColorMap = _recomputeTriangleColorMap();
-    updateSnapshot();
-    notify();
+    if (!hoveredWorldPoint && !worldPoint) {
+      // do nothing
+    } else if (!hoveredWorldPoint || !worldPoint || hoveredWorldPoint[0] !== worldPoint[0] || hoveredWorldPoint[1] !== worldPoint[1] || hoveredWorldPoint[2] !== worldPoint[2]) {
+      hoveredWorldPoint = worldPoint || null;
+      changed = true;
+    }
+    
+    if (changed) {
+      if (activeBrush !== 'PointPath') {
+        proposedTriangleIds.clear();
+        if (id !== null) {
+          proposedTriangleIds.add(id);
+        }
+      }
+      triangleColorMap = _recomputeTriangleColorMap();
+      updateSnapshot();
+      notify();
+    }
   },
 
   setProposedTriangleIds(ids: number[] | Set<number>) {

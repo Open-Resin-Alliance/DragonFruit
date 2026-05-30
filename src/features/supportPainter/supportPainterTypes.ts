@@ -192,6 +192,7 @@ export interface SupportPainterState {
 
   // Transient hover state — NOT committed to `regions` and NOT persisted.
   hoveredTriangleId:      number | null;
+  hoveredWorldPoint:      [number, number, number] | null;
   proposedTriangleIds:    Set<number>;  // preview highlight before user commits
 
   directGenEnabled:       boolean; // Action B: Direct Click-to-Generate toggle

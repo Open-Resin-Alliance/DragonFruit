@@ -869,6 +869,20 @@ function walkMarkerShape(
   return proposed.filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
 }
 
+function insertSorted(queue: { cost: number; face: number }[], item: { cost: number; face: number }) {
+  let low = 0;
+  let high = queue.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (queue[mid].cost < item.cost) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  queue.splice(low, 0, item);
+}
+
 export function findDijkstraFacePath(
   map: ClientAdjacencyMap,
   startFace: number,
@@ -890,7 +904,6 @@ export function findDijkstraFacePath(
   queue.push({ cost: 0, face: startFace });
 
   while (queue.length > 0) {
-    queue.sort((a, b) => a.cost - b.cost);
     const { cost, face } = queue.shift()!;
 
     if (face === endFace) break;
@@ -910,7 +923,7 @@ export function findDijkstraFacePath(
       if (nextCost < adjBest) {
         dists.set(adj, nextCost);
         prev.set(adj, face);
-        queue.push({ cost: nextCost, face: adj });
+        insertSorted(queue, { cost: nextCost, face: adj });
       }
     }
   }
@@ -961,11 +974,10 @@ export function walkPointPathLine(
 
   for (const face of skeleton) {
     dists.set(face, 0);
-    queue.push({ cost: 0, face });
+    insertSorted(queue, { cost: 0, face });
   }
 
   while (queue.length > 0) {
-    queue.sort((a, b) => a.cost - b.cost);
     const { cost, face } = queue.shift()!;
 
     if (cost > radiusMm) continue;
@@ -984,7 +996,7 @@ export function walkPointPathLine(
       const currentBest = dists.get(adj) ?? Infinity;
       if (nextCost < currentBest && nextCost <= radiusMm) {
         dists.set(adj, nextCost);
-        queue.push({ cost: nextCost, face: adj });
+        insertSorted(queue, { cost: nextCost, face: adj });
       }
     }
   }

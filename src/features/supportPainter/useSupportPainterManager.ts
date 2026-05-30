@@ -187,10 +187,16 @@ export function useSupportPainterManager(
   const pointPathPointsJson = JSON.stringify(pointPathPoints);
 
   useEffect(() => {
-    if (!isActive || !activeModelId || hoveredTriangleId === null || initializedModelId !== activeModelId) {
-      if (isActive && hoveredTriangleId === null) {
-        console.log('[SupportPainterManager] Hovered triangle is null - clearing proposals.');
-      }
+    const snap = supportPainterStore.getSnapshot();
+    const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
+    const activeBrushType = activeCustomBrush ? (activeCustomBrush.baseBrush || 'MacroFace') : activeBrush;
+    const isPointPath = activeBrushType === 'PointPath';
+
+    if (!isActive || !activeModelId || initializedModelId !== activeModelId) {
+      return;
+    }
+
+    if (hoveredTriangleId === null && !isPointPath) {
       return;
     }
 
@@ -207,10 +213,6 @@ export function useSupportPainterManager(
       
       console.log(`[SupportPainterManager] Running proposal on seed: ${hoveredTriangleId}, active brush: ${activeBrush}, mesh resolved: ${!!mesh}`);
       
-      const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
-      const activeBrushType = activeCustomBrush ? (activeCustomBrush.baseBrush || 'MacroFace') : activeBrush;
-
-      const snap = supportPainterStore.getSnapshot();
       const isCustomMarker = activeCustomBrush && activeCustomBrush.baseBrush === 'Marker';
 
       const radius = isCustomMarker
@@ -257,7 +259,7 @@ export function useSupportPainterManager(
       
       const proposedIds = proposeRegionOnClient(
         map,
-        hoveredTriangleId,
+        hoveredTriangleId ?? -1,
         activeBrushType,
         matrixWorld,
         activeBrushType === 'Marker' ? radius : effectiveRadius,
