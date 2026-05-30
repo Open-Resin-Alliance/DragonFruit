@@ -18,6 +18,7 @@ import {
   Plus,
   Sliders,
   Square,
+  Settings,
 } from 'lucide-react';
 import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
 import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
@@ -180,7 +181,9 @@ export function SupportPainterPanel({
   const activeSettings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
   const supportState = useSyncExternalStore(subscribeToSupports, getSupportsSnapshot, getSupportsSnapshot);
   const [expandedRegions, setExpandedRegions] = useState<Record<string, boolean>>({});
-  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(true);
+  const [activeTab, setActiveTab] = useState<'active' | 'history'>('active');
+  const [isMaintenanceExpanded, setIsMaintenanceExpanded] = useState(false);
   const trunkWidth = activeSettings.shaft.diameterMm;
   const defaultSpacing = trunkWidth * 4.0;
 
@@ -464,42 +467,132 @@ export function SupportPainterPanel({
       />
 
       {expanded && (
-      <div className="px-3 pb-3 pt-1 flex flex-col gap-3">
-
-          {/* Direct Click-to-Generate Toggle */}
-          <div
-            className="flex items-center justify-between p-2.5 rounded-lg border text-xs"
-            style={{
-              background: 'var(--surface-2)',
-              borderColor: 'var(--border-subtle)',
-            }}
-          >
-            <div className="flex flex-col gap-0.5 min-w-0 pr-2">
-              <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Direct Click-to-Generate
-              </span>
-              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                Generate supports instantly on click
-              </span>
-            </div>
+        <div className="px-3 pb-3 pt-1 flex flex-col gap-3">
+          {/* Tab Headers */}
+          <div className="flex border-b border-[var(--border-subtle)] mb-2">
             <button
-              type="button"
-              onClick={() => supportPainterStore.setDirectGenEnabled(!state.directGenEnabled)}
-              className="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
-              style={{
-                backgroundColor: state.directGenEnabled ? 'var(--accent)' : 'var(--surface-1)',
-              }}
+              onClick={() => setActiveTab('active')}
+              className={`flex-1 py-2 text-center text-xs font-semibold border-b-2 transition-all ${
+                activeTab === 'active'
+                  ? 'border-[var(--accent)] text-[var(--text-strong)]'
+                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-strong)]'
+              }`}
             >
-              <span
-                className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                style={{
-                  transform: state.directGenEnabled ? 'translateX(16px)' : 'translateX(0)',
-                }}
-              />
+              Active
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`flex-1 py-2 text-center text-xs font-semibold border-b-2 transition-all ${
+                activeTab === 'history'
+                  ? 'border-[var(--accent)] text-[var(--text-strong)]'
+                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-strong)]'
+              }`}
+            >
+              History &amp; Tools
             </button>
           </div>
 
-          {/* ROI Storage Mode Dropdown */}
+          {activeTab === 'active' ? (
+            <div className="flex flex-col gap-3">
+              {/* 1. Painted Regions (Pending List) */}
+          {/* Painted Regions List (Pending Only) */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span
+                className="text-[10px] uppercase tracking-wider font-bold"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Painted Regions ({pendingRegions.length})
+              </span>
+              {pendingRegions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => supportPainterStore.clearAll()}
+                  className="text-[10px] font-medium hover:underline transition-colors"
+                  style={{ color: 'var(--danger, #ef4444)' }}
+                >
+                  Clear All
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-[140px] overflow-y-auto pr-1 flex flex-col gap-1.5 scrollbar-thin">
+              {pendingRegions.length === 0 ? (
+                <div
+                  className="flex flex-col items-center justify-center py-3 text-center text-[11px] italic"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {state.directGenEnabled
+                    ? 'Direct Generation Mode: Click mesh to instantly place supports'
+                    : 'No pending regions painted yet'}
+                </div>
+              ) : (
+                pendingRegions
+                  .sort((a, b) => b.createdAt - a.createdAt)
+                  .map((region) => {
+                    const details = BRUSH_DETAILS[region.brushType];
+
+                    return (
+                      <div
+                        key={region.id}
+                        className="flex flex-col p-2 rounded-lg border text-xs gap-1"
+                        style={{
+                          background: 'var(--surface-2)',
+                          borderColor: 'var(--border-subtle)',
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <div
+                              className="w-3 h-3 rounded border flex-shrink-0 animate-pulse"
+                              style={{
+                                backgroundColor: region.color,
+                                borderColor: 'var(--border-subtle)',
+                              }}
+                            />
+                            <div className="flex flex-col min-w-0">
+                              <span
+                                className="font-semibold truncate"
+                                style={{ color: 'var(--text-strong)' }}
+                              >
+                                {details?.label || region.brushType} (Pending)
+                              </span>
+                              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                Seed #{region.seedTriangleId}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded border font-semibold"
+                              style={{
+                                background: 'var(--surface-1)',
+                                borderColor: 'var(--border-subtle)',
+                                color: 'var(--text-muted)',
+                              }}
+                            >
+                              {region.triangleIds.size} tri
+                            </span>
+                            <IconButton
+                              onClick={() => supportPainterStore.removeRegion(region.id)}
+                              className="!p-1"
+                              title="Delete region"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </IconButton>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+          </div>
+
+
+
+              {/* 2. Spacing Overrides */}
+          {/* Spacing Overrides */}
           <div
             className="flex flex-col gap-2 p-2.5 rounded-lg border text-xs"
             style={{
@@ -507,30 +600,59 @@ export function SupportPainterPanel({
               borderColor: 'var(--border-subtle)',
             }}
           >
-            <div className="flex flex-col gap-0.5">
-              <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
-                ROI Storage Mode
-              </span>
-              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                Controls how ROI data is saved/loaded
-              </span>
+            <span className="font-semibold text-xs text-left" style={{ color: 'var(--text-strong)' }}>
+              Spacing Overrides
+            </span>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              <div className="flex flex-col gap-1 text-left">
+                <span style={{ color: 'var(--text-muted)' }}>Perimeter Spacing (mm)</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="20"
+                  placeholder={defaultSpacing.toFixed(1)}
+                  value={state.perimeterSpacingOverride !== null ? state.perimeterSpacingOverride : ''}
+                  onChange={(e) => {
+                    const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                    supportPainterStore.setPerimeterSpacingOverride(val);
+                  }}
+                  className="w-full text-[11px] px-2 py-1.5 rounded border outline-none font-medium text-right"
+                  style={{
+                    background: 'var(--surface-1)',
+                    borderColor: 'var(--border-subtle)',
+                    color: 'var(--accent)',
+                  }}
+                />
+              </div>
+              <div className="flex flex-col gap-1 text-left">
+                <span style={{ color: 'var(--text-muted)' }}>Infill Spacing (mm)</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="20"
+                  placeholder={defaultSpacing.toFixed(1)}
+                  value={state.infillSpacingOverride !== null ? state.infillSpacingOverride : ''}
+                  onChange={(e) => {
+                    const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                    supportPainterStore.setInfillSpacingOverride(val);
+                  }}
+                  className="w-full text-[11px] px-2 py-1.5 rounded border outline-none font-medium text-right"
+                  style={{
+                    background: 'var(--surface-1)',
+                    borderColor: 'var(--border-subtle)',
+                    color: 'var(--accent)',
+                  }}
+                />
+              </div>
             </div>
-            <select
-              value={state.roiTrackingMode}
-              onChange={(e) => supportPainterStore.setRoiTrackingMode(e.target.value as any)}
-              className="w-full text-[11px] px-2 py-1.5 rounded border outline-none font-medium transition-colors cursor-pointer"
-              style={{
-                background: 'var(--surface-1)',
-                borderColor: 'var(--border-subtle)',
-                color: 'var(--text-strong)',
-              }}
-            >
-              <option value="voxl">Persistent VOXL (Recommended)</option>
-              <option value="session">Session-Only</option>
-              <option value="none">None (Purge on change)</option>
-            </select>
+            <div className="text-[9px] mt-1 italic text-left" style={{ color: 'var(--text-muted)' }}>
+              Default spacing is computed dynamically as 4.0 × shaft diameter ({defaultSpacing.toFixed(2)} mm). Clear field to restore default.
+            </div>
           </div>
 
+              {/* 3. Select Smart Brush */}
           {/* Brush Selection */}
           <div className="flex flex-col gap-2">
             <span
@@ -1069,6 +1191,9 @@ export function SupportPainterPanel({
             </div>
           )}
 
+
+
+              {/* 4. Select Custom Brush */}
           {/* Custom Brushes Selection Section */}
           <div className="flex flex-col gap-2 border-t pt-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
             <span
@@ -1146,157 +1271,69 @@ export function SupportPainterPanel({
             </div>
           </div>
 
-          {/* Interaction Context Hint */}
-          {/*
+
+
+              {/* 5. Edit Current Brush Supports settings button */}
+          {/* Edit Current Brush Supports Button */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              // Will be wired in Phase III
+            }}
+            className="w-full !text-[11px] py-1.5 flex items-center justify-center gap-1.5"
+          >
+            <Settings className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+            <span>Edit Current Brush Supports</span>
+          </Button>
+
+              {/* 6. Compact Direct Click-to-Generate Toggle */}
+          {/* Direct Click-to-Generate Toggle */}
           <div
-            className="rounded-lg p-2.5 text-[11px] leading-relaxed border"
+            className="flex items-center justify-between p-2 rounded-lg border text-xs"
             style={{
               background: 'var(--surface-2)',
               borderColor: 'var(--border-subtle)',
-              color: 'var(--text-muted)',
             }}
           >
-            {state.modifierKeys.alt ? (
-              <div className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--warning, #f59e0b)' }}>
-                <span className="font-bold">Subtract Mode active:</span>
-                &nbsp;Click a painted triangle to delete its region.
-              </div>
-            ) : state.modifierKeys.shift ? (
-              <div className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--accent)' }}>
-                <span className="font-bold">Manual Support Mode active:</span>
-                &nbsp;Click to place supports manually.
-              </div>
-            ) : state.directGenEnabled ? (
-              <div className="flex flex-col gap-0.5">
-                <span className="font-medium" style={{ color: 'var(--accent)' }}>
-                  {activeDetails.label}: Instant Placement
-                </span>
-                <span>Click model to instantly generate &amp; place supports in the highlighted region.</span>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-0.5">
-                <span className="font-medium" style={{ color: 'var(--text-strong)' }}>
-                  {activeDetails.label}: {activeDetails.desc}
-                </span>
-                <span>
-                  Click to paint. Hold{' '}
-                  <kbd
-                    className="px-1 rounded text-[10px] border"
-                    style={{ background: 'var(--surface-0)', borderColor: 'var(--border-subtle)' }}
-                  >
-                    Shift
-                  </kbd>
-                  {' '}+ click to place supports manually. Hold{' '}
-                  <kbd
-                    className="px-1 rounded text-[10px] border"
-                    style={{ background: 'var(--surface-0)', borderColor: 'var(--border-subtle)' }}
-                  >
-                    Alt
-                  </kbd>
-                  {' '}+ click to subtract.
-                </span>
-              </div>
-            )}
-          </div>
-          */}
-
-          {/* Painted Regions List (Pending Only) */}
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between">
+            <span className="font-semibold text-xs" style={{ color: 'var(--text-strong)' }}>
+              Direct Click-to-Generate
+            </span>
+            <button
+              type="button"
+              onClick={() => supportPainterStore.setDirectGenEnabled(!state.directGenEnabled)}
+              className="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              style={{
+                backgroundColor: state.directGenEnabled ? 'var(--accent)' : 'var(--surface-1)',
+              }}
+            >
               <span
-                className="text-[10px] uppercase tracking-wider font-bold"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Painted Regions ({pendingRegions.length})
-              </span>
-              {pendingRegions.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => supportPainterStore.clearAll()}
-                  className="text-[10px] font-medium hover:underline transition-colors"
-                  style={{ color: 'var(--danger, #ef4444)' }}
-                >
-                  Clear All
-                </button>
-              )}
-            </div>
-
-            <div className="max-h-[140px] overflow-y-auto pr-1 flex flex-col gap-1.5 scrollbar-thin">
-              {pendingRegions.length === 0 ? (
-                <div
-                  className="flex flex-col items-center justify-center py-3 text-center text-[11px] italic"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  {state.directGenEnabled
-                    ? 'Direct Generation Mode: Click mesh to instantly place supports'
-                    : 'No pending regions painted yet'}
-                </div>
-              ) : (
-                pendingRegions
-                  .sort((a, b) => b.createdAt - a.createdAt)
-                  .map((region) => {
-                    const details = BRUSH_DETAILS[region.brushType];
-
-                    return (
-                      <div
-                        key={region.id}
-                        className="flex flex-col p-2 rounded-lg border text-xs gap-1"
-                        style={{
-                          background: 'var(--surface-2)',
-                          borderColor: 'var(--border-subtle)',
-                        }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <div
-                              className="w-3 h-3 rounded border flex-shrink-0 animate-pulse"
-                              style={{
-                                backgroundColor: region.color,
-                                borderColor: 'var(--border-subtle)',
-                              }}
-                            />
-                            <div className="flex flex-col min-w-0">
-                              <span
-                                className="font-semibold truncate"
-                                style={{ color: 'var(--text-strong)' }}
-                              >
-                                {details?.label || region.brushType} (Pending)
-                              </span>
-                              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                Seed #{region.seedTriangleId}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded border font-semibold"
-                              style={{
-                                background: 'var(--surface-1)',
-                                borderColor: 'var(--border-subtle)',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              {region.triangleIds.size} tri
-                            </span>
-                            <IconButton
-                              onClick={() => supportPainterStore.removeRegion(region.id)}
-                              className="!p-1"
-                              title="Delete region"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </IconButton>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-              )}
-            </div>
+                className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                style={{
+                  transform: state.directGenEnabled ? 'translateX(16px)' : 'translateX(0)',
+                }}
+              />
+            </button>
           </div>
 
+              {/* 7. Generate Supports Button */}
+          {/* Generate Button */}
+          <Button
+            variant="accent"
+            size="sm"
+            className="w-full"
+            disabled={pendingRegions.length === 0 || isGenerating}
+            onClick={handleGenerate}
+          >
+            {isGenerating ? 'Generating…' : 'Generate Supports (' + pendingRegions.length + ')'}
+          </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {/* 1. Completed ROI History & Saves list */}
           {/* ROI History and Saves Rollup */}
           <div
-            className="flex flex-col gap-1.5 border-t pt-2.5"
+            className="flex flex-col gap-1.5 border-t pt-2.5 text-left"
             style={{ borderColor: 'var(--border-subtle)' }}
           >
             <div className="flex items-center justify-between">
@@ -1507,314 +1544,335 @@ export function SupportPainterPanel({
                       })
                   )}
                 </div>
-                
-                {/* Boolean Operators Action Bar */}
-                {activeSelectedIds.length >= 2 && (
-                  <div
-                    className="flex flex-col gap-2 p-2.5 rounded-lg border text-xs my-2.5"
+              </div>
+            )}
+          </div>
+
+              {/* 2. Boolean Operators Action Bar */}
+          {/* Boolean Operators Action Bar */}
+          {activeSelectedIds.length >= 2 && (
+            <div
+              className="flex flex-col gap-2 p-2.5 rounded-lg border text-xs my-2.5"
+              style={{
+                background: 'var(--surface-3, #2a2b36)',
+                borderColor: 'var(--accent, #ec4899)',
+                boxShadow: '0 0 10px rgba(236, 72, 153, 0.25)',
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-[10px] uppercase tracking-wider text-[#ec4899]">
+                  Boolean Operators
+                </span>
+                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  {activeSelectedIds.length} regions selected
+                </span>
+              </div>
+              <div className="flex gap-2 justify-stretch">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    supportPainterStore.booleanOperate('union', activeSelectedIds[0], activeSelectedIds[1]);
+                    setSelectedIds([]);
+                  }}
+                  className="flex-1 py-1 rounded bg-[#ec4899] text-white font-bold hover:bg-[#db2777] transition-all text-center"
+                  title="Merge regions (A ∪ B)"
+                >
+                  Union (∪)
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    supportPainterStore.booleanOperate('subtract', activeSelectedIds[0], activeSelectedIds[1]);
+                    setSelectedIds([]);
+                  }}
+                  className="flex-1 py-1 rounded text-white font-bold hover:bg-[#4b5563] border border-[#ec4899]/50 transition-all text-center"
+                  style={{ background: 'var(--surface-2, #374151)' }}
+                  title="Subtract B from A (A \ B)"
+                >
+                  Subtract (∖)
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    supportPainterStore.booleanOperate('intersect', activeSelectedIds[0], activeSelectedIds[1]);
+                    setSelectedIds([]);
+                  }}
+                  className="flex-1 py-1 rounded text-white font-bold hover:bg-[#4b5563] border border-[#ec4899]/50 transition-all text-center"
+                  style={{ background: 'var(--surface-2, #374151)' }}
+                  title="Intersect A and B (A ∩ B)"
+                >
+                  Intersect (∩)
+                </button>
+              </div>
+            </div>
+          )}
+
+              {/* 3. Selected ROI Actions */}
+          {/* Selected ROI Actions */}
+          {(() => {
+            const selectedRegion = state.selectedRegionId ? completedRegions.find(r => r.id === state.selectedRegionId) : null;
+
+            let totalChildSupports = 0;
+            if (selectedRegion) {
+              const regionTrunks = Object.values(supportState.trunks).filter(t => t.roiId === selectedRegion.id);
+              const regionBranches = Object.values(supportState.branches).filter(b => b.roiId === selectedRegion.id);
+              const regionLeaves = Object.values(supportState.leaves).filter(l => l.roiId === selectedRegion.id);
+              const regionTwigs = Object.values(supportState.twigs).filter(t => t.roiId === selectedRegion.id);
+              const regionSticks = Object.values(supportState.sticks).filter(s => s.roiId === selectedRegion.id);
+              const regionAnchors = Object.values(supportState.anchors).filter(a => a.roiId === selectedRegion.id);
+              totalChildSupports = regionTrunks.length + regionBranches.length + regionLeaves.length + regionTwigs.length + regionSticks.length + regionAnchors.length;
+            }
+
+            const isBtnDisabled = selectedRegion === null;
+
+            return (
+              <div
+                className="flex flex-col gap-2 border-t pt-2.5 text-left font-medium"
+                style={{ borderColor: 'var(--border-subtle)' }}
+              >
+                <span
+                  className="text-[10px] uppercase tracking-wider font-bold"
+                  style={{ color: 'var(--accent, #ec4899)' }}
+                >
+                  Selected ROI Actions
+                </span>
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Left Column */}
+                  <div className="flex flex-col gap-1.5">
+                    {/* Erase Supports */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => selectedRegion && handleRemoveSupportsForRoi(selectedRegion.id)}
+                      className="w-full !text-[10px] py-1.5 flex items-center justify-start px-2 gap-1.5"
+                      disabled={isBtnDisabled || totalChildSupports === 0}
+                      style={{
+                        opacity: (isBtnDisabled || totalChildSupports === 0) ? 0.4 : 1,
+                        cursor: (isBtnDisabled || totalChildSupports === 0) ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <Eraser className="w-3.5 h-3.5" style={{ color: (isBtnDisabled || totalChildSupports === 0) ? 'var(--text-muted)' : 'var(--warning, #f59e0b)' }} />
+                      <span>Erase Supports</span>
+                    </Button>
+                    {/* Delete ROI Only */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        if (selectedRegion) {
+                          handleRemoveRoiOnly(selectedRegion.id);
+                          supportPainterStore.setSelectedRegionId(null);
+                        }
+                      }}
+                      className="w-full !text-[10px] py-1.5 flex items-center justify-start px-2 gap-1.5"
+                      disabled={isBtnDisabled}
+                      style={{
+                        opacity: isBtnDisabled ? 0.4 : 1,
+                        cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <Trash className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--text-strong)' }} />
+                      <span>Delete ROI Only</span>
+                    </Button>
+                    {/* Delete ROI & Supports */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        if (selectedRegion) {
+                          handleDeleteRegion(selectedRegion.id);
+                          supportPainterStore.setSelectedRegionId(null);
+                        }
+                      }}
+                      className="w-full !text-[10px] py-1.5 flex items-center justify-start px-2 gap-1.5"
+                      disabled={isBtnDisabled}
+                      style={{
+                        opacity: isBtnDisabled ? 0.4 : 1,
+                        cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--danger, #ef4444)' }} />
+                      <span>Delete ROI &amp; Supp.</span>
+                    </Button>
+                  </div>
+
+                  {/* Right Column */}
+                  <div className="flex flex-col gap-1.5">
+                    {/* Edit ROI Supports */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        // Will be wired in Phase III
+                      }}
+                      className="w-full !text-[10px] py-1.5 flex items-center justify-start px-2 gap-1.5"
+                      disabled={isBtnDisabled}
+                      style={{
+                        opacity: isBtnDisabled ? 0.4 : 1,
+                        cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <Settings className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--accent)' }} />
+                      <span>Edit ROI Supports</span>
+                    </Button>
+                    {/* Recalculate ROI Supports */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={async () => {
+                        const activeMesh = getActiveMesh?.();
+                        if (activeModelId && activeMesh && selectedRegion) {
+                          await regenerateSupportsForRoi(activeModelId, activeMesh, selectedRegion.id);
+                        }
+                      }}
+                      className="w-full !text-[10px] py-1.5 flex items-center justify-start px-2 gap-1.5"
+                      disabled={isBtnDisabled}
+                      style={{
+                        opacity: isBtnDisabled ? 0.4 : 1,
+                        cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 animate-none" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--accent)' }} />
+                      <span>Recalculate ROI</span>
+                    </Button>
+                    {/* Recalculate All Supports */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={async () => {
+                        const activeMesh = getActiveMesh?.();
+                        if (activeModelId && activeMesh && completedRegions.length > 0) {
+                          for (const region of completedRegions) {
+                            await regenerateSupportsForRoi(activeModelId, activeMesh, region.id);
+                          }
+                        }
+                      }}
+                      className="w-full !text-[10px] py-1.5 flex items-center justify-start px-2 gap-1.5"
+                      disabled={completedRegions.length === 0}
+                      style={{
+                        opacity: completedRegions.length === 0 ? 0.4 : 1,
+                        cursor: completedRegions.length === 0 ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" style={{ color: completedRegions.length === 0 ? 'var(--text-muted)' : 'var(--text-strong)' }} />
+                      <span>Recalculate All</span>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+              {/* 4. Storage & Maintenance Tools rollup */}
+          {/* Storage & Maintenance Rollup Collapsible */}
+          <div
+            className="flex flex-col gap-2 border-t pt-2.5 text-left font-medium"
+            style={{ borderColor: 'var(--border-subtle)' }}
+          >
+            <div
+              className="flex items-center justify-between cursor-pointer select-none"
+              onClick={() => setIsMaintenanceExpanded(!isMaintenanceExpanded)}
+            >
+              <div className="flex items-center gap-1">
+                <IconButton
+                  className="!p-0.5 animate-none"
+                  title={isMaintenanceExpanded ? "Collapse Utilities" : "Expand Utilities"}
+                >
+                  {isMaintenanceExpanded ? (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  )}
+                </IconButton>
+                <span
+                  className="text-[10px] uppercase tracking-wider font-bold"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  Storage &amp; Maintenance Tools
+                </span>
+              </div>
+            </div>
+
+            {isMaintenanceExpanded && (
+              <div className="flex flex-col gap-2.5 mt-1">
+                {/* ROI Storage Mode Dropdown */}
+                <div
+                  className="flex flex-col gap-1.5 p-2 rounded-lg border text-xs"
+                  style={{
+                    background: 'var(--surface-2)',
+                    borderColor: 'var(--border-subtle)',
+                  }}
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-xs" style={{ color: 'var(--text-strong)' }}>
+                      ROI Storage Mode
+                    </span>
+                    <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                      Controls how ROI data is saved/loaded
+                    </span>
+                  </div>
+                  <select
+                    value={state.roiTrackingMode}
+                    onChange={(e) => supportPainterStore.setRoiTrackingMode(e.target.value as any)}
+                    className="w-full text-[11px] px-2 py-1.5 rounded border outline-none font-medium transition-colors cursor-pointer"
                     style={{
-                      background: 'var(--surface-3, #2a2b36)',
-                      borderColor: 'var(--accent, #ec4899)',
-                      boxShadow: '0 0 10px rgba(236, 72, 153, 0.25)',
+                      background: 'var(--surface-1)',
+                      borderColor: 'var(--border-subtle)',
+                      color: 'var(--text-strong)',
                     }}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-[10px] uppercase tracking-wider text-[#ec4899]">
-                        Boolean Operators
-                      </span>
-                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        {activeSelectedIds.length} regions selected
-                      </span>
-                    </div>
-                    <div className="flex gap-2 justify-stretch">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          supportPainterStore.booleanOperate('union', activeSelectedIds[0], activeSelectedIds[1]);
-                          setSelectedIds([]);
-                        }}
-                        className="flex-1 py-1 rounded bg-[#ec4899] text-white font-bold hover:bg-[#db2777] transition-all text-center"
-                        title="Merge regions (A ∪ B)"
-                      >
-                        Union (∪)
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          supportPainterStore.booleanOperate('subtract', activeSelectedIds[0], activeSelectedIds[1]);
-                          setSelectedIds([]);
-                        }}
-                        className="flex-1 py-1 rounded text-white font-bold hover:bg-[#4b5563] border border-[#ec4899]/50 transition-all text-center"
-                        style={{ background: 'var(--surface-2, #374151)' }}
-                        title="Subtract B from A (A \ B)"
-                      >
-                        Subtract (∖)
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          supportPainterStore.booleanOperate('intersect', activeSelectedIds[0], activeSelectedIds[1]);
-                          setSelectedIds([]);
-                        }}
-                        className="flex-1 py-1 rounded text-white font-bold hover:bg-[#4b5563] border border-[#ec4899]/50 transition-all text-center"
-                        style={{ background: 'var(--surface-2, #374151)' }}
-                        title="Intersect A and B (A ∩ B)"
-                      >
-                        Intersect (∩)
-                      </button>
-                    </div>
-                  </div>
-                )}                {/* Selected ROI Actions */}
-                {(() => {
-                  const selectedRegion = state.selectedRegionId ? completedRegions.find(r => r.id === state.selectedRegionId) : null;
+                    <option value="voxl">Persistent VOXL (Recommended)</option>
+                    <option value="session">Session-Only</option>
+                    <option value="none">None (Purge on change)</option>
+                  </select>
+                </div>
 
-                  let totalChildSupports = 0;
-                  if (selectedRegion) {
-                    const regionTrunks = Object.values(supportState.trunks).filter(t => t.roiId === selectedRegion.id);
-                    const regionBranches = Object.values(supportState.branches).filter(b => b.roiId === selectedRegion.id);
-                    const regionLeaves = Object.values(supportState.leaves).filter(l => l.roiId === selectedRegion.id);
-                    const regionTwigs = Object.values(supportState.twigs).filter(t => t.roiId === selectedRegion.id);
-                    const regionSticks = Object.values(supportState.sticks).filter(s => s.roiId === selectedRegion.id);
-                    const regionAnchors = Object.values(supportState.anchors).filter(a => a.roiId === selectedRegion.id);
-                    totalChildSupports = regionTrunks.length + regionBranches.length + regionLeaves.length + regionTwigs.length + regionSticks.length + regionAnchors.length;
-                  }
-
-                  const isBtnDisabled = selectedRegion === null;
-
-                  return (
-                    <div
-                      className="flex flex-col gap-2 border-t pt-2.5"
-                      style={{ borderColor: 'var(--border-subtle)' }}
-                    >
-                      <span
-                        className="text-[10px] uppercase tracking-wider font-bold"
-                        style={{ color: 'var(--accent, #ec4899)' }}
-                      >
-                        Selected ROI Actions
-                      </span>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => selectedRegion && handleRemoveSupportsForRoi(selectedRegion.id)}
-                          className="w-full !text-[10px] py-1 flex items-center justify-center gap-1.5"
-                          disabled={isBtnDisabled || totalChildSupports === 0}
-                          style={{
-                            opacity: (isBtnDisabled || totalChildSupports === 0) ? 0.4 : 1,
-                            cursor: (isBtnDisabled || totalChildSupports === 0) ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          <Eraser className="w-3.5 h-3.5" style={{ color: (isBtnDisabled || totalChildSupports === 0) ? 'var(--text-muted)' : 'var(--warning, #f59e0b)' }} />
-                          Erase ROI Supports
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => {
-                            if (selectedRegion) {
-                              handleDeleteRegion(selectedRegion.id);
-                              supportPainterStore.setSelectedRegionId(null);
-                            }
-                          }}
-                          className="w-full !text-[10px] py-1 flex items-center justify-center gap-1.5"
-                          disabled={isBtnDisabled}
-                          style={{
-                            opacity: isBtnDisabled ? 0.4 : 1,
-                            cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--danger, #ef4444)' }} />
-                          Delete ROI &amp; Supports
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => {
-                            if (selectedRegion) {
-                              handleRemoveRoiOnly(selectedRegion.id);
-                              supportPainterStore.setSelectedRegionId(null);
-                            }
-                          }}
-                          className="col-span-2 w-full !text-[10px] py-1 flex items-center justify-center gap-1.5"
-                          disabled={isBtnDisabled}
-                          style={{
-                            opacity: isBtnDisabled ? 0.4 : 1,
-                            cursor: isBtnDisabled ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          <Trash className="w-3.5 h-3.5" style={{ color: isBtnDisabled ? 'var(--text-muted)' : 'var(--text-strong)' }} />
-                          Remove ROI Only
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* ROI Maintenance Utilities inside rollup */}
-                <div
-                  className="flex flex-col gap-2 border-t pt-2.5"
-                  style={{ borderColor: 'var(--border-subtle)' }}
-                >
-                  <span
-                    className="text-[10px] uppercase tracking-wider font-bold"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Maintenance Utilities
-                  </span>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        const beforeRegions = new Map(state.regions);
-                        pushHistory({
-                          type: PAINT_ROI_STRIP,
-                          description: 'Strip model ROI regions',
-                          payload: { beforeRegions },
-                        });
-                        supportPainterStore.stripRoiData(activeModelId);
-                      }}
-                      className="w-full !text-[10px] py-1"
-                      disabled={completedRegions.length === 0}
-                    >
-                      Strip ROI (Model)
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        const beforeRegions = new Map(state.regions);
-                        pushHistory({
-                          type: PAINT_ROI_STRIP,
-                          description: 'Strip all ROI regions',
-                          payload: { beforeRegions },
-                        });
-                        supportPainterStore.stripRoiData();
-                      }}
-                      className="w-full !text-[10px] py-1"
-                      disabled={completedRegions.length === 0}
-                    >
-                      Strip ROI (Global)
-                    </Button>
-                  </div>
-
+                {/* Strip ROI Buttons */}
+                <div className="grid grid-cols-2 gap-1.5">
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={async () => {
-                      const activeMesh = getActiveMesh?.();
-                      if (activeModelId && activeMesh && completedRegions.length > 0) {
-                        // Batch regenerate supports sequentially for each completed region
-                        for (const region of completedRegions) {
-                          await regenerateSupportsForRoi(activeModelId, activeMesh, region.id);
-                        }
-                      }
+                    onClick={() => {
+                      const beforeRegions = new Map(state.regions);
+                      pushHistory({
+                        type: PAINT_ROI_STRIP,
+                        description: 'Strip model ROI regions',
+                        payload: { beforeRegions },
+                      });
+                      supportPainterStore.stripRoiData(activeModelId);
                     }}
-                    className="w-full !text-[10px] py-1 flex items-center justify-center gap-1.5 mt-0.5"
+                    className="w-full !text-[10px] py-1"
                     disabled={completedRegions.length === 0}
                   >
-                    <RefreshCw className="w-3 h-3" />
-                    Recalculate All Supports
+                    Strip ROI (Model)
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      const beforeRegions = new Map(state.regions);
+                      pushHistory({
+                        type: PAINT_ROI_STRIP,
+                        description: 'Strip all ROI regions',
+                        payload: { beforeRegions },
+                      });
+                      supportPainterStore.stripRoiData();
+                    }}
+                    className="w-full !text-[10px] py-1"
+                    disabled={completedRegions.length === 0}
+                  >
+                    Strip ROI (Global)
                   </Button>
                 </div>
               </div>
             )}
           </div>
-
-          {/* Spacing Overrides [SPACING_OVERRIDES_UI] */}
-          {/* [AGENT_NOTE] User-customizable spacing overrides separately for perimeter and infill. */}
-          <div
-            className="flex flex-col gap-2 border-t pt-2.5"
-            style={{ borderColor: 'var(--border-subtle)' }}
-          >
-            <span
-              className="text-[10px] uppercase tracking-wider font-bold"
-              style={{ color: 'var(--text-muted)' }}
-            >
-              Spacing Overrides
-            </span>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Perimeter Spacing */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[10px] font-medium" style={{ color: 'var(--text-strong)' }}>
-                  Perimeter Spacing
-                </span>
-                <div className="relative flex items-center">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    placeholder={defaultSpacing.toFixed(1)}
-                    value={state.perimeterSpacingOverride !== null ? state.perimeterSpacingOverride : ''}
-                    onChange={(e) => {
-                      const val = e.target.value === '' ? null : Math.max(0.1, parseFloat(e.target.value));
-                      supportPainterStore.setPerimeterSpacingOverride(val);
-                    }}
-                    className="w-full text-[11px] pl-2 pr-6 py-1 rounded border outline-none font-medium transition-colors"
-                    style={{
-                      background: 'var(--surface-1)',
-                      borderColor: 'var(--border-subtle)',
-                      color: 'var(--text-strong)',
-                    }}
-                  />
-                  <span className="absolute right-2 text-[9px] pointer-events-none" style={{ color: 'var(--text-muted)' }}>
-                    mm
-                  </span>
-                </div>
-                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                  Default: <span className="font-medium">{defaultSpacing.toFixed(1)} mm</span>
-                </span>
-              </div>
-
-              {/* Infill Spacing */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[10px] font-medium" style={{ color: 'var(--text-strong)' }}>
-                  Infill Spacing
-                </span>
-                <div className="relative flex items-center">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    placeholder={defaultSpacing.toFixed(1)}
-                    value={state.infillSpacingOverride !== null ? state.infillSpacingOverride : ''}
-                    onChange={(e) => {
-                      const val = e.target.value === '' ? null : Math.max(0.1, parseFloat(e.target.value));
-                      supportPainterStore.setInfillSpacingOverride(val);
-                    }}
-                    className="w-full text-[11px] pl-2 pr-6 py-1 rounded border outline-none font-medium transition-colors"
-                    style={{
-                      background: 'var(--surface-1)',
-                      borderColor: 'var(--border-subtle)',
-                      color: 'var(--text-strong)',
-                    }}
-                  />
-                  <span className="absolute right-2 text-[9px] pointer-events-none" style={{ color: 'var(--text-muted)' }}>
-                    mm
-                  </span>
-                </div>
-                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                  Default: <span className="font-medium">{defaultSpacing.toFixed(1)} mm</span>
-                </span>
-              </div>
             </div>
-          </div>
-
-          {/* Generate Button */}
-          <Button
-            variant="accent"
-            size="sm"
-            className="w-full"
-            disabled={pendingRegions.length === 0 || isGenerating}
-            onClick={handleGenerate}
-          >
-            {isGenerating ? 'Generating…' : `Generate Supports (${pendingRegions.length})`}
-          </Button>
-
+          )}
         </div>
       )}
 
-      {/* ─── Support Painter Toast Notification [TOAST_NOTIFICATION] ─── */}
+            {/* ─── Support Painter Toast Notification [TOAST_NOTIFICATION] ─── */}
       {/* [AGENT_NOTE] Mounts a floating toast viewport showing attempted vs placed counts upon completion. */}
       {state.toast && (
         <ToastViewport position="top-center" zIndex={9999} style={{ top: '1.25rem' }}>
