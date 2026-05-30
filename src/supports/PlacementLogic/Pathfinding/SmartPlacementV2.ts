@@ -13,6 +13,8 @@
 
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
+import type { SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
+import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import {
     calculateStandardPlacement,
     type TrunkPlacementInput,
@@ -189,8 +191,89 @@ interface MixedSocketRescueCandidate {
     socketPos: Vec3;
     base: ResolvedBaseCandidate;
     joints: Vec3[];
+    conePenaltyScore: number;
     socketShiftMm: number;
     metrics: ResolvedChainMetrics;
+}
+
+interface ContactConeRescueScoringInput {
+    tipPos: Vec3;
+    tipNormal: Vec3;
+    tipProfile: SupportTipProfile;
+}
+
+interface ContactConeRescuePenaltyMetrics {
+    lengthMm: number;
+    score: number;
+    angleFromSurfaceNormalDeg: number;
+    addedLengthMm: number;
+}
+
+function normalizeVectorOrFallback(vector: THREE.Vector3, fallback: THREE.Vector3): THREE.Vector3 {
+    if (vector.lengthSq() < 0.000001) {
+        return fallback.clone().normalize();
+    }
+
+    return vector.clone().normalize();
+}
+
+function getContactConeRescuePenaltyMetrics(args: {
+    socketPos: Vec3;
+    coneScoring: ContactConeRescueScoringInput;
+    reference?: Pick<ContactConeRescuePenaltyMetrics, 'lengthMm' | 'angleFromSurfaceNormalDeg'>;
+}): ContactConeRescuePenaltyMetrics {
+    const { socketPos, coneScoring, reference } = args;
+    const surfaceNormal = normalizeVectorOrFallback(
+        new THREE.Vector3(coneScoring.tipNormal.x, coneScoring.tipNormal.y, coneScoring.tipNormal.z),
+        new THREE.Vector3(0, 0, 1),
+    );
+    const approxAxis = normalizeVectorOrFallback(
+        new THREE.Vector3(
+            socketPos.x - coneScoring.tipPos.x,
+            socketPos.y - coneScoring.tipPos.y,
+            socketPos.z - coneScoring.tipPos.z,
+        ),
+        surfaceNormal,
+    );
+    const thickness = coneScoring.tipProfile.type === 'disk'
+        ? calculateDiskThickness(
+            { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
+            { x: approxAxis.x, y: approxAxis.y, z: approxAxis.z },
+            coneScoring.tipProfile,
+        )
+        : 0;
+    const coneStart = new THREE.Vector3(
+        coneScoring.tipPos.x + surfaceNormal.x * thickness,
+        coneScoring.tipPos.y + surfaceNormal.y * thickness,
+        coneScoring.tipPos.z + surfaceNormal.z * thickness,
+    );
+    const finalAxis = normalizeVectorOrFallback(
+        new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z).sub(coneStart),
+        approxAxis,
+    );
+    const coneLengthMm = Math.max(0.05, coneStart.distanceTo(new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z)));
+    const angleFromSurfaceNormalDeg = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(finalAxis.dot(surfaceNormal), -1, 1)));
+    const referenceLengthMm = reference?.lengthMm ?? coneScoring.tipProfile.lengthMm;
+    const referenceAngleDeg = reference?.angleFromSurfaceNormalDeg ?? 0;
+    const addedLengthMm = Math.max(0, coneLengthMm - referenceLengthMm);
+    const worsenedAngleDeg = Math.max(0, angleFromSurfaceNormalDeg - referenceAngleDeg);
+    const shallownessScale = angleFromSurfaceNormalDeg / 90;
+    const absoluteShallownessPenalty =
+        angleFromSurfaceNormalDeg * 0.025
+        + Math.max(0, angleFromSurfaceNormalDeg - 45) * 0.12;
+    const worsenedShallownessPenalty =
+        worsenedAngleDeg * 0.09
+        + Math.max(0, angleFromSurfaceNormalDeg - Math.max(referenceAngleDeg, 45)) * 0.14;
+    const addedLengthPenalty =
+        addedLengthMm * (2.8 + shallownessScale * 5.4)
+        + addedLengthMm * addedLengthMm * (0.7 + shallownessScale * 1.1);
+
+    return {
+        lengthMm: coneLengthMm,
+        score: absoluteShallownessPenalty + worsenedShallownessPenalty + addedLengthPenalty,
+        angleFromSurfaceNormalDeg,
+        addedLengthMm,
+    };
 }
 
 function isMixedSocketRescueCandidateBetter(
@@ -198,6 +281,13 @@ function isMixedSocketRescueCandidateBetter(
     current: MixedSocketRescueCandidate,
 ): boolean {
     const eps = 0.000001;
+
+    if (candidate.conePenaltyScore < current.conePenaltyScore - eps) {
+        return true;
+    }
+    if (candidate.conePenaltyScore > current.conePenaltyScore + eps) {
+        return false;
+    }
 
     if (candidate.socketShiftMm < current.socketShiftMm - eps) {
         return true;
@@ -223,12 +313,17 @@ export function findMixedSocketRescueCandidate(args: {
     shaftRadius: number;
     clearance: number;
     maxAngleFromVerticalDeg: number;
+    coneScoring: ContactConeRescueScoringInput;
     buildNearestCandidateNodeKeys?: (preferredKey: string, maxRings: number) => string[];
     subGridOffset?: { x: number; y: number } | null;
 }): { socketPos: Vec3; base: ResolvedBaseCandidate; joints: Vec3[] } | null {
     const candidates = buildMixedSocketRescueCandidates({
         socketPos: args.socketPos,
         maxTotalLateralMm: args.maxTotalLateralMm,
+    });
+    const baselineConePenaltyMetrics = getContactConeRescuePenaltyMetrics({
+        socketPos: args.socketPos,
+        coneScoring: args.coneScoring,
     });
 
     let best: MixedSocketRescueCandidate | null = null;
@@ -270,10 +365,17 @@ export function findMixedSocketRescueCandidate(args: {
                 }
             }
 
+            const conePenaltyMetrics = getContactConeRescuePenaltyMetrics({
+                socketPos: candidateSocketPos,
+                coneScoring: args.coneScoring,
+                reference: baselineConePenaltyMetrics,
+            });
+
             const candidate: MixedSocketRescueCandidate = {
                 socketPos: candidateSocketPos,
                 base: resolvedBase,
                 joints,
+                conePenaltyScore: conePenaltyMetrics.score,
                 socketShiftMm,
                 metrics: getResolvedChainMetrics(candidateSocketPos, joints, rootTopTarget),
             };
@@ -343,6 +445,7 @@ export function findStraightSocketRescueCandidate(args: {
     rootsRadius: number;
     shaftRadius: number;
     clearance: number;
+    coneScoring?: ContactConeRescueScoringInput;
     buildNearestCandidateNodeKeys?: (preferredKey: string, maxRings: number) => string[];
     subGridOffset?: { x: number; y: number } | null;
 }): { socketPos: Vec3; base: ResolvedBaseCandidate } | null {
@@ -350,6 +453,14 @@ export function findStraightSocketRescueCandidate(args: {
         socketPos: args.socketPos,
         maxTotalLateralMm: args.maxTotalLateralMm,
     });
+    const baselineConePenaltyMetrics = args.coneScoring
+        ? getContactConeRescuePenaltyMetrics({
+            socketPos: args.socketPos,
+            coneScoring: args.coneScoring,
+        })
+        : null;
+
+    let bestCandidate: { socketPos: Vec3; base: ResolvedBaseCandidate; conePenaltyScore: number; socketShiftMm: number } | null = null;
 
     for (const candidateSocketPos of candidates) {
         const resolved = resolveCommittedBaseCandidate({
@@ -369,14 +480,56 @@ export function findStraightSocketRescueCandidate(args: {
             subGridOffset: args.subGridOffset,
         });
         if (resolved) {
-            return {
+            const conePenaltyScore = args.coneScoring
+                ? getContactConeRescuePenaltyMetrics({
+                    socketPos: candidateSocketPos,
+                    coneScoring: args.coneScoring,
+                    reference: baselineConePenaltyMetrics ?? undefined,
+                }).score
+                : 0;
+            const candidate = {
                 socketPos: candidateSocketPos,
                 base: resolved,
+                conePenaltyScore,
+                socketShiftMm: distanceXY(candidateSocketPos, args.socketPos),
             };
+
+            if (!bestCandidate) {
+                bestCandidate = candidate;
+                continue;
+            }
+
+            const eps = 0.000001;
+            if (candidate.conePenaltyScore < bestCandidate.conePenaltyScore - eps) {
+                bestCandidate = candidate;
+                continue;
+            }
+            if (candidate.conePenaltyScore > bestCandidate.conePenaltyScore + eps) {
+                continue;
+            }
+            if (candidate.socketShiftMm < bestCandidate.socketShiftMm - eps) {
+                bestCandidate = candidate;
+                continue;
+            }
+            if (candidate.socketShiftMm > bestCandidate.socketShiftMm + eps) {
+                continue;
+            }
+            if ((candidate.base.inboundLateralMm ?? 0) < (bestCandidate.base.inboundLateralMm ?? 0) - eps) {
+                bestCandidate = candidate;
+                continue;
+            }
+            if (candidate.base.snapDistance < bestCandidate.base.snapDistance - eps) {
+                bestCandidate = candidate;
+            }
         }
     }
 
-    return null;
+    return bestCandidate
+        ? {
+            socketPos: bestCandidate.socketPos,
+            base: bestCandidate.base,
+        }
+        : null;
 }
 
 function getWidePassBaseExpansionsAt2mm(maxTotalLateralMm: number, isPreview: boolean): number {
@@ -838,6 +991,11 @@ export function calculateSmartPlacementV2(
         rootsRadius,
         shaftRadius,
         clearance,
+        coneScoring: {
+            tipPos: input.tipPos,
+            tipNormal: input.tipNormal,
+            tipProfile: input.tipProfile,
+        },
         buildNearestCandidateNodeKeys,
         subGridOffset: !settings.grid.enabled ? {
             x: input.tipPos.x - Math.round(input.tipPos.x / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
@@ -867,6 +1025,11 @@ export function calculateSmartPlacementV2(
             shaftRadius,
             clearance,
             maxAngleFromVerticalDeg: maxSegmentAngleFromVerticalDeg,
+            coneScoring: {
+                tipPos: input.tipPos,
+                tipNormal: input.tipNormal,
+                tipProfile: input.tipProfile,
+            },
             buildNearestCandidateNodeKeys,
             subGridOffset: !settings.grid.enabled ? {
                 x: input.tipPos.x - Math.round(input.tipPos.x / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
