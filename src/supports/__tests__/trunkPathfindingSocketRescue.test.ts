@@ -147,3 +147,49 @@ test('findMixedSocketRescueCandidate allows a small socket stretch plus a shaft 
     assert.ok(Math.abs(rescued!.socketPos.x) <= 1.000001);
     assert.ok(rescued!.joints.length >= 1);
 });
+
+test('findMixedSocketRescueCandidate keeps the lower shaft under the last deviation instead of snapping back to the original socket column', () => {
+    const sdf = makeOpenSdf({
+        segmentBlocked: (ax: number, _ay: number, _az: number, bx: number, _by: number) => {
+            const nearlyVertical = Math.abs(ax - bx) < 0.2;
+            const insideOriginColumn = Math.abs(ax) < 0.35 && Math.abs(bx) < 0.35;
+            return nearlyVertical && insideOriginColumn;
+        },
+    });
+
+    const rescued = findMixedSocketRescueCandidate({
+        socketPos: { x: 0, y: 0, z: 10 },
+        rootTopZ: 2,
+        maxTotalLateralMm: 0,
+        gridEnabled: false,
+        spacingMm: 4,
+        maxNearestNodeSearchRings: 1,
+        sdf,
+        diskHeight: 1,
+        coneHeight: 1,
+        rootsRadius: 1.5,
+        shaftRadius: 0.75,
+        clearance: 1,
+        maxAngleFromVerticalDeg: 80,
+        coneScoring: {
+            tipPos: { x: 0, y: 0, z: 0 },
+            tipNormal: { x: 1, y: 0, z: 0 },
+            tipProfile: {
+                type: 'disk',
+                contactDiameterMm: 0.3,
+                bodyDiameterMm: 0.9,
+                lengthMm: 1.2,
+                penetrationMm: 0.15,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 0.35,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        },
+    });
+
+    assert.ok(rescued);
+    assert.ok(rescued!.joints.length >= 1);
+    const lastJoint = rescued!.joints[rescued!.joints.length - 1];
+    assert.ok(Math.abs(rescued!.base.rootTopTarget.x - lastJoint.x) < 0.000001, `expected root-top target x=${rescued!.base.rootTopTarget.x.toFixed(2)} to stay under last joint x=${lastJoint.x.toFixed(2)}`);
+    assert.ok(Math.abs(rescued!.base.basePos.x - lastJoint.x) < 0.000001, `expected base x=${rescued!.base.basePos.x.toFixed(2)} to stay under last joint x=${lastJoint.x.toFixed(2)}`);
+});

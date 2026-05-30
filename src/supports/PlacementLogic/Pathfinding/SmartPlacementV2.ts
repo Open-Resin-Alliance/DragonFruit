@@ -282,17 +282,17 @@ function isMixedSocketRescueCandidateBetter(
 ): boolean {
     const eps = 0.000001;
 
-    if (candidate.conePenaltyScore < current.conePenaltyScore - eps) {
-        return true;
-    }
-    if (candidate.conePenaltyScore > current.conePenaltyScore + eps) {
-        return false;
-    }
-
     if (candidate.socketShiftMm < current.socketShiftMm - eps) {
         return true;
     }
     if (candidate.socketShiftMm > current.socketShiftMm + eps) {
+        return false;
+    }
+
+    if (candidate.conePenaltyScore < current.conePenaltyScore - eps) {
+        return true;
+    }
+    if (candidate.conePenaltyScore > current.conePenaltyScore + eps) {
         return false;
     }
 
@@ -325,13 +325,17 @@ export function findMixedSocketRescueCandidate(args: {
         socketPos: args.socketPos,
         coneScoring: args.coneScoring,
     });
+    const resolvedBaseCache = new Map<string, ResolvedBaseCandidate | null>();
 
-    let best: MixedSocketRescueCandidate | null = null;
+    const getResolvedBaseForTerminalPoint = (terminalPoint: Vec3): ResolvedBaseCandidate | null => {
+        const key = `${terminalPoint.x.toFixed(4)}|${terminalPoint.y.toFixed(4)}|${terminalPoint.z.toFixed(4)}`;
+        if (resolvedBaseCache.has(key)) {
+            return resolvedBaseCache.get(key) ?? null;
+        }
 
-    for (const candidateSocketPos of candidates) {
         const resolvedBase = resolveCommittedBaseCandidate({
-            preferredBottomPos: { x: candidateSocketPos.x, y: candidateSocketPos.y, z: 0 },
-            lastSegmentStart: null,
+            preferredBottomPos: { x: terminalPoint.x, y: terminalPoint.y, z: 0 },
+            lastSegmentStart: terminalPoint,
             rootTopZ: args.rootTopZ,
             gridEnabled: args.gridEnabled,
             spacingMm: args.spacingMm,
@@ -345,14 +349,24 @@ export function findMixedSocketRescueCandidate(args: {
             buildNearestCandidateNodeKeys: args.buildNearestCandidateNodeKeys,
             subGridOffset: args.subGridOffset,
         });
-        if (!resolvedBase) {
-            continue;
-        }
 
-        const rootTopTarget = resolvedBase.rootTopTarget;
+        resolvedBaseCache.set(key, resolvedBase);
+        return resolvedBase;
+    };
+
+    let best: MixedSocketRescueCandidate | null = null;
+
+    for (const candidateSocketPos of candidates) {
         const socketShiftMm = distanceXY(candidateSocketPos, args.socketPos);
 
         const considerCandidate = (joints: Vec3[]): void => {
+            const terminalPoint = joints[joints.length - 1] ?? candidateSocketPos;
+            const resolvedBase = getResolvedBaseForTerminalPoint(terminalPoint);
+            if (!resolvedBase) {
+                return;
+            }
+
+            const rootTopTarget = resolvedBase.rootTopTarget;
             const chainPoints = [candidateSocketPos, ...joints, rootTopTarget];
             for (let i = 0; i < chainPoints.length - 1; i++) {
                 const start = chainPoints[i];
@@ -397,9 +411,8 @@ export function findMixedSocketRescueCandidate(args: {
             jointZ > args.rootTopZ + MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM;
             jointZ -= MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM
         ) {
-            const t = (candidateSocketPos.z - jointZ) / availableDrop;
-            const centerX = candidateSocketPos.x + (rootTopTarget.x - candidateSocketPos.x) * t;
-            const centerY = candidateSocketPos.y + (rootTopTarget.y - candidateSocketPos.y) * t;
+            const centerX = candidateSocketPos.x;
+            const centerY = candidateSocketPos.y;
 
             for (const jointRadius of MIXED_SOCKET_RESCUE_JOINT_RADII_MM) {
                 if (jointRadius === 0) {
