@@ -42,6 +42,7 @@ export function PickingOrbitPauser() {
   const orbitFallbackResumeRef = React.useRef<number | null>(null);
   const isPausedRef = React.useRef(false);
   const lastRequestedResumeDelayRef = React.useRef(220);
+  const lastFallbackRefreshMsRef = React.useRef(0);
 
   type SupportGizmoWindowState = Window & {
     __jointGizmoDragging?: boolean;
@@ -58,15 +59,25 @@ export function PickingOrbitPauser() {
         window.clearTimeout(resumeTimeoutRef.current);
         resumeTimeoutRef.current = null;
       }
-      if (orbitFallbackResumeRef.current !== null) {
-        window.clearTimeout(orbitFallbackResumeRef.current);
+
+      const now = performance.now();
+      const shouldRefreshFallback =
+        orbitFallbackResumeRef.current === null
+        || now - lastFallbackRefreshMsRef.current > 140;
+
+      if (shouldRefreshFallback) {
+        if (orbitFallbackResumeRef.current !== null) {
+          window.clearTimeout(orbitFallbackResumeRef.current);
+        }
+        lastFallbackRefreshMsRef.current = now;
+        orbitFallbackResumeRef.current = window.setTimeout(() => {
+          orbitFallbackResumeRef.current = null;
+          if (!isPausedRef.current) return;
+          isPausedRef.current = false;
+          resume();
+        }, 420);
       }
-      orbitFallbackResumeRef.current = window.setTimeout(() => {
-        orbitFallbackResumeRef.current = null;
-        if (!isPausedRef.current) return;
-        isPausedRef.current = false;
-        resume();
-      }, 420);
+
       if (!isPausedRef.current) {
         isPausedRef.current = true;
         pause();

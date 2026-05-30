@@ -82,7 +82,7 @@ import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
 import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanvasInteractionBits';
 
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
-import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, LoggingHelper, SceneMoodOverlay } from './SceneEnvironment';
+import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
 import { useIsLinux } from '@/hooks/usePlatform';
@@ -1068,6 +1068,7 @@ export function SceneCanvas({
   const [supportGizmoInteractionActive, setSupportGizmoInteractionActive] = React.useState(false);
   const supportGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const webGlRecoveryTimeoutRef = React.useRef<number | null>(null);
+  const useReactOrbitInteractionState = !(mode === 'prepare' && transformMode === 'transform');
     const isOrbitInRotateState = React.useCallback(() => {
       if (trackpadGestureActionRef.current != null) {
         return trackpadGestureActionRef.current === 'orbit';
@@ -1947,13 +1948,8 @@ export function SceneCanvas({
     }
     if (prevBranchHoverDotVisibleRef.current !== visible) {
       prevBranchHoverDotVisibleRef.current = visible;
-      console.log('[BranchHoverDot]', visible ? 'show' : 'hide', {
-        pos: branchHoverPosition,
-        isBranchPlacementActive,
-        time: performance.now(),
-      });
     }
-  }, [branchHoverPosition, branchTipPosition, branchPlacementPreview, isBranchPlacementActive]);
+  }, [branchHoverPosition, branchTipPosition, branchPlacementPreview]);
 
   React.useEffect(() => {
     const visible = !!leafHoverPosition && !leafTipPosition && !leafPlacementPreview;
@@ -1963,13 +1959,8 @@ export function SceneCanvas({
     }
     if (prevLeafHoverDotVisibleRef.current !== visible) {
       prevLeafHoverDotVisibleRef.current = visible;
-      console.log('[LeafHoverDot]', visible ? 'show' : 'hide', {
-        pos: leafHoverPosition,
-        isLeafPlacementActive,
-        time: performance.now(),
-      });
     }
-  }, [leafHoverPosition, leafTipPosition, leafPlacementPreview, isLeafPlacementActive]);
+  }, [leafHoverPosition, leafTipPosition, leafPlacementPreview]);
 
   // Computed refs for active model
   const activeGroupRef = React.useMemo(
@@ -3210,6 +3201,45 @@ export function SceneCanvas({
     transform,
   ]);
 
+  const footprintOutlineTargets = React.useMemo(() => {
+    const ids = selectedTransformableModelIds.length > 0
+      ? selectedTransformableModelIds
+      : activeModelId
+        ? [activeModelId]
+        : hoveredModelId
+          ? [hoveredModelId]
+          : [];
+
+    const seen = new Set<string>();
+    const targets: Array<{
+      id: string;
+      geometry: LoadedModel['geometry'];
+      transform: ModelTransform;
+    }> = [];
+
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      const model = modelById.get(id);
+      if (!model || !model.visible) continue;
+
+      targets.push({
+        id,
+        geometry: model.geometry,
+        transform: (id === activeModelId && transform) ? transform : model.transform,
+      });
+    }
+
+    return targets;
+  }, [
+    activeModelId,
+    hoveredModelId,
+    modelById,
+    selectedTransformableModelIds,
+    transform,
+  ]);
+
   const crossSectionStencilSourceVersion = React.useMemo(() => ({
     supportRenderRefreshNonce,
     supportDragTransactionId,
@@ -3599,7 +3629,6 @@ export function SceneCanvas({
   const handleCanvasClick = React.useCallback(
     (e: React.MouseEvent) => {
       if (!cameraInteractionCycleEnabled) return;
-      console.log('[Canvas] handleCanvasClick fired, mode:', mode);
 
       const target = e.target as HTMLElement | null;
       // Canvas whitespace deselection is handled via R3F onPointerMissed for reliable hit/miss detection.
@@ -3612,7 +3641,6 @@ export function SceneCanvas({
       }
 
       if (window.__modelClickedThisFrame) {
-        console.log('[Canvas] Ignoring click (model clicked this frame)');
         return;
       }
 
@@ -3636,7 +3664,7 @@ export function SceneCanvas({
     if (!cameraInteractionCycleEnabled) return;
     if (isMarqueeSelecting) return;
     if (window.__modelClickedThisFrame) return;
-    if (isOrbitInteracting || spaceMouseNavigationActive) return;
+    if (orbitInteractionActiveRef.current || spaceMouseNavigationActive) return;
 
     if (suppressNextCanvasClickRef.current || (window as any).__gizmoDragEndedThisFrame) {
       suppressNextCanvasClickRef.current = false;
@@ -3656,7 +3684,7 @@ export function SceneCanvas({
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSupportSelection();
     }
-  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
+  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -3685,9 +3713,11 @@ export function SceneCanvas({
   }, [buildPlateOpacity, isCameraBelowBuildPlate]);
 
   const hidePlateContactPrimitives = plateContactCullActive;
-  const hideRaftPrimitives = plateContactCullActive;
-  const hideGridHelpers = plateContactCullActive;
+  const hideRaftPrimitives = mode === 'support' && plateContactCullActive;
+  const hideGridHelpers = false;
+  const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
+  const suppressSupportProxyPointerInteraction = supportCreationModeActive || suppressSupportSelectionAndHover || modifyToolActive;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -4322,7 +4352,7 @@ export function SceneCanvas({
       orbitChangeQueuedRef.current = false;
 
       const orbitActive = orbitInteractionActiveRef.current;
-      if (orbitActive) {
+      if (orbitActive && useReactOrbitInteractionState) {
         const rotating = isOrbitInRotateState();
         setIsOrbitRotating((prev) => (prev === rotating ? prev : rotating));
       }
@@ -4338,7 +4368,7 @@ export function SceneCanvas({
         }
       }
     });
-  }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
+  }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds, useReactOrbitInteractionState]);
 
   const handleSpaceMouseNavigationFrame = React.useCallback(() => {
     if (!cameraInteractionCycleEnabled) return;
@@ -4418,14 +4448,16 @@ export function SceneCanvas({
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
     const isRotateInteraction = isOrbitInRotateState();
-    setIsOrbitRotating(isRotateInteraction);
-    setIsOrbitInteracting(true);
-    setMouseOrbitDragRunId((id) => id + 1);
+    if (useReactOrbitInteractionState) {
+      setIsOrbitRotating(isRotateInteraction);
+      setIsOrbitInteracting(true);
+      setMouseOrbitDragRunId((id) => id + 1);
+    }
     window.dispatchEvent(new Event('picking-orbit-start'));
     if (!isRotateInteraction) {
       window.dispatchEvent(new Event('picking-pan-start'));
     }
-  }, [isOrbitInRotateState]);
+  }, [isOrbitInRotateState, useReactOrbitInteractionState]);
 
   const handleOrbitEnd = React.useCallback(() => {
     const wasTrackpadGesture = trackpadGestureActionRef.current !== null;
@@ -4436,8 +4468,10 @@ export function SceneCanvas({
     }
     orbitInteractionActiveRef.current = false;
     orbitInteractionMovedRef.current = false;
-    setIsOrbitInteracting(false);
-    setIsOrbitRotating(false);
+    if (useReactOrbitInteractionState) {
+      setIsOrbitInteracting(false);
+      setIsOrbitRotating(false);
+    }
 
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
@@ -4447,7 +4481,7 @@ export function SceneCanvas({
     window.dispatchEvent(new CustomEvent('picking-pan-end', {
       detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
-  }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate]);
+  }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate, useReactOrbitInteractionState]);
 
   React.useEffect(() => {
     if (cameraInteractionCycleEnabled) return;
@@ -4902,8 +4936,6 @@ export function SceneCanvas({
           onWebGlContextLost={handleWebGlContextLost}
           onWebGlContextRestored={handleWebGlContextRestored}
         />
-        <LoggingHelper mode={mode} />
-        
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
           directionalIntensity={directionalIntensity ?? 0.3}
@@ -5104,7 +5136,7 @@ export function SceneCanvas({
                             hoverModelId={supportHoverModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             navigationLodActive={navigationLodActive}
-                            disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
+                            disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                             raftColorized={raftColorized}
                             raftHoverized={raftHoverized}
                             passive
@@ -5399,7 +5431,7 @@ export function SceneCanvas({
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={navigationLodActive}
-                  disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
+                  disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
@@ -5471,12 +5503,17 @@ export function SceneCanvas({
                 && !hideFootprintOutlineForPreview
                 && !(transformMode === 'placeOnFace' && disableRaycast)
                 && (
-                <FootprintBorderRenderer
-                  modelGeometry={activeModel ? activeModel.geometry : null}
-                  modelTransform={activeModelTransform}
-                  modelId={activeModelId ?? hoveredModelId ?? null}
-                  color={supportHoverTintColor}
-                />
+                <>
+                  {footprintOutlineTargets.map((entry) => (
+                    <FootprintBorderRenderer
+                      key={`footprint-border-${entry.id}`}
+                      modelGeometry={entry.geometry}
+                      modelTransform={entry.transform}
+                      modelId={entry.id}
+                      color={supportHoverTintColor}
+                    />
+                  ))}
+                </>
               )}
 
               {satDebugTargets.map((entry) => (
@@ -5511,7 +5548,7 @@ export function SceneCanvas({
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive
-                  disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
+                  disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   passive
@@ -5546,7 +5583,7 @@ export function SceneCanvas({
                         hoverModelId={supportHoverModelId}
                         modelDropOffsetsById={entryDropOffsets}
                         modelFilterId={modelId}
-                        disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
+                        disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                         raftColorized={raftColorized}
                         raftHoverized={raftHoverized}
                         passive
@@ -5739,18 +5776,6 @@ export function SceneCanvas({
                             },
                           };
                         });
-
-                        const formatVec3 = (v: THREE.Vector3) => `(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`;
-                        console.groupCollapsed('[MultiGizmo][Scene] move commit payload');
-                        console.log('selected models:', entries.map((entry) => entry.modelId));
-                        console.log('model positions:', entries.map((entry) => ({ modelId: entry.modelId, position: formatVec3(entry.before.position) })));
-                        const draggedEntry = entries.find((entry) => entry.modelId === activeModelId) ?? entries[0] ?? null;
-                        console.log('model dragged to:', draggedEntry ? {
-                          modelId: draggedEntry.modelId,
-                          position: formatVec3(draggedEntry.after.position),
-                        } : null);
-                        console.log('model updated position:', entries.map((entry) => ({ modelId: entry.modelId, position: formatVec3(entry.after.position) })));
-                        console.groupEnd();
 
                         onGizmoTransformGroupCommit?.({
                           operation: 'move',
@@ -6016,18 +6041,6 @@ export function SceneCanvas({
                             },
                           };
                         });
-
-                        const formatVec3 = (v: THREE.Vector3) => `(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`;
-                        console.groupCollapsed('[MultiGizmo][Scene] scale commit payload');
-                        console.log('selected models:', entries.map((entry) => entry.modelId));
-                        console.log('model positions:', entries.map((entry) => ({ modelId: entry.modelId, position: formatVec3(entry.before.position) })));
-                        const draggedEntry = entries.find((entry) => entry.modelId === activeModelId) ?? entries[0] ?? null;
-                        console.log('model dragged to:', draggedEntry ? {
-                          modelId: draggedEntry.modelId,
-                          position: formatVec3(draggedEntry.after.position),
-                        } : null);
-                        console.log('model updated position:', entries.map((entry) => ({ modelId: entry.modelId, position: formatVec3(entry.after.position) })));
-                        console.groupEnd();
 
                         onGizmoTransformGroupCommit?.({
                           operation: 'scale',
