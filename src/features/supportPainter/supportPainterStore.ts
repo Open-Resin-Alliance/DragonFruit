@@ -200,6 +200,34 @@ function updateSnapshot() {
   };
 }
 
+function _remapSupportsRoiId(state: any, sourceRoiIds: string[], targetRoiId: string): any {
+  const sourceSet = new Set(sourceRoiIds);
+  const remapEntity = (record: any) => {
+    if (!record) return record;
+    const next: any = {};
+    for (const [id, value] of Object.entries(record)) {
+      const val = value as any;
+      if (val.roiId && sourceSet.has(val.roiId)) {
+        next[id] = { ...val, roiId: targetRoiId };
+      } else {
+        next[id] = val;
+      }
+    }
+    return next;
+  };
+
+  return {
+    ...state,
+    roots: remapEntity(state.roots),
+    trunks: remapEntity(state.trunks),
+    branches: remapEntity(state.branches),
+    leaves: remapEntity(state.leaves),
+    twigs: remapEntity(state.twigs),
+    sticks: remapEntity(state.sticks),
+    anchors: remapEntity(state.anchors),
+  };
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   const clean = hex.replace('#', '');
   const r = parseInt(clean.substring(0, 2), 16);
@@ -451,6 +479,11 @@ export const supportPainterStore = {
             regions.delete(otherId);
           }
           newRegion.triangleIds = nextSet;
+
+          // Remap supports belonging to merged ROIs to the new unified ROI
+          const supportState = getSupportSnapshot();
+          const nextSupportState = _remapSupportsRoiId(supportState, touchedIds, id);
+          setSupportSnapshot(nextSupportState);
         }
       }
     }
@@ -528,6 +561,11 @@ export const supportPainterStore = {
           region.triangleIds = nextSet;
           region.rleSpans = undefined;
           region.loops = undefined;
+
+          // Remap supports belonging to merged ROIs to the active unified ROI
+          const supportState = getSupportSnapshot();
+          const nextSupportState = _remapSupportsRoiId(supportState, touchedIds, regionId);
+          setSupportSnapshot(nextSupportState);
         }
       }
     }
@@ -862,6 +900,11 @@ export const supportPainterStore = {
       nextRA.triangleIds = new Set([...rA.triangleIds, ...rB.triangleIds]);
       nextRegions.set(roiIdA, nextRA);
       nextRegions.delete(roiIdB);
+
+      // Remap supports of the merged ROI to the unified target ROI
+      const supportState = getSupportSnapshot();
+      const nextSupportState = _remapSupportsRoiId(supportState, [roiIdB], roiIdA);
+      setSupportSnapshot(nextSupportState);
     } else if (type === 'subtract') {
       const nextSet = new Set<number>();
       for (const id of rA.triangleIds) {

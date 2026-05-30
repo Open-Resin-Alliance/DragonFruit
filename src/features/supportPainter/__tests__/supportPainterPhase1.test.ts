@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { supportPainterStore } from '../supportPainterStore';
 import { serializeROIsForVoxl, deserializeROIsFromVoxl } from '../voxlCodec';
 import { type CustomBrushTemplate, type ROIRegion } from '../supportPainterTypes';
+import { getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot } from '@/supports/state';
 
 describe('Support Painter Phase 1 - Custom Brush Store & Codec Tests', () => {
   const mockBrush: CustomBrushTemplate = {
@@ -218,6 +219,71 @@ describe('Support Painter Phase 1 - Custom Brush Store & Codec Tests', () => {
     assert.strictEqual(subtractedRegion.loops, undefined, 'Subtracting triangle IDs must invalidate cached loops');
 
     // Clean up store
+    supportPainterStore.clearAll();
+    supportPainterStore.setActiveModelId(null);
+  });
+
+  it('should remap support roiIds correctly when merging regions through boolean union', () => {
+    const roiIdA = 'roi-union-a';
+    const roiIdB = 'roi-union-b';
+    const testModelId = 'test-model-union';
+
+    // 1. Create mock regions in the store
+    const rA: ROIRegion = {
+      id: roiIdA,
+      brushType: 'MacroFace',
+      seedTriangleId: 10,
+      triangleIds: new Set([10, 11]),
+      color: '#4A90E2',
+      proposedOnly: false,
+      createdAt: Date.now(),
+    };
+    const rB: ROIRegion = {
+      id: roiIdB,
+      brushType: 'MacroFace',
+      seedTriangleId: 20,
+      triangleIds: new Set([20, 21]),
+      color: '#FF5B6F',
+      proposedOnly: false,
+      createdAt: Date.now(),
+    };
+
+    const regionsMap = new Map<string, ROIRegion>();
+    regionsMap.set(roiIdA, rA);
+    regionsMap.set(roiIdB, rB);
+
+    supportPainterStore.setActiveModelId(testModelId);
+    supportPainterStore.restoreRegions(regionsMap);
+
+    // 2. Set up mock supports in the support state
+    const originalSupportState = getSupportSnapshot();
+    const mockSupportState = {
+      ...originalSupportState,
+      roots: {
+        'root-1': { id: 'root-1', roiId: roiIdB, modelId: testModelId },
+      },
+      trunks: {
+        'trunk-1': { id: 'trunk-1', roiId: roiIdB, modelId: testModelId, segments: [] },
+      },
+    };
+    setSupportSnapshot(mockSupportState as any);
+
+    // 3. Perform Union Boolean operation (merges B into A, and deletes B)
+    supportPainterStore.booleanOperate('union', roiIdA, roiIdB);
+
+    // 4. Verify ROIs in the store
+    const snapshot = supportPainterStore.getSnapshot();
+    assert.ok(snapshot.regions.has(roiIdA));
+    assert.ok(!snapshot.regions.has(roiIdB), 'Merged region B should be deleted');
+    assert.strictEqual(snapshot.regions.get(roiIdA)!.triangleIds.size, 4);
+
+    // 5. Verify remapping of supports in the support state
+    const postSupportState = getSupportSnapshot();
+    assert.strictEqual(postSupportState.roots['root-1']?.roiId, roiIdA, 'Merged support roots must be reassociated with the target ROI');
+    assert.strictEqual(postSupportState.trunks['trunk-1']?.roiId, roiIdA, 'Merged support trunks must be reassociated with the target ROI');
+
+    // Clean up
+    setSupportSnapshot(originalSupportState);
     supportPainterStore.clearAll();
     supportPainterStore.setActiveModelId(null);
   });
