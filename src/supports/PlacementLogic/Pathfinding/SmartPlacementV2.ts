@@ -69,6 +69,12 @@ const ROOTS_DISK_PERIMETER_SAMPLES = 16;
 const ROOTS_DISK_SAFETY_MM = COLLISION_AVOIDANCE_MM;
 
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
+const MIN_ROUTING_SEARCH_LATERAL_MM = 60;
+const MAX_ROUTING_SEARCH_LATERAL_MM = 120;
+const ROUTING_SEARCH_LATERAL_PER_VERTICAL_MM = 3.0;
+const ROUTING_SEARCH_SWEEP_RADII_MM = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30, 36, 44, 52, 60, 72, 84, 96, 108];
+const BASE_WIDE_PASS_EXPANSIONS_AT_2MM = 600;
+const BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM = 250;
 
 // Minimum vertical span (mm) that routing joints must cover.
 // If 2+ joints are all crammed into a small Z band at the tip (< this value),
@@ -89,6 +95,48 @@ function scaleExpansionsForStep(baseExpansionsAt2mm: number, stepMm: number): nu
     // Keep approximate travel reach comparable to historical 2mm tuning by
     // scaling expansion budget with inverse step size.
     return Math.max(1, Math.round((baseExpansionsAt2mm * LEGACY_BASE_STEP_MM) / stepMm));
+}
+
+export interface SmartPlacementV2SearchEnvelope {
+    maxTotalLateralMm: number;
+    rescueSweepRadiiMm: number[];
+}
+
+export function getSmartPlacementV2SearchEnvelope(args: {
+    socketPos: Vec3;
+    rootTopZ: number;
+    spacingMm: number;
+}): SmartPlacementV2SearchEnvelope {
+    const verticalSpanMm = Math.max(0, args.socketPos.z - args.rootTopZ);
+    const unclampedLateralLimit = Math.max(
+        MIN_ROUTING_SEARCH_LATERAL_MM,
+        args.spacingMm * 15,
+        verticalSpanMm * ROUTING_SEARCH_LATERAL_PER_VERTICAL_MM,
+    );
+    const maxTotalLateralMm = Math.round(
+        Math.min(MAX_ROUTING_SEARCH_LATERAL_MM, unclampedLateralLimit) * 2,
+    ) / 2;
+
+    const rescueSweepRadiiMm = ROUTING_SEARCH_SWEEP_RADII_MM.filter((radius) => radius < maxTotalLateralMm - 0.000001);
+    if (
+        rescueSweepRadiiMm.length === 0
+        || Math.abs(rescueSweepRadiiMm[rescueSweepRadiiMm.length - 1] - maxTotalLateralMm) > 0.000001
+    ) {
+        rescueSweepRadiiMm.push(maxTotalLateralMm);
+    }
+
+    return {
+        maxTotalLateralMm,
+        rescueSweepRadiiMm,
+    };
+}
+
+function getWidePassBaseExpansionsAt2mm(maxTotalLateralMm: number, isPreview: boolean): number {
+    const baseBudget = isPreview
+        ? BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM
+        : BASE_WIDE_PASS_EXPANSIONS_AT_2MM;
+    const radiusScale = Math.min(2, Math.max(1, maxTotalLateralMm / MIN_ROUTING_SEARCH_LATERAL_MM));
+    return Math.round(baseBudget * radiusScale);
 }
 
 // ---------- Roots cone volume check ----------
@@ -150,6 +198,92 @@ function rootsDiskBlocked(
     }
 
     return false;
+}
+
+export interface ResolvedBaseCandidate {
+    basePos: Vec3;
+    rootTopTarget: Vec3;
+    snapDistance: number;
+    nodeKey: string | null;
+}
+
+export function resolveCommittedBaseCandidate(args: {
+    preferredBottomPos: Vec3;
+    lastSegmentStart: Vec3 | null;
+    rootTopZ: number;
+    gridEnabled: boolean;
+    spacingMm: number;
+    maxNearestNodeSearchRings: number;
+    sdf: SDFCache;
+    diskHeight: number;
+    coneHeight: number;
+    rootsRadius: number;
+    shaftRadius: number;
+    clearance: number;
+    buildNearestCandidateNodeKeys?: (preferredKey: string, maxRings: number) => string[];
+    subGridOffset?: { x: number; y: number } | null;
+}): ResolvedBaseCandidate | null {
+    const candidateNodeKeys = args.gridEnabled
+        ? args.buildNearestCandidateNodeKeys?.(
+            gridNodeKeyFromXY(args.preferredBottomPos.x, args.preferredBottomPos.y, args.spacingMm),
+            args.maxNearestNodeSearchRings,
+        ) ?? []
+        : ['disabled'];
+
+    let bestBase: ResolvedBaseCandidate | null = null;
+    for (const nodeKey of candidateNodeKeys) {
+        let snappedXY = args.gridEnabled
+            ? gridSnappedXYFromKey(nodeKey, args.spacingMm)
+            : { x: args.preferredBottomPos.x, y: args.preferredBottomPos.y };
+
+        if (!args.gridEnabled && args.subGridOffset) {
+            snappedXY = {
+                x: snappedXY.x + args.subGridOffset.x,
+                y: snappedXY.y + args.subGridOffset.y,
+            };
+        }
+
+        const basePos: Vec3 = { x: snappedXY.x, y: snappedXY.y, z: 0 };
+        const rootTopTarget: Vec3 = { x: snappedXY.x, y: snappedXY.y, z: args.rootTopZ };
+        if (rootsDiskBlocked(
+            args.sdf,
+            basePos.x,
+            basePos.y,
+            args.diskHeight,
+            args.coneHeight,
+            args.rootsRadius,
+            args.shaftRadius,
+        )) {
+            continue;
+        }
+
+        if (
+            args.lastSegmentStart
+            && args.sdf.segmentBlocked(
+                args.lastSegmentStart.x,
+                args.lastSegmentStart.y,
+                args.lastSegmentStart.z,
+                rootTopTarget.x,
+                rootTopTarget.y,
+                rootTopTarget.z,
+                args.clearance,
+            )
+        ) {
+            continue;
+        }
+
+        const snapDistance = distanceXY(basePos, args.preferredBottomPos);
+        if (!bestBase || snapDistance < bestBase.snapDistance) {
+            bestBase = {
+                basePos,
+                rootTopTarget,
+                snapDistance,
+                nodeKey: args.gridEnabled ? nodeKey : null,
+            };
+        }
+    }
+
+    return bestBase;
 }
 
 // ---------- SDF Cache Pool ----------
@@ -296,7 +430,6 @@ export function calculateSmartPlacementV2(
     // can take lateral steps to navigate around overhangs. Final trunk angle is
     // validated via maxSegmentAngleFromVerticalDeg after the path is resolved.
     const ROUTING_ANGLE_FROM_VERTICAL_DEG = 80;
-    const maxTotalLateralMm = Math.max(60, settings.grid.spacingMm * 15);
 
     // 1. Standard placement (baseline — no collision check)
     const standard = calculateStandardPlacement(input);
@@ -313,6 +446,11 @@ export function calculateSmartPlacementV2(
     const rootTopZ = input.rootsTopZ;
     const socketPos = standard.socketPos;
     const isPreview = context?.isPreview ?? false;
+    const { maxTotalLateralMm, rescueSweepRadiiMm } = getSmartPlacementV2SearchEnvelope({
+        socketPos,
+        rootTopZ,
+        spacingMm: settings.grid.spacingMm,
+    });
 
     // Shaft + roots checks now use SDF sphere-tracing and bounding-ball
     // early-outs, so preview no longer needs the old coarse approximations —
@@ -372,9 +510,26 @@ export function calculateSmartPlacementV2(
 
     // Full-resolution roots validation for both preview and click-time —
     // the SDF bounding-ball early-out makes open slices effectively free.
-    const goalValidator = (wx: number, wy: number, wz: number) => {
-        void wz;
-        return !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
+    const goalValidator = (wx: number, wy: number, wz: number, parentPos: Vec3 | null) => {
+        if (!settings.grid.enabled) {
+            return !rootsDiskBlocked(sdf, wx, wy, diskHeight, coneHeight, rootsRadius, shaftRadius);
+        }
+
+        return resolveCommittedBaseCandidate({
+            preferredBottomPos: { x: wx, y: wy, z: 0 },
+            lastSegmentStart: parentPos,
+            rootTopZ,
+            gridEnabled: true,
+            spacingMm: settings.grid.spacingMm,
+            maxNearestNodeSearchRings: MAX_NEAREST_NODE_SEARCH_RINGS,
+            sdf,
+            diskHeight,
+            coneHeight,
+            rootsRadius,
+            shaftRadius,
+            clearance,
+            buildNearestCandidateNodeKeys,
+        }) != null;
     };
 
     const result = gridAStar(sdf, socketPos, rootTopZ, {
@@ -403,10 +558,10 @@ export function calculateSmartPlacementV2(
     // complex overhangs before finding the clear corridor.
     //
     // When the fine-step search fails (exhausted budget, stagnated, or simply hit
-    // a pathfinding ceiling), retry with a 6mm grid and 600 expansions. The coarser
-    // grid gives V1-equivalent reach (10 cells × 6mm = 60mm per axis), while keeping
-    // SDF-backed precision for each edge validation. Any directed path that V1 would
-    // find in macro-jumps, V2 at 6mm step will find in similar expansion counts.
+    // a pathfinding ceiling), retry with a coarser 0.6mm grid and a budget that
+    // scales with the current lateral envelope. This rescue pass explores much
+    // farther per unit of work than the 0.25mm fine pass while still keeping the
+    // base position tight and validating every edge against the SDF.
     // Only retry if we didn't already reach a goal — don't double-process successes.
     if (!result.reached) {
         const wideResult = gridAStar(sdf, socketPos, rootTopZ, {
@@ -416,14 +571,17 @@ export function calculateSmartPlacementV2(
             occupancy: context?.occupancy,
             ignoreSupportId: context?.placingSupportId,
             // Preview should remain responsive; use a smaller wide-step budget.
-            maxExpansions: scaleExpansionsForStep(isPreview ? 250 : 600, WIDE_ASTAR_STEP_MM),
+            maxExpansions: scaleExpansionsForStep(
+                getWidePassBaseExpansionsAt2mm(maxTotalLateralMm, isPreview),
+                WIDE_ASTAR_STEP_MM,
+            ),
             stepMm: WIDE_ASTAR_STEP_MM,
             goalValidator,
             endpointOnlyCollisionCheck: isPreview,
         }, null); // always cold-start wide search (different grid quantisation)
         if (wideResult.reached) {
             // Wide-step succeeded — use its result. Don't write to warm-start maps
-            // since the 6mm grid state is incompatible with the normal 2mm warm-start.
+            // since the 0.6mm grid state is incompatible with the normal 0.25mm warm-start.
             const widePathJoints = wideResult.path.slice(1, -1);
             const widePathEnd = wideResult.path[wideResult.path.length - 1];
             // Grid-snap the base and validate angle using the routing angle (looser than final)
@@ -439,30 +597,30 @@ export function calculateSmartPlacementV2(
             const _ge = settings.grid.enabled;
             const _sp = settings.grid.spacingMm;
             const _ubp: Vec3 = { x: widePathEnd.x, y: widePathEnd.y, z: 0 };
-            const _cnk = _ge
-                ? _bncCached(gridNodeKeyFromXY(_ubp.x, _ubp.y, _sp), MAX_NEAREST_NODE_SEARCH_RINGS)
-                : ['disabled'];
-            let _best: { basePos: Vec3; snapDistance: number; nodeKey: string | null } | null = null;
             const _wideSubGridOffset = !_ge ? {
                 x: input.tipPos.x - Math.round(input.tipPos.x / WIDE_ASTAR_STEP_MM) * WIDE_ASTAR_STEP_MM,
                 y: input.tipPos.y - Math.round(input.tipPos.y / WIDE_ASTAR_STEP_MM) * WIDE_ASTAR_STEP_MM,
             } : null;
-            for (const nk of _cnk) {
-                let sxy = _ge ? gridSnappedXYFromKey(nk, _sp) : { x: _ubp.x, y: _ubp.y };
-                if (!_ge && _wideSubGridOffset) {
-                    sxy = {
-                        x: sxy.x + _wideSubGridOffset.x,
-                        y: sxy.y + _wideSubGridOffset.y,
-                    };
-                }
-                const bp: Vec3 = { x: sxy.x, y: sxy.y, z: 0 };
-                if (rootsDiskBlocked(sdf, bp.x, bp.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
-                const sd = distanceXY(bp, _ubp);
-                if (!_best || sd < _best.snapDistance) _best = { basePos: bp, snapDistance: sd, nodeKey: nk };
-            }
+            let _best = resolveCommittedBaseCandidate({
+                preferredBottomPos: _ubp,
+                lastSegmentStart: widePathJoints.length > 0 ? widePathJoints[widePathJoints.length - 1] : widePathEnd,
+                rootTopZ,
+                gridEnabled: _ge,
+                spacingMm: _sp,
+                maxNearestNodeSearchRings: MAX_NEAREST_NODE_SEARCH_RINGS,
+                sdf,
+                diskHeight,
+                coneHeight,
+                rootsRadius,
+                shaftRadius,
+                clearance,
+                buildNearestCandidateNodeKeys: _bncCached,
+                subGridOffset: _wideSubGridOffset,
+            });
             if (!_best) {
                 _best = {
                     basePos: { x: _ubp.x, y: _ubp.y, z: 0 },
+                    rootTopTarget: { x: _ubp.x, y: _ubp.y, z: rootTopZ },
                     snapDistance: 0,
                     nodeKey: null,
                 };
@@ -541,8 +699,7 @@ export function calculateSmartPlacementV2(
 
                 // Expand rings outward; terminate when no candidate in this ring
                 // or any larger ring can beat the current best.
-                const _sr = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30];
-                for (const _r of _sr) {
+                for (const _r of rescueSweepRadiiMm) {
                     if (_r > maxTotalLateralMm) break;
                     // Socket-centered candidates at this ring have distance _r from socket.
                     // A*-base-centered candidates have minimum distance max(0, _distSA - _r).
@@ -987,50 +1144,22 @@ export function calculateSmartPlacementV2(
     } : null;
 
     // Find best grid node for the base
-    let bestBase: {
-        basePos: Vec3;
-        rootTopTarget: Vec3;
-        snapDistance: number;
-        nodeKey: string | null;
-    } | null = null;
-
-    const candidateNodeKeys = gridEnabled
-        ? buildNearestCandidateNodeKeysCached(
-            gridNodeKeyFromXY(unsnappedBottomPos.x, unsnappedBottomPos.y, spacingMm),
-            MAX_NEAREST_NODE_SEARCH_RINGS,
-        )
-        : ['disabled'];
-
-    for (const nodeKey of candidateNodeKeys) {
-        let snappedXY = gridEnabled
-            ? gridSnappedXYFromKey(nodeKey, spacingMm)
-            : { x: unsnappedBottomPos.x, y: unsnappedBottomPos.y };
-
-        // When grid is disabled, apply the sub-grid offset to preserve uniqueness
-        if (!gridEnabled && subGridOffset) {
-            snappedXY = {
-                x: snappedXY.x + subGridOffset.x,
-                y: snappedXY.y + subGridOffset.y,
-            };
-        }
-
-        const basePos: Vec3 = { x: snappedXY.x, y: snappedXY.y, z: 0 };
-        const rootTopTarget: Vec3 = { x: snappedXY.x, y: snappedXY.y, z: rootTopZ };
-        const snapDistance = distanceXY(basePos, unsnappedBottomPos);
-
-        // Volumetric roots check at this grid-snapped base position.
-        // Grid snapping shifts XY, so a position the A* validated may not
-        // hold after snapping — recheck the full cone/disk volume.
-        if (rootsDiskBlocked(sdf, basePos.x, basePos.y, diskHeight, coneHeight, rootsRadius, shaftRadius)) continue;
-
-        // Check that the last shaft segment (lowest joint → rootTopTarget) is also clear
-        const lastJoint = pathJoints.length > 0 ? pathJoints[pathJoints.length - 1] : pathEnd;
-        if (sdf.segmentBlocked(lastJoint.x, lastJoint.y, lastJoint.z, rootTopTarget.x, rootTopTarget.y, rootTopTarget.z, clearance)) continue;
-
-        if (!bestBase || snapDistance < bestBase.snapDistance) {
-            bestBase = { basePos, rootTopTarget, snapDistance, nodeKey: gridEnabled ? nodeKey : null };
-        }
-    }
+    const bestBase = resolveCommittedBaseCandidate({
+        preferredBottomPos: unsnappedBottomPos,
+        lastSegmentStart: pathJoints.length > 0 ? pathJoints[pathJoints.length - 1] : pathEnd,
+        rootTopZ,
+        gridEnabled,
+        spacingMm,
+        maxNearestNodeSearchRings: MAX_NEAREST_NODE_SEARCH_RINGS,
+        sdf,
+        diskHeight,
+        coneHeight,
+        rootsRadius,
+        shaftRadius,
+        clearance,
+        buildNearestCandidateNodeKeys: buildNearestCandidateNodeKeysCached,
+        subGridOffset,
+    });
 
     if (!bestBase) {
         // No valid grid-snapped base found
@@ -1106,8 +1235,7 @@ export function calculateSmartPlacementV2(
         // search isn't limited to ~9mm radius by length-aware tightening
         // on 22mm-tall supports. The tightened angle is enforced at commit time.
         const sweepDirs = 16;
-        const sweepRadii = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30];
-        for (const r of sweepRadii) {
+        for (const r of rescueSweepRadiiMm) {
             if (r > maxTotalLateralMm) break;
             for (let d = 0; d < sweepDirs; d++) {
                 const a = (d / sweepDirs) * Math.PI * 2;

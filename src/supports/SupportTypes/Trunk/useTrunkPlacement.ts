@@ -1,8 +1,8 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addAnchor, addBranch, addKnot, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
+import { addAnchor, addBranch, addKnot, addLeaf, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
+import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_LEAF, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
@@ -328,6 +328,13 @@ export function useTrunkPlacementV2() {
             return;
         }
 
+        if (decision.kind === 'place_leaf') {
+            setPreviewData(decision.supportData);
+            setPreviewError(null);
+            setPreviewWarning(null);
+            return;
+        }
+
         if (decision.kind === 'place_anchor') {
             setPreviewData(decision.supportData);
             setPreviewError(null);
@@ -465,6 +472,21 @@ export function useTrunkPlacementV2() {
                     knot: decision.knot,
                     trunkUpdate: trunkUpdate ? { before: trunkUpdate.before, after: trunkUpdate.after } : undefined,
                     knotUpdates: trunkUpdate?.knotUpdates ?? undefined,
+                },
+            });
+            clearSupportSelection();
+            return;
+        }
+
+        if (decision.kind === 'place_leaf') {
+            addKnot(decision.knot);
+            addLeaf(decision.leaf);
+
+            pushHistory({
+                type: SUPPORT_ADD_LEAF,
+                payload: {
+                    leaf: decision.leaf,
+                    knot: decision.knot,
                 },
             });
             clearSupportSelection();

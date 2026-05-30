@@ -50,7 +50,7 @@ export interface GridAStarOptions {
      * but the roots volume at that XY may intersect the mesh. The validator
      * rejects those positions so the A* keeps searching.
      */
-    goalValidator?: (wx: number, wy: number, wz: number) => boolean;
+    goalValidator?: (wx: number, wy: number, wz: number, parentPos: Vec3 | null) => boolean;
     /**
      * When true, each neighbor edge collision check uses `sdf.isBlocked` on
      * the endpoint cell only instead of the full `sdf.segmentBlocked` sweep.
@@ -302,6 +302,14 @@ export function gridAStar(
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 
+    function decodeKey(key: number): { x: number; y: number; z: number } {
+        const uz = key % 0x8000;
+        const rem = (key - uz) / 0x8000;
+        const uy = rem % 0x8000;
+        const ux = (rem - uy) / 0x8000;
+        return { x: ux - 0x4000, y: uy - 0x4000, z: uz - 0x4000 };
+    }
+
     while (openSet.length > 0 && expansions < maxExp) {
         const current = heapPop(openSet)!;
         if (closedSet.has(current.key)) continue;
@@ -315,7 +323,18 @@ export function gridAStar(
         if (expansions - lastZProgressAt > STAGNATION_LIMIT) break;
 
         if (current.z <= gqz) {
-            if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step)) {
+            const parentKey = cameFrom.get(current.key);
+            const parentPos = parentKey === undefined
+                ? null
+                : (() => {
+                    const parent = decodeKey(parentKey);
+                    return {
+                        x: parent.x * step,
+                        y: parent.y * step,
+                        z: parent.z * step,
+                    };
+                })();
+            if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step, parentPos)) {
                 goalEntry = current;
                 break;
             }
@@ -390,14 +409,6 @@ export function gridAStar(
 
     const rawPath: Vec3[] = [];
     let traceKey = goalEntry.key;
-
-    function decodeKey(key: number): { x: number; y: number; z: number } {
-        const uz = key % 0x8000;
-        const rem = (key - uz) / 0x8000;
-        const uy = rem % 0x8000;
-        const ux = (rem - uy) / 0x8000;
-        return { x: ux - 0x4000, y: uy - 0x4000, z: uz - 0x4000 };
-    }
 
     while (traceKey !== undefined) {
         const coords = decodeKey(traceKey);
