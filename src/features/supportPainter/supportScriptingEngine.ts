@@ -84,7 +84,7 @@ interface SampledPoint extends BasicSampledPoint {
   regionId: string;
   regionType: BrushType;
   regionTriCount: number;
-  stage: 'minima' | 'perimeter' | 'infill';
+  stage: 'minima' | 'perimeter' | 'infill' | 'centerline';
 }
 
 // 2D Point-in-Triangle test using Barycentric Coordinates
@@ -514,6 +514,7 @@ export async function generateSupportsFromPainter(
   const rawMinima: SampledPoint[] = [];
   const rawPerimeter: SampledPoint[] = [];
   const rawInfill: SampledPoint[] = [];
+  const rawCenterline: SampledPoint[] = [];
 
   const regionVertexNormals = new Map<string, Map<number, THREE.Vector3>>();
   const regionBoundaryLoops = new Map<string, VoxlROIBoundaryLoop[]>();
@@ -560,8 +561,13 @@ export async function generateSupportsFromPainter(
 
     let spineData: { points: THREE.Vector3[]; normals: THREE.Vector3[] } | null = null;
 
-    if (region.brushType === 'CylinderMinima' || region.brushType === 'Ridge') {
-      // 1D Centroid Chain Walk crease spine sampling
+    const isPointPathLine = region.brushType === 'PointPath' && (
+      (region.brush?.parameters?.pointPathMode === 'line') ||
+      (region.brush === undefined && state.pointPathMode === 'line' && !state.pointPathClosed)
+    );
+
+    if (region.brushType === 'CylinderMinima' || region.brushType === 'Ridge' || isPointPathLine) {
+      // 1D Topological Graph Diameter BFS crease/spine solver
       const regionAdj = new Map<number, number[]>();
       const addRegionAdj = (ta: number, tb: number) => {
         let list = regionAdj.get(ta);
@@ -592,33 +598,43 @@ export async function generateSupportsFromPainter(
         }
       }
 
-      let startTri = Array.from(triangleIds)[0];
-      for (const triId of triangleIds) {
-        const degree = regionAdj.get(triId)?.length ?? 0;
-        if (degree === 1) {
-          startTri = triId;
-          break;
-        }
-      }
+      // BFS helper to find the topologically furthest node and its parent map
+      const runBFS = (startId: number): { furthestId: number; parentMap: Map<number, number> } => {
+        const queue: number[] = [startId];
+        const visited = new Set<number>([startId]);
+        const parentMap = new Map<number, number>();
+        let furthestId = startId;
 
-      const orderedFaces: number[] = [];
-      const visitedFaces = new Set<number>();
-      let currentTri = startTri;
+        while (queue.length > 0) {
+          const curr = queue.shift()!;
+          furthestId = curr;
 
-      while (currentTri !== undefined && !visitedFaces.has(currentTri)) {
-        orderedFaces.push(currentTri);
-        visitedFaces.add(currentTri);
-
-        const neighbors = regionAdj.get(currentTri) || [];
-        let nextTri: number | undefined = undefined;
-        for (const n of neighbors) {
-          if (!visitedFaces.has(n)) {
-            nextTri = n;
-            break;
+          const neighbors = regionAdj.get(curr) || [];
+          for (const neighbor of neighbors) {
+            if (!visited.has(neighbor)) {
+              visited.add(neighbor);
+              parentMap.set(neighbor, curr);
+              queue.push(neighbor);
+            }
           }
         }
-        currentTri = nextTri!;
+        return { furthestId, parentMap };
+      };
+
+      const startTri = Array.from(triangleIds)[0];
+      const { furthestId: endA } = runBFS(startTri);
+      const { furthestId: endB, parentMap } = runBFS(endA);
+
+      const orderedFaces: number[] = [];
+      let curr = endB;
+      while (curr !== endA) {
+        orderedFaces.push(curr);
+        const parent = parentMap.get(curr);
+        if (parent === undefined) break;
+        curr = parent;
       }
+      orderedFaces.push(endA);
+      orderedFaces.reverse(); // Standard orientation from A to B
 
       const spinePoints: THREE.Vector3[] = [];
       const spineNormals: THREE.Vector3[] = [];
@@ -805,6 +821,8 @@ export async function generateSupportsFromPainter(
         coplanarityAngleDeg: region.brushType === 'MacroFace' ? 15 : undefined,
         creaseAngleDeg: region.brushType === 'Ridge' ? 30 : undefined,
         radiusMm: region.brushType === 'Point' ? 5 : undefined,
+        pointPathMode: region.brushType === 'PointPath' ? state.pointPathMode : undefined,
+        pointPathClosed: region.brushType === 'PointPath' ? state.pointPathClosed : undefined,
       },
     };
 
@@ -821,6 +839,7 @@ export async function generateSupportsFromPainter(
           minima: { ...suppressionSettings.minima },
           perimeter: { ...suppressionSettings.perimeter },
           infill: { ...suppressionSettings.infill },
+          centerline: { ...suppressionSettings.centerline },
         },
         tipContactDiameterMm: activeSettings.tip.contactDiameterMm,
         tipBodyDiameterMm: activeSettings.tip.bodyDiameterMm,
@@ -853,8 +872,9 @@ export async function generateSupportsFromPainter(
   const acceptedMinima: SampledPoint[] = [];
   const acceptedPerimeter: SampledPoint[] = [];
   const acceptedInfill: SampledPoint[] = [];
+  const acceptedCenterline: SampledPoint[] = [];
 
-  const acceptedPoints = () => [...acceptedMinima, ...acceptedPerimeter, ...acceptedInfill];
+  const acceptedPoints = () => [...acceptedMinima, ...acceptedPerimeter, ...acceptedInfill, ...acceptedCenterline];
 
   const areRegionsIntersecting = (r1: ROIRegion, r2: ROIRegion): boolean => {
     for (const triId of r1.triangleIds) {
@@ -865,7 +885,7 @@ export async function generateSupportsFromPainter(
 
   const getRegionSuppressionRule = (
     region: ROIRegion,
-    stage: 'minima' | 'perimeter' | 'infill'
+    stage: 'minima' | 'perimeter' | 'infill' | 'centerline'
   ) => {
     if (region.customBrush) {
       const op = region.customBrush.operations.find(o => o.type === stage && o.enabled);
@@ -880,7 +900,7 @@ export async function generateSupportsFromPainter(
         return {
           enabled: false,
           distanceMm: 0,
-          types: [] as ('minima' | 'perimeter' | 'infill')[],
+          types: [] as ('minima' | 'perimeter' | 'infill' | 'centerline')[],
           mode: 'none' as const,
         };
       }
@@ -896,12 +916,12 @@ export async function generateSupportsFromPainter(
       return {
         enabled: false,
         distanceMm: 0,
-        types: [] as ('minima' | 'perimeter' | 'infill')[],
+        types: [] as ('minima' | 'perimeter' | 'infill' | 'centerline')[],
         mode: 'none' as const,
       };
     }
 
-    let radius = stage === 'perimeter'
+    let radius = stage === 'perimeter' || stage === 'centerline'
       ? perimeterSpacing
       : stage === 'infill'
         ? infillSpacing
@@ -914,7 +934,7 @@ export async function generateSupportsFromPainter(
     return {
       enabled: true,
       distanceMm: radius,
-      types: isOverrideCandidate ? ['minima', 'perimeter', 'infill'] as ('minima' | 'perimeter' | 'infill')[] : config.types,
+      types: isOverrideCandidate ? ['minima', 'perimeter', 'infill', 'centerline'] as ('minima' | 'perimeter' | 'infill' | 'centerline')[] : config.types,
       mode: effectiveMode,
     };
   };
@@ -925,7 +945,7 @@ export async function generateSupportsFromPainter(
 
     let combinedEnabled = false;
     let maxDistance = 0;
-    const combinedTypes = new Set<'minima' | 'perimeter' | 'infill'>();
+    const combinedTypes = new Set<'minima' | 'perimeter' | 'infill' | 'centerline'>();
     let combinedMode: 'none' | 'current' | 'all' = 'none';
 
     for (const r of regions) {
@@ -973,7 +993,7 @@ export async function generateSupportsFromPainter(
     if (!vertexNormals) continue;
 
     const pipeline: {
-      type: 'minima' | 'perimeter' | 'infill';
+      type: 'minima' | 'perimeter' | 'infill' | 'centerline';
       enabled: boolean;
       spacing: {
         baseSpacingMm: number;
@@ -1002,20 +1022,32 @@ export async function generateSupportsFromPainter(
       }
     } else {
       const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker';
+      const isLineBrush = region.brushType === 'Ridge' || region.brushType === 'CylinderMinima' || (
+        region.brushType === 'PointPath' && (
+          (region.brush?.parameters?.pointPathMode === 'line') ||
+          (region.brush === undefined && state.pointPathMode === 'line' && !state.pointPathClosed)
+        )
+      );
+
       pipeline.push({
         type: 'minima',
-        enabled: !isPointPathOrMarker,
+        enabled: !isPointPathOrMarker && !isLineBrush,
         spacing: { baseSpacingMm: minimaSuppressionRadius },
       });
       pipeline.push({
         type: 'perimeter',
-        enabled: !isPointPathOrMarker,
+        enabled: !isPointPathOrMarker && !isLineBrush,
         spacing: { baseSpacingMm: perimeterSpacing },
       });
       pipeline.push({
         type: 'infill',
-        enabled: true,
+        enabled: !isLineBrush,
         spacing: { baseSpacingMm: infillSpacing },
+      });
+      pipeline.push({
+        type: 'centerline',
+        enabled: isLineBrush,
+        spacing: { baseSpacingMm: perimeterSpacing, seedFromMinima: true },
       });
     }
 
@@ -1099,6 +1131,66 @@ export async function generateSupportsFromPainter(
           }
         }
         rawPerimeter.push(...candidates);
+      } else if (stage.type === 'centerline') {
+        const spine = regionSpines.get(region.id);
+        if (spine && spine.points.length > 0) {
+          const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
+          let samples: BasicSampledPoint[] = [];
+
+          if (stage.spacing.seedFromMinima) {
+            // Find the point along the spine with the absolute lowest Z-coordinate
+            let minZIdx = 0;
+            let minZ = Infinity;
+            for (let j = 0; j < spine.points.length; j++) {
+              if (spine.points[j].z < minZ) {
+                minZ = spine.points[j].z;
+                minZIdx = j;
+              }
+            }
+
+            // Split spine into two sub-paths starting at minZIdx
+            // Segment A: backwards from M to 0
+            const ptsA: THREE.Vector3[] = [];
+            const normsA: THREE.Vector3[] = [];
+            for (let j = minZIdx; j >= 0; j--) {
+              ptsA.push(spine.points[j]);
+              normsA.push(spine.normals[j]);
+            }
+
+            // Segment B: forwards from M to len-1
+            const ptsB: THREE.Vector3[] = [];
+            const normsB: THREE.Vector3[] = [];
+            for (let j = minZIdx; j < spine.points.length; j++) {
+              ptsB.push(spine.points[j]);
+              normsB.push(spine.normals[j]);
+            }
+
+            // Sample both segments symmetrically outward from M
+            const samplesA = sampleSpineWithNormals(ptsA, normsA, spacing);
+            const samplesB = sampleSpineWithNormals(ptsB, normsB, spacing);
+
+            // Merge results, skipping the duplicate starting point of samplesB
+            samples.push(...samplesA);
+            if (samplesB.length > 1) {
+              samples.push(...samplesB.slice(1));
+            }
+          } else {
+            // Standard sequential walk from tip to tip
+            samples = sampleSpineWithNormals(spine.points, spine.normals, spacing);
+          }
+
+          for (const sample of samples) {
+            candidates.push({
+              pos: sample.pos,
+              normal: sample.normal,
+              regionId: region.id,
+              regionType: region.brushType,
+              regionTriCount: region.triangleIds.size,
+              stage: 'centerline',
+            });
+          }
+        }
+        rawCenterline.push(...candidates);
       } else if (stage.type === 'infill') {
         if (region.triangleIds.size > 0) {
           const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
@@ -1270,6 +1362,8 @@ export async function generateSupportsFromPainter(
             acceptedPerimeter.push(cand);
           } else if (stage.type === 'infill') {
             acceptedInfill.push(cand);
+          } else if (stage.type === 'centerline') {
+            acceptedCenterline.push(cand);
           }
         }
       }
@@ -1360,7 +1454,7 @@ export async function generateSupportsFromPainter(
     label: string;
     attempted: number;
     placed: number;
-    stages: Record<'minima' | 'perimeter' | 'infill', { attempted: number; placed: number }>;
+    stages: Record<'minima' | 'perimeter' | 'infill' | 'centerline', { attempted: number; placed: number }>;
   }>();
 
   const registerAttempt = (col: SampledPoint) => {
@@ -1375,6 +1469,7 @@ export async function generateSupportsFromPainter(
           minima: { attempted: 0, placed: 0 },
           perimeter: { attempted: 0, placed: 0 },
           infill: { attempted: 0, placed: 0 },
+          centerline: { attempted: 0, placed: 0 },
         }
       };
       statsMap.set(col.regionId, stats);
@@ -1414,7 +1509,7 @@ export async function generateSupportsFromPainter(
 
       // Scale perturbation radii dynamically based on active support stage spacing (up to 10% of spacing interval)
       let baseInterval = 2.0; // Standard fallback
-      if (col.stage === 'perimeter') {
+      if (col.stage === 'perimeter' || col.stage === 'centerline') {
         baseInterval = perimeterSpacing;
       } else if (col.stage === 'infill') {
         baseInterval = infillSpacing;
@@ -1504,8 +1599,8 @@ export async function generateSupportsFromPainter(
       processPointPlacement(anchorPoint);
     }
 
-    // 5b. Place perimeter and infill columns
-    const allColumns = [...acceptedPerimeter, ...acceptedInfill];
+    // 5b. Place perimeter, infill, and centerline columns
+    const allColumns = [...acceptedPerimeter, ...acceptedInfill, ...acceptedCenterline];
     for (const col of allColumns) {
       processPointPlacement(col);
     }
@@ -1544,12 +1639,12 @@ export async function generateSupportsFromPainter(
   const toastLines: string[] = [];
   for (const stats of statsMap.values()) {
     toastLines.push(`${stats.label}: placed ${stats.placed}/${stats.attempted} candidates`);
-    const activeStages = (Object.keys(stats.stages) as ('minima' | 'perimeter' | 'infill')[]).filter(
+    const activeStages = (Object.keys(stats.stages) as ('minima' | 'perimeter' | 'infill' | 'centerline')[]).filter(
       s => stats.stages[s].attempted > 0
     );
     if (activeStages.length > 1) {
       const stageDetails = activeStages.map(s => {
-        const name = s === 'minima' ? 'minima' : s === 'perimeter' ? 'perimeter' : 'infill';
+        const name = s === 'minima' ? 'minima' : s === 'perimeter' ? 'perimeter' : s === 'infill' ? 'infill' : 'centerline';
         return `${name} ${stats.stages[s].placed}/${stats.stages[s].attempted}`;
       }).join(', ');
       toastLines.push(`  (${stageDetails})`);

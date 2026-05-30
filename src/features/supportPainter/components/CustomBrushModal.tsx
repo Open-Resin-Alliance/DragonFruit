@@ -73,6 +73,19 @@ const DEFAULT_OPERATIONS: CustomSupportOperation[] = [
       seedFromMinima: true,
     },
   },
+  {
+    type: 'centerline',
+    enabled: false,
+    suppression: {
+      enabled: true,
+      distanceMm: 2.0,
+      suppressAgainst: ['minima', 'perimeter', 'centerline'],
+    },
+    spacing: {
+      baseSpacingMm: 2.0,
+      seedFromMinima: true,
+    },
+  },
 ];
 
 const presets: Record<BrushType, Partial<CustomBrushTemplate['selection']>> = {

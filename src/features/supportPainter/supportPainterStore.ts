@@ -56,6 +56,10 @@ const DEFAULT_SUPPRESSION_SETTINGS: SuppressionSettings = {
     mode: 'all',
     types: ['minima', 'perimeter', 'infill'],
   },
+  centerline: {
+    mode: 'none',
+    types: [],
+  },
 };
 
 let suppressionSettings: SuppressionSettings = { ...DEFAULT_SUPPRESSION_SETTINGS };

@@ -5,14 +5,14 @@ export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'Cyl
 // ─── Custom Support Operations & Pipeline Typings ───────────────────────────
 
 export interface CustomSupportOperation {
-  type: 'minima' | 'perimeter' | 'infill';
+  type: 'minima' | 'perimeter' | 'infill' | 'centerline';
   enabled: boolean;
   
   // Suppression rules for this specific operation
   suppression: {
     enabled: boolean;
     distanceMm: number;
-    suppressAgainst: ('minima' | 'perimeter' | 'infill')[];
+    suppressAgainst: ('minima' | 'perimeter' | 'infill' | 'centerline')[];
   };
 
   // Spacing configurations
@@ -151,13 +151,14 @@ export interface StageSuppressionConfig {
   /**
    * Candidate stages that will trigger suppression against this stage.
    */
-  types: ('minima' | 'perimeter' | 'infill')[];
+  types: ('minima' | 'perimeter' | 'infill' | 'centerline')[];
 }
 
 export interface SuppressionSettings {
   minima: StageSuppressionConfig;
   perimeter: StageSuppressionConfig;
   infill: StageSuppressionConfig;
+  centerline: StageSuppressionConfig;
 }
 
 export interface SupportPainterToast {
@@ -265,6 +266,8 @@ export interface BrushMetadata {
     creaseAngleDeg?: number;      // Ridge
     radiusMm?: number;            // Point Geodesic
     zThresholdMm?: number;        // Ring
+    pointPathMode?: 'line' | 'polygon'; // PointPath
+    pointPathClosed?: boolean; // PointPath
   };
 }
 

@@ -94,7 +94,9 @@ export function SupportPipelineEditor({
                 ? 'Local Minima Placement'
                 : op.type === 'perimeter'
                   ? 'Perimeter Contour Pathing'
-                  : 'Poisson Disc Infill Populator';
+                  : op.type === 'centerline'
+                    ? '1D Centerline Diameter Spine Path'
+                    : 'Poisson Disc Infill Populator';
 
             return (
               <div
@@ -332,6 +334,24 @@ export function SupportPipelineEditor({
                             </div>
                           </>
                         )}
+
+                        {/* Centerline-specific fields */}
+                        {op.type === 'centerline' && (
+                          <div className="col-span-2 flex items-center gap-2 mt-1">
+                            <input
+                              type="checkbox"
+                              checked={op.spacing.seedFromMinima || false}
+                              onChange={e =>
+                                updateOpSpacing(index, { seedFromMinima: e.target.checked })
+                              }
+                              className="w-4 h-4 rounded accent-accent cursor-pointer"
+                              id={`seed-check-${op.type}`}
+                            />
+                            <label htmlFor={`seed-check-${op.type}`} className="cursor-pointer font-medium select-none">
+                              Snap centerline coordinates origin to vertical Z-minima (work outwards symmetrically)
+                            </label>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -400,7 +420,7 @@ export function SupportPipelineEditor({
                           <div className="flex flex-col gap-1.5">
                             <span>Suppress Against Stages:</span>
                             <div className="flex flex-wrap gap-2">
-                              {['minima', 'perimeter', 'infill'].map(t => {
+                              {['minima', 'perimeter', 'infill', 'centerline'].map(t => {
                                 const active = op.suppression.suppressAgainst.includes(t as any);
                                 return (
                                   <button

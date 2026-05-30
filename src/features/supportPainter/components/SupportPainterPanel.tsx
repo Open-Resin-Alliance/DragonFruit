@@ -209,10 +209,14 @@ export function SupportPainterPanel({
 
   const getDefaultPipeline = (brushType: BrushType): CustomSupportOperation[] => {
     const isPointPathOrMarker = brushType === 'PointPath' || brushType === 'Marker';
+    const isLineBrush = brushType === 'Ridge' || brushType === 'CylinderMinima' || (
+      brushType === 'PointPath' && state.pointPathMode === 'line' && !state.pointPathClosed
+    );
+
     return [
       {
         type: 'minima',
-        enabled: !isPointPathOrMarker,
+        enabled: !isPointPathOrMarker && !isLineBrush,
         suppression: {
           enabled: true,
           distanceMm: defaultSpacing,
@@ -224,7 +228,7 @@ export function SupportPainterPanel({
       },
       {
         type: 'perimeter',
-        enabled: !isPointPathOrMarker,
+        enabled: !isPointPathOrMarker && !isLineBrush,
         suppression: {
           enabled: false,
           distanceMm: defaultSpacing,
@@ -238,7 +242,7 @@ export function SupportPainterPanel({
       },
       {
         type: 'infill',
-        enabled: true,
+        enabled: !isLineBrush,
         suppression: {
           enabled: true,
           distanceMm: defaultSpacing,
@@ -247,6 +251,19 @@ export function SupportPainterPanel({
         spacing: {
           baseSpacingMm: defaultSpacing,
           infillPattern: 'PoissonDisc',
+          seedFromMinima: true,
+        },
+      },
+      {
+        type: 'centerline',
+        enabled: isLineBrush,
+        suppression: {
+          enabled: true,
+          distanceMm: defaultSpacing,
+          suppressAgainst: ['minima', 'perimeter', 'infill', 'centerline'],
+        },
+        spacing: {
+          baseSpacingMm: defaultSpacing,
           seedFromMinima: true,
         },
       },
@@ -266,11 +283,14 @@ export function SupportPainterPanel({
       
       if (region.support) {
         const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker';
+        const isLineBrush = region.brushType === 'Ridge' || region.brushType === 'CylinderMinima' || (
+          region.brushType === 'PointPath' && region.brush?.parameters?.pointPathMode === 'line'
+        );
         const params = region.support.parameters;
         return [
           {
             type: 'minima',
-            enabled: !isPointPathOrMarker,
+            enabled: !isPointPathOrMarker && !isLineBrush,
             suppression: {
               enabled: params.suppressionSettings?.minima?.mode !== 'none',
               distanceMm: params.minimaSuppressionRadiusMm ?? defaultSpacing,
@@ -282,7 +302,7 @@ export function SupportPainterPanel({
           },
           {
             type: 'perimeter',
-            enabled: !isPointPathOrMarker,
+            enabled: !isPointPathOrMarker && !isLineBrush,
             suppression: {
               enabled: params.suppressionSettings?.perimeter?.mode !== 'none',
               distanceMm: params.perimeterSpacingMm ?? defaultSpacing,
@@ -296,7 +316,7 @@ export function SupportPainterPanel({
           },
           {
             type: 'infill',
-            enabled: true,
+            enabled: !isLineBrush,
             suppression: {
               enabled: params.suppressionSettings?.infill?.mode !== 'none',
               distanceMm: params.infillSpacingMm ?? defaultSpacing,
@@ -305,6 +325,19 @@ export function SupportPainterPanel({
             spacing: {
               baseSpacingMm: params.infillSpacingMm ?? defaultSpacing,
               infillPattern: 'PoissonDisc',
+              seedFromMinima: true,
+            },
+          },
+          {
+            type: 'centerline',
+            enabled: isLineBrush,
+            suppression: {
+              enabled: params.suppressionSettings?.centerline?.mode !== 'none',
+              distanceMm: params.perimeterSpacingMm ?? defaultSpacing,
+              suppressAgainst: params.suppressionSettings?.centerline?.types || ['minima', 'perimeter', 'infill', 'centerline'],
+            },
+            spacing: {
+              baseSpacingMm: params.perimeterSpacingMm ?? defaultSpacing,
               seedFromMinima: true,
             },
           },
