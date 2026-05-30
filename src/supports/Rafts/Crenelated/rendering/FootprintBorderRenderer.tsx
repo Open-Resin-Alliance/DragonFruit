@@ -10,7 +10,7 @@ import { computeFootprint } from '../geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '../geometry/computeRaftOuterBoundary';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { computeProjectedFootprintHull } from '@/utils/modelFootprint';
 
 interface FootprintBorderRendererProps {
   modelGeometry: GeometryWithBounds | null;
@@ -22,8 +22,6 @@ interface FootprintBorderRendererProps {
 const FOOTPRINT_BORDER_Z = 0.001;
 const FOOTPRINT_BORDER_MARGIN_MAX_MM = 0.05;
 const FOOTPRINT_BORDER_OUTLINE_PADDING_MM = 0.1;
-const FOOTPRINT_SILHOUETTE_BINS = 96;
-const FOOTPRINT_MAX_SCANNED_VERTICES = 160_000;
 const FOOTPRINT_SILHOUETTE_CACHE_MAX_ENTRIES = 32;
 
 const sharedFootprintSilhouetteCache = new Map<string, THREE.Vector2[]>();
@@ -160,80 +158,11 @@ function computeLocalModelFootprintHull(
   modelGeometry: GeometryWithBounds,
   modelTransform: ModelTransform,
 ): THREE.Vector2[] {
-  const position = modelGeometry.geometry.getAttribute('position');
-  if (!position || position.count < 3) return [];
-
-  const bbox = modelGeometry.geometry.boundingBox ??
-    new THREE.Box3().setFromBufferAttribute(position as THREE.BufferAttribute);
-  const center = bbox.getCenter(new THREE.Vector3());
-
-  const transformMatrix = new THREE.Matrix4();
-  transformMatrix.compose(
-    new THREE.Vector3(0, 0, 0),
-    quaternionFromGlobalEuler(modelTransform.rotation),
-    modelTransform.scale
+  return computeProjectedFootprintHull(
+    modelGeometry,
+    modelTransform.rotation,
+    modelTransform.scale,
   );
-  transformMatrix.multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
-
-  const binPoints = new Array<THREE.Vector2 | null>(FOOTPRINT_SILHOUETTE_BINS).fill(null);
-  const binDistances = new Array<number>(FOOTPRINT_SILHOUETTE_BINS).fill(-Infinity);
-  const extremePoints = {
-    minX: null as THREE.Vector2 | null,
-    maxX: null as THREE.Vector2 | null,
-    minY: null as THREE.Vector2 | null,
-    maxY: null as THREE.Vector2 | null,
-    minDiagA: null as THREE.Vector2 | null,
-    maxDiagA: null as THREE.Vector2 | null,
-    minDiagB: null as THREE.Vector2 | null,
-    maxDiagB: null as THREE.Vector2 | null,
-  };
-  const extremeValues = {
-    minX: Infinity,
-    maxX: -Infinity,
-    minY: Infinity,
-    maxY: -Infinity,
-    minDiagA: Infinity,
-    maxDiagA: -Infinity,
-    minDiagB: Infinity,
-    maxDiagB: -Infinity,
-  };
-  const vertex = new THREE.Vector3();
-  const stride = Math.max(1, Math.ceil(position.count / FOOTPRINT_MAX_SCANNED_VERTICES));
-
-  for (let i = 0; i < position.count; i += stride) {
-    vertex.fromBufferAttribute(position, i).applyMatrix4(transformMatrix);
-    const point = new THREE.Vector2(vertex.x, vertex.y);
-    const dx = point.x;
-    const dy = point.y;
-    const distSq = dx * dx + dy * dy;
-    const angle = Math.atan2(dy, dx);
-    const bin = Math.min(
-      FOOTPRINT_SILHOUETTE_BINS - 1,
-      Math.max(0, Math.floor(((angle + Math.PI) / (Math.PI * 2)) * FOOTPRINT_SILHOUETTE_BINS)),
-    );
-    if (distSq > binDistances[bin]) {
-      binDistances[bin] = distSq;
-      binPoints[bin] = point;
-    }
-
-    const diagA = point.x + point.y;
-    const diagB = point.x - point.y;
-    if (point.x < extremeValues.minX) { extremeValues.minX = point.x; extremePoints.minX = point; }
-    if (point.x > extremeValues.maxX) { extremeValues.maxX = point.x; extremePoints.maxX = point; }
-    if (point.y < extremeValues.minY) { extremeValues.minY = point.y; extremePoints.minY = point; }
-    if (point.y > extremeValues.maxY) { extremeValues.maxY = point.y; extremePoints.maxY = point; }
-    if (diagA < extremeValues.minDiagA) { extremeValues.minDiagA = diagA; extremePoints.minDiagA = point; }
-    if (diagA > extremeValues.maxDiagA) { extremeValues.maxDiagA = diagA; extremePoints.maxDiagA = point; }
-    if (diagB < extremeValues.minDiagB) { extremeValues.minDiagB = diagB; extremePoints.minDiagB = point; }
-    if (diagB > extremeValues.maxDiagB) { extremeValues.maxDiagB = diagB; extremePoints.maxDiagB = point; }
-  }
-
-  const modelPoints = [
-    ...binPoints.filter((point): point is THREE.Vector2 => point !== null),
-    ...Object.values(extremePoints).filter((point): point is THREE.Vector2 => point !== null),
-  ];
-
-  return convexHull(modelPoints);
 }
 
 function getOrComputeLocalModelFootprintHull(
