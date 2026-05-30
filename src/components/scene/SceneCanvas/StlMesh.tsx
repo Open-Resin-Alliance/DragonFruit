@@ -7,7 +7,7 @@ import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
 import { supportPainterStore, useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
-import { proposeRegionOnClient } from '@/features/supportPainter/useClientAdjacencyMap';
+import { proposeRegionOnClient, walkPointPathPolygon } from '@/features/supportPainter/useClientAdjacencyMap';
 import { PAINT_ROI_ADD, PAINT_ROI_REMOVE } from '@/features/supportPainter/supportPainterHistoryTypes';
 import { pushHistory } from '@/history/historyStore';
 import { useRoiHighlightMaterial } from '@/features/supportPainter/shaders/roiHighlight';
@@ -1034,9 +1034,9 @@ if (uDitherAmount > 0.0) {
                 if (typeof faceIndex === 'number') {
                   supportPainterStore.setHoveredTriangle(faceIndex);
 
-                  // Continuous drag painting/erasing when click-and-dragging
+                   // Continuous drag painting/erasing when click-and-dragging
                   const snap = supportPainterStore.getSnapshot();
-                  if ((e.buttons & 1) === 1 && (snap.interactionPhase === 'Expand' || snap.interactionPhase === 'Subtract')) {
+                  if (snap.activeBrush !== 'PointPath' && (e.buttons & 1) === 1 && (snap.interactionPhase === 'Expand' || snap.interactionPhase === 'Subtract')) {
                     const map = supportPainterStore.getClientAdjacencyMap();
                     if (map) {
                       const mesh = e.object as THREE.Mesh;
@@ -1183,6 +1183,47 @@ if (uDitherAmount > 0.0) {
             const faceIndex = e.faceIndex;
             if (faceIndex !== undefined && faceIndex !== null) {
               const snap = supportPainterStore.getSnapshot();
+              if (snap.activeBrush === 'PointPath') {
+                const clickPoint = e.point.clone();
+                if (snap.pointPathMode === 'polygon' && snap.pointPathPoints.length >= 3) {
+                  const firstPos = new THREE.Vector3(...snap.pointPathPoints[0].point);
+                  const distToFirst = clickPoint.distanceTo(firstPos);
+                  if (distToFirst < 4.0) {
+                    supportPainterStore.setPointPathClosed(true);
+                    const map = supportPainterStore.getClientAdjacencyMap();
+                    if (map) {
+                      const mesh = e.object as THREE.Mesh;
+                      const matrixWorld = mesh.matrixWorld || new THREE.Matrix4();
+                      const inv = new THREE.Matrix4().copy(matrixWorld).invert();
+                      const localUp = new THREE.Vector3(0, 0, 1).transformDirection(inv);
+                      const scale = new THREE.Vector3();
+                      matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+                      const worldScale = (scale.x + scale.y + scale.z) / 3;
+
+                      const pts = snap.pointPathPoints.map((p) => p.faceIndex);
+                      const finalIds = walkPointPathPolygon(map, pts, localUp, worldScale);
+                      supportPainterStore.setProposedTriangleIds(finalIds);
+                      const newId = supportPainterStore.commitPointPathRegion({
+                        seedTriangleId: snap.pointPathPoints[0].faceIndex,
+                      });
+
+                      const nextSnap = supportPainterStore.getSnapshot();
+                      const addedRegion = nextSnap.regions.get(newId);
+                      if (addedRegion) {
+                        pushHistory({
+                          type: PAINT_ROI_ADD,
+                          description: 'Paint polygon region of interest',
+                          payload: { region: addedRegion },
+                        });
+                      }
+                    }
+                    return;
+                  }
+                }
+                supportPainterStore.addPointPathPoint([clickPoint.x, clickPoint.y, clickPoint.z], faceIndex);
+                return;
+              }
+
               if (snap.modifierKeys.alt) {
                 // Subtract mode
                 supportPainterStore.setInteractionPhase('Subtract');

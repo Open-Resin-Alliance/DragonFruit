@@ -86,6 +86,7 @@ import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers
 import { StlMesh } from './StlMesh';
 import { SupportPainterPanel } from '@/features/supportPainter/components/SupportPainterPanel';
 import { setClipBounds } from './clipBoundsStore';
+import PointPathOverlay from './PointPathOverlay';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { useSupportPainterManager } from '@/features/supportPainter/useSupportPainterManager';
 import { supportPainterStore, useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
@@ -6275,6 +6276,7 @@ export function SceneCanvas({
           </ZUpGizmoHelper>
         )}
         <OrbitPivotIndicator visible={!thumbnailCaptureActive && isOrbitInteracting && isOrbitRotating} />
+        <PointPathOverlay />
         {cameraInteractionCycleEnabled && (
           <SpaceMouseController
             pivotPoint={selectedSpaceMousePivotPoint}

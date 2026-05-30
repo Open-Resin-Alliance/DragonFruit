@@ -304,6 +304,7 @@ export function CustomBrushModal({
                       <option value="Point">Manual Geodesic (Point)</option>
                       <option value="Ring">Horizontal Ring (Ring)</option>
                       <option value="Marker">Rotated Tip Marker (Marker)</option>
+                      <option value="PointPath">Point Path & Closed Loop (PointPath)</option>
                     </select>
                   </div>
 
@@ -340,7 +341,7 @@ export function CustomBrushModal({
                   Preset Starting Templates
                 </label>
                 <div className="flex gap-2">
-                  {(['MacroFace', 'Ridge', 'Point', 'Ring', 'Marker'] as BrushType[]).map(type => (
+                  {(['MacroFace', 'Ridge', 'Point', 'Ring', 'Marker', 'PointPath'] as BrushType[]).map(type => (
                     <button
                       key={type}
                       type="button"
@@ -683,6 +684,49 @@ export function CustomBrushModal({
                         className="w-4 h-4 cursor-pointer accent-accent"
                       />
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {brush.baseBrush === 'PointPath' && (
+                <div className="flex flex-col gap-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex flex-col gap-1.5 text-xs">
+                      <span className="font-semibold text-gray-300">Point Path Mode</span>
+                      <select
+                        value={brush.selection.pointPathMode ?? 'line'}
+                        onChange={e => updateSelection({ pointPathMode: e.target.value as any })}
+                        className="px-2.5 py-1.5 rounded border text-xs outline-none cursor-pointer"
+                        style={{
+                          background: 'var(--surface-2, #1d242e)',
+                          borderColor: 'var(--border-subtle, #2d3748)',
+                          color: 'var(--text-strong, #fff)',
+                        }}
+                      >
+                        <option value="line">Segment Path (Line)</option>
+                        <option value="polygon">Closed Loop (Polygon Flood Fill)</option>
+                      </select>
+                    </div>
+
+                    {brush.selection.pointPathMode !== 'polygon' && (
+                      <div className="flex flex-col gap-1.5 text-xs">
+                        <span className="font-semibold text-gray-300">Path Stroke Width (mm)</span>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="range"
+                            min="0.5"
+                            max="20.0"
+                            step="0.5"
+                            value={brush.selection.pointPathWidthMm ?? 2.0}
+                            onChange={e => updateSelection({ pointPathWidthMm: parseFloat(e.target.value) })}
+                            className="flex-1 accent-accent cursor-pointer"
+                          />
+                          <span className="font-bold min-w-[32px] text-right">
+                            {(brush.selection.pointPathWidthMm ?? 2.0).toFixed(1)} mm
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

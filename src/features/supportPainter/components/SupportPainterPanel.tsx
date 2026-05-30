@@ -840,6 +840,123 @@ export function SupportPainterPanel({
             </div>
           )}
 
+          {/* Point Path Brush Controls */}
+          {state.activeBrush === 'PointPath' && (
+            <div
+              className="flex flex-col gap-3 p-2.5 rounded-lg border text-xs text-left"
+              style={{
+                background: 'var(--surface-2)',
+                borderColor: 'var(--border-subtle)',
+              }}
+            >
+              <div className="font-bold uppercase tracking-wider text-[10px] text-gray-400 border-b pb-1">
+                Point Path settings
+              </div>
+
+              {/* Path Mode Selector */}
+              <div className="flex flex-col gap-1">
+                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Drawing mode
+                </span>
+                <div className="flex gap-1.5 mt-1">
+                  <Button
+                    className="flex-1 text-xs py-1"
+                    style={{
+                      background: state.pointPathMode === 'line' ? 'var(--accent)' : 'var(--surface-1)',
+                      color: state.pointPathMode === 'line' ? '#fff' : 'var(--text-strong)',
+                    }}
+                    onClick={() => supportPainterStore.setPointPathMode('line')}
+                  >
+                    Segment path
+                  </Button>
+                  <Button
+                    className="flex-1 text-xs py-1"
+                    style={{
+                      background: state.pointPathMode === 'polygon' ? 'var(--accent)' : 'var(--surface-1)',
+                      color: state.pointPathMode === 'polygon' ? '#fff' : 'var(--text-strong)',
+                    }}
+                    onClick={() => supportPainterStore.setPointPathMode('polygon')}
+                  >
+                    Closed loop
+                  </Button>
+                </div>
+              </div>
+
+              {/* Bar Width Slider (Only show for line mode) */}
+              {state.pointPathMode === 'line' && (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between">
+                    <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      Path stroke width
+                    </span>
+                    <span className="font-bold" style={{ color: 'var(--accent)' }}>
+                      {state.pointPathWidthMm.toFixed(1)} mm
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="20.0"
+                    step="0.5"
+                    value={state.pointPathWidthMm}
+                    onChange={(e) => supportPainterStore.setPointPathWidthMm(parseFloat(e.target.value))}
+                    className="w-full accent-accent cursor-pointer"
+                  />
+                </div>
+              )}
+
+              {/* Control Points counter and actions */}
+              <div className="flex flex-col gap-2 border-t pt-2 mt-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex justify-between text-[11px] text-gray-400">
+                  <span>Placed control points:</span>
+                  <span className="font-bold text-white">{state.pointPathPoints.length}</span>
+                </div>
+
+                <div className="flex gap-1.5 mt-1">
+                  <Button
+                    className="flex-1 text-[11px] py-1 bg-red-600 hover:bg-red-700 text-white font-semibold"
+                    disabled={state.pointPathPoints.length === 0}
+                    onClick={() => supportPainterStore.clearPointPathPoints()}
+                  >
+                    Clear points
+                  </Button>
+                  
+                  {state.pointPathMode === 'line' ? (
+                    <Button
+                      className="flex-1 text-[11px] py-1 bg-green-600 hover:bg-green-700 text-white font-semibold"
+                      disabled={state.pointPathPoints.length < 2}
+                      onClick={() => {
+                        const firstPt = state.pointPathPoints[0];
+                        if (firstPt) {
+                          supportPainterStore.commitPointPathRegion({
+                            seedTriangleId: firstPt.faceIndex
+                          });
+                        }
+                      }}
+                    >
+                      Commit path
+                    </Button>
+                  ) : (
+                    <Button
+                      className="flex-1 text-[11px] py-1 bg-green-600 hover:bg-green-700 text-white font-semibold"
+                      disabled={state.pointPathPoints.length < 3}
+                      onClick={() => {
+                        const firstPt = state.pointPathPoints[0];
+                        if (firstPt) {
+                          supportPainterStore.commitPointPathRegion({
+                            seedTriangleId: firstPt.faceIndex
+                          });
+                        }
+                      }}
+                    >
+                      Close & Commit
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Custom Brushes Selection Section */}
           <div className="flex flex-col gap-2 border-t pt-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
             <span
