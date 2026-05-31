@@ -128,7 +128,40 @@ describe('Support Painter Phase 1 - Custom Brush Store & Codec Tests', () => {
     assert.ok(deserializedRegions?.has(testRegionId), 'Deserialized output must contain the region ID');
     
     const deserializedRegion = deserializedRegions?.get(testRegionId);
-    assert.deepStrictEqual(deserializedRegion?.customBrush, mockBrush, 'Deserialized region must structurally match the custom brush template');
+    const expectedBrush = {
+      ...mockBrush,
+      operations: [
+        ...mockBrush.operations,
+        {
+          type: 'infill',
+          enabled: true,
+          suppression: {
+            enabled: true,
+            distanceMm: 4.0,
+            suppressAgainst: ['minima', 'perimeter', 'infill'],
+          },
+          spacing: {
+            baseSpacingMm: 4.0,
+            infillPattern: 'PoissonDisc',
+            seedFromMinima: true,
+          },
+        },
+        {
+          type: 'centerline',
+          enabled: false,
+          suppression: {
+            enabled: true,
+            distanceMm: 4.0,
+            suppressAgainst: ['minima', 'perimeter', 'infill', 'centerline'],
+          },
+          spacing: {
+            baseSpacingMm: 4.0,
+            seedFromMinima: true,
+          },
+        },
+      ],
+    };
+    assert.deepStrictEqual(deserializedRegion?.customBrush, expectedBrush, 'Deserialized region must structurally match the custom brush template');
   });
 
   it('should safely handle imports of legacy VOXL files which lack customBrush namespaces without failing', () => {

@@ -1,6 +1,6 @@
 // ─── Brush Identity ─────────────────────────────────────────────────────────
 
-export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'CylinderSides' | 'CylinderMinima' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands';
+export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands';
 
 // ─── Custom Support Operations & Pipeline Typings ───────────────────────────
 
@@ -86,8 +86,8 @@ export const BRUSH_COLORS: Record<BrushType, string> = {
   MacroFace:      '#4A90E2',   // blue
   Ridge:          '#E2844A',   // orange
   Point:          '#7ED321',   // green
-  CylinderSides:  '#9B59B6',   // purple
-  CylinderMinima: '#A569BD',   // light purple/lavender
+  RoughEdge:      '#9B59B6',   // purple
+  SoftRidge:      '#A569BD',   // light purple/lavender
   Ring:           '#FF5B6F',   // pink/red
   ManualCircle:   '#06B6D4',   // teal/cyan
   ManualSquare:   '#F59E0B',   // amber/gold
@@ -331,8 +331,12 @@ export function upgradePipeline(
   brushType: BrushType,
   defaultSpacing: number = 4.0
 ): CustomSupportOperation[] {
-  const isPointPathOrMarker = brushType === 'PointPath' || brushType === 'Marker';
-  const isLineBrush = brushType === 'Ridge' || brushType === 'CylinderMinima' || brushType === 'PointPath';
+  let activeBrushType = brushType;
+  if ((activeBrushType as string) === 'CylinderMinima') activeBrushType = 'SoftRidge';
+  if ((activeBrushType as string) === 'CylinderSides') activeBrushType = 'RoughEdge';
+
+  const isPointPathOrMarker = activeBrushType === 'PointPath' || activeBrushType === 'Marker' || activeBrushType === 'RoughEdge';
+  const isLineBrush = activeBrushType === 'Ridge' || activeBrushType === 'SoftRidge' || activeBrushType === 'PointPath';
 
   const standardTypes: ('minima' | 'perimeter' | 'infill' | 'centerline')[] = [
     'minima',

@@ -26,8 +26,8 @@ const BRUSH_DETAILS: Record<BrushType, { label: string }> = {
   MacroFace:      { label: 'MacroFace' },
   Ridge:          { label: 'Ridge Crease' },
   Point:          { label: 'Point Geodesic' },
-  CylinderSides:  { label: 'Cyl. Sides' },
-  CylinderMinima: { label: 'Cyl. Minima' },
+  RoughEdge:      { label: 'Rough Edge' },
+  SoftRidge:      { label: 'Soft Ridge' },
   Ring:           { label: 'Z-Plane Ring' },
   ManualCircle:   { label: 'Manual Circle' },
   ManualSquare:   { label: 'Manual Square' },
@@ -566,7 +566,7 @@ export async function generateSupportsFromPainter(
       (region.brush === undefined && state.pointPathMode === 'line' && !state.pointPathClosed)
     );
 
-    if (region.brushType === 'CylinderMinima' || region.brushType === 'Ridge' || isPointPathLine) {
+    if (region.brushType === 'SoftRidge' || region.brushType === 'Ridge' || isPointPathLine) {
       // 1D Topological Graph Diameter BFS crease/spine solver
       const regionAdj = new Map<number, number[]>();
       const addRegionAdj = (ta: number, tb: number) => {
@@ -770,6 +770,12 @@ export async function generateSupportsFromPainter(
           vertexIds: [...finalPath],
         });
       }
+      if (region.brushType === 'MacroFace' || region.brushType === 'Marker' || region.brushType === 'ManualCircle' || region.brushType === 'ManualSquare' || (region.brushType === 'PointPath' && !isPointPathLine)) {
+        const blobSpine = getBlobCenterlineSpine(triangleIds, uniqueVertices, triangles, vertexNormals);
+        if (blobSpine) {
+          regionSpines.set(region.id, blobSpine);
+        }
+      }
     }
     regionBoundaryLoops.set(region.id, regionLoops);
 
@@ -908,8 +914,8 @@ export async function generateSupportsFromPainter(
 
     const config = suppressionSettings[stage];
     const isOverrideCandidate =
-      region.brushType === 'CylinderSides' ||
-      region.brushType === 'CylinderMinima';
+      region.brushType === 'RoughEdge' ||
+      region.brushType === 'SoftRidge';
 
     const effectiveMode = isOverrideCandidate ? 'all' : config.mode;
     if (effectiveMode === 'none') {
@@ -927,7 +933,7 @@ export async function generateSupportsFromPainter(
         ? infillSpacing
         : minimaSuppressionRadius;
 
-    if (region.brushType === 'CylinderSides' || region.brushType === 'CylinderMinima') {
+    if (region.brushType === 'RoughEdge' || region.brushType === 'SoftRidge') {
       radius = trunkWidth * 3.0;
     }
 
@@ -972,8 +978,8 @@ export async function generateSupportsFromPainter(
       if (combinedTypes.has(acc.stage)) {
         if (combinedMode === 'all' || (combinedMode === 'current' && acc.regionId === cand.regionId)) {
           let effectiveRadius = maxDistance;
-          if (cand.regionType === 'CylinderSides' || acc.regionType === 'CylinderSides' ||
-              cand.regionType === 'CylinderMinima' || acc.regionType === 'CylinderMinima') {
+          if (cand.regionType === 'RoughEdge' || acc.regionType === 'RoughEdge' ||
+              cand.regionType === 'SoftRidge' || acc.regionType === 'SoftRidge') {
             effectiveRadius = Math.max(effectiveRadius, trunkWidth * 3.0);
           }
 
@@ -1021,8 +1027,8 @@ export async function generateSupportsFromPainter(
         });
       }
     } else {
-      const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker';
-      const isLineBrush = region.brushType === 'Ridge' || region.brushType === 'CylinderMinima' || (
+      const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker' || region.brushType === 'RoughEdge';
+      const isLineBrush = region.brushType === 'Ridge' || region.brushType === 'SoftRidge' || (
         region.brushType === 'PointPath' && (
           (region.brush?.parameters?.pointPathMode === 'line') ||
           (region.brush === undefined && state.pointPathMode === 'line' && !state.pointPathClosed)
@@ -1446,6 +1452,326 @@ export async function generateSupportsFromPainter(
       pos: bestHit.point.clone(),
       normal,
     };
+  }
+
+  // High-performance dual PCA/Geodesic centerline solver for 2D blob brushes
+  function getBlobCenterlineSpine(
+    triangleIds: Set<number>,
+    uniqueVertices: THREE.Vector3[],
+    triangles: WeldedTriangle[],
+    vertexNormals: Map<number, THREE.Vector3>
+  ): { points: THREE.Vector3[]; normals: THREE.Vector3[] } | null {
+    if (triangleIds.size === 0) return null;
+
+    // 1. Gather all centroids and calculate region average normal
+    const centroids: THREE.Vector3[] = [];
+    const avgNormal = new THREE.Vector3();
+    for (const triId of triangleIds) {
+      const tri = triangles[triId];
+      if (tri) {
+        centroids.push(tri.centroid);
+        avgNormal.add(tri.normal);
+      }
+    }
+    if (centroids.length === 0) return null;
+    avgNormal.normalize();
+
+    // 2. Build local coordinate frame tangent plane
+    const tangentU = new THREE.Vector3();
+    if (Math.abs(avgNormal.x) > Math.abs(avgNormal.z)) {
+      tangentU.set(-avgNormal.y, avgNormal.x, 0).normalize();
+    } else {
+      tangentU.set(0, -avgNormal.z, avgNormal.y).normalize();
+    }
+    const tangentV = new THREE.Vector3().crossVectors(avgNormal, tangentU).normalize();
+
+    // Project centroids onto local 2D tangent plane
+    const proj2D = centroids.map((c) => {
+      const diff = c.clone().sub(centroids[0]);
+      return new THREE.Vector2(diff.dot(tangentU), diff.dot(tangentV));
+    });
+
+    // Calculate 2D centroid of projected points
+    const mean = new THREE.Vector2(0, 0);
+    for (const p of proj2D) {
+      mean.add(p);
+    }
+    mean.divideScalar(proj2D.length);
+
+    // Compute covariance matrix
+    let covXX = 0, covYY = 0, covXY = 0;
+    for (const p of proj2D) {
+      const dx = p.x - mean.x;
+      const dy = p.y - mean.y;
+      covXX += dx * dx;
+      covYY += dy * dy;
+      covXY += dx * dy;
+    }
+    covXX /= proj2D.length;
+    covYY /= proj2D.length;
+    covXY /= proj2D.length;
+
+    // Solve for eigenvalues
+    const trace = covXX + covYY;
+    const det = covXX * covYY - covXY * covXY;
+    const term = Math.sqrt(Math.max(0, trace * trace - 4 * det));
+    const L1 = (trace + term) / 2;
+    const L2 = Math.max(1e-8, (trace - term) / 2);
+
+    const aspectRatio = Math.sqrt(L1 / L2);
+
+    // Check elongation: if elongated (aspectRatio >= 1.5), use PCA
+    if (aspectRatio >= 1.5) {
+      // Find major eigenvector corresponding to L1
+      const majorVec = new THREE.Vector2();
+      if (Math.abs(covXY) > 1e-8) {
+        majorVec.set(L1 - covYY, covXY).normalize();
+      } else {
+        if (covXX > covYY) {
+          majorVec.set(1, 0);
+        } else {
+          majorVec.set(0, 1);
+        }
+      }
+
+      // Project projected 2D points onto major axis to find extents
+      let minT = Infinity;
+      let maxT = -Infinity;
+      for (const p of proj2D) {
+        const t = (p.x - mean.x) * majorVec.x + (p.y - mean.y) * majorVec.y;
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+      }
+
+      // 3D segment endpoints
+      const minT3D = centroids[0].clone()
+        .addScaledVector(tangentU, mean.x)
+        .addScaledVector(tangentV, mean.y)
+        .addScaledVector(tangentU, majorVec.x * minT)
+        .addScaledVector(tangentV, majorVec.y * minT);
+      const maxT3D = centroids[0].clone()
+        .addScaledVector(tangentU, mean.x)
+        .addScaledVector(tangentV, mean.y)
+        .addScaledVector(tangentU, majorVec.x * maxT)
+        .addScaledVector(tangentV, majorVec.y * maxT);
+
+      // Sample segment evenly
+      const spacing = 4.0; // fallback spacing
+      const dist = minT3D.distanceTo(maxT3D);
+      const K = Math.max(2, Math.round(dist / spacing));
+      const spinePoints: THREE.Vector3[] = [];
+      const spineNormals: THREE.Vector3[] = [];
+
+      for (let i = 0; i < K; i++) {
+        const t = i / (K - 1);
+        const interpPos = new THREE.Vector3().lerpVectors(minT3D, maxT3D, t);
+        
+        // Tangent project back onto mesh surface using standard safety envelope
+        const proj = findSurfaceProjectedPointTangent(mesh, interpPos, avgNormal);
+        if (proj) {
+          spinePoints.push(proj.pos);
+          spineNormals.push(proj.normal);
+        } else {
+          // Fallback to interpolated pos if raycast fails
+          spinePoints.push(interpPos);
+          spineNormals.push(avgNormal.clone());
+        }
+      }
+
+      return { points: spinePoints, normals: spineNormals };
+    }
+
+    // FALLBACK: Geodesic Distance Transform / Medial Axis walk
+    // 1. Identify boundary edges
+    const edgeCount = new Map<string, number>();
+    const edgeToVertices = new Map<string, [number, number]>();
+
+    for (const triId of triangleIds) {
+      const tri = triangles[triId];
+      if (!tri) continue;
+      const edges = [
+        [tri.idx0, tri.idx1],
+        [tri.idx1, tri.idx2],
+        [tri.idx2, tri.idx0],
+      ] as const;
+      for (const [idxA, idxB] of edges) {
+        const key = idxA < idxB ? `${idxA}|${idxB}` : `${idxB}|${idxA}`;
+        edgeCount.set(key, (edgeCount.get(key) || 0) + 1);
+        if (!edgeToVertices.has(key)) {
+          edgeToVertices.set(key, [idxA, idxB]);
+        }
+      }
+    }
+
+    const boundaryVertices = new Set<number>();
+    for (const [key, count] of edgeCount.entries()) {
+      if (count === 1) {
+        const [a, b] = edgeToVertices.get(key)!;
+        boundaryVertices.add(a);
+        boundaryVertices.add(b);
+      }
+    }
+
+    if (boundaryVertices.size === 0) {
+      // Loop-free region fallback: just use arbitrary starting point
+      const firstTri = triangles[Array.from(triangleIds)[0]];
+      if (firstTri) {
+        boundaryVertices.add(firstTri.idx0);
+      }
+    }
+
+    // 2. Multi-source Dijkstra walk inside the sub-graph
+    // Build region local adjacency map of faces to faces
+    const faceAdj = new Map<number, number[]>();
+    const addFaceAdj = (fa: number, fb: number) => {
+      let list = faceAdj.get(fa);
+      if (!list) { faceAdj.set(fa, list = []); }
+      list.push(fb);
+    };
+
+    const edgeMap = new Map<string, number[]>();
+    for (const triId of triangleIds) {
+      const tri = triangles[triId];
+      if (!tri) continue;
+      const edges = [
+        tri.idx0 < tri.idx1 ? `${tri.idx0}|${tri.idx1}` : `${tri.idx1}|${tri.idx0}`,
+        tri.idx1 < tri.idx2 ? `${tri.idx1}|${tri.idx2}` : `${tri.idx2}|${tri.idx1}`,
+        tri.idx2 < tri.idx0 ? `${tri.idx2}|${tri.idx0}` : `${tri.idx0}|${tri.idx2}`
+      ];
+      for (const ek of edges) {
+        let list = edgeMap.get(ek);
+        if (!list) { edgeMap.set(ek, list = []); }
+        list.push(triId);
+      }
+    }
+
+    for (const list of edgeMap.values()) {
+      if (list.length === 2) {
+        addFaceAdj(list[0], list[1]);
+        addFaceAdj(list[1], list[0]);
+      }
+    }
+
+    // Run Multi-source Dijkstra
+    const dists = new Map<number, number>();
+    interface DijkstraState {
+      cost: number;
+      face: number;
+    }
+    const queue: DijkstraState[] = [];
+
+    // Seed faces containing boundary vertices get cost = 0
+    for (const triId of triangleIds) {
+      const tri = triangles[triId];
+      if (!tri) continue;
+      if (boundaryVertices.has(tri.idx0) || boundaryVertices.has(tri.idx1) || boundaryVertices.has(tri.idx2)) {
+        dists.set(triId, 0);
+        queue.push({ cost: 0, face: triId });
+      }
+    }
+
+    while (queue.length > 0) {
+      queue.sort((a, b) => a.cost - b.cost);
+      const { cost, face } = queue.shift()!;
+
+      const currentBest = dists.get(face) ?? Infinity;
+      if (cost > currentBest) continue;
+
+      const neighbors = faceAdj.get(face) || [];
+      for (const n of neighbors) {
+        const centroidCurr = triangles[face].centroid;
+        const centroidAdj = triangles[n].centroid;
+        const stepCost = centroidCurr.distanceTo(centroidAdj);
+        const nextCost = cost + stepCost;
+
+        const adjBest = dists.get(n) ?? Infinity;
+        if (nextCost < adjBest) {
+          dists.set(n, nextCost);
+          queue.push({ cost: nextCost, face: n });
+        }
+      }
+    }
+
+    // 3. Find Ridge Faces (local distance maxima)
+    const ridges: number[] = [];
+    for (const triId of triangleIds) {
+      const dist = dists.get(triId) ?? 0;
+      const neighbors = faceAdj.get(triId) || [];
+      let isLocalMax = true;
+      for (const n of neighbors) {
+        if ((dists.get(n) ?? 0) > dist) {
+          isLocalMax = false;
+          break;
+        }
+      }
+      if (isLocalMax && dist > 0.05) {
+        ridges.push(triId);
+      }
+    }
+
+    if (ridges.length === 0) {
+      // Fallback to center-most face
+      let maxDist = -1;
+      let centerFace = Array.from(triangleIds)[0];
+      for (const triId of triangleIds) {
+        const d = dists.get(triId) ?? 0;
+        if (d > maxDist) {
+          maxDist = d;
+          centerFace = triId;
+        }
+      }
+      ridges.push(centerFace);
+    }
+
+    // 4. Trace the ridge faces to form a coherent spine
+    // Find the two furthest ridge nodes topologically
+    const runBFS = (startId: number): { furthestId: number; parentMap: Map<number, number> } => {
+      const bQueue: number[] = [startId];
+      const visited = new Set<number>([startId]);
+      const parentMap = new Map<number, number>();
+      let furthestId = startId;
+
+      while (bQueue.length > 0) {
+        const curr = bQueue.shift()!;
+        furthestId = curr;
+
+        const neighbors = (faceAdj.get(curr) || []).filter(n => ridges.includes(n));
+        for (const neighbor of neighbors) {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            parentMap.set(neighbor, curr);
+            bQueue.push(neighbor);
+          }
+        }
+      }
+      return { furthestId, parentMap };
+    };
+
+    const { furthestId: endA } = runBFS(ridges[0]);
+    const { furthestId: endB, parentMap } = runBFS(endA);
+
+    const orderedFaces: number[] = [];
+    let curr = endB;
+    while (curr !== endA) {
+      orderedFaces.push(curr);
+      const parent = parentMap.get(curr);
+      if (parent === undefined) break;
+      curr = parent;
+    }
+    orderedFaces.push(endA);
+    orderedFaces.reverse();
+
+    const spinePoints: THREE.Vector3[] = [];
+    const spineNormals: THREE.Vector3[] = [];
+    for (const f of orderedFaces) {
+      const tri = triangles[f];
+      if (tri) {
+        spinePoints.push(tri.centroid);
+        spineNormals.push(tri.normal);
+      }
+    }
+
+    return { points: spinePoints, normals: spineNormals };
   }
 
   // ─── Placement Statistics Tracking [STATS_TRACKING] ───

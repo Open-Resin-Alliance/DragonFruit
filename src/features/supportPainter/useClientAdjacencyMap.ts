@@ -182,10 +182,10 @@ export function proposeRegionOnClient(
       return walkMacroFace(map, seedFaceIndex, localUp, customBrush);
     case 'Ridge':
       return walkRidge(map, seedFaceIndex, localUp, customBrush);
-    case 'CylinderSides':
-      return walkCylinderSides(map, seedFaceIndex, localUp);
-    case 'CylinderMinima':
-      return walkCylinderMinima(map, seedFaceIndex, localUp);
+    case 'RoughEdge':
+      return walkRoughEdge(map, seedFaceIndex, localUp);
+    case 'SoftRidge':
+      return walkSoftRidge(map, seedFaceIndex, localUp, customBrush);
     case 'Point':
       if (customBrush?.selection?.geodesicPathType === 'square') {
         return walkManualSquare(map, seedFaceIndex, localUp, worldScale, brushRadiusMm);
@@ -506,34 +506,49 @@ function walkRidge(
   return Array.from(visited).filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
 }
 
-function walkCylinderSides(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3): number[] {
+export function walkRoughEdge(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3): number[] {
   const visited = new Set<number>();
-  const queue: number[] = [];
+  const seedNormal = map.faceNormals[seed];
+  if (seedNormal.dot(localUp) > 0.2) return [];
 
-  const isAnisotropicCylinder = (f: number): boolean => {
+  // Precompute local normal entropy/variance in a 2-ring neighborhood for all candidates
+  const getLocalNormalVariance = (f: number): number => {
+    const neighbors = new Set<number>([f, ...(map.faceToFaces[f] || [])]);
+    for (const n of map.faceToFaces[f] || []) {
+      for (const nn of map.faceToFaces[n] || []) {
+        neighbors.add(nn);
+      }
+    }
     const norm = map.faceNormals[f];
-    const angles = map.faceToFaces[f].map((adj) => norm.angleTo(map.faceNormals[adj]));
-    if (angles.length === 0) return false;
-    const maxAngle = Math.max(...angles);
-    const minAngle = Math.min(...angles);
-    // Anisotropic cylinder condition: curved in one direction (> 0.03 rad) and flat in another (< 0.05 rad)
-    return maxAngle > 0.03 && minAngle < 0.05;
+    let varianceSum = 0;
+    let count = 0;
+    for (const n of neighbors) {
+      const angle = norm.angleTo(map.faceNormals[n]);
+      varianceSum += angle * angle;
+      count++;
+    }
+    return count > 0 ? varianceSum / count : 0;
   };
 
-  if (map.faceNormals[seed].dot(localUp) <= 0.2 && isAnisotropicCylinder(seed)) {
-    queue.push(seed);
-    visited.add(seed);
+  // High entropy means rough edge. Smooth region < 0.05, rough edge > 0.15.
+  const ENTROPY_THRESHOLD = 0.08;
 
-    while (queue.length > 0) {
-      const curr = queue.shift()!;
-      const adjs = map.faceToFaces[curr];
-      for (const adj of adjs) {
-        if (!visited.has(adj)) {
-          if (map.faceNormals[adj].dot(localUp) <= 0.2 && isAnisotropicCylinder(adj)) {
-            visited.add(adj);
-            queue.push(adj);
-          }
-        }
+  const queue: number[] = [seed];
+  visited.add(seed);
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const adjs = map.faceToFaces[curr] || [];
+
+    for (const adj of adjs) {
+      if (visited.has(adj)) continue;
+      if (map.faceNormals[adj].dot(localUp) > 0.2) continue; // Overhang check
+
+      // Check if neighbor is high-entropy (rough edge)
+      const variance = getLocalNormalVariance(adj);
+      if (variance >= ENTROPY_THRESHOLD) {
+        visited.add(adj);
+        queue.push(adj);
       }
     }
   }
@@ -541,56 +556,142 @@ function walkCylinderSides(map: ClientAdjacencyMap, seed: number, localUp: THREE
   return Array.from(visited).filter((idx) => idx === seed || map.faceNormals[idx].dot(localUp) <= 0.2);
 }
 
-function walkCylinderMinima(map: ClientAdjacencyMap, seed: number, localUp: THREE.Vector3): number[] {
+export function walkSoftRidge(
+  map: ClientAdjacencyMap,
+  seed: number,
+  localUp: THREE.Vector3,
+  customBrush?: CustomBrushTemplate
+): number[] {
   const visited = new Set<number>();
+  const seedNormal = map.faceNormals[seed];
+  if (seedNormal.dot(localUp) > 0.2) return [];
 
-  const isAnisotropicCylinder = (f: number): boolean => {
+  const selection = customBrush?.selection;
+  // Lower thresholds for soft ridges (e.g. 1.5 deg seed, 0.5 deg propagate)
+  const HIGH_THRESHOLD = (selection?.creaseSeedAngleDeg ?? 1.5) * (Math.PI / 180);
+  const LOW_THRESHOLD = (selection?.creasePropagateAngleDeg ?? 0.5) * (Math.PI / 180);
+  const alignLimit = selection?.ridgeAlignmentTolerance ?? 0.3;
+
+  const getPeakCurvature = (f: number): { neighborIdx: number; angle: number } => {
     const norm = map.faceNormals[f];
-    const angles = map.faceToFaces[f].map((adj) => norm.angleTo(map.faceNormals[adj]));
-    if (angles.length === 0) return false;
-    const maxAngle = Math.max(...angles);
-    const minAngle = Math.min(...angles);
-    return maxAngle > 0.03 && minAngle < 0.05;
+    let maxAngle = 0;
+    let neighborIdx = -1;
+    for (const adj of map.faceToFaces[f] || []) {
+      const angle = norm.angleTo(map.faceNormals[adj]);
+      if (angle > maxAngle) {
+        maxAngle = angle;
+        neighborIdx = adj;
+      }
+    }
+    return { neighborIdx, angle: maxAngle };
   };
 
-  if (map.faceNormals[seed].dot(localUp) <= 0.2 && isAnisotropicCylinder(seed)) {
-    visited.add(seed);
+  const seedPeak = getPeakCurvature(seed);
+  if (seedPeak.angle < HIGH_THRESHOLD) return [];
+  visited.add(seed);
 
-    const getCylinderCandidates = (f: number): number[] => {
-      const list: number[] = [];
-      for (const adj of map.faceToFaces[f]) {
+  const propagateChain = (startFace: number) => {
+    let curr = startFace;
+    while (true) {
+      const { neighborIdx, angle } = getPeakCurvature(curr);
+      if (neighborIdx === -1 || angle < LOW_THRESHOLD) break;
+
+      // Compute local ridge axis vector
+      const normCurr = map.faceNormals[curr];
+      const normCrease = map.faceNormals[neighborIdx];
+      const grad = new THREE.Vector3().subVectors(normCurr, normCrease);
+      const ridgeAxis = new THREE.Vector3().crossVectors(normCurr, grad);
+      if (ridgeAxis.lengthSq() < 1e-6) break;
+      ridgeAxis.normalize();
+
+      // Look at unvisited neighbors and choose the one closest to the ridge axis
+      const adjs = map.faceToFaces[curr] || [];
+      let bestAdj = -1;
+      let bestScore = -1;
+
+      for (const adj of adjs) {
         if (visited.has(adj)) continue;
-        if (map.faceNormals[adj].dot(localUp) > 0.2) continue;
-        if (isAnisotropicCylinder(adj)) {
-          list.push(adj);
+        if (map.faceNormals[adj].dot(localUp) > 0.2) continue; // Overhang constraint
+
+        const adjPeak = getPeakCurvature(adj);
+        if (adjPeak.angle < LOW_THRESHOLD) continue;
+
+        // Compute direction displacement vector
+        const disp = new THREE.Vector3().subVectors(map.faceCentroids[adj], map.faceCentroids[curr]);
+        if (disp.lengthSq() < 1e-6) continue;
+        disp.normalize();
+
+        const score = Math.abs(disp.dot(ridgeAxis));
+        if (score > bestScore) {
+          bestScore = score;
+          bestAdj = adj;
         }
       }
-      list.sort((a, b) => map.faceNormals[a].dot(localUp) - map.faceNormals[b].dot(localUp));
-      return list;
-    };
 
-    const candidates = getCylinderCandidates(seed);
-
-    if (candidates.length > 0) {
-      let curr = candidates[0];
+      if (bestAdj === -1 || bestScore < alignLimit) break;
+      curr = bestAdj;
       visited.add(curr);
-      while (true) {
-        const next = getCylinderCandidates(curr);
-        if (next.length === 0) break;
-        curr = next[0];
-        visited.add(curr);
+    }
+  };
+
+  const normSeed = map.faceNormals[seed];
+  const normCreaseSeed = map.faceNormals[seedPeak.neighborIdx];
+  const gradSeed = new THREE.Vector3().subVectors(normSeed, normCreaseSeed);
+  const ridgeAxisSeed = new THREE.Vector3().crossVectors(normSeed, gradSeed);
+
+  if (ridgeAxisSeed.lengthSq() < 1e-6) {
+    // Fallback if cross product is degenerate
+    const fallbacks = (map.faceToFaces[seed] || []).filter(
+      (adj) => getPeakCurvature(adj).angle >= LOW_THRESHOLD && map.faceNormals[adj].dot(localUp) <= 0.2
+    );
+    if (fallbacks.length > 0) {
+      visited.add(fallbacks[0]);
+      propagateChain(fallbacks[0]);
+    }
+    if (fallbacks.length > 1) {
+      visited.add(fallbacks[1]);
+      propagateChain(fallbacks[1]);
+    }
+  } else {
+    ridgeAxisSeed.normalize();
+
+    const adjsSeed = map.faceToFaces[seed] || [];
+    let bestForwardAdj = -1;
+    let bestForwardScore = -1;
+    let bestBackwardAdj = -1;
+    let bestBackwardScore = -1;
+
+    for (const adj of adjsSeed) {
+      if (map.faceNormals[adj].dot(localUp) > 0.2) continue;
+      const adjPeak = getPeakCurvature(adj);
+      if (adjPeak.angle < LOW_THRESHOLD) continue;
+
+      const disp = new THREE.Vector3().subVectors(map.faceCentroids[adj], map.faceCentroids[seed]);
+      if (disp.lengthSq() < 1e-6) continue;
+      disp.normalize();
+
+      const dotVal = disp.dot(ridgeAxisSeed);
+      const score = Math.abs(dotVal);
+      if (dotVal > 0) {
+        if (score > bestForwardScore) {
+          bestForwardScore = score;
+          bestForwardAdj = adj;
+        }
+      } else {
+        if (score > bestBackwardScore) {
+          bestBackwardScore = score;
+          bestBackwardAdj = adj;
+        }
       }
     }
 
-    if (candidates.length > 1) {
-      let curr = candidates[1];
-      visited.add(curr);
-      while (true) {
-        const next = getCylinderCandidates(curr);
-        if (next.length === 0) break;
-        curr = next[0];
-        visited.add(curr);
-      }
+    if (bestForwardAdj !== -1 && bestForwardScore >= alignLimit) {
+      visited.add(bestForwardAdj);
+      propagateChain(bestForwardAdj);
+    }
+    if (bestBackwardAdj !== -1 && bestBackwardScore >= alignLimit) {
+      visited.add(bestBackwardAdj);
+      propagateChain(bestBackwardAdj);
     }
   }
 

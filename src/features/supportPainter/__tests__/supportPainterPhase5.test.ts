@@ -54,8 +54,8 @@ describe('Support Painter Phase 5 - Rust Minima Scanner & TypeScript batch conso
     const region = snapshot.regions.get(regionId)!;
 
     assert.ok(regionId.startsWith('auto-minima-'), 'Consolidated region ID should have auto-minima prefix');
-    assert.strictEqual(region.brushType, 'ManualCircle');
-    assert.strictEqual(region.color, '#06B6D4', 'Consolidated region should be colored cyan');
+    assert.strictEqual(region.brushType, 'MinimaIslands');
+    assert.strictEqual(region.color, '#7ED321', 'Consolidated region should be colored green');
     assert.strictEqual(region.seedTriangleId, 4, 'Primary seed should reference first scan coordinate');
 
     // Centroids are 1.0mm apart, so 0.1mm radius should only select the seed faces themselves
