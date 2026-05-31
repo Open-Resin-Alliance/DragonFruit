@@ -213,26 +213,29 @@ describe('Support Painter - New Smart Brushes Unit Tests', () => {
       assert.ok(!selected.includes(4), 'Should reject lateral detour neighbor 4 due to crease vector clamp constraint');
     });
 
-    it('should terminate propagation in Rough Edge walk if high-entropy neighbors count exceeds 2', () => {
-      // Seed 0 (high-roughness) has 3 neighbors: 1, 2, 3, which are all rough (variance > 0.06).
-      // Since neighbor count is 3 (> 2), seed 0 behaves as a junction and walk should terminate immediately.
+    it('should terminate propagation in Rough Edge walk if high-entropy neighbors count exceeds 3', () => {
+      // Seed 0 (high-roughness) has 4 neighbors: 1, 2, 3, 4, which are all rough (variance > 0.06).
+      // Since neighbor count is 4 (> 3), seed 0 behaves as a junction and walk should terminate immediately.
       const mockJunctionMap: ClientAdjacencyMap = {
-        faceCount: 4,
+        faceCount: 5,
         faceNormals: [
           new THREE.Vector3(0.2, 0.4, -0.9).normalize(), // 0 (seed)
           new THREE.Vector3(-0.2, -0.4, -0.9).normalize(), // 1
           new THREE.Vector3(0.2, -0.4, -0.9).normalize(), // 2
           new THREE.Vector3(-0.2, 0.4, -0.9).normalize(), // 3
+          new THREE.Vector3(0.2, 0.4, 0.9).normalize(), // 4
         ],
         faceCentroids: [
           new THREE.Vector3(0, 0, 0), // 0 (seed)
           new THREE.Vector3(1, 0, 0), // 1
           new THREE.Vector3(0, 1, 0), // 2
           new THREE.Vector3(-1, 0, 0), // 3
+          new THREE.Vector3(0, -1, 0), // 4
         ],
-        faceZBounds: Array.from({ length: 4 }, () => ({ min: -0.1, max: 0.1 })),
+        faceZBounds: Array.from({ length: 5 }, () => ({ min: -0.1, max: 0.1 })),
         faceToFaces: [
-          [1, 2, 3], // 0 (seed connected to 3 rough neighbors)
+          [1, 2, 3, 4], // 0 (seed connected to 4 rough neighbors)
+          [0],
           [0],
           [0],
           [0],
@@ -248,8 +251,8 @@ describe('Support Painter - New Smart Brushes Unit Tests', () => {
       const localUp = new THREE.Vector3(0, 0, 1);
       const selected = walkRoughEdge(mockJunctionMap, 0, localUp, mockCustomBrush);
 
-      // Seed 0 is rough (variance > 0.12), neighbors are rough (> 0.06).
-      // However, seed 0 has 3 rough neighbors, which triggers the branch-valence check (> 2).
+      // Seed 0 is rough (variance > 0.06), neighbors are rough (> 0.045).
+      // However, seed 0 has 4 rough neighbors, which triggers the branch-valence check (> 3).
       // Propagation should terminate immediately, selecting only the seed face!
       assert.strictEqual(selected.length, 1, 'Should terminate propagation at junction and select only the seed face');
       assert.strictEqual(selected[0], 0);

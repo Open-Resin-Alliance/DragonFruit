@@ -540,15 +540,15 @@ export function walkRoughEdge(
   };
 
   // 1. Variance Hysteresis (Phase C)
-  // Seed a walk only on high-roughness faces (normal variance > 0.12)
+  // Leverage custom roughness threshold dynamically, or fall back to standard smart defaults
+  const SEED_THRESHOLD = customBrush?.selection?.roughnessThreshold ?? 0.08;
+  const PROPAGATION_THRESHOLD = customBrush?.selection?.roughnessThreshold ?? (customBrush ? 0.06 : 0.08);
+
   const seedVariance = getLocalNormalVariance(seed);
-  if (seedVariance <= 0.12) return [];
+  if (seedVariance <= SEED_THRESHOLD) return [];
 
   const queue: number[] = [seed];
   visited.add(seed);
-
-  // Fallback to 0.08 default if customBrush is not provided to match pre-existing test expectation
-  const PROPAGATION_THRESHOLD = customBrush ? 0.06 : 0.08;
 
   while (queue.length > 0) {
     const curr = queue.shift()!;
@@ -563,8 +563,8 @@ export function walkRoughEdge(
       }
     }
 
-    // If a face has more than two high-entropy neighbors, treat it as a junction/intersection and terminate
-    if (roughNeighborCount > 2) {
+    // If a face has more than three high-entropy neighbors, treat it as a junction/intersection and terminate
+    if (roughNeighborCount > 3) {
       continue;
     }
 
@@ -572,7 +572,6 @@ export function walkRoughEdge(
       if (visited.has(adj)) continue;
       if (map.faceNormals[adj].dot(localUp) > 0.2) continue; // Overhang check
 
-      // Check if neighbor is moderately rough (variance > 0.06)
       const variance = getLocalNormalVariance(adj);
       if (variance > PROPAGATION_THRESHOLD) {
         visited.add(adj);
