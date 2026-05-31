@@ -46,6 +46,11 @@ function resolveCollisionAwareDiskThickness(
         collisionMesh,
         angleThickness,
         maxStandoff,
+        0.2,
+        {
+            startRadius: (cone.profile.contactDiameterMm / 2) + CONTACT_CONE_COLLISION_SAFETY_MM,
+            endRadius: bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
+        },
     );
 
     const capEps = 1e-6;

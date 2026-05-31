@@ -664,7 +664,12 @@ export function moveJoint(
                         testRadius,
                         mesh,
                         angleThickness, // minOffset (start at angle-based)
-                        maxStandoff
+                        maxStandoff,
+                        0.2,
+                        {
+                            startRadius: (trunk.contactCone.profile.contactDiameterMm / 2) + safetyMargin,
+                            endRadius: testRadius,
+                        },
                     );
 
                     // If we hit the cap, treat it as "solver couldn't prove clearance" rather than

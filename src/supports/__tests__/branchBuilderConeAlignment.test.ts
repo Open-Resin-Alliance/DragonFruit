@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
-import { isCollisionSegmentBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { isCollisionFrustumBlocked, isCollisionSegmentBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { getSettings } from '../Settings';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import type { Knot, Vec3 } from '../types';
@@ -103,9 +103,10 @@ test('buildBranchData reroutes the shaft instead of steepening the cone near the
     const withMeshAngle = angleBetween(tipNormal, withMesh.contactCone!.normal);
     const withMeshSocket = getFinalSocketPosition(withMesh.contactCone!);
     const coneStart = getConeStart(withMesh.contactCone!);
-    const blocked = isCollisionSegmentBlocked(
+    const blocked = isCollisionFrustumBlocked(
         coneStart,
         withMeshSocket,
+        (withMesh.contactCone!.profile.contactDiameterMm / 2) + 0.25,
         (withMesh.contactCone!.profile.bodyDiameterMm / 2) + 0.25,
         mesh,
     );
@@ -150,4 +151,22 @@ test('buildBranchData prefers shaft deviation over aggressively stretching the c
         branch.contactCone!.profile.lengthMm <= directDistance - 1.5,
         `expected cone length ${branch.contactCone!.profile.lengthMm.toFixed(2)}mm to stay well below direct reach ${directDistance.toFixed(2)}mm`,
     );
+});
+
+test('frustum cone collision checks catch wide-end clips that a narrow start-radius shaft would miss', () => {
+    const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.25, 0.25, 0.45),
+        new THREE.MeshBasicMaterial(),
+    );
+    mesh.position.set(0.62, 0, 3.2);
+    mesh.updateMatrixWorld(true);
+
+    const start = { x: 0, y: 0, z: 0 };
+    const end = { x: 0, y: 0, z: 4 };
+
+    const narrowStartBlocked = isCollisionSegmentBlocked(start, end, 0.22, mesh);
+    const frustumBlocked = isCollisionFrustumBlocked(start, end, 0.22, 0.72, mesh);
+
+    assert.equal(narrowStartBlocked, false);
+    assert.equal(frustumBlocked, true);
 });

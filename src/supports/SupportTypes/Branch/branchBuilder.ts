@@ -9,7 +9,7 @@ import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
 import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
-import { isCollisionSegmentBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 
 const BRANCH_CONE_COLLISION_SAFETY_MM = 0.25;
 const BRANCH_SOCKET_POLAR_DEG = [0, 10, 20, 30, 40, 50, 60];
@@ -44,8 +44,9 @@ function isConePlacementClear(cone: ContactCone, mesh?: THREE.Mesh): boolean {
 
     const coneStart = getConeStartPosition(cone);
     const socketPos = getFinalSocketPosition(cone);
-    const collisionRadius = (cone.profile.bodyDiameterMm / 2) + BRANCH_CONE_COLLISION_SAFETY_MM;
-    return !isCollisionSegmentBlocked(coneStart, socketPos, collisionRadius, mesh);
+    const contactRadius = (cone.profile.contactDiameterMm / 2) + BRANCH_CONE_COLLISION_SAFETY_MM;
+    const bodyRadius = (cone.profile.bodyDiameterMm / 2) + BRANCH_CONE_COLLISION_SAFETY_MM;
+    return !isCollisionFrustumBlocked(coneStart, socketPos, contactRadius, bodyRadius, mesh);
 }
 
 function buildAuthoredBranchCone(
