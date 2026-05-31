@@ -413,10 +413,11 @@ export function findMixedSocketRescueCandidate(args: {
     };
 
     let best: MixedSocketRescueCandidate | null = null;
+    let bestSocketShiftMm: number | null = null;
 
     for (const candidateSocketPos of candidates) {
         const socketShiftMm = distanceXY(candidateSocketPos, args.socketPos);
-        if (best && socketShiftMm > best.socketShiftMm + 0.000001) {
+        if (bestSocketShiftMm !== null && socketShiftMm > bestSocketShiftMm + 0.000001) {
             break;
         }
 
@@ -460,6 +461,7 @@ export function findMixedSocketRescueCandidate(args: {
 
             if (!best || isMixedSocketRescueCandidateBetter(candidate, best)) {
                 best = candidate;
+                bestSocketShiftMm = candidate.socketShiftMm;
             }
         };
 
