@@ -34,6 +34,7 @@ const BRUSH_DETAILS: Record<BrushType, { label: string }> = {
   Marker:         { label: 'Marker Brush' },
   PointPath:      { label: 'Point Path' },
   MinimaIslands:  { label: 'Minima Islands' },
+  'Unk Legacy Brush': { label: 'Unk Legacy Brush' },
 };
 
 function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
@@ -770,7 +771,7 @@ export async function generateSupportsFromPainter(
           vertexIds: [...finalPath],
         });
       }
-      if (region.brushType === 'MacroFace' || region.brushType === 'Marker' || region.brushType === 'ManualCircle' || region.brushType === 'ManualSquare' || (region.brushType === 'PointPath' && !isPointPathLine)) {
+      if (region.brushType === 'MacroFace' || region.brushType === 'Marker' || region.brushType === 'Unk Legacy Brush' || region.brushType === 'ManualCircle' || region.brushType === 'ManualSquare' || (region.brushType === 'PointPath' && !isPointPathLine)) {
         const blobSpine = getBlobCenterlineSpine(triangleIds, uniqueVertices, triangles, vertexNormals);
         if (blobSpine) {
           regionSpines.set(region.id, blobSpine);
@@ -1027,7 +1028,7 @@ export async function generateSupportsFromPainter(
         });
       }
     } else {
-      const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker' || region.brushType === 'RoughEdge';
+      const isPointPathOrMarker = region.brushType === 'PointPath' || region.brushType === 'Marker' || region.brushType === 'RoughEdge' || region.brushType === 'Unk Legacy Brush';
       const isLineBrush = region.brushType === 'Ridge' || region.brushType === 'SoftRidge' || (
         region.brushType === 'PointPath' && (
           (region.brush?.parameters?.pointPathMode === 'line') ||

@@ -226,6 +226,10 @@ export function proposeRegionOnClient(
       } else if (seedFaceIndex >= 0 && seedFaceIndex < map.faceCount) {
         return [seedFaceIndex];
       }
+    case 'Unk Legacy Brush':
+      if (seedFaceIndex >= 0 && seedFaceIndex < map.faceCount) {
+        return [seedFaceIndex];
+      }
       return [];
     default:
       // Legacy 1-ring fallback

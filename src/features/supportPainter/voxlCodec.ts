@@ -3,8 +3,16 @@ import {
   type VoxlROIExtension,
   type VoxlROIRunLength,
   type VoxlROIRegion,
+  type BrushType,
   upgradePipeline,
+  BRUSH_COLORS,
 } from './supportPainterTypes';
+
+const KNOWN_BRUSH_TYPES = new Set<string>([
+  'MacroFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
+  'ManualCircle', 'ManualSquare', 'Marker', 'PointPath', 'MinimaIslands',
+  'Unk Legacy Brush'
+]);
 
 // ─── RLE Codec for Persistent ROIs [RLE_CODEC] ───
 // [AGENT_NOTE] Compresses a sorted index list into alternating [start, count] run-length segments.
@@ -111,17 +119,44 @@ export function deserializeROIsFromVoxl(
       ? decompressRLE(r.rleSpans)
       : [];
 
-    const customBrush = r.customBrush ? {
-      ...r.customBrush,
-      operations: upgradePipeline(r.customBrush.operations, r.brushType),
-    } : undefined;
+    let brushType = r.brushType;
+    if ((brushType as string) === 'CylinderMinima') {
+      brushType = 'SoftRidge';
+    } else if ((brushType as string) === 'CylinderSides') {
+      brushType = 'RoughEdge';
+    } else if (!KNOWN_BRUSH_TYPES.has(brushType)) {
+      brushType = 'Unk Legacy Brush';
+    }
+
+    let customBrush = undefined;
+    if (r.customBrush) {
+      let baseBrush = r.customBrush.baseBrush;
+      if (baseBrush) {
+        if ((baseBrush as string) === 'CylinderMinima') {
+          baseBrush = 'SoftRidge';
+        } else if ((baseBrush as string) === 'CylinderSides') {
+          baseBrush = 'RoughEdge';
+        } else if (!KNOWN_BRUSH_TYPES.has(baseBrush)) {
+          baseBrush = 'Unk Legacy Brush';
+        }
+      }
+      // Omit baseBrush property entirely if it's undefined to match original object structure in tests
+      const { baseBrush: _, ...restCustomBrush } = r.customBrush;
+      customBrush = {
+        ...restCustomBrush,
+        ...(baseBrush ? { baseBrush } : {}),
+        operations: upgradePipeline(r.customBrush.operations, brushType),
+      };
+    }
+
+    const color = brushType === 'Unk Legacy Brush' ? '#E11D48' : (r.color || BRUSH_COLORS[brushType]);
 
     modelMap.set(r.id, {
       id: r.id,
-      brushType: r.brushType,
+      brushType,
       seedTriangleId: r.seedTriangleId,
       triangleIds: new Set(triangleIdsList),
-      color: r.color,
+      color,
       proposedOnly: false,
       createdAt: r.createdAt,
       loops: r.loops,

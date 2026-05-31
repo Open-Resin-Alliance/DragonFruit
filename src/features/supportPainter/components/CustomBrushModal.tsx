@@ -135,6 +135,7 @@ const presets: Record<BrushType, Partial<CustomBrushTemplate['selection']>> = {
     pointPathMode: 'line',
   },
   MinimaIslands: {},
+  'Unk Legacy Brush': {},
 };
 
 const DEFAULT_TEMPLATE: CustomBrushTemplate = {

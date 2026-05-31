@@ -22,6 +22,12 @@ import { getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot } 
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
 
+const KNOWN_BRUSH_TYPES = new Set<string>([
+  'MacroFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
+  'ManualCircle', 'ManualSquare', 'Marker', 'PointPath', 'MinimaIslands',
+  'Unk Legacy Brush'
+]);
+
 const listeners = new Set<() => void>();
 
 let isActive = false;
@@ -115,9 +121,27 @@ function loadCustomBrushesFromLocalStorage() {
         const list = JSON.parse(raw) as CustomBrushTemplate[];
         customBrushes.clear();
         for (const brush of list) {
+          let baseBrush = brush.baseBrush;
+          if (baseBrush) {
+            if ((baseBrush as string) === 'CylinderMinima') {
+              baseBrush = 'SoftRidge';
+            } else if ((baseBrush as string) === 'CylinderSides') {
+              baseBrush = 'RoughEdge';
+            } else if (!KNOWN_BRUSH_TYPES.has(baseBrush)) {
+              baseBrush = 'Unk Legacy Brush';
+            }
+          }
+
+          let color = brush.color;
+          if (baseBrush === 'Unk Legacy Brush') {
+            color = '#E11D48';
+          }
+
           const upgradedBrush = {
             ...brush,
-            operations: upgradePipeline(brush.operations, brush.baseBrush || 'MacroFace'),
+            baseBrush,
+            color,
+            operations: upgradePipeline(brush.operations, baseBrush || 'MacroFace'),
           };
           customBrushes.set(brush.id, upgradedBrush);
         }
@@ -238,10 +262,13 @@ function _remapSupportsRoiId(state: any, sourceRoiIds: string[], targetRoiId: st
 }
 
 function hexToRgb(hex: string): [number, number, number] {
+  if (!hex || typeof hex !== 'string') {
+    return [225, 29, 72]; // Safe default fallback (Marker Red `#E11D48`)
+  }
   const clean = hex.replace('#', '');
-  const r = parseInt(clean.substring(0, 2), 16);
-  const g = parseInt(clean.substring(2, 4), 16);
-  const b = parseInt(clean.substring(4, 6), 16);
+  const r = parseInt(clean.substring(0, 2), 16) || 0;
+  const g = parseInt(clean.substring(2, 4), 16) || 0;
+  const b = parseInt(clean.substring(4, 6), 16) || 0;
   return [r, g, b];
 }
 

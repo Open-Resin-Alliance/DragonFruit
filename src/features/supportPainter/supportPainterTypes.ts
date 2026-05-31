@@ -1,6 +1,6 @@
 // ─── Brush Identity ─────────────────────────────────────────────────────────
 
-export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands';
+export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands' | 'Unk Legacy Brush';
 
 // ─── Custom Support Operations & Pipeline Typings ───────────────────────────
 
@@ -95,6 +95,7 @@ export const BRUSH_COLORS: Record<BrushType, string> = {
   Marker:         '#E11D48',   // premium rose/red
   PointPath:      '#10B981',   // emerald/mint green
   MinimaIslands:  '#7ED321',   // bright neon green of Point Geodesic
+  'Unk Legacy Brush': '#E11D48', // same red as Marker
 };
 
 // ─── Interaction Phase State Machine ────────────────────────────────────────
@@ -336,7 +337,7 @@ export function upgradePipeline(
   if ((activeBrushType as string) === 'CylinderMinima') activeBrushType = 'SoftRidge';
   if ((activeBrushType as string) === 'CylinderSides') activeBrushType = 'RoughEdge';
 
-  const isPointPathOrMarker = activeBrushType === 'PointPath' || activeBrushType === 'Marker' || activeBrushType === 'RoughEdge';
+  const isPointPathOrMarker = activeBrushType === 'PointPath' || activeBrushType === 'Marker' || activeBrushType === 'RoughEdge' || activeBrushType === 'Unk Legacy Brush';
   const isLineBrush = activeBrushType === 'Ridge' || activeBrushType === 'SoftRidge' || activeBrushType === 'PointPath';
 
   const standardTypes: ('minima' | 'perimeter' | 'infill' | 'centerline')[] = [

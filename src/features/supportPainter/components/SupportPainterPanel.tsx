@@ -96,6 +96,11 @@ const BRUSH_DETAILS: Record<
     desc: 'Auto-detected local vertical minima islands',
     icon: WandSparkles,
   },
+  'Unk Legacy Brush': {
+    label: 'Unk Legacy Brush',
+    desc: 'Unknown legacy support brush',
+    icon: Cylinder,
+  },
 };
 
 function getSupportTips(supportState: any, activeModelId: string): THREE.Vector3[] {
@@ -820,7 +825,7 @@ export function SupportPainterPanel({
             </span>
             <div className="grid grid-cols-2 gap-1.5">
               {(Object.keys(BRUSH_DETAILS) as BrushType[])
-                .filter((brush) => brush !== 'ManualCircle' && brush !== 'ManualSquare' && brush !== 'MinimaIslands')
+                .filter((brush) => brush !== 'ManualCircle' && brush !== 'ManualSquare' && brush !== 'MinimaIslands' && brush !== 'Unk Legacy Brush')
                 .map((brush) => {
                 const isSelected = state.activeBrush === brush && state.activeCustomBrushId === null;
                 const details = BRUSH_DETAILS[brush];
