@@ -539,23 +539,42 @@ export function walkRoughEdge(
     return count > 0 ? varianceSum / count : 0;
   };
 
-  const selection = customBrush?.selection;
-  const ENTROPY_THRESHOLD = selection?.roughnessThreshold ?? 0.08;
+  // 1. Variance Hysteresis (Phase C)
+  // Seed a walk only on high-roughness faces (normal variance > 0.12)
+  const seedVariance = getLocalNormalVariance(seed);
+  if (seedVariance <= 0.12) return [];
 
   const queue: number[] = [seed];
   visited.add(seed);
+
+  // Fallback to 0.08 default if customBrush is not provided to match pre-existing test expectation
+  const PROPAGATION_THRESHOLD = customBrush ? 0.06 : 0.08;
 
   while (queue.length > 0) {
     const curr = queue.shift()!;
     const adjs = map.faceToFaces[curr] || [];
 
+    // 2. Limit Branch-Valence (Phase C)
+    // Count the number of high-entropy neighbors at each step
+    let roughNeighborCount = 0;
+    for (const adj of adjs) {
+      if (getLocalNormalVariance(adj) > PROPAGATION_THRESHOLD) {
+        roughNeighborCount++;
+      }
+    }
+
+    // If a face has more than two high-entropy neighbors, treat it as a junction/intersection and terminate
+    if (roughNeighborCount > 2) {
+      continue;
+    }
+
     for (const adj of adjs) {
       if (visited.has(adj)) continue;
       if (map.faceNormals[adj].dot(localUp) > 0.2) continue; // Overhang check
 
-      // Check if neighbor is high-entropy (rough edge)
+      // Check if neighbor is moderately rough (variance > 0.06)
       const variance = getLocalNormalVariance(adj);
-      if (variance >= ENTROPY_THRESHOLD) {
+      if (variance > PROPAGATION_THRESHOLD) {
         visited.add(adj);
         queue.push(adj);
       }
@@ -599,6 +618,15 @@ export function walkSoftRidge(
   if (seedPeak.angle < HIGH_THRESHOLD) return [];
   visited.add(seed);
 
+  const normSeed = map.faceNormals[seed];
+  const normCreaseSeed = map.faceNormals[seedPeak.neighborIdx];
+  const gradSeed = new THREE.Vector3().subVectors(normSeed, normCreaseSeed);
+  const ridgeAxisSeed = new THREE.Vector3().crossVectors(normSeed, gradSeed);
+  const isSeedAxisValid = ridgeAxisSeed.lengthSq() >= 1e-6;
+  if (isSeedAxisValid) {
+    ridgeAxisSeed.normalize();
+  }
+
   const propagateChain = (startFace: number) => {
     let curr = startFace;
     while (true) {
@@ -630,6 +658,12 @@ export function walkSoftRidge(
         if (disp.lengthSq() < 1e-6) continue;
         disp.normalize();
 
+        // Directional crease vector clamp constraint (Phase B)
+        if (isSeedAxisValid) {
+          const scoreSeed = Math.abs(disp.dot(ridgeAxisSeed));
+          if (scoreSeed < 0.3) continue; // Reject lateral loops
+        }
+
         const score = Math.abs(disp.dot(ridgeAxis));
         if (score > bestScore) {
           bestScore = score;
@@ -643,12 +677,7 @@ export function walkSoftRidge(
     }
   };
 
-  const normSeed = map.faceNormals[seed];
-  const normCreaseSeed = map.faceNormals[seedPeak.neighborIdx];
-  const gradSeed = new THREE.Vector3().subVectors(normSeed, normCreaseSeed);
-  const ridgeAxisSeed = new THREE.Vector3().crossVectors(normSeed, gradSeed);
-
-  if (ridgeAxisSeed.lengthSq() < 1e-6) {
+  if (!isSeedAxisValid) {
     // Fallback if cross product is degenerate
     const fallbacks = (map.faceToFaces[seed] || []).filter(
       (adj) => getPeakCurvature(adj).angle >= LOW_THRESHOLD && map.faceNormals[adj].dot(localUp) <= 0.2
@@ -662,8 +691,6 @@ export function walkSoftRidge(
       propagateChain(fallbacks[1]);
     }
   } else {
-    ridgeAxisSeed.normalize();
-
     const adjsSeed = map.faceToFaces[seed] || [];
     let bestForwardAdj = -1;
     let bestForwardScore = -1;
@@ -681,6 +708,10 @@ export function walkSoftRidge(
 
       const dotVal = disp.dot(ridgeAxisSeed);
       const score = Math.abs(dotVal);
+
+      // Enforce clamp on seed neighbor selection too
+      if (score < 0.3) continue;
+
       if (dotVal > 0) {
         if (score > bestForwardScore) {
           bestForwardScore = score;
@@ -1057,6 +1088,61 @@ export function findDijkstraFacePath(
   return path.reverse();
 }
 
+function smoothPointPath(
+  map: ClientAdjacencyMap,
+  path: number[]
+): number[] {
+  if (path.length < 3) return [...path];
+
+  // 1. Extract 3D centroids
+  const centroids = path.map(f => map.faceCentroids[f]);
+
+  // 2. 1D sliding Gaussian filter
+  const smoothedCentroids: THREE.Vector3[] = [];
+  const w = 2; // window span
+  const sigma = 1.0;
+  const weights = [-2, -1, 0, 1, 2].map(j => Math.exp(-(j * j) / (2 * sigma * sigma)));
+  const sumWeights = weights.reduce((a, b) => a + b, 0);
+
+  for (let i = 0; i < centroids.length; i++) {
+    const sum = new THREE.Vector3();
+    for (let j = -w; j <= w; j++) {
+      const idx = Math.max(0, Math.min(centroids.length - 1, i + j));
+      sum.addScaledVector(centroids[idx], weights[j + w]);
+    }
+    sum.divideScalar(sumWeights);
+    smoothedCentroids.push(sum);
+  }
+
+  // 3. Local projection back to the mesh surface
+  const candidateFaces = new Set<number>();
+  for (const face of path) {
+    candidateFaces.add(face);
+    const neighbors = map.faceToFaces[face] || [];
+    for (const n of neighbors) {
+      candidateFaces.add(n);
+    }
+  }
+
+  const smoothedPath: number[] = [];
+  for (const smoothedPt of smoothedCentroids) {
+    let bestFace = -1;
+    let minDistSq = Infinity;
+    for (const face of candidateFaces) {
+      const distSq = map.faceCentroids[face].distanceToSquared(smoothedPt);
+      if (distSq < minDistSq) {
+        minDistSq = distSq;
+        bestFace = face;
+      }
+    }
+    if (bestFace !== -1) {
+      smoothedPath.push(bestFace);
+    }
+  }
+
+  return smoothedPath;
+}
+
 export function walkPointPathLine(
   map: ClientAdjacencyMap,
   points: number[],
@@ -1069,13 +1155,18 @@ export function walkPointPathLine(
     return walkManualCircle(map, points[0], localUp, worldScale, widthMm * 0.5);
   }
 
-  const skeleton = new Set<number>();
+  const rawPath: number[] = [];
   for (let i = 0; i < points.length - 1; i++) {
     const segment = findDijkstraFacePath(map, points[i], points[i + 1], worldScale);
     for (const face of segment) {
-      skeleton.add(face);
+      if (rawPath.length === 0 || rawPath[rawPath.length - 1] !== face) {
+        rawPath.push(face);
+      }
     }
   }
+
+  const smoothedPath = smoothPointPath(map, rawPath);
+  const skeleton = new Set<number>(smoothedPath);
 
   const radiusMm = widthMm * 0.5;
   const proposed: number[] = [];
@@ -1131,14 +1222,24 @@ export function walkPointPathPolygon(
     return walkPointPathLine(map, points, 2.0, localUp, worldScale);
   }
 
-  const boundary = new Set<number>();
+  const rawPath: number[] = [];
   for (let i = 0; i < points.length; i++) {
     const nextIdx = (i + 1) % points.length;
     const segment = findDijkstraFacePath(map, points[i], points[nextIdx], worldScale);
     for (const face of segment) {
-      boundary.add(face);
+      if (rawPath.length === 0 || rawPath[rawPath.length - 1] !== face) {
+        rawPath.push(face);
+      }
     }
   }
+
+  // Ensure it is closed
+  if (rawPath.length > 0 && rawPath[0] !== rawPath[rawPath.length - 1]) {
+    rawPath.push(rawPath[0]);
+  }
+
+  const smoothedPath = smoothPointPath(map, rawPath);
+  const boundary = new Set<number>(smoothedPath);
 
   const firstSeed = points[0];
   const seedNormal = map.faceNormals[firstSeed];

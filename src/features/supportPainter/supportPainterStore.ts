@@ -272,6 +272,91 @@ function hexToRgb(hex: string): [number, number, number] {
   return [r, g, b];
 }
 
+function dilate(triangleSet: Set<number>, map: ClientAdjacencyMap): Set<number> {
+  const dilated = new Set(triangleSet);
+  for (const triId of triangleSet) {
+    const neighbors = map.faceToFaces[triId] || [];
+    for (const n of neighbors) {
+      dilated.add(n);
+    }
+  }
+  return dilated;
+}
+
+function erode(triangleSet: Set<number>, map: ClientAdjacencyMap): Set<number> {
+  const eroded = new Set<number>();
+  for (const triId of triangleSet) {
+    const neighbors = map.faceToFaces[triId] || [];
+    let keep = true;
+    for (const n of neighbors) {
+      if (!triangleSet.has(n)) {
+        keep = false;
+        break;
+      }
+    }
+    if (keep) {
+      eroded.add(triId);
+    }
+  }
+  return eroded;
+}
+
+function hasIslandsOrHoles(triangleSet: Set<number>, map: ClientAdjacencyMap): boolean {
+  if (triangleSet.size === 0) return false;
+
+  // 1. Check for disconnected components (islands)
+  const visited = new Set<number>();
+  let componentsCount = 0;
+
+  for (const triId of triangleSet) {
+    if (visited.has(triId)) continue;
+    componentsCount++;
+    if (componentsCount > 1) return true; // Found disjointed islands!
+
+    // BFS to find connected component
+    const queue: number[] = [triId];
+    visited.add(triId);
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      const adjs = map.faceToFaces[curr] || [];
+      for (const adj of adjs) {
+        if (triangleSet.has(adj) && !visited.has(adj)) {
+          visited.add(adj);
+          queue.push(adj);
+        }
+      }
+    }
+  }
+
+  // 2. Check for internal holes (unselected faces where at least 2 neighbors are selected)
+  for (const triId of triangleSet) {
+    const neighbors = map.faceToFaces[triId] || [];
+    for (const n of neighbors) {
+      if (!triangleSet.has(n)) {
+        const nNeighbors = map.faceToFaces[n] || [];
+        let selectedCount = 0;
+        for (const nn of nNeighbors) {
+          if (triangleSet.has(nn)) {
+            selectedCount++;
+          }
+        }
+        if (selectedCount >= 2) {
+          return true; // Found a hole!
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function morphologicalClosing(triangleSet: Set<number>, map: ClientAdjacencyMap): Set<number> {
+  if (!hasIslandsOrHoles(triangleSet, map)) {
+    return triangleSet;
+  }
+  return erode(dilate(triangleSet, map), map);
+}
+
 function _recomputeTriangleColorMap(): TriangleColorMap {
   const map: TriangleColorMap = new Map();
   // 1. Committed regions
@@ -419,7 +504,7 @@ export const supportPainterStore = {
     const eraserMode = activeCustomBrush ? activeCustomBrush.selection.markerEraserMode : markerEraserMode;
     const collisionMode = activeCustomBrush ? (activeCustomBrush.selection.markerCollisionMode ?? 'fence') : markerCollisionMode;
 
-    const triangleIds = proposedTriangleIds.size > 0
+    let triangleIds = proposedTriangleIds.size > 0
       ? new Set(proposedTriangleIds)
       : new Set([payload.seedTriangleId]);
 
@@ -428,6 +513,10 @@ export const supportPainterStore = {
       this.subtractTrianglesFromRegions(triangleIds);
       proposedTriangleIds.clear();
       return '';
+    }
+
+    if (isMarker && clientAdjacencyMap) {
+      triangleIds = morphologicalClosing(triangleIds, clientAdjacencyMap);
     }
 
     const id = crypto.randomUUID?.() || Math.random().toString(36).substring(2);
@@ -535,16 +624,21 @@ export const supportPainterStore = {
     const region = regions.get(regionId);
     if (!region) return;
 
-    const nextSet = new Set(region.triangleIds);
+    let nextSet = new Set(region.triangleIds);
     for (const tid of triangleIds) {
       nextSet.add(tid);
     }
+
+    const isMarker = region.brushType === 'Marker' || (region.customBrush && region.customBrush.baseBrush === 'Marker');
+    if (isMarker && clientAdjacencyMap) {
+      nextSet = morphologicalClosing(nextSet, clientAdjacencyMap);
+    }
+
     region.triangleIds = nextSet;
     region.rleSpans = undefined;
     region.loops = undefined;
 
     // Handle Erode / Push / Merge collisions for the appended stroke triangles
-    const isMarker = region.brushType === 'Marker' || (region.customBrush && region.customBrush.baseBrush === 'Marker');
     const collisionMode = region.customBrush
       ? (region.customBrush.selection.markerCollisionMode ?? 'fence')
       : markerCollisionMode;

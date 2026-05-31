@@ -378,6 +378,210 @@ export function solvePerimeterWithInflections(
   return samples;
 }
 
+export function simplifyLoopEuclidean(
+  vertexIds: number[],
+  uniqueVertices: THREE.Vector3[],
+  tolerance: number
+): number[] {
+  if (vertexIds.length <= 3) return [...vertexIds];
+
+  const decimated: number[] = [];
+  decimated.push(vertexIds[0]);
+
+  let lastPos = uniqueVertices[vertexIds[0]];
+  const isClosed = vertexIds[0] === vertexIds[vertexIds.length - 1];
+  const len = isClosed ? vertexIds.length - 1 : vertexIds.length;
+
+  for (let i = 1; i < len; i++) {
+    const pos = uniqueVertices[vertexIds[i]];
+    if (lastPos.distanceTo(pos) >= tolerance) {
+      decimated.push(vertexIds[i]);
+      lastPos = pos;
+    }
+  }
+
+  if (isClosed) {
+    if (decimated.length < 3) {
+      return [...vertexIds];
+    }
+    decimated.push(decimated[0]);
+  }
+
+  return decimated;
+}
+
+export function applyAlphaShapeToLoops(
+  loops: VoxlROIBoundaryLoop[],
+  uniqueVertices: THREE.Vector3[],
+  vertexNormals: Map<number, THREE.Vector3>,
+  alpha: number
+): VoxlROIBoundaryLoop[] {
+  if (loops.length === 0) return [];
+
+  const vertexIndicesSet = new Set<number>();
+  for (const loop of loops) {
+    for (const vid of loop.vertexIds) {
+      vertexIndicesSet.add(vid);
+    }
+  }
+  const vertexIndices = Array.from(vertexIndicesSet);
+  if (vertexIndices.length < 3) return loops;
+
+  const avgCentroid = new THREE.Vector3();
+  const avgNormal = new THREE.Vector3();
+  let validNormCount = 0;
+
+  for (const vid of vertexIndices) {
+    avgCentroid.add(uniqueVertices[vid]);
+    const vNorm = vertexNormals.get(vid);
+    if (vNorm) {
+      avgNormal.add(vNorm);
+      validNormCount++;
+    }
+  }
+  avgCentroid.divideScalar(vertexIndices.length);
+
+  if (validNormCount > 0) {
+    avgNormal.normalize();
+  } else {
+    avgNormal.set(0, 0, 1);
+  }
+
+  const tangentU = new THREE.Vector3(1, 0, 0).cross(avgNormal);
+  if (tangentU.lengthSq() < 1e-4) {
+    tangentU.copy(new THREE.Vector3(0, 1, 0).cross(avgNormal));
+  }
+  tangentU.normalize();
+  const tangentV = new THREE.Vector3().crossVectors(avgNormal, tangentU).normalize();
+
+  const pts2D = vertexIndices.map(vid => {
+    const rel = new THREE.Vector3().subVectors(uniqueVertices[vid], avgCentroid);
+    return {
+      u: rel.dot(tangentU),
+      v: rel.dot(tangentV)
+    };
+  });
+
+  const alphaEdges: [number, number][] = [];
+  const alpha2 = alpha * alpha;
+  const eps = 1e-5;
+
+  for (let i = 0; i < pts2D.length; i++) {
+    const pi = pts2D[i];
+    for (let j = i + 1; j < pts2D.length; j++) {
+      const pj = pts2D[j];
+      const dx = pj.u - pi.u;
+      const dy = pj.v - pi.v;
+      const distSq = dx * dx + dy * dy;
+      const dist = Math.sqrt(distSq);
+
+      if (dist > 2 * alpha) continue;
+
+      const mx = (pi.u + pj.u) / 2;
+      const my = (pi.v + pj.v) / 2;
+
+      const hSq = alpha2 - distSq / 4;
+      const h = hSq > 0 ? Math.sqrt(hSq) : 0;
+
+      const nx = -dy / dist;
+      const ny = dx / dist;
+
+      const c1 = { u: mx + h * nx, v: my + h * ny };
+      const c2 = { u: mx - h * nx, v: my - h * ny };
+
+      let c1Empty = true;
+      let c2Empty = true;
+
+      for (let k = 0; k < pts2D.length; k++) {
+        if (k === i || k === j) continue;
+        const pk = pts2D[k];
+
+        if (c1Empty) {
+          const d1Sq = (pk.u - c1.u) * (pk.u - c1.u) + (pk.v - c1.v) * (pk.v - c1.v);
+          if (d1Sq < alpha2 - eps) {
+            c1Empty = false;
+          }
+        }
+        if (c2Empty) {
+          const d2Sq = (pk.u - c2.u) * (pk.u - c2.u) + (pk.v - c2.v) * (pk.v - c2.v);
+          if (d2Sq < alpha2 - eps) {
+            c2Empty = false;
+          }
+        }
+        if (!c1Empty && !c2Empty) break;
+      }
+
+      if (c1Empty || c2Empty) {
+        alphaEdges.push([i, j]);
+      }
+    }
+  }
+
+  const adjMap = new Map<number, number[]>();
+  for (const [u, w] of alphaEdges) {
+    if (!adjMap.has(u)) adjMap.set(u, []);
+    if (!adjMap.has(w)) adjMap.set(w, []);
+    adjMap.get(u)!.push(w);
+    adjMap.get(w)!.push(u);
+  }
+
+  const visited = new Set<number>();
+  const newLoops: VoxlROIBoundaryLoop[] = [];
+
+  for (const startIdx of adjMap.keys()) {
+    if (visited.has(startIdx)) continue;
+
+    const path: number[] = [startIdx];
+    visited.add(startIdx);
+
+    let current = startIdx;
+    let prev = -1;
+    let closed = false;
+
+    while (true) {
+      const neighbors = adjMap.get(current) || [];
+      let nextIdx = -1;
+      for (const n of neighbors) {
+        if (n === prev) continue;
+        if (n === startIdx && path.length > 2) {
+          closed = true;
+          nextIdx = n;
+          break;
+        }
+        if (!visited.has(n)) {
+          nextIdx = n;
+          break;
+        }
+      }
+
+      if (nextIdx !== -1) {
+        if (nextIdx === startIdx) {
+          path.push(nextIdx);
+          break;
+        }
+        path.push(nextIdx);
+        visited.add(nextIdx);
+        prev = current;
+        current = nextIdx;
+      } else {
+        break;
+      }
+    }
+
+    if (closed && path.length > 3) {
+      newLoops.push({
+        type: 'outer',
+        vertexIds: path.map(idx => vertexIndices[idx]),
+      });
+    }
+  }
+
+  if (newLoops.length === 0) {
+    return loops;
+  }
+  return newLoops;
+}
+
 function sampleSpineWithNormals(
   points: THREE.Vector3[],
   normals: THREE.Vector3[],
@@ -1094,11 +1298,23 @@ export async function generateSupportsFromPainter(
           }
         } else {
           const loops = regionBoundaryLoops.get(region.id) || [];
-          for (const loop of loops) {
+          
+          // 1. Alpha-Shape Envelope to bridge disjointed triangle islands
+          const alphaRadius = region.customBrush?.selection?.alphaRadiusMm ?? state.brushRadiusMm ?? 1.5;
+          const bridgedLoops = applyAlphaShapeToLoops(loops, uniqueVertices, vertexNormals, alphaRadius);
+          
+          // 2. Dynamic Euclidean Decimation Filter
+          const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
+          const tolerance = Math.max(0.5, spacing * 0.2);
+
+          const simplifiedLoops = bridgedLoops.map(loop => ({
+            ...loop,
+            vertexIds: simplifyLoopEuclidean(loop.vertexIds, uniqueVertices, tolerance),
+          }));
+
+          for (const loop of simplifiedLoops) {
             if (loop.vertexIds.length < 2) continue;
             let samples: BasicSampledPoint[] = [];
-
-            const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
 
             if (stage.spacing.useInflectionPoints) {
               const solverMode = stage.spacing.solverMode || 'standard';

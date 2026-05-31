@@ -166,6 +166,7 @@ const DEFAULT_TEMPLATE: CustomBrushTemplate = {
     markerEraserMode: false,
     markerCollisionMode: 'fence',
     roughnessThreshold: 0.08,
+    alphaRadiusMm: 1.5,
   },
   operations: [...DEFAULT_OPERATIONS],
 };

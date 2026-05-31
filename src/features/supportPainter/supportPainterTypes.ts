@@ -64,6 +64,7 @@ export interface CustomBrushTemplate {
     geodesicPathType?: 'circle' | 'square'; // Point: Dijkstra vs Tangent clamp
     zHeightEnvelopeToleranceMm?: number; // Ring: Z window tolerance
     roughnessThreshold?: number;         // RoughEdge: entropy/roughness threshold
+    alphaRadiusMm?: number;              // Alpha-Shape solver radius
 
     // Marker-specific parameters
     markerRadiusMm?: number;
