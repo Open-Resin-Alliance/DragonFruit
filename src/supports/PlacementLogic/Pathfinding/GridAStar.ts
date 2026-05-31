@@ -71,6 +71,8 @@ export interface GridAStarOptions {
      * Acceptable for hover preview — click-time always uses full resolution.
      */
     endpointOnlyCollisionCheck?: boolean;
+    /** Optional label used by the pathfinding debug overlay. */
+    debugLabel?: string;
 }
 
 export interface GridAStarResult {
@@ -88,6 +90,8 @@ export interface GridAStarResult {
     hitExpansionLimit: boolean;
     /** Reusable warm-start state for the next frame. */
     warmState: WarmStartState | null;
+    /** Optional debug snapshot of the explored cells and solved path. */
+    debug?: GridAStarDebugSnapshot;
 }
 
 export interface WarmStartState {
@@ -97,6 +101,19 @@ export interface WarmStartState {
     openEntries: AStarEntry[];
     gScores: Map<number, number>;
     cameFrom: Map<number, number>;
+}
+
+export interface GridAStarDebugSnapshot {
+    label: string;
+    searchStepMm: number;
+    expansions: number;
+    reached: boolean;
+    stagnated: boolean;
+    hitExpansionLimit: boolean;
+    expandedNodes: Vec3[];
+    frontierNodes: Vec3[];
+    rawPath: Vec3[];
+    simplifiedPath: Vec3[];
 }
 
 // ---------- Internal ----------
@@ -297,6 +314,7 @@ export function gridAStar(
 
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
+    const debugExpandedNodes: Vec3[] = [];
 
     const STAGNATION_LIMIT = 600;
     let bestZReached = sqz;
@@ -315,6 +333,11 @@ export function gridAStar(
         if (closedSet.has(current.key)) continue;
         closedSet.add(current.key);
         expansions++;
+        debugExpandedNodes.push({
+            x: current.x * step,
+            y: current.y * step,
+            z: current.z * step,
+        });
 
         if (current.z < bestZReached) {
             bestZReached = current.z;
@@ -390,6 +413,26 @@ export function gridAStar(
 
     const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
     const hitExpansionLimit = !goalEntry && !stagnated && expansions >= maxExp;
+    const toDebugSnapshot = (
+        reached: boolean,
+        rawPath: Vec3[],
+        simplifiedPath: Vec3[],
+    ): GridAStarDebugSnapshot => ({
+        label: opts.debugLabel ?? 'astar',
+        searchStepMm: step,
+        expansions,
+        reached,
+        stagnated,
+        hitExpansionLimit,
+        expandedNodes: debugExpandedNodes,
+        frontierNodes: openSet.slice(0, 128).map((entry) => ({
+            x: entry.x * step,
+            y: entry.y * step,
+            z: entry.z * step,
+        })),
+        rawPath,
+        simplifiedPath,
+    });
 
     if (!goalEntry) {
         return {
@@ -398,6 +441,7 @@ export function gridAStar(
             reached: false,
             stagnated,
             hitExpansionLimit,
+            debug: toDebugSnapshot(false, [], []),
             warmState: stagnated ? null : {
                 socketPos: { ...startPos },
                 openEntries: openSet.slice(0, 64),
@@ -432,6 +476,7 @@ export function gridAStar(
         reached: true,
         stagnated: false,
         hitExpansionLimit: false,
+        debug: toDebugSnapshot(true, rawPath, simplified),
         warmState: {
             socketPos: { ...startPos },
             openEntries: [],

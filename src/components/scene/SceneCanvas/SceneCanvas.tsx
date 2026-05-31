@@ -126,6 +126,12 @@ import {
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
+import { SupportPathfindingDebugOverlay } from '@/components/scene/SupportPathfindingDebugOverlay';
+import {
+  getSupportPathfindingDebugState,
+  subscribeToSupportPathfindingDebugState,
+  toggleSupportPathfindingDebugEnabled,
+} from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -270,6 +276,7 @@ type CrossSectionCapDebugPanelState = {
 
 const CROSS_SECTION_CAP_DEBUG_STORAGE_KEY = 'df:cross-section-cap-debug:v4';
 const CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED = false;
+const SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS = 420;
 
 const DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE: CrossSectionCapDebugPanelState = {
   enabled: false,
@@ -551,6 +558,12 @@ export function SceneCanvas({
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
+  const supportPathfindingDebugState = React.useSyncExternalStore(
+    subscribeToSupportPathfindingDebugState,
+    getSupportPathfindingDebugState,
+    getSupportPathfindingDebugState,
+  );
+  const supportPathfindingDebugLastTapMsRef = React.useRef<number>(0);
 
   const [isLightTheme, setIsLightTheme] = React.useState(() => {
     if (typeof window === 'undefined') return false;
@@ -3625,6 +3638,48 @@ export function SceneCanvas({
     };
   }, [activeModelId, mode, onActiveModelChange, selectedModelIds]);
 
+  React.useEffect(() => {
+    if (mode !== 'support') {
+      supportPathfindingDebugLastTapMsRef.current = 0;
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isTypingContext = !!target && (
+        target.isContentEditable
+        || tag === 'INPUT'
+        || tag === 'TEXTAREA'
+        || tag === 'SELECT'
+      );
+      if (isTypingContext) return;
+
+      const isJHotkey = event.code === 'KeyJ' || event.key.toLowerCase() === 'j';
+      if (!isJHotkey) return;
+
+      const nowMs = performance.now();
+      const elapsedMs = nowMs - supportPathfindingDebugLastTapMsRef.current;
+      supportPathfindingDebugLastTapMsRef.current = nowMs;
+
+      if (elapsedMs > SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSupportPathfindingDebugEnabled();
+      supportPathfindingDebugLastTapMsRef.current = 0;
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [mode]);
+
   // Handle canvas background clicks (deselect support)
   const handleCanvasClick = React.useCallback(
     (e: React.MouseEvent) => {
@@ -6284,6 +6339,9 @@ export function SceneCanvas({
           plateDepthMm={activeBuildVolumeSettings.depthMm}
         />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
+        {mode === 'support' && supportPathfindingDebugState.enabled && (
+          <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
+        )}
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
         {children}
       </Canvas>

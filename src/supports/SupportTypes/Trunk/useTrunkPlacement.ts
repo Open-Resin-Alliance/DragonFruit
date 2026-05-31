@@ -17,6 +17,7 @@ import { buildStick } from '../Stick/stickBuilder';
 import { buildTwig } from '../Twig/twigBuilder';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import { getSupportPathfindingDebugEnabled, setSupportPathfindingDebugSnapshot } from '../../PlacementLogic/Pathfinding/pathfindingDebugState';
 
 // ---------------------------------------------------------------------------
 // Cavity stick helpers
@@ -159,6 +160,9 @@ export function useTrunkPlacementV2() {
         setPreviewError((prev) => (prev === null ? prev : null));
         setPreviewWarning((prev) => (prev === null ? prev : null));
         cavityPreviewCacheRef.current = null;
+        if (getSupportPathfindingDebugEnabled()) {
+            setSupportPathfindingDebugSnapshot(null);
+        }
     }, []);
 
     const commitTrunkBuild = useCallback((trunkBuild: ReturnType<typeof buildTrunkData>) => {

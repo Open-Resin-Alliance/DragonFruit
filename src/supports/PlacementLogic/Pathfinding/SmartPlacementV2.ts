@@ -24,8 +24,9 @@ import { getSettings } from '../../Settings';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../Grid/gridMath';
 import { buildNearestCandidateNodeKeys } from '../Grid/nearestCandidateNodeKeys';
 import { SDFCache } from './SDFCache';
-import { gridAStar, type WarmStartState } from './GridAStar';
+import { gridAStar, type GridAStarDebugSnapshot, type WarmStartState } from './GridAStar';
 import type { SupportOccupancy } from './SupportOccupancy';
+import { getSupportPathfindingDebugEnabled, setSupportPathfindingDebugSnapshot } from './pathfindingDebugState';
 import {
     distanceXY,
     distance3D,
@@ -1094,6 +1095,8 @@ export function calculateSmartPlacementV2(
     const settings = getSettings();
     const shaftRadius = settings.shaft.diameterMm / 2;
     const clearance = shaftRadius + COLLISION_AVOIDANCE_MM;
+    const debugEnabled = getSupportPathfindingDebugEnabled();
+    let debugPasses: GridAStarDebugSnapshot[] = [];
     const rootsRadius = settings.roots.diameterMm / 2;
     const diskHeight = settings.roots.diskHeightMm;
     const coneHeight = settings.roots.coneHeightMm;
@@ -1122,6 +1125,35 @@ export function calculateSmartPlacementV2(
     // 3. Quick check: is the straight-down path clear AND do the roots fit at the base?
     const rootTopZ = input.rootsTopZ;
     const socketPos = standard.socketPos;
+    if (debugEnabled) {
+        setSupportPathfindingDebugSnapshot(null);
+    }
+    const publishPathfindingDebugSnapshot = () => {
+        if (!debugEnabled) return;
+        setSupportPathfindingDebugSnapshot(
+            debugPasses.length > 0
+                ? {
+                    modelId,
+                    socketPos,
+                    rootTopZ,
+                    clearanceMm: clearance,
+                    passes: debugPasses.map((pass) => ({
+                        label: pass.label,
+                        searchStepMm: pass.searchStepMm,
+                        expansions: pass.expansions,
+                        reached: pass.reached,
+                        stagnated: pass.stagnated,
+                        hitExpansionLimit: pass.hitExpansionLimit,
+                        expandedNodes: pass.expandedNodes,
+                        frontierNodes: pass.frontierNodes,
+                        rawPath: pass.rawPath,
+                        simplifiedPath: pass.simplifiedPath,
+                    })),
+                    updatedAtMs: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+                }
+                : null,
+        );
+    };
     const isPreview = context?.isPreview ?? false;
     const { maxTotalLateralMm, rescueSweepRadiiMm } = getSmartPlacementV2SearchEnvelope({
         socketPos,
@@ -1240,6 +1272,8 @@ export function calculateSmartPlacementV2(
                 );
             }
 
+            publishPathfindingDebugSnapshot();
+            publishPathfindingDebugSnapshot();
             return {
                 ...standard,
                 socketPos: mixedSocketRescue.socketPos,
@@ -1259,6 +1293,7 @@ export function calculateSmartPlacementV2(
                 `[SmartPlacementV2] STRAIGHT rescue fallback — socket=(${straightRescue.socketPos.x.toFixed(2)},${straightRescue.socketPos.y.toFixed(2)},${straightRescue.socketPos.z.toFixed(2)}) base=(${straightRescue.base.basePos.x.toFixed(2)},${straightRescue.base.basePos.y.toFixed(2)},${straightRescue.base.basePos.z.toFixed(2)})`,
             );
         }
+        publishPathfindingDebugSnapshot();
         return {
             ...standard,
             socketPos: straightRescue.socketPos,
@@ -1276,6 +1311,7 @@ export function calculateSmartPlacementV2(
     //     This turns repeated probes at similar positions from ~600 A* expansions
     //     to a single distance check — the primary performance win for interior hovers.
     if (isNearStagnationPoint(mesh.uuid, socketPos)) {
+        publishPathfindingDebugSnapshot();
         return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
     }
     // Preview-exhausted fast-fail: if this is a preview call and a nearby position
@@ -1283,6 +1319,7 @@ export function calculateSmartPlacementV2(
     // Uses a tighter radius (PREVIEW_EXHAUSTED_RADIUS_SQ) than true stagnation so
     // we don't block valid positions 1-2mm away from an exhausted query.
     if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos, PREVIEW_EXHAUSTED_RADIUS_SQ)) {
+        publishPathfindingDebugSnapshot();
         return { ...standard, error: 'COLLISION_WITH_MODEL', exhaustedBudget: true };
     }
 
@@ -1352,7 +1389,11 @@ export function calculateSmartPlacementV2(
         // Endpoint-only checks hit grid-aligned cells that ARE cached after first
         // visit, dropping first-frame cold cost from ~30k to ~600 BVH calls.
         endpointOnlyCollisionCheck: isPreview,
+        debugLabel: 'fine',
     }, warmStart);
+    if (debugEnabled && result.debug) {
+        debugPasses = [result.debug];
+    }
 
     // ---------- Wide-step fallback (V1 parity for large-detour overhangs) ----------
     //
@@ -1382,7 +1423,11 @@ export function calculateSmartPlacementV2(
             stepMm: WIDE_ASTAR_STEP_MM,
             goalValidator,
             endpointOnlyCollisionCheck: isPreview,
+            debugLabel: 'wide',
         }, null); // always cold-start wide search (different grid quantisation)
+        if (debugEnabled && wideResult.debug) {
+            debugPasses = [...debugPasses, wideResult.debug];
+        }
         if (wideResult.reached) {
             // Wide-step succeeded — use its result. Don't write to warm-start maps
             // since the 0.6mm grid state is incompatible with the normal 0.25mm warm-start.
@@ -1446,6 +1491,7 @@ export function calculateSmartPlacementV2(
             // Preview fast-path: skip expensive simplification/straightening passes.
             // Click-time placement still runs the full quality pipeline.
             if (isPreview) {
+                publishPathfindingDebugSnapshot();
                 return {
                     ...standard,
                     joints: _zJoints,
@@ -1846,6 +1892,7 @@ export function calculateSmartPlacementV2(
                         );
                     }
                     // No usable path — fall through to COLLISION_WITH_MODEL.
+                    publishPathfindingDebugSnapshot();
                     return {
                         ...standard,
                         error: 'COLLISION_WITH_MODEL',
@@ -1880,6 +1927,7 @@ export function calculateSmartPlacementV2(
                         _wideSegs.join('\n'),
                     );
                 }
+                publishPathfindingDebugSnapshot();
                 return {
                     ...standard,
                     joints: _finalJoints,
@@ -1921,6 +1969,7 @@ export function calculateSmartPlacementV2(
         if (straightRescueFallback) {
             return straightRescueFallback;
         }
+        publishPathfindingDebugSnapshot();
         return {
             ...standard,
             error: 'COLLISION_WITH_MODEL',
@@ -2001,6 +2050,7 @@ export function calculateSmartPlacementV2(
             return straightRescueFallback;
         }
         // No valid grid-snapped base found
+        publishPathfindingDebugSnapshot();
         return {
             ...standard,
             error: 'COLLISION_WITH_MODEL',
@@ -2179,12 +2229,15 @@ export function calculateSmartPlacementV2(
             if (straightRescueFallback) {
                 return straightRescueFallback;
             }
+            publishPathfindingDebugSnapshot();
             return {
                 ...standard,
                 error: 'COLLISION_WITH_MODEL',
             };
         }
     }
+
+    publishPathfindingDebugSnapshot();
 
     // 8b. Final SDF validation of the complete chain.
     //    Even after simplification + straightening, verify every segment is clear.
@@ -2206,6 +2259,7 @@ export function calculateSmartPlacementV2(
             if (straightRescueFallback) {
                 return straightRescueFallback;
             }
+            publishPathfindingDebugSnapshot();
             return {
                 ...standard,
                 error: 'COLLISION_WITH_MODEL',
@@ -2259,6 +2313,7 @@ export function calculateSmartPlacementV2(
         );
     }
 
+    publishPathfindingDebugSnapshot();
     return finalResult;
 }
 
