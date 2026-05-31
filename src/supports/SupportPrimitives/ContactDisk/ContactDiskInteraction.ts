@@ -5,7 +5,9 @@ import { calculateDiskThickness } from './contactDiskUtils';
 import { getFinalSocketPosition } from '../ContactCone/contactConeUtils';
 import { calculateSafeOffset } from '../../PlacementLogic/CollisionAvoidance';
 
-const CONTACT_CONE_COLLISION_SAFETY_MM = 0.8;
+// Contact cones need to respect the model, but they can sit much closer than
+// shafts/roots without causing the oversized detours that a full 0.8mm margin induces.
+const CONTACT_CONE_COLLISION_SAFETY_MM = 0.3;
 const LEGACY_MAX_STANDOFF_MM = 1.5;
 const LEGACY_CLAMPED_MAX_STANDOFF_MM = 0.35;
 

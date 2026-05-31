@@ -11,7 +11,7 @@ import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 
-const BRANCH_CONE_COLLISION_SAFETY_MM = 0.8;
+const BRANCH_CONE_COLLISION_SAFETY_MM = 0.3;
 const BRANCH_SOCKET_POLAR_DEG = [0, 10, 20, 30, 40, 50, 60];
 const BRANCH_SOCKET_AZIMUTH_DEG = [0, 25, -25, 50, -50, 85, -85, 120, -120, 155, -155, 180];
 const BRANCH_SOCKET_STRETCH_FACTORS = [1, 1.05, 1.12, 1.2, 1.32, 1.48, 1.68];
