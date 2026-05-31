@@ -72,6 +72,12 @@ const COLLISION_AVOIDANCE_MM = 0.8;
 const ROOTS_DISK_PERIMETER_SAMPLES = 16;
 /** Safety margin in mm added to all roots volume checks. */
 const ROOTS_DISK_SAFETY_MM = COLLISION_AVOIDANCE_MM;
+/** Small extra margin used only for contact-cone body collision sampling. */
+const CONTACT_CONE_COLLISION_SAFETY_MM = 0.05;
+/** Ignore the first tip-adjacent region so contact attachment is still allowed. */
+const CONTACT_CONE_TIP_IGNORE_MM = 0.25;
+/** Target sampling stride for cone frustum checks (adaptive with SDF cell size). */
+const CONTACT_CONE_COLLISION_SAMPLE_STEP_MM = 0.2;
 
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
 const MIN_ROUTING_SEARCH_LATERAL_MM = 60;
@@ -223,6 +229,7 @@ interface ContactConeRescuePenaltyMetrics {
 
 type RootsDiskBlockedAt = (centerX: number, centerY: number) => boolean;
 type SegmentBlockedBetween = (start: Vec3, end: Vec3) => boolean;
+type ContactConeBlockedAt = (socketPos: Vec3) => boolean;
 
 function vec3CacheKey(point: Vec3): string {
     return `${point.x}|${point.y}|${point.z}`;
@@ -301,6 +308,126 @@ function getContactConeRescuePenaltyMetrics(args: {
     };
 }
 
+interface ContactConeGeometry {
+    coneStart: Vec3;
+    socketPos: Vec3;
+    coneLengthMm: number;
+    coneStartRadiusMm: number;
+    coneEndRadiusMm: number;
+}
+
+function resolveContactConeGeometry(args: {
+    tipPos: Vec3;
+    tipNormal: Vec3;
+    tipProfile: SupportTipProfile;
+    socketPos: Vec3;
+}): ContactConeGeometry {
+    const surfaceNormal = normalizeVectorOrFallback(
+        new THREE.Vector3(args.tipNormal.x, args.tipNormal.y, args.tipNormal.z),
+        new THREE.Vector3(0, 0, 1),
+    );
+    const approxAxis = normalizeVectorOrFallback(
+        new THREE.Vector3(
+            args.socketPos.x - args.tipPos.x,
+            args.socketPos.y - args.tipPos.y,
+            args.socketPos.z - args.tipPos.z,
+        ),
+        surfaceNormal,
+    );
+
+    const diskThickness = args.tipProfile.type === 'disk'
+        ? calculateDiskThickness(
+            { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
+            { x: approxAxis.x, y: approxAxis.y, z: approxAxis.z },
+            args.tipProfile,
+        )
+        : 0;
+
+    const coneStart: Vec3 = {
+        x: args.tipPos.x + surfaceNormal.x * diskThickness,
+        y: args.tipPos.y + surfaceNormal.y * diskThickness,
+        z: args.tipPos.z + surfaceNormal.z * diskThickness,
+    };
+
+    const coneEnd = new THREE.Vector3(args.socketPos.x, args.socketPos.y, args.socketPos.z);
+    const coneLengthMm = Math.max(0.05, coneEnd.distanceTo(new THREE.Vector3(coneStart.x, coneStart.y, coneStart.z)));
+
+    return {
+        coneStart,
+        socketPos: args.socketPos,
+        coneLengthMm,
+        coneStartRadiusMm: args.tipProfile.contactDiameterMm / 2,
+        coneEndRadiusMm: args.tipProfile.bodyDiameterMm / 2,
+    };
+}
+
+function contactConeBlocked(args: {
+    sdf: SDFCache;
+    cone: ContactConeGeometry;
+}): boolean {
+    const cone = args.cone;
+    const length = cone.coneLengthMm;
+    if (length <= 0.000001) {
+        return false;
+    }
+
+    const start = cone.coneStart;
+    const end = cone.socketPos;
+    const dirX = end.x - start.x;
+    const dirY = end.y - start.y;
+    const dirZ = end.z - start.z;
+
+    const minStep = Math.max(
+        Math.min(CONTACT_CONE_COLLISION_SAMPLE_STEP_MM, args.sdf.cellSize * 0.8),
+        0.1,
+    );
+    const startT = Math.min(1, CONTACT_CONE_TIP_IGNORE_MM / length);
+    const sampleCount = Math.max(1, Math.ceil((1 - startT) * length / minStep));
+
+    for (let i = 0; i <= sampleCount; i++) {
+        const t = startT + ((1 - startT) * i) / sampleCount;
+        const px = start.x + dirX * t;
+        const py = start.y + dirY * t;
+        const pz = start.z + dirZ * t;
+        const radius = THREE.MathUtils.lerp(cone.coneStartRadiusMm, cone.coneEndRadiusMm, t) + CONTACT_CONE_COLLISION_SAFETY_MM;
+        if (args.sdf.isBlocked(px, py, pz, radius)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function createContactConeBlockedMemo(args: {
+    sdf: SDFCache;
+    tipPos: Vec3;
+    tipNormal: Vec3;
+    tipProfile: SupportTipProfile;
+}): ContactConeBlockedAt {
+    const cache = new Map<string, boolean>();
+
+    return (socketPos: Vec3): boolean => {
+        const key = vec3CacheKey(socketPos);
+        const cached = cache.get(key);
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const blocked = contactConeBlocked({
+            sdf: args.sdf,
+            cone: resolveContactConeGeometry({
+                tipPos: args.tipPos,
+                tipNormal: args.tipNormal,
+                tipProfile: args.tipProfile,
+                socketPos,
+            }),
+        });
+
+        cache.set(key, blocked);
+        return blocked;
+    };
+}
+
 function isMixedSocketRescueCandidateBetter(
     candidate: MixedSocketRescueCandidate,
     current: MixedSocketRescueCandidate,
@@ -343,6 +470,7 @@ export function findMixedSocketRescueCandidate(args: {
     subGridOffset?: { x: number; y: number } | null;
     rootsDiskBlockedAt?: RootsDiskBlockedAt;
     segmentBlockedBetween?: SegmentBlockedBetween;
+    contactConeBlockedAt?: ContactConeBlockedAt;
 }): { socketPos: Vec3; base: ResolvedBaseCandidate; joints: Vec3[] } | null {
     const candidates = buildMixedSocketRescueCandidates({
         socketPos: args.socketPos,
@@ -417,6 +545,10 @@ export function findMixedSocketRescueCandidate(args: {
     let bestSocketShiftMm: number | null = null;
 
     for (const candidateSocketPos of candidates) {
+        if (args.contactConeBlockedAt?.(candidateSocketPos)) {
+            continue;
+        }
+
         const socketShiftMm = distanceXY(candidateSocketPos, args.socketPos);
         if (bestSocketShiftMm !== null && socketShiftMm > bestSocketShiftMm + 0.000001) {
             break;
@@ -529,6 +661,7 @@ export function findStraightSocketRescueCandidate(args: {
     subGridOffset?: { x: number; y: number } | null;
     rootsDiskBlockedAt?: RootsDiskBlockedAt;
     segmentBlockedBetween?: SegmentBlockedBetween;
+    contactConeBlockedAt?: ContactConeBlockedAt;
 }): { socketPos: Vec3; base: ResolvedBaseCandidate } | null {
     const candidates = buildStraightSocketRescueCandidates({
         socketPos: args.socketPos,
@@ -565,6 +698,10 @@ export function findStraightSocketRescueCandidate(args: {
     };
 
     for (const candidateSocketPos of candidates) {
+        if (args.contactConeBlockedAt?.(candidateSocketPos)) {
+            continue;
+        }
+
         const conePenaltyScore = getConePenaltyScore(candidateSocketPos);
         const socketShiftMm = distanceXY(candidateSocketPos, args.socketPos);
         const eps = 0.000001;
@@ -1168,22 +1305,29 @@ export function calculateSmartPlacementV2(
         shaftRadius,
     });
     const segmentBlockedBetween = createSegmentBlockedMemo({ sdf, clearance });
+    const contactConeBlockedAt = createContactConeBlockedMemo({
+        sdf,
+        tipPos: input.tipPos,
+        tipNormal: input.tipNormal,
+        tipProfile: input.tipProfile,
+    });
 
     // Shaft + roots checks now use SDF sphere-tracing and bounding-ball
     // early-outs, so preview no longer needs the old coarse approximations —
     // the accurate versions are fast in open space and equally accurate.
     const straightClear = !segmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
+    const coneClear = !contactConeBlockedAt(socketPos);
 
     const baseXY = standard.basePos;
     const rootsFitStandard = !rootsDiskBlockedAt(baseXY.x, baseXY.y);
 
     if (!isPreview) {
-        console.log(`[SmartPlacementV2] called — socket=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)} straightClear=${straightClear} rootsFit=${rootsFitStandard}`);
+        console.log(`[SmartPlacementV2] called — socket=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)} coneClear=${coneClear} straightClear=${straightClear} rootsFit=${rootsFitStandard}`);
     }
 
-    if (straightClear && rootsFitStandard) {
+    if (coneClear && straightClear && rootsFitStandard) {
         if (!isPreview) console.log(`[SmartPlacementV2] STRAIGHT path — no routing needed`);
-        return standard; // Shaft is clear and roots fit — no routing needed
+        return standard; // Cone, shaft, and roots are all clear — no routing needed
     }
 
     let straightRescueCache:
@@ -1220,6 +1364,7 @@ export function calculateSmartPlacementV2(
             } : null,
             rootsDiskBlockedAt,
             segmentBlockedBetween,
+            contactConeBlockedAt,
         });
 
         return straightRescueCache;
@@ -1259,6 +1404,7 @@ export function calculateSmartPlacementV2(
             } : null,
             rootsDiskBlockedAt,
             segmentBlockedBetween,
+            contactConeBlockedAt,
         });
 
         return mixedSocketRescueCache;
@@ -1272,7 +1418,6 @@ export function calculateSmartPlacementV2(
                 );
             }
 
-            publishPathfindingDebugSnapshot();
             publishPathfindingDebugSnapshot();
             return {
                 ...standard,
@@ -1305,6 +1450,13 @@ export function calculateSmartPlacementV2(
             error: undefined,
         };
     };
+
+    if (!coneClear) {
+        const straightRescueFallback = buildStraightRescueFallback();
+        if (straightRescueFallback) {
+            return straightRescueFallback;
+        }
+    }
 
     // 3b. Spatial caches: skip A* if a previous search from a nearby socketPos
     //     already stagnated (cavity) or exhausted the preview budget.
@@ -1487,6 +1639,18 @@ export function calculateSmartPlacementV2(
 
             const _wideRootTop: Vec3 = { x: _resolvedWideBase.basePos.x, y: _resolvedWideBase.basePos.y, z: rootTopZ };
             const _warning = standard.warning;
+
+            if (contactConeBlockedAt(socketPos)) {
+                const straightRescueFallback = buildStraightRescueFallback();
+                if (straightRescueFallback) {
+                    return straightRescueFallback;
+                }
+                publishPathfindingDebugSnapshot();
+                return {
+                    ...standard,
+                    error: 'COLLISION_WITH_MODEL',
+                };
+            }
 
             // Preview fast-path: skip expensive simplification/straightening passes.
             // Click-time placement still runs the full quality pipeline.
@@ -2050,6 +2214,18 @@ export function calculateSmartPlacementV2(
             return straightRescueFallback;
         }
         // No valid grid-snapped base found
+        publishPathfindingDebugSnapshot();
+        return {
+            ...standard,
+            error: 'COLLISION_WITH_MODEL',
+        };
+    }
+
+    if (contactConeBlockedAt(socketPos)) {
+        const straightRescueFallback = buildStraightRescueFallback();
+        if (straightRescueFallback) {
+            return straightRescueFallback;
+        }
         publishPathfindingDebugSnapshot();
         return {
             ...standard,
