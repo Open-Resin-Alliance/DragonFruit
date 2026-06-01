@@ -164,22 +164,13 @@ export function SupportPipelineEditor({
                 key={opKey}
                 className="flex flex-col rounded-xl border overflow-hidden transition-all"
                 style={{
-                  background: op.enabled
-                    ? 'var(--surface-2, #1d242e)'
-                    : 'rgba(29, 36, 46, 0.45)',
+                  background: 'var(--surface-2, #1d242e)',
                   borderColor: isExpanded ? colorTheme : 'var(--border-subtle, #2d3748)',
-                  opacity: op.enabled ? 1 : 0.65,
                 }}
               >
                 {/* Operation Card Header */}
                 <div className="flex items-center justify-between px-4 py-3 select-none">
                   <div className="flex items-center gap-3 min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={op.enabled}
-                      onChange={e => updateOp(index, { enabled: e.target.checked })}
-                      className="w-4 h-4 rounded text-accent focus:ring-0 accent-accent cursor-pointer"
-                    />
                     <div className="flex flex-col min-w-0">
                       <span className="font-semibold text-xs capitalize truncate">
                         {op.type} stage
@@ -268,7 +259,21 @@ export function SupportPipelineEditor({
 
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-1.5 justify-between w-full">
-                            <span>{op.type === 'minima' && op.spacing.attemptLeafCreation ? 'Leaf Search Interval (mm)' : 'Base Spacing (mm)'}</span>
+                            <span className="flex items-center gap-1">
+                              {op.enableZHeightDensity
+                                ? 'Starting Spacing (Dense Zone) (mm)'
+                                : op.type === 'minima' && op.spacing.attemptLeafCreation
+                                  ? 'Leaf Search Interval (mm)'
+                                  : 'Base Spacing (mm)'}
+                              {op.enableZHeightDensity && (
+                                <span className="group relative cursor-pointer text-accent hover:opacity-85">
+                                  <Info className="w-3.5 h-3.5" />
+                                  <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-48 hidden group-hover:block bg-black/90 text-white text-[9px] p-2 rounded shadow-lg z-10 font-normal leading-relaxed border border-gray-700">
+                                    Controls the dense support spacing near the Z-minima. As height increases up to the Z End Interval, spacing scales up by the Z-Factor.
+                                  </span>
+                                </span>
+                              )}
+                            </span>
                             {compOp && compOp.spacing.baseSpacingMm !== op.spacing.baseSpacingMm && (
                               <span className="text-[9px] text-[#A5A6B5] font-semibold bg-black/35 px-1.5 py-0.5 rounded">
                                 Last: {compOp.spacing.baseSpacingMm.toFixed(1)} mm
@@ -613,7 +618,10 @@ export function SupportPipelineEditor({
                           type="checkbox"
                           checked={op.enableZHeightDensity || false}
                           onChange={e =>
-                            updateOp(index, { enableZHeightDensity: e.target.checked })
+                            updateOp(index, {
+                              enableZHeightDensity: e.target.checked,
+                              isIntervalDirectlyEdited: true,
+                            })
                           }
                           className="w-4 h-4 rounded accent-accent cursor-pointer"
                           id={`zheight-check-${opKey}`}
@@ -637,7 +645,10 @@ export function SupportPipelineEditor({
                               value={isNaN(op.minimaStartInterval ?? 0.5) ? '' : (op.minimaStartInterval ?? 0.5)}
                               onChange={e => {
                                 const val = parseFloat(e.target.value);
-                                updateOp(index, { minimaStartInterval: isNaN(val) ? 0.5 : val });
+                                updateOp(index, {
+                                  minimaStartInterval: isNaN(val) ? 0.5 : val,
+                                  isIntervalDirectlyEdited: true,
+                                });
                               }}
                               className="px-2.5 py-1.5 rounded border font-medium outline-none"
                               style={{
@@ -655,10 +666,10 @@ export function SupportPipelineEditor({
                               onChange={e => {
                                 const val = e.target.value.trim();
                                 if (val.toLowerCase() === 'auto' || val === '') {
-                                  updateOp(index, { minimaEndInterval: 'auto' });
+                                  updateOp(index, { minimaEndInterval: 'auto', isIntervalDirectlyEdited: true });
                                 } else {
                                   const parsed = parseFloat(val);
-                                  updateOp(index, { minimaEndInterval: isNaN(parsed) ? 'auto' : parsed });
+                                  updateOp(index, { minimaEndInterval: isNaN(parsed) ? 'auto' : parsed, isIntervalDirectlyEdited: true });
                                 }
                               }}
                               className="px-2.5 py-1.5 rounded border font-medium outline-none"
@@ -680,7 +691,7 @@ export function SupportPipelineEditor({
                               value={isNaN(op.zFactor ?? 2.0) ? '' : (op.zFactor ?? 2.0)}
                               onChange={e => {
                                 const val = parseFloat(e.target.value);
-                                updateOp(index, { zFactor: isNaN(val) ? 2.0 : val });
+                                updateOp(index, { zFactor: isNaN(val) ? 2.0 : val, isIntervalDirectlyEdited: true });
                               }}
                               className="px-2.5 py-1.5 rounded border font-medium outline-none"
                               style={{
@@ -695,7 +706,7 @@ export function SupportPipelineEditor({
                             <select
                               value={op.zFactorCurve ?? 'linear'}
                               onChange={e =>
-                                updateOp(index, { zFactorCurve: e.target.value as any })
+                                updateOp(index, { zFactorCurve: e.target.value as any, isIntervalDirectlyEdited: true })
                               }
                               className="px-2.5 py-1.5 rounded border font-medium outline-none cursor-pointer text-xs"
                               style={{

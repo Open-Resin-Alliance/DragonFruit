@@ -1,3 +1,5 @@
+import { generateUuid } from '@/utils/uuid';
+
 // ─── Brush Identity ─────────────────────────────────────────────────────────
 
 export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands' | 'Unk Legacy Brush';
@@ -363,6 +365,16 @@ export function upgradePipeline(
   brushType: BrushType,
   defaultSpacing: number = 4.0
 ): CustomSupportOperation[] {
+  if (ops) {
+    return ops.map(op => ({
+      ...op,
+      id: op.id || generateUuid(),
+      minimaEndInterval: op.minimaEndInterval ?? 'auto',
+      zFactor: Math.max(1.0, op.zFactor ?? 2.0),
+      wrapFraction: op.wrapFraction ?? 1.0,
+    }));
+  }
+
   let activeBrushType = brushType;
   if ((activeBrushType as string) === 'CylinderMinima') activeBrushType = 'SoftRidge';
   if ((activeBrushType as string) === 'CylinderSides') activeBrushType = 'RoughEdge';
@@ -435,29 +447,9 @@ export function upgradePipeline(
     },
   };
 
-  const inputOps = ops || [];
-
-  return standardTypes.map(type => {
-    const existing = inputOps.find(op => op.type === type);
-    if (existing) {
-      const mergedSuppression = {
-        enabled: existing.suppression?.enabled ?? defaultOps[type].suppression.enabled,
-        distanceMm: existing.suppression?.distanceMm ?? defaultOps[type].suppression.distanceMm,
-        suppressAgainst: existing.suppression?.suppressAgainst ?? defaultOps[type].suppression.suppressAgainst,
-      };
-      
-      return {
-        ...defaultOps[type],
-        ...existing,
-        suppression: mergedSuppression,
-        spacing: {
-          ...defaultOps[type].spacing,
-          ...existing.spacing,
-        },
-      };
-    } else {
-      return defaultOps[type];
-    }
-  });
+  return standardTypes.map(type => ({
+    ...defaultOps[type],
+    id: generateUuid(),
+  }));
 }
 

@@ -10,7 +10,7 @@ import {
   filterInsetLoopByWrapFraction,
 } from '../supportScriptingEngine';
 import { supportPainterStore } from '../supportPainterStore';
-import { type ROIRegion, type CustomBrushTemplate } from '../supportPainterTypes';
+import { type ROIRegion, type CustomBrushTemplate, upgradePipeline } from '../supportPainterTypes';
 import { resetStore as resetSupportStore, getSnapshot as getSupportSnapshot } from '@/supports/state';
 
 describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', () => {
@@ -390,5 +390,55 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     assert.deepStrictEqual(truncated[0], new THREE.Vector3(5, 0, 1));
     assert.deepStrictEqual(truncated[1], new THREE.Vector3(8, 0, 3));
     assert.deepStrictEqual(truncated[2], new THREE.Vector3(10, 0, 5));
+  });
+
+  it('should upgrade pipeline safely preserving custom deletions, duplicates, and order without re-adding deleted steps', () => {
+    // A. Input pipeline has two perimeter steps and infill, but MINIMA and CENTERLINE are deleted
+    const customOps: any[] = [
+      {
+        id: 'perimeter-1',
+        type: 'perimeter',
+        insetDistanceMm: 0.0,
+        spacing: { baseSpacingMm: 4.0 }
+      },
+      {
+        id: 'perimeter-2',
+        type: 'perimeter',
+        insetDistanceMm: 1.2,
+        spacing: { baseSpacingMm: 5.0 }
+      },
+      {
+        id: 'infill-1',
+        type: 'infill',
+        spacing: { baseSpacingMm: 4.0 }
+      }
+    ];
+
+    const upgraded = upgradePipeline(customOps, 'MacroFace');
+    
+    // Asserts:
+    // 1. Array length must be exactly 3 (custom stack length preserved, no re-added minima/centerline)
+    assert.strictEqual(upgraded.length, 3);
+    
+    // 2. Custom ids and types must be perfectly preserved in order
+    assert.strictEqual(upgraded[0].id, 'perimeter-1');
+    assert.strictEqual(upgraded[0].type, 'perimeter');
+    assert.strictEqual(upgraded[1].id, 'perimeter-2');
+    assert.strictEqual(upgraded[1].type, 'perimeter');
+    assert.strictEqual(upgraded[2].id, 'infill-1');
+    assert.strictEqual(upgraded[2].type, 'infill');
+    
+    // 3. Dynamic defaults are successfully mapped
+    assert.strictEqual(upgraded[0].wrapFraction, 1.0);
+    assert.strictEqual(upgraded[0].minimaEndInterval, 'auto');
+    assert.strictEqual(upgraded[0].zFactor, 2.0);
+
+    // B. Legacy undefined input falls back to default 4-stage pipeline
+    const defaultPipeline = upgradePipeline(undefined, 'MacroFace');
+    assert.strictEqual(defaultPipeline.length, 4);
+    assert.ok(defaultPipeline.some(op => op.type === 'minima'));
+    assert.ok(defaultPipeline.some(op => op.type === 'perimeter'));
+    assert.ok(defaultPipeline.some(op => op.type === 'infill'));
+    assert.ok(defaultPipeline.some(op => op.type === 'centerline'));
   });
 });
