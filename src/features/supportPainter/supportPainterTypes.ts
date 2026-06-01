@@ -2,17 +2,36 @@
 
 export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands' | 'Unk Legacy Brush';
 
-// ─── Custom Support Operations & Pipeline Typings ───────────────────────────
+export type CustomSupportOperationType = 'minima' | 'perimeter' | 'infill' | 'centerline';
 
 export interface CustomSupportOperation {
-  type: 'minima' | 'perimeter' | 'infill' | 'centerline';
-  enabled: boolean;
+  id?: string; // Unique step identifier (optional for compatibility)
+  type: CustomSupportOperationType;
+  enabled?: boolean; // backwards compatibility
   
+  // Sizing Preset binding to Support Studio presets
+  supportPresetId?: string; // Map to physical columns (Light, Medium, Heavy, etc.)
+  
+  // Direct edit tracking flags to enforce precedence
+  isIntervalDirectlyEdited?: boolean; // lock interval from being auto-updated
+  isEndIntervalDirectlyEdited?: boolean; // lock Z end interval from being auto-updated
+  
+  // Spatial offset configurations
+  insetDistanceMm?: number; // default 0.0mm (ensures no alterations unless configured)
+  wrapFraction?: number; // default 1.0 (range 0.1 -> 1.0)
+  
+  // Z-gradient density
+  enableZHeightDensity?: boolean; // default false
+  minimaStartInterval?: number; // default 0.5mm
+  minimaEndInterval?: number | 'auto'; // default 'auto' (resolves to 4x trunk diameter)
+  zFactor?: number; // default 2.0 (range 1.0 -> 5.0)
+  zFactorCurve?: 'linear' | 'sigmoid' | 'parabolic';
+
   // Suppression rules for this specific operation
   suppression: {
     enabled: boolean;
     distanceMm: number;
-    suppressAgainst: ('minima' | 'perimeter' | 'infill' | 'centerline')[];
+    suppressAgainst: CustomSupportOperationType[];
   };
 
   // Spacing configurations

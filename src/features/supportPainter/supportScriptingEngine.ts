@@ -16,7 +16,7 @@ import {
   addLeaf,
   addKnot,
 } from '@/supports/state';
-import { getShaftProfile, getSettings } from '@/supports/Settings';
+import { getShaftProfile, getSettings, setSettings, getPresetById } from '@/supports/Settings';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
 import { deleteSupportsForRoi } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -91,6 +91,7 @@ interface SampledPoint extends BasicSampledPoint {
   stage: 'minima' | 'perimeter' | 'infill' | 'centerline';
   attemptLeafCreation?: boolean;
   leafInterval?: number;
+  supportPresetId?: string;
 }
 
 // 2D Point-in-Triangle test using Barycentric Coordinates
@@ -1226,6 +1227,7 @@ export async function generateSupportsFromPainter(
     const pipeline: {
       type: 'minima' | 'perimeter' | 'infill' | 'centerline';
       enabled: boolean;
+      supportPresetId?: string;
       spacing: {
         baseSpacingMm: number;
         sequence?: number[];
@@ -1241,7 +1243,8 @@ export async function generateSupportsFromPainter(
       for (const op of region.customBrush.operations) {
         pipeline.push({
           type: op.type,
-          enabled: op.enabled,
+          enabled: op.enabled !== false,
+          supportPresetId: op.supportPresetId,
           spacing: {
             baseSpacingMm: op.spacing.baseSpacingMm,
             sequence: op.spacing.sequence,
@@ -1305,6 +1308,7 @@ export async function generateSupportsFromPainter(
             stage: 'minima',
             attemptLeafCreation: stage.spacing.attemptLeafCreation,
             leafInterval: stage.spacing.baseSpacingMm,
+            supportPresetId: stage.supportPresetId,
           });
         }
         candidates.sort((a, b) => a.pos.z - b.pos.z);
@@ -1362,6 +1366,7 @@ export async function generateSupportsFromPainter(
               regionType: region.brushType,
               regionTriCount: region.triangleIds.size,
               stage: 'perimeter',
+              supportPresetId: stage.supportPresetId,
             });
           }
         }
@@ -1422,6 +1427,7 @@ export async function generateSupportsFromPainter(
               regionType: region.brushType,
               regionTriCount: region.triangleIds.size,
               stage: 'centerline',
+              supportPresetId: stage.supportPresetId,
             });
           }
         }
@@ -1493,6 +1499,7 @@ export async function generateSupportsFromPainter(
                     regionType: region.brushType,
                     regionTriCount: region.triangleIds.size,
                     stage: 'infill',
+                    supportPresetId: stage.supportPresetId,
                   });
                 }
               }
@@ -1538,6 +1545,7 @@ export async function generateSupportsFromPainter(
                     regionType: region.brushType,
                     regionTriCount: region.triangleIds.size,
                     stage: 'infill',
+                    supportPresetId: stage.supportPresetId,
                   });
                 }
               }
@@ -1580,6 +1588,7 @@ export async function generateSupportsFromPainter(
                     regionType: region.brushType,
                     regionTriCount: region.triangleIds.size,
                     stage: 'infill',
+                    supportPresetId: stage.supportPresetId,
                   });
                 }
               }
@@ -2052,201 +2061,223 @@ export async function generateSupportsFromPainter(
     const isMock = mesh?.name === 'mock-mesh-leaf-test';
     const effectiveMeshForPlacement = isMock ? undefined : mesh;
 
+    const presetId = col.supportPresetId;
+    const originalSettings = getSettings();
+    let settingsOverridden = false;
+
+    if (presetId) {
+      const preset = getPresetById(presetId);
+      if (preset) {
+        const newSettings = {
+          ...originalSettings,
+          shaft: {
+            ...originalSettings.shaft,
+            diameterMm: preset.settings?.shaft?.diameterMm ?? originalSettings.shaft.diameterMm,
+          },
+          tip: {
+            ...originalSettings.tip,
+            contactDiameterMm: preset.settings?.tip?.contactDiameterMm ?? originalSettings.tip.contactDiameterMm,
+            bodyDiameterMm: preset.settings?.tip?.bodyDiameterMm ?? originalSettings.tip.bodyDiameterMm,
+            lengthMm: preset.settings?.tip?.lengthMm ?? originalSettings.tip.lengthMm,
+            coneAngleDeg: preset.settings?.tip?.coneAngleDeg ?? originalSettings.tip.coneAngleDeg,
+          },
+          roots: {
+            ...originalSettings.roots,
+            diameterMm: preset.settings?.roots?.diameterMm ?? originalSettings.roots.diameterMm,
+            diskHeightMm: preset.settings?.roots?.diskHeightMm ?? originalSettings.roots.diskHeightMm,
+            coneHeightMm: preset.settings?.roots?.coneHeightMm ?? originalSettings.roots.coneHeightMm,
+          }
+        };
+        setSettings(newSettings);
+        settingsOverridden = true;
+      }
+    }
+
     let finalPos = col.pos.clone();
     let finalNormal = col.normal.clone();
-    let isAccepted = validateSupportPlacement(finalPos, finalNormal, modelId, effectiveMeshForPlacement);
 
-    if (!isAccepted && effectiveMeshForPlacement) {
-      console.log(`[SupportScriptingEngine] Proposed tip at (${col.pos.x.toFixed(2)},${col.pos.y.toFixed(2)},${col.pos.z.toFixed(2)}) is unprintable or collides. Perturbing tip destination...`);
-      
-      let foundAcceptablePerturbation = false;
+    try {
+      let isAccepted = validateSupportPlacement(finalPos, finalNormal, modelId, effectiveMeshForPlacement);
 
-      /* [LEGACY_XY_PERTURBATION_STEPS]
-      const searchRadiusSteps = [0.05, 0.10, 0.15, 0.20];
-      */
-
-      // Scale perturbation radii dynamically based on active support stage spacing (up to 10% of spacing interval)
-      let baseInterval = 2.0; // Standard fallback
-      if (col.stage === 'perimeter' || col.stage === 'centerline') {
-        baseInterval = perimeterSpacing;
-      } else if (col.stage === 'infill') {
-        baseInterval = infillSpacing;
-      } else if (col.stage === 'minima') {
-        baseInterval = minimaSuppressionRadius || 2.0;
-      }
-      const searchRadiusSteps = [0.025, 0.05, 0.075, 0.10].map(pct => baseInterval * pct);
-
-      const searchDirections = 8;
-      const angleStep = (Math.PI * 2) / searchDirections;
-
-      perturbLoop: for (const radius of searchRadiusSteps) {
-        for (let d = 0; d < searchDirections; d++) {
-          const angle = d * angleStep;
-
-          /* [LEGACY_XY_PERTURBATION]
-          const offsetX = Math.cos(angle) * radius;
-          const offsetY = Math.sin(angle) * radius;
-
-          const proj = findSurfaceProjectedPoint(
-            mesh,
-            col.pos.x + offsetX,
-            col.pos.y + offsetY,
-            col.pos.z,
-            col.normal
-          );
-          */
-
-          // 1. Construct local 3D tangent plane basis relative to surface normal
-          const t1 = new THREE.Vector3();
-          if (Math.abs(col.normal.x) > Math.abs(col.normal.z)) {
-            t1.set(-col.normal.y, col.normal.x, 0).normalize();
-          } else {
-            t1.set(0, -col.normal.z, col.normal.y).normalize();
-          }
-          const t2 = new THREE.Vector3().crossVectors(col.normal, t1).normalize();
-
-          // 2. Shift point along tangent vectors
-          const shift = new THREE.Vector3()
-            .addScaledVector(t1, Math.cos(angle) * radius)
-            .addScaledVector(t2, Math.sin(angle) * radius);
-          const perturbedPos = col.pos.clone().add(shift);
-
-          // 3. Project back onto surface along the normal direction
-          const proj = findSurfaceProjectedPointTangent(
-            mesh,
-            perturbedPos,
-            col.normal
-          );
-
-          if (!proj) continue;
-
-          const isValid = validateSupportPlacement(proj.pos, proj.normal, modelId, mesh);
-          if (isValid) {
-            console.log(`[SupportScriptingEngine] Found accepted perturbed tip at (${proj.pos.x.toFixed(2)},${proj.pos.y.toFixed(2)},${proj.pos.z.toFixed(2)}) at radius ${radius}mm!`);
-            finalPos = proj.pos;
-            finalNormal = proj.normal;
-            isAccepted = true;
-            foundAcceptablePerturbation = true;
-            break perturbLoop;
-          }
-        }
-      }
-
-      if (!foundAcceptablePerturbation) {
-        console.warn(`[SupportScriptingEngine] Could not find any valid perturbed tip. Proposing original coordinate as fallback.`);
-      }
-    }
-
-    if (isAccepted && col.stage === 'minima' && col.attemptLeafCreation && col.leafInterval) {
-      const leafInterval = col.leafInterval;
-      const snapshot = getSupportSnapshot();
-      const trunks = Object.values(snapshot.trunks).filter(t => t.modelId === modelId);
-
-      let bestKnotInfo: {
-        trunk: Trunk;
-        segment: Segment;
-        segmentIndex: number;
-        t: number;
-        projectedPoint: THREE.Vector3;
-        distance: number;
-      } | null = null;
-      let minDistance = Infinity;
-
-      for (const trunk of trunks) {
-        const root = snapshot.roots[trunk.rootId];
-        if (!root) continue;
-        for (let i = 0; i < trunk.segments.length; i++) {
-          const segment = trunk.segments[i];
-          const endpoints = getTrunkSegmentEndpoints(trunk, segment, i, root);
-          if (!endpoints) continue;
-
-          const A = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-          const B = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-          const P = finalPos;
-
-          const AB = new THREE.Vector3().subVectors(B, A);
-          const AP = new THREE.Vector3().subVectors(P, A);
-          const abLenSq = AB.lengthSq();
-          let t = 0;
-          if (abLenSq > 1e-8) {
-            t = AP.dot(AB) / abLenSq;
-            t = Math.max(0, Math.min(1, t));
-          }
-          const projected = new THREE.Vector3().addVectors(A, AB.multiplyScalar(t));
-          
-          if (finalPos.z <= projected.z) continue;
-
-          const dist = finalPos.distanceTo(projected);
-          if (dist < leafInterval && dist < minDistance) {
-            minDistance = dist;
-            bestKnotInfo = {
-              trunk,
-              segment,
-              segmentIndex: i,
-              t,
-              projectedPoint: projected,
-              distance: dist,
-            };
-          }
-        }
-      }
-
-      if (bestKnotInfo && mesh) {
-        const { trunk, segment, t, projectedPoint } = bestKnotInfo;
-        const dir = new THREE.Vector3().subVectors(projectedPoint, finalPos);
-        const distance = dir.length();
+      if (!isAccepted && effectiveMeshForPlacement) {
+        console.log(`[SupportScriptingEngine] Proposed tip at (${col.pos.x.toFixed(2)},${col.pos.y.toFixed(2)},${col.pos.z.toFixed(2)}) is unprintable or collides. Perturbing tip destination...`);
         
-        let clearLoS = true;
-        if (distance > 0.1) {
-          dir.normalize();
-          const raycaster = new THREE.Raycaster();
-          const rayStart = finalPos.clone().addScaledVector(dir, 0.05);
-          const rayEnd = projectedPoint.clone().addScaledVector(dir, -0.05);
-          const rayDist = rayStart.distanceTo(rayEnd);
-          raycaster.set(rayStart, dir);
-          raycaster.far = rayDist;
-          const hits = raycaster.intersectObject(mesh, false);
-          if (hits.length > 0) {
-            clearLoS = false;
+        let foundAcceptablePerturbation = false;
+
+        // Scale perturbation radii dynamically based on active support stage spacing (up to 10% of spacing interval)
+        let baseInterval = 2.0; // Standard fallback
+        if (col.stage === 'perimeter' || col.stage === 'centerline') {
+          baseInterval = perimeterSpacing;
+        } else if (col.stage === 'infill') {
+          baseInterval = infillSpacing;
+        } else if (col.stage === 'minima') {
+          baseInterval = minimaSuppressionRadius || 2.0;
+        }
+        const searchRadiusSteps = [0.025, 0.05, 0.075, 0.10].map(pct => baseInterval * pct);
+
+        const searchDirections = 8;
+        const angleStep = (Math.PI * 2) / searchDirections;
+
+        perturbLoop: for (const radius of searchRadiusSteps) {
+          for (let d = 0; d < searchDirections; d++) {
+            const angle = d * angleStep;
+
+            // 1. Construct local 3D tangent plane basis relative to surface normal
+            const t1 = new THREE.Vector3();
+            if (Math.abs(col.normal.x) > Math.abs(col.normal.z)) {
+              t1.set(-col.normal.y, col.normal.x, 0).normalize();
+            } else {
+              t1.set(0, -col.normal.z, col.normal.y).normalize();
+            }
+            const t2 = new THREE.Vector3().crossVectors(col.normal, t1).normalize();
+
+            // 2. Shift point along tangent vectors
+            const shift = new THREE.Vector3()
+              .addScaledVector(t1, Math.cos(angle) * radius)
+              .addScaledVector(t2, Math.sin(angle) * radius);
+            const perturbedPos = col.pos.clone().add(shift);
+
+            // 3. Project back onto surface along the normal direction
+            const proj = findSurfaceProjectedPointTangent(
+              mesh,
+              perturbedPos,
+              col.normal
+            );
+
+            if (!proj) continue;
+
+            const isValid = validateSupportPlacement(proj.pos, proj.normal, modelId, mesh);
+            if (isValid) {
+              console.log(`[SupportScriptingEngine] Found accepted perturbed tip at (${proj.pos.x.toFixed(2)},${proj.pos.y.toFixed(2)},${proj.pos.z.toFixed(2)}) at radius ${radius}mm!`);
+              finalPos = proj.pos;
+              finalNormal = proj.normal;
+              isAccepted = true;
+              foundAcceptablePerturbation = true;
+              break perturbLoop;
+            }
           }
         }
 
-        if (clearLoS) {
-          const knot: Knot = {
-            id: generateUuid(),
-            parentShaftId: segment.id,
-            t,
-            pos: { x: projectedPoint.x, y: projectedPoint.y, z: projectedPoint.z },
-            diameter: segment.diameter + 0.1,
-          };
-          const leafResult = buildLeafData({
-            tipPos: { x: finalPos.x, y: finalPos.y, z: finalPos.z },
-            surfaceNormal: { x: finalNormal.x, y: finalNormal.y, z: finalNormal.z },
-            modelId,
-            parentKnot: knot,
-            hostDiameterMm: segment.diameter,
-          });
-          leafResult.leaf.roiId = col.regionId;
-
-          addKnot(knot);
-          addLeaf(leafResult.leaf);
-          registerPlacement(col);
-          return;
+        if (!foundAcceptablePerturbation) {
+          console.warn(`[SupportScriptingEngine] Could not find any valid perturbed tip. Proposing original coordinate as fallback.`);
         }
       }
-    }
 
-    // Call unified placement API to route, snap, and place the support
-    const res = placeSupportUnified({
-      tipPos: finalPos,
-      tipNormal: finalNormal,
-      modelId,
-      mesh: effectiveMeshForPlacement,
-      roiId: col.regionId,
-    });
+      if (isAccepted && col.stage === 'minima' && col.attemptLeafCreation && col.leafInterval) {
+        const leafInterval = col.leafInterval;
+        const snapshot = getSupportSnapshot();
+        const trunks = Object.values(snapshot.trunks).filter(t => t.modelId === modelId);
 
-    if (res.success) {
-      registerPlacement(col);
+        let bestKnotInfo: {
+          trunk: Trunk;
+          segment: Segment;
+          segmentIndex: number;
+          t: number;
+          projectedPoint: THREE.Vector3;
+          distance: number;
+        } | null = null;
+        let minDistance = Infinity;
+
+        for (const trunk of trunks) {
+          const root = snapshot.roots[trunk.rootId];
+          if (!root) continue;
+          for (let i = 0; i < trunk.segments.length; i++) {
+            const segment = trunk.segments[i];
+            const endpoints = getTrunkSegmentEndpoints(trunk, segment, i, root);
+            if (!endpoints) continue;
+
+            const A = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
+            const B = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
+            const P = finalPos;
+
+            const AB = new THREE.Vector3().subVectors(B, A);
+            const AP = new THREE.Vector3().subVectors(P, A);
+            const abLenSq = AB.lengthSq();
+            let t = 0;
+            if (abLenSq > 1e-8) {
+              t = AP.dot(AB) / abLenSq;
+              t = Math.max(0, Math.min(1, t));
+            }
+            const projected = new THREE.Vector3().addVectors(A, AB.multiplyScalar(t));
+            
+            if (finalPos.z <= projected.z) continue;
+
+            const dist = finalPos.distanceTo(projected);
+            if (dist < leafInterval && dist < minDistance) {
+              minDistance = dist;
+              bestKnotInfo = {
+                trunk,
+                segment,
+                segmentIndex: i,
+                t,
+                projectedPoint: projected,
+                distance: dist,
+              };
+            }
+          }
+        }
+
+        if (bestKnotInfo && mesh) {
+          const { trunk, segment, t, projectedPoint } = bestKnotInfo;
+          const dir = new THREE.Vector3().subVectors(projectedPoint, finalPos);
+          const distance = dir.length();
+          
+          let clearLoS = true;
+          if (distance > 0.1) {
+            dir.normalize();
+            const raycaster = new THREE.Raycaster();
+            const rayStart = finalPos.clone().addScaledVector(dir, 0.05);
+            const rayEnd = projectedPoint.clone().addScaledVector(dir, -0.05);
+            const rayDist = rayStart.distanceTo(rayEnd);
+            raycaster.set(rayStart, dir);
+            raycaster.far = rayDist;
+            const hits = raycaster.intersectObject(mesh, false);
+            if (hits.length > 0) {
+              clearLoS = false;
+            }
+          }
+
+          if (clearLoS) {
+            const knot: Knot = {
+              id: generateUuid(),
+              parentShaftId: segment.id,
+              t,
+              pos: { x: projectedPoint.x, y: projectedPoint.y, z: projectedPoint.z },
+              diameter: segment.diameter + 0.1,
+            };
+            const leafResult = buildLeafData({
+              tipPos: { x: finalPos.x, y: finalPos.y, z: finalPos.z },
+              surfaceNormal: { x: finalNormal.x, y: finalNormal.y, z: finalNormal.z },
+              modelId,
+              parentKnot: knot,
+              hostDiameterMm: segment.diameter,
+            });
+            leafResult.leaf.roiId = col.regionId;
+
+            addKnot(knot);
+            addLeaf(leafResult.leaf);
+            registerPlacement(col);
+            return;
+          }
+        }
+      }
+
+      // Call unified placement API to route, snap, and place the support
+      const res = placeSupportUnified({
+        tipPos: finalPos,
+        tipNormal: finalNormal,
+        modelId,
+        mesh: effectiveMeshForPlacement,
+        roiId: col.regionId,
+      });
+
+      if (res.success) {
+        registerPlacement(col);
+      }
+    } finally {
+      if (settingsOverridden) {
+        setSettings(originalSettings);
+      }
     }
   };
 

@@ -5,9 +5,11 @@ import {
   Info,
   Grid,
   X,
+  Trash,
 } from 'lucide-react';
 import { IconButton, Button } from '@/components/ui/primitives';
-import { type CustomSupportOperation } from '../supportPainterTypes';
+import { type CustomSupportOperation, type CustomSupportOperationType } from '../supportPainterTypes';
+import { getPresetList, getPresetById } from '@/supports/Settings/presets';
 
 interface SupportPipelineEditorProps {
   initialPipeline: CustomSupportOperation[];
@@ -78,6 +80,64 @@ export function SupportPipelineEditor({
     onChange(nextOps);
   };
 
+  const addOp = (type: CustomSupportOperationType) => {
+    const defaultSpacing = 4.0;
+    const newOp: CustomSupportOperation = {
+      id: `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      type,
+      enabled: true,
+      supportPresetId: 'structure',
+      isIntervalDirectlyEdited: false,
+      insetDistanceMm: 0.0,
+      wrapFraction: 1.0,
+      enableZHeightDensity: false,
+      minimaStartInterval: 0.5,
+      minimaEndInterval: 'auto',
+      zFactor: 2.0,
+      zFactorCurve: 'linear',
+      suppression: {
+        enabled: type !== 'perimeter',
+        distanceMm: defaultSpacing,
+        suppressAgainst: type === 'minima' ? ['minima'] : type === 'infill' ? ['minima', 'perimeter', 'infill'] : ['minima', 'perimeter', 'infill', 'centerline'],
+      },
+      spacing: {
+        baseSpacingMm: defaultSpacing,
+        solverMode: 'standard',
+        useInflectionPoints: false,
+        infillPattern: 'PoissonDisc',
+        seedFromMinima: true,
+        attemptLeafCreation: type === 'minima',
+      },
+    };
+    onChange([...initialPipeline, newOp]);
+  };
+
+  const deleteOp = (index: number) => {
+    const nextOps = initialPipeline.filter((_, idx) => idx !== index);
+    onChange(nextOps);
+  };
+
+  const applyPresetToOp = (index: number, presetId: string) => {
+    const nextOps = initialPipeline.map((op, idx) => {
+      if (idx === index) {
+        const preset = getPresetById(presetId);
+        const shaftDiameter = preset?.settings?.shaft?.diameterMm ?? 1.0;
+        const newSpacing = op.isIntervalDirectlyEdited ? op.spacing.baseSpacingMm : shaftDiameter * 4.0;
+        
+        return {
+          ...op,
+          supportPresetId: presetId,
+          spacing: {
+            ...op.spacing,
+            baseSpacingMm: newSpacing,
+          }
+        };
+      }
+      return op;
+    }) as CustomSupportOperation[];
+    onChange(nextOps);
+  };
+
   const renderContent = () => {
     return (
       <div className="flex flex-col gap-3">
@@ -87,7 +147,8 @@ export function SupportPipelineEditor({
         
         <div className="flex flex-col gap-2.5">
           {initialPipeline.map((op, index) => {
-            const isExpanded = expandedOp === op.type;
+            const opKey = op.id || `${op.type}-${index}`;
+            const isExpanded = expandedOp === opKey;
             const compOp = comparisonPipeline?.find(c => c.type === op.type);
             const label =
               op.type === 'minima'
@@ -100,7 +161,7 @@ export function SupportPipelineEditor({
 
             return (
               <div
-                key={op.type}
+                key={opKey}
                 className="flex flex-col rounded-xl border overflow-hidden transition-all"
                 style={{
                   background: op.enabled
@@ -143,10 +204,18 @@ export function SupportPipelineEditor({
                     >
                       <ChevronDown className="w-3.5 h-3.5" />
                     </IconButton>
+                    
+                    <IconButton
+                      onClick={() => deleteOp(index)}
+                      className="!p-0.5 hover:bg-red-500/10"
+                      title="Delete step from stack"
+                    >
+                      <Trash className="w-3.5 h-3.5" style={{ color: 'var(--danger, #ef4444)' }} />
+                    </IconButton>
 
                     <button
                       type="button"
-                      onClick={() => setExpandedOp(isExpanded ? null : op.type)}
+                      onClick={() => setExpandedOp(isExpanded ? null : opKey)}
                       className="text-[10px] ml-1 px-2 py-1 rounded border font-semibold flex items-center gap-1 hover:bg-black/20"
                       style={{
                         borderColor: 'var(--border-subtle, #2d3748)',
@@ -176,6 +245,27 @@ export function SupportPipelineEditor({
                       </h4>
                       
                       <div className="grid grid-cols-2 gap-3">
+                        {/* Support Preset Selection Dropdown */}
+                        <div className="col-span-2 flex flex-col gap-1 border-b pb-2.5 mb-1.5" style={{ borderColor: 'var(--border-subtle, #2d3748)' }}>
+                          <span className="font-semibold text-gray-300">Preset Size Binding</span>
+                          <select
+                            value={op.supportPresetId || 'structure'}
+                            onChange={e => applyPresetToOp(index, e.target.value)}
+                            className="px-2.5 py-1.5 rounded border font-medium outline-none cursor-pointer text-xs"
+                            style={{
+                              background: 'var(--surface-1, #151a22)',
+                              borderColor: 'var(--border-subtle, #2d3748)',
+                              color: 'var(--text-strong)',
+                            }}
+                          >
+                            {getPresetList().map(p => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} preset ({p.settings.shaft.diameterMm.toFixed(2)} mm column)
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-1.5 justify-between w-full">
                             <span>{op.type === 'minima' && op.spacing.attemptLeafCreation ? 'Leaf Search Interval (mm)' : 'Base Spacing (mm)'}</span>
@@ -189,19 +279,58 @@ export function SupportPipelineEditor({
                             type="number"
                             step="0.1"
                             min="0.5"
-                            /* ORIGINAL:
-                            value={op.spacing.baseSpacingMm}
-                            onChange={e =>
-                              updateOpSpacing(index, {
-                                baseSpacingMm: parseFloat(e.target.value),
-                              })
-                            }
-                            */
                             value={isNaN(op.spacing.baseSpacingMm) ? '' : op.spacing.baseSpacingMm}
                             onChange={e => {
                               const val = parseFloat(e.target.value);
-                              updateOpSpacing(index, {
-                                baseSpacingMm: isNaN(val) ? 0 : val,
+                              updateOp(index, {
+                                isIntervalDirectlyEdited: true,
+                                spacing: {
+                                  ...op.spacing,
+                                  baseSpacingMm: isNaN(val) ? 0 : val,
+                                }
+                              });
+                            }}
+                            className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                            style={{
+                              background: 'var(--surface-1, #151a22)',
+                              borderColor: 'var(--border-subtle, #2d3748)',
+                            }}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span>Inset Distance (mm)</span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.0"
+                            value={isNaN(op.insetDistanceMm ?? 0.0) ? '' : (op.insetDistanceMm ?? 0.0)}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value);
+                              updateOp(index, {
+                                insetDistanceMm: isNaN(val) ? 0.0 : val,
+                              });
+                            }}
+                            className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                            style={{
+                              background: 'var(--surface-1, #151a22)',
+                              borderColor: 'var(--border-subtle, #2d3748)',
+                            }}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span>Wrap Fraction</span>
+                          <input
+                            type="number"
+                            step="0.05"
+                            min="0.1"
+                            max="1.0"
+                            value={isNaN(op.wrapFraction ?? 1.0) ? '' : (op.wrapFraction ?? 1.0)}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value);
+                              updateOp(index, {
+                                wrapFraction: isNaN(val) ? 1.0 : val,
                               });
                             }}
                             className="px-2.5 py-1.5 rounded border font-medium outline-none"
@@ -476,11 +605,145 @@ export function SupportPipelineEditor({
                         </div>
                       )}
                     </div>
+
+                    {/* Z-Height Spacing Density Settings */}
+                    <div className="flex flex-col gap-2.5 border-t pt-3" style={{ borderColor: 'var(--border-subtle, #2d3748)' }}>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={op.enableZHeightDensity || false}
+                          onChange={e =>
+                            updateOp(index, { enableZHeightDensity: e.target.checked })
+                          }
+                          className="w-4 h-4 rounded accent-accent cursor-pointer"
+                          id={`zheight-check-${opKey}`}
+                        />
+                        <label
+                          htmlFor={`zheight-check-${opKey}`}
+                          className="cursor-pointer font-medium select-none"
+                        >
+                          Enable Z-Height Spacing Density (Z-gradient)
+                        </label>
+                      </div>
+                      
+                      {op.enableZHeightDensity && (
+                        <div className="grid grid-cols-2 gap-3 mt-1 animate-fade-in">
+                          <div className="flex flex-col gap-1">
+                            <span>Minima Start Interval (mm)</span>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0.1"
+                              value={isNaN(op.minimaStartInterval ?? 0.5) ? '' : (op.minimaStartInterval ?? 0.5)}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateOp(index, { minimaStartInterval: isNaN(val) ? 0.5 : val });
+                              }}
+                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                              style={{
+                                background: 'var(--surface-1, #151a22)',
+                                borderColor: 'var(--border-subtle, #2d3748)',
+                              }}
+                            />
+                          </div>
+                          
+                          <div className="flex flex-col gap-1">
+                            <span>Minima End Interval (mm / auto)</span>
+                            <input
+                              type="text"
+                              value={op.minimaEndInterval ?? 'auto'}
+                              onChange={e => {
+                                const val = e.target.value.trim();
+                                if (val.toLowerCase() === 'auto' || val === '') {
+                                  updateOp(index, { minimaEndInterval: 'auto' });
+                                } else {
+                                  const parsed = parseFloat(val);
+                                  updateOp(index, { minimaEndInterval: isNaN(parsed) ? 'auto' : parsed });
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                              style={{
+                                background: 'var(--surface-1, #151a22)',
+                                borderColor: 'var(--border-subtle, #2d3748)',
+                              }}
+                              placeholder="auto"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <span>Z-Factor Multiplier</span>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="1.0"
+                              max="5.0"
+                              value={isNaN(op.zFactor ?? 2.0) ? '' : (op.zFactor ?? 2.0)}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateOp(index, { zFactor: isNaN(val) ? 2.0 : val });
+                              }}
+                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                              style={{
+                                background: 'var(--surface-1, #151a22)',
+                                borderColor: 'var(--border-subtle, #2d3748)',
+                              }}
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <span>Z-Factor Scaling Curve</span>
+                            <select
+                              value={op.zFactorCurve ?? 'linear'}
+                              onChange={e =>
+                                updateOp(index, { zFactorCurve: e.target.value as any })
+                              }
+                              className="px-2.5 py-1.5 rounded border font-medium outline-none cursor-pointer text-xs"
+                              style={{
+                                background: 'var(--surface-1, #151a22)',
+                                borderColor: 'var(--border-subtle, #2d3748)',
+                                color: 'var(--text-strong)',
+                              }}
+                            >
+                              <option value="linear">Linear</option>
+                              <option value="sigmoid">Sigmoidal</option>
+                              <option value="parabolic">Parabolic</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             );
           })}
+        </div>
+
+        {/* Operation Stack Appender Controls */}
+        <div className="flex flex-col gap-2 border-t pt-4 mt-3" style={{ borderColor: 'var(--border-subtle, #2d3748)' }}>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+            Append New Operation to Stack
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {(['minima', 'perimeter', 'infill', 'centerline'] as CustomSupportOperationType[]).map(type => {
+              const label = type === 'minima' ? '+ Add Minima' : type === 'perimeter' ? '+ Add Perimeter' : type === 'infill' ? '+ Add Infill' : '+ Add Centerline';
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => addOp(type)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded border transition-colors hover:bg-black/20"
+                  style={{
+                    borderColor: colorTheme,
+                    color: colorTheme,
+                    background: 'transparent',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     );

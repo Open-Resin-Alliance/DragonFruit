@@ -91,7 +91,7 @@ export function serializeROIsForVoxl(
 
   return {
     kind: 'support-painter-rois',
-    version: 1, // Keep version at 1 for backwards compatibility with prior loaders
+    version: 3, // Version 3 enables dynamic stackable operations and bound Support Studio presets
     modelId: activeModelId,
     regions: list,
   };
@@ -105,6 +105,7 @@ export function deserializeROIsFromVoxl(
   ext: VoxlROIExtension
 ): Map<string, Map<string, ROIRegion>> {
   const result = new Map<string, Map<string, ROIRegion>>();
+  const version = ext.version || 1;
 
   for (const r of ext.regions) {
     const targetModelId = r.modelId || ext.modelId; // Fallback to primary modelId if not present
@@ -142,10 +143,48 @@ export function deserializeROIsFromVoxl(
       }
       // Omit baseBrush property entirely if it's undefined to match original object structure in tests
       const { baseBrush: _, ...restCustomBrush } = r.customBrush;
+      
+      let operations = r.customBrush.operations || [];
+      if (version < 3) {
+        // Upgrade legacy flat/fixed pipeline to default operations list
+        operations = upgradePipeline(operations, brushType);
+      } else {
+        // If version >= 3, keep custom operations exactly but map dynamic defaults to ensure full compatibility
+        operations = operations.map(op => ({
+          id: op.id || `${op.type}-${Math.random().toString(36).substr(2, 9)}`,
+          type: op.type,
+          enabled: op.enabled !== false,
+          supportPresetId: op.supportPresetId || 'default-light',
+          isIntervalDirectlyEdited: op.isIntervalDirectlyEdited ?? false,
+          isEndIntervalDirectlyEdited: op.isEndIntervalDirectlyEdited ?? false,
+          insetDistanceMm: op.insetDistanceMm ?? 0.0,
+          wrapFraction: op.wrapFraction ?? 1.0,
+          enableZHeightDensity: op.enableZHeightDensity ?? false,
+          minimaStartInterval: op.minimaStartInterval ?? 0.5,
+          minimaEndInterval: op.minimaEndInterval ?? 'auto',
+          zFactor: op.zFactor ?? 2.0,
+          zFactorCurve: op.zFactorCurve ?? 'linear',
+          suppression: {
+            enabled: op.suppression?.enabled ?? false,
+            distanceMm: op.suppression?.distanceMm ?? 4.0,
+            suppressAgainst: op.suppression?.suppressAgainst ?? [],
+          },
+          spacing: {
+            baseSpacingMm: op.spacing?.baseSpacingMm ?? 4.0,
+            sequence: op.spacing?.sequence,
+            solverMode: op.spacing?.solverMode ?? 'standard',
+            useInflectionPoints: op.spacing?.useInflectionPoints ?? false,
+            infillPattern: op.spacing?.infillPattern ?? 'PoissonDisc',
+            seedFromMinima: op.spacing?.seedFromMinima ?? true,
+            attemptLeafCreation: op.spacing?.attemptLeafCreation ?? false,
+          }
+        }));
+      }
+
       customBrush = {
         ...restCustomBrush,
         ...(baseBrush ? { baseBrush } : {}),
-        operations: upgradePipeline(r.customBrush.operations, brushType),
+        operations,
       };
     }
 
@@ -175,14 +214,14 @@ export function deserializeROIsFromVoxl(
 
 /**
  * Type guard to validate whether an unknown value is a valid VoxlROIExtension.
- * Supports both Version 1 and Version 2 formats.
+ * Supports Version 1, 2, and 3 formats.
  */
 export function isVoxlROIExtension(v: unknown): v is VoxlROIExtension {
   if (typeof v !== 'object' || v === null) return false;
   const candidate = v as Partial<VoxlROIExtension>;
   return (
     candidate.kind === 'support-painter-rois' &&
-    (candidate.version === 1 || candidate.version === 2) &&
+    (candidate.version === 1 || candidate.version === 2 || candidate.version === 3) &&
     typeof candidate.modelId === 'string' &&
     Array.isArray(candidate.regions)
   );
