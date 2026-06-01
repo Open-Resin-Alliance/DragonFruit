@@ -24,9 +24,10 @@ export interface CustomSupportOperation {
   
   // Z-gradient density
   enableZHeightDensity?: boolean; // default false
-  minimaStartInterval?: number; // default 0.5mm
-  minimaEndInterval?: number | 'auto'; // default 'auto' (resolves to 4x trunk diameter)
-  zFactor?: number; // default 2.0 (range 1.0 -> 5.0)
+  minimaStartInterval?: number; // default 0 (Start Offset Percentage 0-100%)
+  minimaEndInterval?: number | 'auto'; // default 100 (End Offset Percentage 0-100% or 'auto')
+  endSpacingMm?: number; // End Tip Spacing (mm)
+  zFactor?: number; // default 2.0 (legacy, replaced by endSpacingMm)
   zFactorCurve?: 'linear' | 'sigmoid' | 'parabolic';
 
   // Suppression rules for this specific operation
@@ -369,8 +370,9 @@ export function upgradePipeline(
     return ops.map(op => ({
       ...op,
       id: op.id || generateUuid(),
-      minimaEndInterval: op.minimaEndInterval ?? 'auto',
-      zFactor: Math.max(1.0, op.zFactor ?? 2.0),
+      minimaStartInterval: op.minimaStartInterval ?? 0,     // Default to 0% Start Offset
+      minimaEndInterval: op.minimaEndInterval ?? 100,       // Default to 100% End Offset
+      endSpacingMm: op.endSpacingMm ?? defaultSpacing,      // Default to 4x trunk size
       wrapFraction: op.wrapFraction ?? 1.0,
     }));
   }
@@ -450,6 +452,10 @@ export function upgradePipeline(
   return standardTypes.map(type => ({
     ...defaultOps[type],
     id: generateUuid(),
+    minimaStartInterval: 0,
+    minimaEndInterval: 100,
+    endSpacingMm: defaultSpacing,
+    wrapFraction: 1.0,
   }));
 }
 

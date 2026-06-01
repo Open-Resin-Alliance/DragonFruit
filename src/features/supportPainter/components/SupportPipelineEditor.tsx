@@ -91,8 +91,9 @@ export function SupportPipelineEditor({
       insetDistanceMm: 0.0,
       wrapFraction: 1.0,
       enableZHeightDensity: false,
-      minimaStartInterval: 0.5,
-      minimaEndInterval: 'auto',
+      minimaStartInterval: 0,
+      minimaEndInterval: 100,
+      endSpacingMm: defaultSpacing,
       zFactor: 2.0,
       zFactorCurve: 'linear',
       suppression: {
@@ -296,48 +297,52 @@ export function SupportPipelineEditor({
                           />
                         </div>
 
-                        <div className="flex flex-col gap-1">
-                          <span>Inset Distance (mm)</span>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0.0"
-                            value={isNaN(op.insetDistanceMm ?? 0.0) ? '' : (op.insetDistanceMm ?? 0.0)}
-                            onChange={e => {
-                              const val = parseFloat(e.target.value);
-                              updateOp(index, {
-                                insetDistanceMm: isNaN(val) ? 0.0 : val,
-                              });
-                            }}
-                            className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                            style={{
-                              background: 'var(--surface-1, #151a22)',
-                              borderColor: 'var(--border-subtle, #2d3748)',
-                            }}
-                          />
-                        </div>
+                        {op.type === 'perimeter' && (
+                          <>
+                            <div className="flex flex-col gap-1">
+                              <span>Inset Distance (mm)</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0.0"
+                                value={isNaN(op.insetDistanceMm ?? 0.0) ? '' : (op.insetDistanceMm ?? 0.0)}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value);
+                                  updateOp(index, {
+                                    insetDistanceMm: isNaN(val) ? 0.0 : val,
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                }}
+                              />
+                            </div>
 
-                        <div className="flex flex-col gap-1">
-                          <span>Wrap Fraction</span>
-                          <input
-                            type="number"
-                            step="0.05"
-                            min="0.1"
-                            max="1.0"
-                            value={isNaN(op.wrapFraction ?? 1.0) ? '' : (op.wrapFraction ?? 1.0)}
-                            onChange={e => {
-                              const val = parseFloat(e.target.value);
-                              updateOp(index, {
-                                wrapFraction: isNaN(val) ? 1.0 : val,
-                              });
-                            }}
-                            className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                            style={{
-                              background: 'var(--surface-1, #151a22)',
-                              borderColor: 'var(--border-subtle, #2d3748)',
-                            }}
-                          />
-                        </div>
+                            <div className="flex flex-col gap-1">
+                              <span>Wrap Fraction</span>
+                              <input
+                                type="number"
+                                step="0.05"
+                                min="0.1"
+                                max="1.0"
+                                value={isNaN(op.wrapFraction ?? 1.0) ? '' : (op.wrapFraction ?? 1.0)}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value);
+                                  updateOp(index, {
+                                    wrapFraction: isNaN(val) ? 1.0 : val,
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                }}
+                              />
+                            </div>
+                          </>
+                        )}
                         
                         {/* Minima-specific fields */}
                         {op.type === 'minima' && (
@@ -394,28 +399,7 @@ export function SupportPipelineEditor({
                               </select>
                             </div>
 
-                            <div className="col-span-2 flex flex-col gap-1">
-                              <span>Variable Spacing Sequence (comma-separated, e.g. 1.0, 2.0)</span>
-                              <input
-                                type="text"
-                                value={op.spacing.sequence?.join(', ') || ''}
-                                onChange={e => {
-                                  const arr = e.target.value
-                                    .split(',')
-                                    .map(s => parseFloat(s.trim()))
-                                    .filter(n => !isNaN(n));
-                                  updateOpSpacing(index, {
-                                    sequence: arr.length > 0 ? arr : undefined,
-                                  });
-                                }}
-                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                                style={{
-                                  background: 'var(--surface-1, #151a22)',
-                                  borderColor: 'var(--border-subtle, #2d3748)',
-                                }}
-                                placeholder="Empty defaults to Base Spacing throughout loop"
-                              />
-                            </div>
+
 
                             <div className="col-span-2 flex items-center gap-2 mt-1">
                               <input
@@ -604,151 +588,156 @@ export function SupportPipelineEditor({
                       )}
                     </div>
 
-                    {/* Z-Height Spacing Density Settings */}
-                    <div className="flex flex-col gap-2.5 border-t pt-3" style={{ borderColor: 'var(--border-subtle, #2d3748)' }}>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={op.enableZHeightDensity || false}
-                          onChange={e =>
-                            updateOp(index, {
-                              enableZHeightDensity: e.target.checked,
-                              isIntervalDirectlyEdited: true,
-                            })
-                          }
-                          className="w-4 h-4 rounded accent-accent cursor-pointer"
-                          id={`zheight-check-${opKey}`}
-                        />
-                        <label
-                          htmlFor={`zheight-check-${opKey}`}
-                          className="cursor-pointer font-medium select-none"
-                        >
-                          Enable Z-Height Spacing Density (Z-gradient)
-                        </label>
-                      </div>
-                      
-                      {op.enableZHeightDensity && (
-                        <div className="grid grid-cols-2 gap-3 mt-1 animate-fade-in">
-                          <div className="col-span-2 flex flex-col gap-1">
-                            <span className="flex items-center gap-1">
-                              Starting Spacing (Dense Zone) (mm)
-                              <span className="group relative cursor-pointer text-accent hover:opacity-85">
-                                <Info className="w-3.5 h-3.5" />
-                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-48 hidden group-hover:block bg-black/90 text-white text-[9px] p-2 rounded shadow-lg z-10 font-normal leading-relaxed border border-gray-700">
-                                  Controls the dense support spacing near the Z-minima. As height increases up to the Z End Offset, spacing scales up by the Z-Factor.
-                                </span>
-                              </span>
-                            </span>
+                    {op.type !== 'minima' && (
+                      <div className="flex flex-col gap-2.5 border-t pt-3" style={{ borderColor: 'var(--border-subtle, #2d3748)' }}>
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-2">
                             <input
-                              type="number"
-                              step="0.1"
-                              min="0.5"
-                              value={isNaN(op.spacing.baseSpacingMm) ? '' : op.spacing.baseSpacingMm}
-                              onChange={e => {
-                                const val = parseFloat(e.target.value);
+                              type="checkbox"
+                              checked={op.enableZHeightDensity || false}
+                              onChange={e =>
                                 updateOp(index, {
+                                  enableZHeightDensity: e.target.checked,
                                   isIntervalDirectlyEdited: true,
-                                  spacing: {
-                                    ...op.spacing,
-                                    baseSpacingMm: isNaN(val) ? 0 : val,
-                                  }
-                                });
-                              }}
-                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                              style={{
-                                background: 'var(--surface-1, #151a22)',
-                                borderColor: 'var(--border-subtle, #2d3748)',
-                              }}
+                                })
+                              }
+                              className="w-4 h-4 rounded accent-accent cursor-pointer"
+                              id={`zheight-check-${opKey}`}
                             />
-                          </div>
-
-                          <div className="flex flex-col gap-1">
-                            <span>Dense Zone Height / Z Start Offset (mm)</span>
-                            <input
-                              type="number"
-                              step="0.1"
-                              min="0.1"
-                              value={isNaN(op.minimaStartInterval ?? 0.5) ? '' : (op.minimaStartInterval ?? 0.5)}
-                              onChange={e => {
-                                const val = parseFloat(e.target.value);
-                                updateOp(index, {
-                                  minimaStartInterval: isNaN(val) ? 0.5 : val,
-                                  isIntervalDirectlyEdited: true,
-                                });
-                              }}
-                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                              style={{
-                                background: 'var(--surface-1, #151a22)',
-                                borderColor: 'var(--border-subtle, #2d3748)',
-                              }}
-                            />
+                            <label
+                              htmlFor={`zheight-check-${opKey}`}
+                              className="cursor-pointer font-semibold select-none text-xs text-gray-200"
+                            >
+                              Enable Z-Height Tip Spacing
+                            </label>
                           </div>
                           
-                          <div className="flex flex-col gap-1">
-                            <span>Transition End Height / Z End Offset (mm / auto)</span>
-                            <input
-                              type="text"
-                              value={op.minimaEndInterval ?? 'auto'}
-                              onChange={e => {
-                                const val = e.target.value.trim();
-                                if (val.toLowerCase() === 'auto' || val === '') {
-                                  updateOp(index, { minimaEndInterval: 'auto', isIntervalDirectlyEdited: true });
-                                } else {
-                                  const parsed = parseFloat(val);
-                                  updateOp(index, { minimaEndInterval: isNaN(parsed) ? 'auto' : parsed, isIntervalDirectlyEdited: true });
+                          {op.enableZHeightDensity && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-semibold text-gray-300">Scaling Curve</span>
+                              <select
+                                value={op.zFactorCurve ?? 'linear'}
+                                onChange={e =>
+                                  updateOp(index, { zFactorCurve: e.target.value as any, isIntervalDirectlyEdited: true })
                                 }
-                              }}
-                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                              style={{
-                                background: 'var(--surface-1, #151a22)',
-                                borderColor: 'var(--border-subtle, #2d3748)',
-                              }}
-                              placeholder="auto"
-                            />
-                          </div>
-
-                          <div className="flex flex-col gap-1">
-                            <span>Z-Factor Multiplier</span>
-                            <input
-                              type="number"
-                              step="0.1"
-                              min="1.0"
-                              max="5.0"
-                              value={isNaN(op.zFactor ?? 2.0) ? '' : (op.zFactor ?? 2.0)}
-                              onChange={e => {
-                                const val = parseFloat(e.target.value);
-                                updateOp(index, { zFactor: isNaN(val) ? 2.0 : val, isIntervalDirectlyEdited: true });
-                              }}
-                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                              style={{
-                                background: 'var(--surface-1, #151a22)',
-                                borderColor: 'var(--border-subtle, #2d3748)',
-                              }}
-                            />
-                          </div>
-
-                          <div className="flex flex-col gap-1">
-                            <span>Z-Factor Scaling Curve</span>
-                            <select
-                              value={op.zFactorCurve ?? 'linear'}
-                              onChange={e =>
-                                updateOp(index, { zFactorCurve: e.target.value as any, isIntervalDirectlyEdited: true })
-                              }
-                              className="px-2.5 py-1.5 rounded border font-medium outline-none cursor-pointer text-xs"
-                              style={{
-                                background: 'var(--surface-1, #151a22)',
-                                borderColor: 'var(--border-subtle, #2d3748)',
-                                color: 'var(--text-strong)',
-                              }}
-                            >
-                              <option value="linear">Linear</option>
-                              <option value="sigmoid">Sigmoidal</option>
-                              <option value="parabolic">Parabolic</option>
-                            </select>
-                          </div>
+                                className="px-2 py-1 rounded border font-semibold outline-none cursor-pointer text-[11px]"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                  color: 'var(--text-strong)',
+                                }}
+                              >
+                                <option value="linear">Linear</option>
+                                <option value="sigmoid">Sigmoidal</option>
+                                <option value="parabolic">Parabolic</option>
+                              </select>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
+
+                        {op.enableZHeightDensity && (
+                          <div className="grid grid-cols-2 gap-3 mt-1.5 animate-fade-in">
+                            {/* Row 1: Starting Tip Spacing and End Tip Spacing */}
+                            <div className="flex flex-col gap-1">
+                              <span className="font-semibold text-gray-300">Starting Tip Spacing (mm)</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0.5"
+                                value={isNaN(op.spacing.baseSpacingMm) ? '' : op.spacing.baseSpacingMm}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value);
+                                  updateOp(index, {
+                                    isIntervalDirectlyEdited: true,
+                                    spacing: {
+                                      ...op.spacing,
+                                      baseSpacingMm: isNaN(val) ? 0 : val,
+                                    }
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                }}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <span className="font-semibold text-gray-300">End Tip Spacing (mm)</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0.5"
+                                value={isNaN(op.endSpacingMm ?? 4.0) ? '' : (op.endSpacingMm ?? 4.0)}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value);
+                                  updateOp(index, {
+                                    endSpacingMm: isNaN(val) ? 4.0 : val,
+                                    isIntervalDirectlyEdited: true,
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                }}
+                              />
+                            </div>
+
+                            {/* Row 2: Start Offset (Z) (%) and End Offset (Z) (%) */}
+                            <div className="flex flex-col gap-1">
+                              <span className="font-semibold text-gray-300">Start Offset (Z) (%)</span>
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                max="100"
+                                value={isNaN(op.minimaStartInterval ?? 0) ? '' : (op.minimaStartInterval ?? 0)}
+                                onChange={e => {
+                                  const val = parseInt(e.target.value, 10);
+                                  updateOp(index, {
+                                    minimaStartInterval: isNaN(val) ? 0 : val,
+                                    isIntervalDirectlyEdited: true,
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                }}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <span className="font-semibold text-gray-300">End Offset (Z) (%)</span>
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                max="100"
+                                value={(() => {
+                                  const endVal = typeof op.minimaEndInterval === 'number' ? op.minimaEndInterval : 100;
+                                  return isNaN(endVal) ? '' : endVal;
+                                })()}
+                                onChange={e => {
+                                  const val = parseInt(e.target.value, 10);
+                                  updateOp(index, {
+                                    minimaEndInterval: isNaN(val) ? 100 : val,
+                                    isIntervalDirectlyEdited: true,
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                                style={{
+                                  background: 'var(--surface-1, #151a22)',
+                                  borderColor: 'var(--border-subtle, #2d3748)',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

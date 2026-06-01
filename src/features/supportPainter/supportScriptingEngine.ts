@@ -360,10 +360,50 @@ export function insetBoundaryLoop(
   vertices3D: THREE.Vector3[],
   planeNormal: THREE.Vector3,
   planeCentroid: THREE.Vector3,
-  insetDistanceMm: number
+  insetDistanceMm: number,
+  vertexNormalsList?: THREE.Vector3[]
 ): THREE.Vector3[] {
   if (insetDistanceMm <= 0.001) return [...vertices3D];
 
+  // If vertex normals list is provided, calculate local 3D inward tangent offsets to guarantee perfect 3D symmetry
+  if (vertexNormalsList && vertexNormalsList.length === vertices3D.length) {
+    const len = vertices3D.length;
+    const insetLoop: THREE.Vector3[] = [];
+    
+    const centroid = new THREE.Vector3();
+    for (const p of vertices3D) centroid.add(p);
+    centroid.divideScalar(len);
+
+    for (let i = 0; i < len; i++) {
+      const pi = vertices3D[i];
+      const ni = vertexNormalsList[i];
+      
+      const prev = vertices3D[(i - 1 + len) % len];
+      const next = vertices3D[(i + 1) % len];
+      
+      const tVec = new THREE.Vector3().subVectors(next, prev);
+      if (tVec.lengthSq() < 1e-8) {
+        tVec.set(1, 0, 0);
+      } else {
+        tVec.normalize();
+      }
+      
+      // Perpendicular to boundary tangent and local surface normal
+      const inwardTangent = new THREE.Vector3().crossVectors(tVec, ni).normalize();
+      
+      // Orient inward tangent towards the loop centroid
+      const toCentroid = new THREE.Vector3().subVectors(centroid, pi);
+      if (inwardTangent.dot(toCentroid) < 0) {
+        inwardTangent.negate();
+      }
+      
+      const offsetPt = pi.clone().addScaledVector(inwardTangent, insetDistanceMm);
+      insetLoop.push(offsetPt);
+    }
+    return insetLoop;
+  }
+
+  // Fallback to 2D flat plane tangent projection offset using Clipper.js
   const tangentU = new THREE.Vector3(1, 0, 0).cross(planeNormal);
   if (tangentU.lengthSq() < 1e-4) {
     tangentU.copy(new THREE.Vector3(0, 1, 0).cross(planeNormal));
@@ -455,20 +495,29 @@ export function calculateZHeightDensitySpacing(
 
   const zRel = pointZ - minimaZ;
   const zSpanROI = maximaZ - minimaZ;
-  
-  const rawZEnd = (op.minimaEndInterval === 'auto' || op.minimaEndInterval === undefined)
-    ? activeTrunkDiameter * 4.0
-    : op.minimaEndInterval;
 
-  const zEnd = Math.min(rawZEnd, zSpanROI);
-  const zStart = op.minimaStartInterval ?? 0.5;
+  // Convert Z-offset percentages (0-100%) to float fractions (0.0 to 1.0)
+  const fStart = Math.max(0.0, Math.min(1.0, (op.minimaStartInterval ?? 0) / 100.0));
+  const fEnd = (op.minimaEndInterval === 'auto' || op.minimaEndInterval === undefined)
+    ? 1.0
+    : Math.max(0.0, Math.min(1.0, (op.minimaEndInterval as number) / 100.0));
+
+  const zStart = fStart * zSpanROI;
+  const zEnd = fEnd * zSpanROI;
+
+  const sStart = op.spacing.baseSpacingMm;
+  const sEnd = op.endSpacingMm ?? (activeTrunkDiameter * 4.0);
 
   if (zEnd <= zStart) {
-    return op.spacing.baseSpacingMm;
+    return sStart;
   }
 
   if (zRel <= zStart) {
-    return op.spacing.baseSpacingMm;
+    return sStart;
+  }
+
+  if (zRel >= zEnd) {
+    return sEnd;
   }
 
   const t = Math.max(0.0, Math.min(1.0, (zRel - zStart) / (zEnd - zStart)));
@@ -480,9 +529,8 @@ export function calculateZHeightDensitySpacing(
     curveVal = t * t;
   }
 
-  const safeZFactor = Math.max(1.0, op.zFactor ?? 2.0);
-  const scaleFactor = 1.0 + curveVal * (safeZFactor - 1.0);
-  return op.spacing.baseSpacingMm * scaleFactor;
+  // Direct, smooth interpolation between Starting Spacing and Ending Spacing
+  return sStart + curveVal * (sEnd - sStart);
 }
 
 export function solvePerimeterWithInflections(
@@ -1509,6 +1557,7 @@ export async function generateSupportsFromPainter(
       type: 'minima' | 'perimeter' | 'infill' | 'centerline';
       enabled: boolean;
       supportPresetId?: string;
+      endSpacingMm?: number;
       spacing: {
         baseSpacingMm: number;
         sequence?: number[];
@@ -1531,6 +1580,7 @@ export async function generateSupportsFromPainter(
           enableZHeightDensity: op.enableZHeightDensity,
           minimaStartInterval: op.minimaStartInterval,
           minimaEndInterval: op.minimaEndInterval,
+          endSpacingMm: op.endSpacingMm,
           zFactor: op.zFactor,
           zFactorCurve: op.zFactorCurve,
           spacing: {
@@ -1637,7 +1687,8 @@ export async function generateSupportsFromPainter(
               planeNormal.normalize();
             }
 
-            loopPts = insetBoundaryLoop(loopPts, planeNormal, planeCentroid, insetDistance);
+            const loopNorms = loop.vertexIds.map(idx => vertexNormals.get(idx) || new THREE.Vector3(0, 0, 1));
+            loopPts = insetBoundaryLoop(loopPts, planeNormal, planeCentroid, insetDistance, loopNorms);
           }
 
           if (loopPts.length < 2) continue;
@@ -1698,13 +1749,6 @@ export async function generateSupportsFromPainter(
               uniqueVertices,
               vertexNormals,
               zDensityParams
-            );
-          } else if (stage.spacing.sequence && stage.spacing.sequence.length > 0) {
-            samples = sampleSequencePolyline(
-              simplifiedIndices,
-              stage.spacing.sequence,
-              uniqueVertices,
-              vertexNormals
             );
           } else {
             samples = samplePolylineWithNormals(

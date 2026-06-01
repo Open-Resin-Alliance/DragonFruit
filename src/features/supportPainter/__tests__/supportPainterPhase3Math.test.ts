@@ -298,17 +298,15 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     // Spacing configuration: base spacing is 2.0mm
     const op: any = {
       enableZHeightDensity: true,
-      minimaStartInterval: 0.5,
-      minimaEndInterval: 10.0,
-      zFactor: 3.0,
+      minimaStartInterval: 10,       // Start offset = 10% (10% of 5.0mm = 0.5mm)
+      minimaEndInterval: 100,       // End offset = 100% (100% of 5.0mm = 5.0mm)
+      endSpacingMm: 6.0,            // End Tip Spacing = 6.0mm (which corresponds to old 3x zFactor)
       zFactorCurve: 'linear',
-      spacing: { baseSpacingMm: 2.0 }
+      spacing: { baseSpacingMm: 2.0 } // Start Tip Spacing = 2.0mm
     };
 
     // ROI span: minimaZ = 2.0, maximaZ = 7.0 (Z span is 5.0mm)
-    // op.minimaEndInterval is 10.0, but resolved zEnd must be capped at zSpanROI = 5.0mm.
-    // So resolved zEnd = Math.min(10.0, 5.0) = 5.0mm.
-    // zStart = 0.5mm.
+    // zStart = 0.5mm, zEnd = 5.0mm
     // Let's check calculation for a point at Z = 2.0 (zRel = 0.0) -> below zStart, should return baseSpacing = 2.0mm.
     const spacingAtBase = calculateZHeightDensitySpacing(2.0, 2.0, 7.0, op, 1.0);
     assert.strictEqual(spacingAtBase, 2.0);
@@ -320,14 +318,12 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     // Let's check spacing at mid-gradient: Z = 4.75 (zRel = 2.75).
     // Interpolation factor t = (zRel - zStart) / (zEnd - zStart) = (2.75 - 0.5) / (5.0 - 0.5) = 2.25 / 4.5 = 0.5.
     // For 'linear' curve, curveVal = 0.5.
-    // scaleFactor = 1.0 + 0.5 * (3.0 - 1.0) = 2.0.
-    // Expected spacing = 2.0 * 2.0 = 4.0mm.
+    // Expected spacing = 2.0 + 0.5 * (6.0 - 2.0) = 4.0mm.
     const spacingLinear = calculateZHeightDensitySpacing(4.75, 2.0, 7.0, op, 1.0);
     assert.strictEqual(spacingLinear, 4.0);
 
     // Now test 'sigmoid' curve:
-    // For t = 0.5, sigmoid value S(0.5) = 3 * 0.25 - 2 * 0.125 = 0.75 - 0.25 = 0.5.
-    // scaleFactor = 1.0 + 0.5 * (3.0 - 1.0) = 2.0.
+    // For t = 0.5, sigmoid value S(0.5) = 0.5.
     // Expected spacing = 4.0mm.
     const opSigmoid = { ...op, zFactorCurve: 'sigmoid' };
     const spacingSigmoid = calculateZHeightDensitySpacing(4.75, 2.0, 7.0, opSigmoid, 1.0);
@@ -335,8 +331,7 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
 
     // Now test 'parabolic' curve:
     // For t = 0.5, parabolic value P(0.5) = 0.25.
-    // scaleFactor = 1.0 + 0.25 * (3.0 - 1.0) = 1.5.
-    // Expected spacing = 2.0 * 1.5 = 3.0mm.
+    // Expected spacing = 2.0 + 0.25 * (6.0 - 2.0) = 3.0mm.
     const opParabolic = { ...op, zFactorCurve: 'parabolic' };
     const spacingParabolic = calculateZHeightDensitySpacing(4.75, 2.0, 7.0, opParabolic, 1.0);
     assert.strictEqual(spacingParabolic, 3.0);
@@ -430,8 +425,9 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     
     // 3. Dynamic defaults are successfully mapped
     assert.strictEqual(upgraded[0].wrapFraction, 1.0);
-    assert.strictEqual(upgraded[0].minimaEndInterval, 'auto');
-    assert.strictEqual(upgraded[0].zFactor, 2.0);
+    assert.strictEqual(upgraded[0].minimaStartInterval, 0);     // 0% Start Fraction
+    assert.strictEqual(upgraded[0].minimaEndInterval, 100);     // 100% End Fraction
+    assert.strictEqual(upgraded[0].endSpacingMm, 4.0);          // default spacing (4.0)
 
     // B. Legacy undefined input falls back to default 4-stage pipeline
     const defaultPipeline = upgradePipeline(undefined, 'MacroFace');
@@ -447,20 +443,46 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     const op: any = {
       type: 'perimeter',
       enableZHeightDensity: true,
-      minimaStartInterval: 0.5,
-      minimaEndInterval: 4.0,
-      zFactor: 2.0,
+      minimaStartInterval: 10,      // Start offset = 10%
+      minimaEndInterval: 80,        // End offset = 80%
+      endSpacingMm: 5.0,            // End Tip Spacing = 5.0 mm
       zFactorCurve: 'linear',
-      spacing: { baseSpacingMm: 2.0 }
+      spacing: { baseSpacingMm: 2.0 } // Start Tip Spacing = 2.0 mm
     };
     
     // Z span is 10.0mm (from Z=0 to Z=10)
-    // zStart = 0.5mm, zEnd = Math.min(4.0, 10.0) = 4.0mm
-    // At point Z = 2.25mm: zRel = 2.25 - 0 = 2.25mm
-    // t = (2.25 - 0.5) / (4.0 - 0.5) = 1.75 / 3.5 = 0.5
-    // scaleFactor = 1.0 + 0.5 * (2.0 - 1.0) = 1.5
-    // expectedSpacing = 2.0 * 1.5 = 3.0mm
-    const spacing = calculateZHeightDensitySpacing(2.25, 0.0, 10.0, op, 1.0);
-    assert.strictEqual(spacing, 3.0);
+    // zStart = 10% * 10.0 = 1.0mm
+    // zEnd = 80% * 10.0 = 8.0mm
+    // At point Z = 4.5mm: zRel = 4.5 - 0 = 4.5mm
+    // t = (4.5 - 1.0) / (8.0 - 1.0) = 3.5 / 7.0 = 0.5
+    // expectedSpacing = 2.0 + 0.5 * (5.0 - 2.0) = 3.5mm
+    const spacing = calculateZHeightDensitySpacing(4.5, 0.0, 10.0, op, 1.0);
+    assert.strictEqual(spacing, 3.5);
+  });
+
+  it('should offset loop vertices directly along local inward tangent vector symmetrically', () => {
+    // 3D planar square loop vertices of size 10x10 at Z=0
+    // Centroid is at (5, 5, 0)
+    const vertices = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(10, 0, 0),
+      new THREE.Vector3(10, 10, 0),
+      new THREE.Vector3(0, 10, 0)
+    ];
+    // Normals pointing vertically straight up (+Z)
+    const normals = [
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0, 1)
+    ];
+
+    // Offset of 1.0mm inwards
+    const insetLoop = insetBoundaryLoop(vertices, new THREE.Vector3(0, 0, 1), new THREE.Vector3(5, 5, 0), 1.0, normals);
+
+    assert.strictEqual(insetLoop.length, 4);
+    // Verified 3D local offset towards centroid (5, 5, 0)
+    // Vertex 0 (0, 0, 0) shifts inwards (positive X and positive Y)
+    assert.ok(insetLoop[0].x > 0 && insetLoop[0].y > 0);
   });
 });
