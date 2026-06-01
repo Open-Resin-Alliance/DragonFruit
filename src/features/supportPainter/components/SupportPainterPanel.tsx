@@ -19,10 +19,11 @@ import {
   Sliders,
   Square,
   Settings,
+  Save,
 } from 'lucide-react';
 import { Card, CardHeader, IconButton, Button, Toast, ToastViewport } from '@/components/ui/primitives';
 import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
-import { type BrushType, type CustomBrushTemplate, type CustomSupportOperation, BRUSH_COLORS, upgradePipeline } from '../supportPainterTypes';
+import { type BrushType, type CustomBrushTemplate, type CustomSupportOperation, BRUSH_COLORS, upgradePipeline, arePipelinesEquivalent, type SupportPlacementScript } from '../supportPainterTypes';
 import { generateSupportsFromPainter, regenerateSupportsForRoi } from '../supportScriptingEngine';
 import { subscribeToSettings, getSettings } from '@/supports/Settings';
 import {
@@ -1512,8 +1513,115 @@ export function SupportPainterPanel({
               </Button>
             </div>
           </div>
+          
+          {/* Support Placement Script Selection Dropdown & Actions */}
+          {(() => {
+            const activeCustomBrush = state.activeCustomBrushId ? state.customBrushes.get(state.activeCustomBrushId) : undefined;
+            const rawPipeline = state.activeBrushPipeline || (activeCustomBrush?.operations) || getDefaultPipeline(state.activeBrush);
+            const currentPipeline = upgradePipeline(rawPipeline, state.activeBrush, defaultSpacing);
+            
+            // Find if current custom support operations matches any known placement script
+            const matchedScript = Array.from(state.placementScripts.values()).find(script =>
+              arePipelinesEquivalent(script.operations, currentPipeline)
+            );
+            
+            const handleSelectScript = (e: React.ChangeEvent<HTMLSelectElement>) => {
+              const scriptId = e.target.value;
+              if (scriptId === 'unsaved') return;
+              const script = state.placementScripts.get(scriptId);
+              if (script) {
+                supportPainterStore.setActivePlacementScriptId(scriptId);
+                supportPainterStore.setActiveBrushPipeline(JSON.parse(JSON.stringify(script.operations)));
+              }
+            };
 
+            const handleSaveScript = () => {
+              let defaultName = matchedScript ? matchedScript.name : "";
+              if (matchedScript?.isBuiltIn) {
+                defaultName = `${matchedScript.name} (Custom)`;
+              }
+              const name = prompt("Enter a name for the support placement script:", defaultName);
+              if (!name) return;
+              
+              const existingCustom = Array.from(state.placementScripts.values()).find(
+                s => s.name.toLowerCase() === name.toLowerCase() && !s.isBuiltIn
+              );
+              
+              const scriptId = existingCustom ? existingCustom.id : `custom-script-${Date.now()}`;
+              const newScript = {
+                id: scriptId,
+                name,
+                operations: JSON.parse(JSON.stringify(currentPipeline)),
+                isBuiltIn: false
+              };
+              
+              supportPainterStore.addPlacementScript(newScript);
+              supportPainterStore.setActivePlacementScriptId(scriptId);
+              supportPainterStore.showToast([`Saved placement script "${name}"`]);
+            };
 
+            const handleDeleteScript = () => {
+              if (!matchedScript || matchedScript.isBuiltIn) return;
+              if (confirm(`Are you sure you want to delete the placement script "${matchedScript.name}"?`)) {
+                supportPainterStore.deletePlacementScript(matchedScript.id);
+                supportPainterStore.showToast([`Deleted placement script "${matchedScript.name}"`]);
+              }
+            };
+
+            return (
+              <div
+                className="flex flex-col gap-1.5 p-2 rounded-lg border text-xs"
+                style={{
+                  background: 'var(--surface-2, #1a202c)',
+                  borderColor: 'var(--border-subtle, #2d3748)',
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs text-gray-300">
+                    Placement Script
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <select
+                    value={matchedScript ? matchedScript.id : 'unsaved'}
+                    onChange={handleSelectScript}
+                    className="flex-1 bg-surface-1 text-text-strong text-[11px] px-2 py-1.5 rounded border border-border-subtle outline-none"
+                    style={{
+                      background: 'var(--surface-1, #151a22)',
+                      borderColor: 'var(--border-subtle, #2d3748)',
+                      color: 'var(--text-strong, #f3f4f6)',
+                    }}
+                  >
+                    {!matchedScript && (
+                      <option value="unsaved">(Unsaved Placement Script)</option>
+                    )}
+                    {Array.from(state.placementScripts.values()).map(script => (
+                      <option key={script.id} value={script.id}>
+                        {script.name}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  <IconButton
+                    onClick={handleSaveScript}
+                    className="!p-1.5 hover:bg-black/20"
+                    title="Save Placement Script"
+                  >
+                    <Save className="w-3.5 h-3.5" style={{ color: 'var(--accent, #4a90e2)' }} />
+                  </IconButton>
+
+                  <IconButton
+                    onClick={handleDeleteScript}
+                    disabled={!matchedScript || matchedScript.isBuiltIn}
+                    className="!p-1.5 hover:bg-black/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={matchedScript?.isBuiltIn ? "Cannot delete built-in script" : "Delete Placement Script"}
+                  >
+                    <Trash className="w-3.5 h-3.5" style={{ color: (!matchedScript || matchedScript.isBuiltIn) ? 'var(--text-muted, #718096)' : 'var(--danger, #ef4444)' }} />
+                  </IconButton>
+                </div>
+              </div>
+            );
+          })()}
 
               {/* 5. Edit Current Brush Supports settings button */}
           {/* Edit Current Brush Supports Button */}
@@ -2012,6 +2120,62 @@ export function SupportPainterPanel({
                     </Button>
                   </div>
                 </div>
+
+                {selectedRegion && (
+                  <div
+                    className="flex flex-col gap-1 p-2 rounded-lg border text-xs mt-2"
+                    style={{
+                      background: 'var(--surface-2, #1a202c)',
+                      borderColor: 'var(--border-subtle, #2d3748)',
+                    }}
+                  >
+                    <span className="font-semibold text-[10px] text-gray-300">
+                      ROI Placement Script
+                    </span>
+                    {(() => {
+                      const rawPipeline = selectedRegion.customBrush?.operations || getDefaultPipeline(selectedRegion.brushType);
+                      const currentPipeline = upgradePipeline(rawPipeline, selectedRegion.brushType, defaultSpacing);
+                      const matchedScript = Array.from(state.placementScripts.values()).find(script =>
+                        arePipelinesEquivalent(script.operations, currentPipeline)
+                      );
+
+                      const handleSelectRoiScript = (e: React.ChangeEvent<HTMLSelectElement>) => {
+                        const scriptId = e.target.value;
+                        if (scriptId === 'unsaved') return;
+                        const script = state.placementScripts.get(scriptId);
+                        if (script) {
+                          supportPainterStore.updateRegionCustomBrush(selectedRegion.id, JSON.parse(JSON.stringify(script.operations)));
+                          const activeMesh = getActiveMesh?.();
+                          if (activeModelId && activeMesh) {
+                            void regenerateSupportsForRoi(activeModelId, activeMesh, selectedRegion.id);
+                          }
+                        }
+                      };
+
+                      return (
+                        <select
+                          value={matchedScript ? matchedScript.id : 'unsaved'}
+                          onChange={handleSelectRoiScript}
+                          className="w-full bg-surface-1 text-text-strong text-[11px] px-2 py-1.5 rounded border border-border-subtle outline-none mt-1 cursor-pointer"
+                          style={{
+                            background: 'var(--surface-1, #151a22)',
+                            borderColor: 'var(--border-subtle, #2d3748)',
+                            color: 'var(--text-strong, #f3f4f6)',
+                          }}
+                        >
+                          {!matchedScript && (
+                            <option value="unsaved">(Unsaved Placement Script)</option>
+                          )}
+                          {Array.from(state.placementScripts.values()).map(script => (
+                            <option key={script.id} value={script.id}>
+                              {script.name}
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             );
           })()}

@@ -322,24 +322,40 @@ export function SupportPipelineEditor({
 
                             <div className="flex flex-col gap-1">
                               <span>Wrap Limit (Z) (%)</span>
-                              <input
-                                type="number"
-                                step="1"
-                                min="1"
-                                max="100"
-                                value={isNaN(op.wrapFraction ?? 100) ? '' : (op.wrapFraction ?? 100)}
-                                onChange={e => {
-                                  const val = parseInt(e.target.value, 10);
-                                  updateOp(index, {
-                                    wrapFraction: isNaN(val) ? 100 : val,
-                                  });
-                                }}
-                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                                style={{
-                                  background: 'var(--surface-1, #151a22)',
-                                  borderColor: 'var(--border-subtle, #2d3748)',
-                                }}
-                              />
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="range"
+                                  min="1"
+                                  max="100"
+                                  step="1"
+                                  value={op.wrapFraction ?? 100}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateOp(index, {
+                                      wrapFraction: isNaN(val) ? undefined : val,
+                                    });
+                                  }}
+                                  className="flex-1 accent-accent h-1.5 rounded-lg appearance-none cursor-pointer bg-gray-700"
+                                />
+                                <input
+                                  type="number"
+                                  step="1"
+                                  min="1"
+                                  max="100"
+                                  value={op.wrapFraction === undefined ? '' : op.wrapFraction}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateOp(index, {
+                                      wrapFraction: isNaN(val) ? undefined : val,
+                                    });
+                                  }}
+                                  className="w-16 px-2 py-1 rounded border font-medium outline-none text-right"
+                                  style={{
+                                    background: 'var(--surface-1, #151a22)',
+                                    borderColor: 'var(--border-subtle, #2d3748)',
+                                  }}
+                                />
+                              </div>
                             </div>
                           </>
                         )}
@@ -688,51 +704,82 @@ export function SupportPipelineEditor({
                             {/* Row 2: Start Offset (Z) (%) and End Offset (Z) (%) */}
                             <div className="flex flex-col gap-1">
                               <span className="font-semibold text-gray-300">Start Offset (Z) (%)</span>
-                              <input
-                                type="number"
-                                step="1"
-                                min="0"
-                                max="100"
-                                value={isNaN(op.minimaStartInterval ?? 0) ? '' : (op.minimaStartInterval ?? 0)}
-                                onChange={e => {
-                                  const val = parseInt(e.target.value, 10);
-                                  updateOp(index, {
-                                    minimaStartInterval: isNaN(val) ? 0 : val,
-                                    isIntervalDirectlyEdited: true,
-                                  });
-                                }}
-                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                                style={{
-                                  background: 'var(--surface-1, #151a22)',
-                                  borderColor: 'var(--border-subtle, #2d3748)',
-                                }}
-                              />
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="100"
+                                  step="1"
+                                  value={op.minimaStartInterval ?? 0}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateOp(index, {
+                                      minimaStartInterval: isNaN(val) ? undefined : val,
+                                      isIntervalDirectlyEdited: true,
+                                    });
+                                  }}
+                                  className="flex-1 accent-accent h-1.5 rounded-lg appearance-none cursor-pointer bg-gray-700"
+                                />
+                                <input
+                                  type="number"
+                                  step="1"
+                                  min="0"
+                                  max="100"
+                                  value={op.minimaStartInterval === undefined ? '' : op.minimaStartInterval}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateOp(index, {
+                                      minimaStartInterval: isNaN(val) ? undefined : val,
+                                      isIntervalDirectlyEdited: true,
+                                    });
+                                  }}
+                                  className="w-16 px-2 py-1 rounded border font-medium outline-none text-right"
+                                  style={{
+                                    background: 'var(--surface-1, #151a22)',
+                                    borderColor: 'var(--border-subtle, #2d3748)',
+                                  }}
+                                />
+                              </div>
                             </div>
 
                             <div className="flex flex-col gap-1">
                               <span className="font-semibold text-gray-300">End Offset (Z) (%)</span>
-                              <input
-                                type="number"
-                                step="1"
-                                min="0"
-                                max="100"
-                                value={(() => {
-                                  const endVal = typeof op.minimaEndInterval === 'number' ? op.minimaEndInterval : 100;
-                                  return isNaN(endVal) ? '' : endVal;
-                                })()}
-                                onChange={e => {
-                                  const val = parseInt(e.target.value, 10);
-                                  updateOp(index, {
-                                    minimaEndInterval: isNaN(val) ? 100 : val,
-                                    isIntervalDirectlyEdited: true,
-                                  });
-                                }}
-                                className="px-2.5 py-1.5 rounded border font-medium outline-none"
-                                style={{
-                                  background: 'var(--surface-1, #151a22)',
-                                  borderColor: 'var(--border-subtle, #2d3748)',
-                                }}
-                              />
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="100"
+                                  step="1"
+                                  value={typeof op.minimaEndInterval === 'number' ? op.minimaEndInterval : 100}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateOp(index, {
+                                      minimaEndInterval: isNaN(val) ? undefined : val,
+                                      isIntervalDirectlyEdited: true,
+                                    });
+                                  }}
+                                  className="flex-1 accent-accent h-1.5 rounded-lg appearance-none cursor-pointer bg-gray-700"
+                                />
+                                <input
+                                  type="number"
+                                  step="1"
+                                  min="0"
+                                  max="100"
+                                  value={op.minimaEndInterval === undefined ? '' : op.minimaEndInterval}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateOp(index, {
+                                      minimaEndInterval: isNaN(val) ? undefined : val,
+                                      isIntervalDirectlyEdited: true,
+                                    });
+                                  }}
+                                  className="w-16 px-2 py-1 rounded border font-medium outline-none text-right"
+                                  style={{
+                                    background: 'var(--surface-1, #151a22)',
+                                    borderColor: 'var(--border-subtle, #2d3748)',
+                                  }}
+                                />
+                              </div>
                             </div>
                           </div>
                         )}

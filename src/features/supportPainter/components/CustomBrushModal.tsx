@@ -4,12 +4,15 @@ import {
   Settings,
   Sliders,
   Grid,
+  Save,
+  Trash,
 } from 'lucide-react';
 import { IconButton, Button } from '@/components/ui/primitives';
 import { SymmetricalClockWidget } from './SymmetricalClockWidget';
 import { OverhangArcGauge } from './OverhangArcGauge';
 import { SupportPipelineEditor } from './SupportPipelineEditor';
-import { type CustomBrushTemplate, type CustomSupportOperation, type BrushType, upgradePipeline } from '../supportPainterTypes';
+import { type CustomBrushTemplate, type CustomSupportOperation, type BrushType, upgradePipeline, arePipelinesEquivalent } from '../supportPainterTypes';
+import { supportPainterStore, useSupportPainterState } from '../supportPainterStore';
 
 const safeNum = (val: number | undefined, fallback: number): number => {
   return val === undefined || isNaN(val) ? fallback : val;
@@ -177,6 +180,7 @@ export function CustomBrushModal({
   onSave,
 }: CustomBrushModalProps) {
   const isEditing = !!initialBrush;
+  const state = useSupportPainterState();
   const [activeTab, setActiveTab] = useState<'selection' | 'pipeline'>('selection');
   const [brush, setBrush] = useState<CustomBrushTemplate>(() => {
     if (initialBrush) {
@@ -866,12 +870,118 @@ export function CustomBrushModal({
               )}
             </div>
           ) : (
-            <SupportPipelineEditor
-              initialPipeline={brush.operations}
-              onChange={ops => setBrush(prev => ({ ...prev, operations: ops }))}
-              isEmbedded={true}
-              colorTheme={brush.color}
-            />
+            <div className="flex flex-col h-full overflow-hidden">
+              {/* Presets Toolbar */}
+              {(() => {
+                const currentPipeline = upgradePipeline(brush.operations, brush.baseBrush || 'MacroFace');
+                const matchedScript = Array.from(state.placementScripts.values()).find(script =>
+                  arePipelinesEquivalent(script.operations, currentPipeline)
+                );
+
+                const handleSelectPreset = (e: React.ChangeEvent<HTMLSelectElement>) => {
+                  const scriptId = e.target.value;
+                  if (scriptId === 'unsaved') return;
+                  const script = state.placementScripts.get(scriptId);
+                  if (script) {
+                    setBrush(prev => ({
+                      ...prev,
+                      operations: JSON.parse(JSON.stringify(script.operations)),
+                    }));
+                  }
+                };
+
+                const handleSavePreset = () => {
+                  let defaultName = matchedScript ? matchedScript.name : "";
+                  if (matchedScript?.isBuiltIn) {
+                    defaultName = `${matchedScript.name} (Custom)`;
+                  }
+                  const name = prompt("Enter a name for the support placement script:", defaultName);
+                  if (!name) return;
+
+                  const existingCustom = Array.from(state.placementScripts.values()).find(
+                    s => s.name.toLowerCase() === name.toLowerCase() && !s.isBuiltIn
+                  );
+
+                  const scriptId = existingCustom ? existingCustom.id : `custom-script-${Date.now()}`;
+                  const newScript = {
+                    id: scriptId,
+                    name,
+                    operations: JSON.parse(JSON.stringify(currentPipeline)),
+                    isBuiltIn: false
+                  };
+
+                  supportPainterStore.addPlacementScript(newScript);
+                  supportPainterStore.showToast([`Saved placement script "${name}"`]);
+                };
+
+                const handleDeletePreset = () => {
+                  if (!matchedScript || matchedScript.isBuiltIn) return;
+                  if (confirm(`Are you sure you want to delete the placement script "${matchedScript.name}"?`)) {
+                    supportPainterStore.deletePlacementScript(matchedScript.id);
+                    supportPainterStore.showToast([`Deleted placement script "${matchedScript.name}"`]);
+                  }
+                };
+
+                return (
+                  <div
+                    className="flex items-center gap-2.5 px-4 py-2 border-b text-xs flex-shrink-0"
+                    style={{
+                      background: 'var(--surface-2, #1a202c)',
+                      borderColor: 'var(--border-subtle, #2d3748)',
+                    }}
+                  >
+                    <span className="font-semibold text-gray-300">
+                      Preset Script:
+                    </span>
+                    <select
+                      value={matchedScript ? matchedScript.id : 'unsaved'}
+                      onChange={handleSelectPreset}
+                      className="flex-1 max-w-[280px] bg-surface-1 text-text-strong text-[11px] px-2 py-1.5 rounded border border-border-subtle outline-none"
+                      style={{
+                        background: 'var(--surface-1, #151a22)',
+                        borderColor: 'var(--border-subtle, #2d3748)',
+                        color: 'var(--text-strong, #f3f4f6)',
+                      }}
+                    >
+                      {!matchedScript && (
+                        <option value="unsaved">(Unsaved Placement Script)</option>
+                      )}
+                      {Array.from(state.placementScripts.values()).map(script => (
+                        <option key={script.id} value={script.id}>
+                          {script.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <IconButton
+                      onClick={handleSavePreset}
+                      className="!p-1.5 hover:bg-black/20"
+                      title="Save Placement Script"
+                    >
+                      <Save className="w-3.5 h-3.5" style={{ color: 'var(--accent, #4a90e2)' }} />
+                    </IconButton>
+
+                    <IconButton
+                      onClick={handleDeletePreset}
+                      disabled={!matchedScript || matchedScript.isBuiltIn}
+                      className="!p-1.5 hover:bg-black/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={matchedScript?.isBuiltIn ? "Cannot delete built-in script" : "Delete Placement Script"}
+                    >
+                      <Trash className="w-3.5 h-3.5" style={{ color: (!matchedScript || matchedScript.isBuiltIn) ? 'var(--text-muted, #718096)' : 'var(--danger, #ef4444)' }} />
+                    </IconButton>
+                  </div>
+                );
+              })()}
+
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <SupportPipelineEditor
+                  initialPipeline={brush.operations}
+                  onChange={ops => setBrush(prev => ({ ...prev, operations: ops }))}
+                  isEmbedded={true}
+                  colorTheme={brush.color}
+                />
+              </div>
+            </div>
           )}
         </div>
 

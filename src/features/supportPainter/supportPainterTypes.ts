@@ -268,6 +268,10 @@ export interface SupportPainterState {
 
   // ─── Phase III Active Brush Pipeline Override State ───
   activeBrushPipeline:    CustomSupportOperation[] | null;
+
+  // ─── Support Placement Scripts State ───
+  placementScripts:       Map<string, SupportPlacementScript>;
+  activePlacementScriptId: string | null;
 }
 
 // ─── Store Action Payloads ───────────────────────────────────────────────────
@@ -459,5 +463,51 @@ export function upgradePipeline(
     endSpacingMm: defaultSpacing,
     wrapFraction: 100,
   }));
+}
+
+export interface SupportPlacementScript {
+  id: string;
+  name: string;
+  operations: CustomSupportOperation[];
+  isBuiltIn?: boolean;
+}
+
+export function arePipelinesEquivalent(a: CustomSupportOperation[], b: CustomSupportOperation[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const opA = a[i];
+    const opB = b[i];
+    if (opA.type !== opB.type) return false;
+    if (opA.enabled !== opB.enabled) return false;
+    if (opA.supportPresetId !== opB.supportPresetId) return false;
+    if (opA.insetDistanceMm !== opB.insetDistanceMm) return false;
+    if (opA.wrapFraction !== opB.wrapFraction) return false;
+    if (opA.enableZHeightDensity !== opB.enableZHeightDensity) return false;
+    if (opA.minimaStartInterval !== opB.minimaStartInterval) return false;
+    if (opA.minimaEndInterval !== opB.minimaEndInterval) return false;
+    if (opA.endSpacingMm !== opB.endSpacingMm) return false;
+    if (opA.zFactorCurve !== opB.zFactorCurve) return false;
+    
+    // Compare suppression
+    const supA = opA.suppression;
+    const supB = opB.suppression;
+    if (supA.enabled !== supB.enabled) return false;
+    if (supA.distanceMm !== supB.distanceMm) return false;
+    if (supA.suppressAgainst.length !== supB.suppressAgainst.length) return false;
+    for (let j = 0; j < supA.suppressAgainst.length; j++) {
+      if (supA.suppressAgainst[j] !== supB.suppressAgainst[j]) return false;
+    }
+
+    // Compare spacing
+    const spA = opA.spacing;
+    const spB = opB.spacing;
+    if (spA.baseSpacingMm !== spB.baseSpacingMm) return false;
+    if (spA.solverMode !== spB.solverMode) return false;
+    if (spA.useInflectionPoints !== spB.useInflectionPoints) return false;
+    if (spA.infillPattern !== spB.infillPattern) return false;
+    if (spA.seedFromMinima !== spB.seedFromMinima) return false;
+    if (spA.attemptLeafCreation !== spB.attemptLeafCreation) return false;
+  }
+  return true;
 }
 

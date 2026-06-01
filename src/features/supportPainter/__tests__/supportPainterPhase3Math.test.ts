@@ -10,7 +10,7 @@ import {
   filterInsetLoopByWrapFraction,
 } from '../supportScriptingEngine';
 import { supportPainterStore } from '../supportPainterStore';
-import { type ROIRegion, type CustomBrushTemplate, upgradePipeline } from '../supportPainterTypes';
+import { type ROIRegion, type CustomBrushTemplate, upgradePipeline, arePipelinesEquivalent } from '../supportPainterTypes';
 import { resetStore as resetSupportStore, getSnapshot as getSupportSnapshot } from '@/supports/state';
 
 describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', () => {
@@ -503,5 +503,46 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     // Verified 3D local offset towards centroid (5, 5, 0)
     // Vertex 0 (0, 0, 0) shifts inwards (positive X and positive Y)
     assert.ok(insetLoop[0].x > 0 && insetLoop[0].y > 0);
+  });
+
+  it('should verify arePipelinesEquivalent behaves correctly and store actions save/delete scripts reliably', () => {
+    // 1. Structural equivalence tests
+    const opsA = upgradePipeline(undefined, 'MacroFace');
+    const opsB = upgradePipeline(undefined, 'MacroFace');
+    
+    assert.ok(arePipelinesEquivalent(opsA, opsB), 'Identical pipelines should be equivalent');
+    
+    // Modify one value in opsB
+    const modifiedOps = JSON.parse(JSON.stringify(opsB));
+    modifiedOps[0].wrapFraction = 42;
+    assert.strictEqual(arePipelinesEquivalent(opsA, modifiedOps), false, 'Modified wrapFraction should make pipelines non-equivalent');
+
+    // 2. Store CRUD actions
+    supportPainterStore.clearAll();
+    
+    const countBefore = supportPainterStore.getSnapshot().placementScripts.size;
+    assert.ok(countBefore >= 11, 'Should pre-populate at least 11 default placement scripts');
+
+    const customScript = {
+      id: 'test-custom-script-id',
+      name: 'Test Custom Script',
+      operations: opsA,
+      isBuiltIn: false
+    };
+
+    // Add custom script
+    supportPainterStore.addPlacementScript(customScript);
+    const stateAfterAdd = supportPainterStore.getSnapshot();
+    assert.ok(stateAfterAdd.placementScripts.has('test-custom-script-id'), 'Store should contain added custom script');
+    
+    // Update custom script
+    supportPainterStore.updatePlacementScript('test-custom-script-id', { name: 'Updated Custom Script Name' });
+    const stateAfterUpdate = supportPainterStore.getSnapshot();
+    assert.strictEqual(stateAfterUpdate.placementScripts.get('test-custom-script-id')?.name, 'Updated Custom Script Name', 'Script name should be updated');
+
+    // Delete custom script
+    supportPainterStore.deletePlacementScript('test-custom-script-id');
+    const stateAfterDelete = supportPainterStore.getSnapshot();
+    assert.ok(!stateAfterDelete.placementScripts.has('test-custom-script-id'), 'Store should delete custom script');
   });
 });

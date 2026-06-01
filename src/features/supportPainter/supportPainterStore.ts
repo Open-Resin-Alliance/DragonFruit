@@ -13,6 +13,8 @@ import {
   type CustomBrushTemplate,
   type LocalMinimum,
   type CustomSupportOperation,
+  type SupportPlacementScript,
+  type CustomSupportOperationType,
   BRUSH_COLORS,
   upgradePipeline,
 } from './supportPainterTypes';
@@ -81,6 +83,139 @@ let roiTrackingMode: 'none' | 'session' | 'voxl' = 'voxl'; // Default persistent
 // ─── Version 3 Custom Support Brushes State ───
 let customBrushes = new Map<string, CustomBrushTemplate>();
 let activeCustomBrushId: string | null = null;
+
+// ─── Support Placement Scripts State ───
+const placementScripts = new Map<string, SupportPlacementScript>();
+let activePlacementScriptId: string | null = null;
+
+const BRUSH_TYPES_LIST: BrushType[] = [
+  'MacroFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
+  'ManualCircle', 'ManualSquare', 'Marker', 'PointPath', 'MinimaIslands'
+];
+
+function getDefaultOperationsForBrush(brushType: BrushType, defaultSpacing = 4.0): CustomSupportOperation[] {
+  const isPointPathOrMarker = brushType === 'PointPath' || brushType === 'Marker';
+  const isLineBrush = brushType === 'Ridge' || brushType === 'SoftRidge' || brushType === 'PointPath';
+  const isMinimaIslands = brushType === 'MinimaIslands';
+
+  return [
+    {
+      type: 'minima' as const,
+      enabled: isMinimaIslands || (!isPointPathOrMarker && !isLineBrush),
+      suppression: {
+        enabled: !isMinimaIslands,
+        distanceMm: defaultSpacing,
+        suppressAgainst: ['minima'] as CustomSupportOperationType[],
+      },
+      spacing: {
+        baseSpacingMm: defaultSpacing,
+      },
+    },
+    {
+      type: 'perimeter' as const,
+      enabled: !isMinimaIslands && !isPointPathOrMarker && !isLineBrush,
+      suppression: {
+        enabled: false,
+        distanceMm: defaultSpacing,
+        suppressAgainst: [] as CustomSupportOperationType[],
+      },
+      spacing: {
+        baseSpacingMm: defaultSpacing,
+        solverMode: 'standard' as const,
+        useInflectionPoints: false,
+      },
+    },
+    {
+      type: 'infill' as const,
+      enabled: !isMinimaIslands && !isLineBrush,
+      suppression: {
+        enabled: true,
+        distanceMm: defaultSpacing,
+        suppressAgainst: ['minima', 'perimeter', 'infill'] as CustomSupportOperationType[],
+      },
+      spacing: {
+        baseSpacingMm: defaultSpacing,
+        infillPattern: 'PoissonDisc' as const,
+        seedFromMinima: true,
+      },
+    },
+    {
+      type: 'centerline' as const,
+      enabled: !isMinimaIslands && isLineBrush,
+      suppression: {
+        enabled: true,
+        distanceMm: defaultSpacing,
+        suppressAgainst: ['minima', 'perimeter', 'infill', 'centerline'] as CustomSupportOperationType[],
+      },
+      spacing: {
+        baseSpacingMm: defaultSpacing,
+        seedFromMinima: true,
+      },
+    },
+  ].map(op => ({
+    ...op,
+    minimaStartInterval: 0,
+    minimaEndInterval: 100,
+    endSpacingMm: defaultSpacing,
+    wrapFraction: 100,
+  }));
+}
+
+function initializeDefaultPlacementScripts() {
+  placementScripts.clear();
+  for (const brushType of BRUSH_TYPES_LIST) {
+    const defaultOps = getDefaultOperationsForBrush(brushType);
+    placementScripts.set(`default-${brushType}`, {
+      id: `default-${brushType}`,
+      name: `Default - ${brushType}`,
+      operations: defaultOps,
+      isBuiltIn: true,
+    });
+  }
+}
+
+const SCRIPTS_LOCAL_STORAGE_KEY = 'dragonfruit.support-painter.placement-scripts';
+
+function savePlacementScriptsToLocalStorage() {
+  try {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const customList = Array.from(placementScripts.values()).filter(s => !s.isBuiltIn);
+      localStorage.setItem(SCRIPTS_LOCAL_STORAGE_KEY, JSON.stringify(customList));
+    }
+  } catch (err) {
+    console.error('[SupportPainterStore] Failed to persist placement scripts', err);
+  }
+}
+
+function loadPlacementScriptsFromLocalStorage() {
+  try {
+    initializeDefaultPlacementScripts();
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(SCRIPTS_LOCAL_STORAGE_KEY);
+      if (raw) {
+        const customList = JSON.parse(raw) as SupportPlacementScript[];
+        for (const script of customList) {
+          const baseType = script.operations.find((op: CustomSupportOperation) => op.enabled)?.type || 'perimeter';
+          const brushTypeMap: Record<string, BrushType> = {
+            minima: 'MinimaIslands',
+            perimeter: 'MacroFace',
+            infill: 'MacroFace',
+            centerline: 'Ridge',
+          };
+          const resolvedBrush = brushTypeMap[baseType] || 'MacroFace';
+          const upgradedOps = upgradePipeline(script.operations, resolvedBrush);
+          placementScripts.set(script.id, {
+            ...script,
+            isBuiltIn: false,
+            operations: upgradedOps,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[SupportPainterStore] Failed to restore placement scripts', err);
+  }
+}
 
 // ─── Version 4 Manual Geodesic Brushes State ───
 let brushRadiusMm = 4.0;
@@ -156,6 +291,7 @@ function loadCustomBrushesFromLocalStorage() {
 
 // Initial invocation on module load
 loadCustomBrushesFromLocalStorage();
+loadPlacementScriptsFromLocalStorage();
 
 let storeSnapshot: SupportPainterState = {
   isActive,
@@ -179,6 +315,8 @@ let storeSnapshot: SupportPainterState = {
   lastSelectedIndex,
   customBrushes: new Map(customBrushes),
   activeCustomBrushId,
+  placementScripts: new Map(placementScripts),
+  activePlacementScriptId,
   brushRadiusMm,
   markerRadiusMm,
   markerTipShape,
@@ -225,6 +363,8 @@ function updateSnapshot() {
     lastSelectedIndex,
     customBrushes: new Map(customBrushes),
     activeCustomBrushId,
+    placementScripts: new Map(placementScripts),
+    activePlacementScriptId,
     brushRadiusMm,
     markerRadiusMm,
     markerTipShape,
@@ -1349,6 +1489,46 @@ export const supportPainterStore = {
 
   setActiveBrushPipeline(pipeline: CustomSupportOperation[] | null) {
     activeBrushPipeline = pipeline;
+    updateSnapshot();
+    notify();
+  },
+
+  addPlacementScript(script: SupportPlacementScript) {
+    placementScripts.set(script.id, {
+      ...script,
+      isBuiltIn: false,
+    });
+    savePlacementScriptsToLocalStorage();
+    updateSnapshot();
+    notify();
+  },
+
+  deletePlacementScript(id: string) {
+    if (placementScripts.get(id)?.isBuiltIn) return;
+    placementScripts.delete(id);
+    if (activePlacementScriptId === id) {
+      activePlacementScriptId = null;
+    }
+    savePlacementScriptsToLocalStorage();
+    updateSnapshot();
+    notify();
+  },
+
+  updatePlacementScript(id: string, updates: Partial<SupportPlacementScript>) {
+    const existing = placementScripts.get(id);
+    if (!existing || existing.isBuiltIn) return;
+    placementScripts.set(id, {
+      ...existing,
+      ...updates,
+      isBuiltIn: false,
+    });
+    savePlacementScriptsToLocalStorage();
+    updateSnapshot();
+    notify();
+  },
+
+  setActivePlacementScriptId(id: string | null) {
+    activePlacementScriptId = id;
     updateSnapshot();
     notify();
   },
