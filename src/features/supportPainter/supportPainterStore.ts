@@ -1131,56 +1131,57 @@ export const supportPainterStore = {
     const triangleIds = region.triangleIds;
     const seed = region.seedTriangleId;
 
-    let mainComponent = new Set<number>();
+    // 1. Identify the largest connected component of triangles using BFS
+    const visited = new Set<number>();
+    let largestComponent = new Set<number>();
 
-    if (triangleIds.has(seed)) {
-      const queue: number[] = [seed];
-      mainComponent.add(seed);
+    for (const triId of triangleIds) {
+      if (visited.has(triId)) continue;
+
+      const currentComponent = new Set<number>();
+      const queue: number[] = [triId];
+      currentComponent.add(triId);
+      visited.add(triId);
 
       while (queue.length > 0) {
         const curr = queue.shift()!;
         const adjs = clientAdjacencyMap.faceToFaces[curr] || [];
         for (const adj of adjs) {
-          if (triangleIds.has(adj) && !mainComponent.has(adj)) {
-            mainComponent.add(adj);
+          if (triangleIds.has(adj) && !currentComponent.has(adj)) {
+            currentComponent.add(adj);
+            visited.add(adj);
             queue.push(adj);
           }
         }
       }
-    } else {
-      const visited = new Set<number>();
-      let largestComponent = new Set<number>();
 
-      for (const triId of triangleIds) {
-        if (visited.has(triId)) continue;
-
-        const currentComponent = new Set<number>();
-        const queue: number[] = [triId];
-        currentComponent.add(triId);
-        visited.add(triId);
-
-        while (queue.length > 0) {
-          const curr = queue.shift()!;
-          const adjs = clientAdjacencyMap.faceToFaces[curr] || [];
-          for (const adj of adjs) {
-            if (triangleIds.has(adj) && !currentComponent.has(adj)) {
-              currentComponent.add(adj);
-              visited.add(adj);
-              queue.push(adj);
-            }
-          }
-        }
-
-        if (currentComponent.size > largestComponent.size) {
-          largestComponent = currentComponent;
-        }
+      if (currentComponent.size > largestComponent.size) {
+        largestComponent = currentComponent;
       }
-      mainComponent = largestComponent;
     }
 
-    if (mainComponent.size < triangleIds.size) {
-      console.log(`[SupportPainterStore] Pruning ${triangleIds.size - mainComponent.size} isolated triangles.`);
-      const nextRegion = { ...region, triangleIds: mainComponent, rleSpans: undefined, loops: undefined };
+    const mainComponent = largestComponent;
+
+    // 2. Dynamic seed replacement: pick a new seed triangle from the largest component if the original seed is missing/erased
+    let seedChanged = false;
+    let newSeed = seed;
+    if (!mainComponent.has(seed) && mainComponent.size > 0) {
+      newSeed = mainComponent.values().next().value!;
+      seedChanged = true;
+    }
+
+    // 3. Apply changes and notify store
+    if (mainComponent.size < triangleIds.size || seedChanged) {
+      if (mainComponent.size < triangleIds.size) {
+        console.log(`[SupportPainterStore] Pruning ${triangleIds.size - mainComponent.size} isolated triangles.`);
+      }
+      const nextRegion = { 
+        ...region, 
+        triangleIds: mainComponent, 
+        seedTriangleId: newSeed,
+        rleSpans: undefined, 
+        loops: undefined 
+      };
       regions.set(regionId, nextRegion);
       triangleColorMap = _recomputeTriangleColorMap();
       updateSnapshot();
