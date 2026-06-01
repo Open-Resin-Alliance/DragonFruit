@@ -2242,6 +2242,7 @@ export async function generateSupportsFromPainter(
             parentKnot: knot,
             hostDiameterMm: segment.diameter,
           });
+          leafResult.leaf.roiId = col.regionId;
 
           addKnot(knot);
           addLeaf(leafResult.leaf);

@@ -272,6 +272,12 @@ export function deleteSupportsForRoi(state: SupportState, roiId: string): Suppor
     for (const [id, branch] of Object.entries(state.branches)) {
         if (branch.roiId === roiId) branchesToRemove.add(id);
     }
+    for (const [id, leaf] of Object.entries(state.leaves)) {
+        if (leaf.roiId === roiId) leavesToRemove.add(id);
+    }
+    for (const [id, brace] of Object.entries(state.braces)) {
+        if (brace.roiId === roiId) bracesToRemove.add(id);
+    }
     for (const [id, twig] of Object.entries(state.twigs)) {
         if (twig.roiId === roiId) twigsToRemove.add(id);
     }

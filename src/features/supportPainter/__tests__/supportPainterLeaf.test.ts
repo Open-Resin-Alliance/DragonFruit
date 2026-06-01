@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { supportPainterStore } from '../supportPainterStore';
 import { generateSupportsFromPainter } from '../supportScriptingEngine';
 import { type ROIRegion } from '../supportPainterTypes';
-import { resetStore as resetSupportStore, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { resetStore as resetSupportStore, getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot } from '@/supports/state';
+import { deleteSupportsForRoi } from '@/supports/PlacementLogic/SupportModelLinker';
 import { updateTipProfile, setSettings, createDefaultSettings } from '@/supports/Settings';
 
 describe('Support Painter - Z-Minima Automated Leaf Support Placement', () => {
@@ -119,6 +120,20 @@ describe('Support Painter - Z-Minima Automated Leaf Support Placement', () => {
     assert.strictEqual(leaf.parentKnotId, knot.id, 'Leaf must connect to the created Knot');
     const segmentIds = primaryTrunk.segments.map(s => s.id);
     assert.ok(segmentIds.includes(knot.parentShaftId), 'Knot must be hosted on one of the primary trunk segments');
+
+    // Verify correct ROI linkage
+    assert.strictEqual(primaryTrunk.roiId, regionId, 'Primary trunk must have the correct roiId');
+    assert.strictEqual(leaf.roiId, regionId, 'Leaf must have the correct roiId');
+
+    // 5a. Call deleteSupportsForRoi and verify that both the trunk, knot, and leaf are deleted cleanly
+    const stateBeforeDelete = getSupportSnapshot();
+    const stateAfterDelete = deleteSupportsForRoi(stateBeforeDelete, regionId);
+    setSupportSnapshot(stateAfterDelete);
+
+    const snapshotAfterDelete = getSupportSnapshot();
+    assert.strictEqual(Object.keys(snapshotAfterDelete.trunks).length, 0, 'Trunks should be cleanly deleted');
+    assert.strictEqual(Object.keys(snapshotAfterDelete.leaves).length, 0, 'Leaves should be cleanly deleted');
+    assert.strictEqual(Object.keys(snapshotAfterDelete.knots).length, 0, 'Knots should be cleanly deleted');
 
     // 6. Clean up modified settings to prevent leaking into subsequent tests
     setSettings(createDefaultSettings());
