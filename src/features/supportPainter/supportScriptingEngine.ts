@@ -684,6 +684,10 @@ export async function generateSupportsFromPainter(
   const triangles: WeldedTriangle[] = [];
 
   for (let i = 0; i < numTriangles; i++) {
+    // Yield to the event loop every 10,000 triangles to prevent RAF stalls during large model indexing
+    if (i > 0 && i % 10000 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     const x0 = soup[i * 9], y0 = soup[i * 9 + 1], z0 = soup[i * 9 + 2];
     const x1 = soup[i * 9 + 3], y1 = soup[i * 9 + 4], z1 = soup[i * 9 + 5];
     const x2 = soup[i * 9 + 6], y2 = soup[i * 9 + 7], z2 = soup[i * 9 + 8];
@@ -771,7 +775,9 @@ export async function generateSupportsFromPainter(
       (region.brush === undefined && state.pointPathMode === 'line' && !state.pointPathClosed)
     );
 
-    if (region.brushType === 'SoftRidge' || region.brushType === 'Ridge' || isPointPathLine) {
+    if (region.brushType === 'MinimaIslands') {
+      // MinimaIslands does not need boundary loops or spines
+    } else if (region.brushType === 'SoftRidge' || region.brushType === 'Ridge' || isPointPathLine) {
       // 1D Topological Graph Diameter BFS crease/spine solver
       const regionAdj = new Map<number, number[]>();
       const addRegionAdj = (ta: number, tb: number) => {
@@ -1117,6 +1123,15 @@ export async function generateSupportsFromPainter(
       }
     }
 
+    if (region.brushType === 'MinimaIslands') {
+      return {
+        enabled: false,
+        distanceMm: 0,
+        types: [] as ('minima' | 'perimeter' | 'infill' | 'centerline')[],
+        mode: 'none' as const,
+      };
+    }
+
     const config = suppressionSettings[stage];
     const isOverrideCandidate =
       region.brushType === 'RoughEdge' ||
@@ -1239,25 +1254,26 @@ export async function generateSupportsFromPainter(
           (region.brush === undefined && state.pointPathMode === 'line' && !state.pointPathClosed)
         )
       );
+      const isMinimaIslands = region.brushType === 'MinimaIslands';
 
       pipeline.push({
         type: 'minima',
-        enabled: !isPointPathOrMarker && !isLineBrush,
+        enabled: isMinimaIslands || (!isPointPathOrMarker && !isLineBrush),
         spacing: { baseSpacingMm: minimaSuppressionRadius },
       });
       pipeline.push({
         type: 'perimeter',
-        enabled: !isPointPathOrMarker && !isLineBrush,
+        enabled: !isMinimaIslands && !isPointPathOrMarker && !isLineBrush,
         spacing: { baseSpacingMm: perimeterSpacing },
       });
       pipeline.push({
         type: 'infill',
-        enabled: !isLineBrush,
+        enabled: !isMinimaIslands && !isLineBrush,
         spacing: { baseSpacingMm: infillSpacing },
       });
       pipeline.push({
         type: 'centerline',
-        enabled: isLineBrush,
+        enabled: !isMinimaIslands && isLineBrush,
         spacing: { baseSpacingMm: perimeterSpacing, seedFromMinima: true },
       });
     }

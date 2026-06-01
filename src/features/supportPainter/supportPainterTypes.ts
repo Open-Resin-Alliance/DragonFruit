@@ -345,6 +345,7 @@ export function upgradePipeline(
 
   const isPointPathOrMarker = activeBrushType === 'PointPath' || activeBrushType === 'Marker' || activeBrushType === 'RoughEdge' || activeBrushType === 'Unk Legacy Brush';
   const isLineBrush = activeBrushType === 'Ridge' || activeBrushType === 'SoftRidge' || activeBrushType === 'PointPath';
+  const isMinimaIslands = activeBrushType === 'MinimaIslands';
 
   const standardTypes: ('minima' | 'perimeter' | 'infill' | 'centerline')[] = [
     'minima',
@@ -356,9 +357,9 @@ export function upgradePipeline(
   const defaultOps: Record<'minima' | 'perimeter' | 'infill' | 'centerline', CustomSupportOperation> = {
     minima: {
       type: 'minima',
-      enabled: !isPointPathOrMarker && !isLineBrush,
+      enabled: isMinimaIslands || (!isPointPathOrMarker && !isLineBrush),
       suppression: {
-        enabled: true,
+        enabled: !isMinimaIslands,
         distanceMm: defaultSpacing,
         suppressAgainst: ['minima'],
       },
@@ -368,7 +369,7 @@ export function upgradePipeline(
     },
     perimeter: {
       type: 'perimeter',
-      enabled: !isPointPathOrMarker && !isLineBrush,
+      enabled: !isMinimaIslands && !isPointPathOrMarker && !isLineBrush,
       suppression: {
         enabled: false,
         distanceMm: defaultSpacing,
@@ -382,7 +383,7 @@ export function upgradePipeline(
     },
     infill: {
       type: 'infill',
-      enabled: !isLineBrush,
+      enabled: !isMinimaIslands && !isLineBrush,
       suppression: {
         enabled: true,
         distanceMm: defaultSpacing,
@@ -396,7 +397,7 @@ export function upgradePipeline(
     },
     centerline: {
       type: 'centerline',
-      enabled: isLineBrush,
+      enabled: !isMinimaIslands && isLineBrush,
       suppression: {
         enabled: true,
         distanceMm: defaultSpacing,

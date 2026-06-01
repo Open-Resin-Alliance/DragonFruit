@@ -1083,6 +1083,7 @@ export const supportPainterStore = {
   pruneOrphans(regionId: string) {
     const region = regions.get(regionId);
     if (!region || !clientAdjacencyMap || region.triangleIds.size === 0) return;
+    if (region.brushType === 'MinimaIslands') return; // Exempt multi-island minima from component pruning
 
     const triangleIds = region.triangleIds;
     const seed = region.seedTriangleId;

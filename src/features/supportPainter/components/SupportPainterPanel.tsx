@@ -217,13 +217,14 @@ export function SupportPainterPanel({
     const isLineBrush = brushType === 'Ridge' || brushType === 'SoftRidge' || (
       brushType === 'PointPath' && state.pointPathMode === 'line' && !state.pointPathClosed
     );
+    const isMinimaIslands = brushType === 'MinimaIslands';
 
     return [
       {
         type: 'minima',
-        enabled: !isPointPathOrMarker && !isLineBrush,
+        enabled: isMinimaIslands || (!isPointPathOrMarker && !isLineBrush),
         suppression: {
-          enabled: true,
+          enabled: !isMinimaIslands,
           distanceMm: defaultSpacing,
           suppressAgainst: ['minima'],
         },
@@ -233,7 +234,7 @@ export function SupportPainterPanel({
       },
       {
         type: 'perimeter',
-        enabled: !isPointPathOrMarker && !isLineBrush,
+        enabled: !isMinimaIslands && !isPointPathOrMarker && !isLineBrush,
         suppression: {
           enabled: false,
           distanceMm: defaultSpacing,
@@ -247,7 +248,7 @@ export function SupportPainterPanel({
       },
       {
         type: 'infill',
-        enabled: !isLineBrush,
+        enabled: !isMinimaIslands && !isLineBrush,
         suppression: {
           enabled: true,
           distanceMm: defaultSpacing,
@@ -261,7 +262,7 @@ export function SupportPainterPanel({
       },
       {
         type: 'centerline',
-        enabled: isLineBrush,
+        enabled: !isMinimaIslands && isLineBrush,
         suppression: {
           enabled: true,
           distanceMm: defaultSpacing,
@@ -291,13 +292,14 @@ export function SupportPainterPanel({
         const isLineBrush = region.brushType === 'Ridge' || region.brushType === 'SoftRidge' || (
           region.brushType === 'PointPath' && region.brush?.parameters?.pointPathMode === 'line'
         );
+        const isMinimaIslands = region.brushType === 'MinimaIslands';
         const params = region.support.parameters;
         return [
           {
             type: 'minima',
-            enabled: !isPointPathOrMarker && !isLineBrush,
+            enabled: isMinimaIslands || (!isPointPathOrMarker && !isLineBrush),
             suppression: {
-              enabled: params.suppressionSettings?.minima?.mode !== 'none',
+              enabled: !isMinimaIslands && params.suppressionSettings?.minima?.mode !== 'none',
               distanceMm: params.minimaSuppressionRadiusMm ?? defaultSpacing,
               suppressAgainst: params.suppressionSettings?.minima?.types || ['minima'],
             },
@@ -307,9 +309,9 @@ export function SupportPainterPanel({
           },
           {
             type: 'perimeter',
-            enabled: !isPointPathOrMarker && !isLineBrush,
+            enabled: !isMinimaIslands && !isPointPathOrMarker && !isLineBrush,
             suppression: {
-              enabled: params.suppressionSettings?.perimeter?.mode !== 'none',
+              enabled: false,
               distanceMm: params.perimeterSpacingMm ?? defaultSpacing,
               suppressAgainst: params.suppressionSettings?.perimeter?.types || [],
             },
@@ -321,9 +323,9 @@ export function SupportPainterPanel({
           },
           {
             type: 'infill',
-            enabled: !isLineBrush,
+            enabled: !isMinimaIslands && !isLineBrush,
             suppression: {
-              enabled: params.suppressionSettings?.infill?.mode !== 'none',
+              enabled: true,
               distanceMm: params.infillSpacingMm ?? defaultSpacing,
               suppressAgainst: params.suppressionSettings?.infill?.types || ['minima', 'perimeter', 'infill'],
             },
@@ -335,9 +337,9 @@ export function SupportPainterPanel({
           },
           {
             type: 'centerline',
-            enabled: isLineBrush,
+            enabled: !isMinimaIslands && isLineBrush,
             suppression: {
-              enabled: params.suppressionSettings?.centerline?.mode !== 'none',
+              enabled: true,
               distanceMm: params.perimeterSpacingMm ?? defaultSpacing,
               suppressAgainst: params.suppressionSettings?.centerline?.types || ['minima', 'perimeter', 'infill', 'centerline'],
             },
@@ -401,7 +403,7 @@ export function SupportPainterPanel({
         const regionAnchors = Object.values(currentSnapshot.anchors).filter(a => a.roiId === region.id);
         const totalChildSupports = regionTrunks.length + regionBranches.length + regionLeaves.length + regionTwigs.length + regionSticks.length + regionAnchors.length;
 
-        if (totalChildSupports === 0) {
+        if (totalChildSupports === 0 && region.brushType !== 'MinimaIslands') {
           nextRegionsMap.delete(region.id);
           changed = true;
         }
@@ -460,7 +462,23 @@ export function SupportPainterPanel({
     const beforeState = getSupportsSnapshot();
     const nextState = deleteSupportsForRoi(beforeState, regionId);
     const beforeRegions = new Map(supportPainterStore.getSnapshot().regions);
+
+    // Reset completed metadata so region becomes pending/active again
+    const nextRegions = new Map(beforeRegions);
+    const region = nextRegions.get(regionId);
+    if (region) {
+      const updatedRegion = {
+        ...region,
+        support: undefined,
+        loops: undefined,
+        placedCount: undefined,
+        attemptedCount: undefined,
+      };
+      nextRegions.set(regionId, updatedRegion);
+    }
+
     setSupportSnapshot(nextState);
+    supportPainterStore.restoreRegions(nextRegions);
 
     pushHistory({
       type: SUPPORT_EDIT_REPLACE,
@@ -469,7 +487,7 @@ export function SupportPainterPanel({
         before: beforeState,
         after: nextState,
         painterRegionsBefore: beforeRegions,
-        painterRegionsAfter: beforeRegions,
+        painterRegionsAfter: nextRegions,
       },
     });
   };
