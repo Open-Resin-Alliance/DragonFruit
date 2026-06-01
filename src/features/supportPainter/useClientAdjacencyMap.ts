@@ -255,7 +255,7 @@ function getFaceCurvature(map: ClientAdjacencyMap, faceIdx: number): number {
   return maxAngle;
 }
 
-function walkMacroFace(
+export function walkMacroFace(
   map: ClientAdjacencyMap,
   seed: number,
   localUp: THREE.Vector3,
@@ -274,6 +274,7 @@ function walkMacroFace(
   const enableNormalCone = selection?.enableNormalConeLimit ?? true;
   const enableDihedral = selection?.enableDihedralLimit ?? true;
   const enableCurvature = selection?.enableCurvatureLimit ?? false;
+  const enableCenterline = selection?.enableCenterlineConstraints ?? false;
 
   // Overhang slope check for seed
   if (selection) {
@@ -287,6 +288,113 @@ function walkMacroFace(
     if (seedNormal.dot(localUp) > 0.2) return [];
   }
 
+  // Distance-to-segment squared helper
+  const getDistanceToSegmentSq = (p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number => {
+    const ab = new THREE.Vector3().subVectors(b, a);
+    const ap = new THREE.Vector3().subVectors(p, a);
+    const abLenSq = ab.lengthSq();
+    if (abLenSq < 1e-8) return p.distanceToSquared(a);
+    let t = ap.dot(ab) / abLenSq;
+    t = Math.max(0, Math.min(1, t));
+    const proj = a.clone().addScaledVector(ab, t);
+    return p.distanceToSquared(proj);
+  };
+
+  // PASS 1: Extract 1D Centerline Backbone if enabled
+  const centerlineFaces = new Set<number>([seed]);
+  const centerlineList: number[] = [seed];
+
+  if (enableCenterline) {
+    const curvLimitRad = (selection?.centerlineCurvatureLimitDeg ?? 25) * degToRad;
+
+    const traceDirection = (firstStepFace: number) => {
+      const path = [seed, firstStepFace];
+      let curr = firstStepFace;
+      let prev = seed;
+
+      while (true) {
+        const adjs = map.faceToFaces[curr] || [];
+        let bestNeighbor = -1;
+        let bestScore = -1;
+
+        const currCentroid = map.faceCentroids[curr];
+        const prevCentroid = map.faceCentroids[prev];
+        const dirPrev = new THREE.Vector3().subVectors(currCentroid, prevCentroid).normalize();
+
+        for (const adj of adjs) {
+          if (centerlineFaces.has(adj)) continue;
+          if (map.faceNormals[adj].dot(localUp) > 0.2) continue;
+
+          const nAdj = map.faceNormals[adj];
+          if (selection) {
+            if (enableSlope) {
+              const minSlopeRad = selection.overhangSlopeMinDeg * degToRad;
+              const maxSlopeRad = selection.overhangSlopeMaxDeg * degToRad;
+              const adjSlope = nAdj.angleTo(localDown);
+              if (adjSlope < minSlopeRad || adjSlope > maxSlopeRad) continue;
+            }
+          } else {
+            if (nAdj.dot(localUp) > 0.2) continue;
+          }
+
+          const adjCentroid = map.faceCentroids[adj];
+          const dirNext = new THREE.Vector3().subVectors(adjCentroid, currCentroid).normalize();
+          const alignment = dirNext.dot(dirPrev);
+
+          if (alignment > bestScore) {
+            bestScore = alignment;
+            bestNeighbor = adj;
+          }
+        }
+
+        if (bestNeighbor === -1) break;
+
+        const angle = Math.acos(Math.max(-1, Math.min(1, bestScore)));
+        if (angle > curvLimitRad) break;
+
+        path.push(bestNeighbor);
+        centerlineFaces.add(bestNeighbor);
+        prev = curr;
+        curr = bestNeighbor;
+      }
+      return path.slice(1);
+    };
+
+    const seedAdjs = map.faceToFaces[seed] || [];
+    const seedCentroid = map.faceCentroids[seed];
+    const candidateSteps = seedAdjs.filter(adj => map.faceNormals[adj].dot(localUp) <= 0.2);
+
+    if (candidateSteps.length >= 2) {
+      const stepA = candidateSteps[0];
+      const dirA = new THREE.Vector3().subVectors(map.faceCentroids[stepA], seedCentroid).normalize();
+
+      let stepB = -1;
+      let minDot = 1.0;
+      for (let i = 1; i < candidateSteps.length; i++) {
+        const adj = candidateSteps[i];
+        const dir = new THREE.Vector3().subVectors(map.faceCentroids[adj], seedCentroid).normalize();
+        const dot = dir.dot(dirA);
+        if (dot < minDot) {
+          minDot = dot;
+          stepB = adj;
+        }
+      }
+
+      if (stepB !== -1 && minDot < 0) {
+        centerlineFaces.add(stepA);
+        centerlineFaces.add(stepB);
+        const forward = traceDirection(stepA);
+        const backward = traceDirection(stepB);
+        centerlineList.unshift(...backward.reverse());
+        centerlineList.push(...forward);
+      }
+    }
+  }
+
+  // PASS 2: BFS propagation with corridor constraints
+  const widthSpreadMm = selection?.centerlineWidthSpreadMm ?? 0.3;
+  const widthSpreadMmSq = widthSpreadMm * widthSpreadMm;
+
   while (queue.length > 0) {
     const curr = queue.shift()!;
     const adjs = map.faceToFaces[curr];
@@ -294,7 +402,7 @@ function walkMacroFace(
     for (const adj of adjs) {
       if (!visited.has(adj)) {
         const nAdj = map.faceNormals[adj];
-        
+
         let slopeOk = false;
         if (selection) {
           if (enableSlope) {
@@ -310,6 +418,25 @@ function walkMacroFace(
         }
 
         if (slopeOk) {
+          // Centerline Corridor Constraint
+          if (enableCenterline) {
+            const adjCentroid = map.faceCentroids[adj];
+            let minDistSq = Infinity;
+            if (centerlineList.length >= 2) {
+              for (let j = 0; j < centerlineList.length - 1; j++) {
+                const distSq = getDistanceToSegmentSq(
+                  adjCentroid,
+                  map.faceCentroids[centerlineList[j]],
+                  map.faceCentroids[centerlineList[j + 1]]
+                );
+                if (distSq < minDistSq) minDistSq = distSq;
+              }
+            } else {
+              minDistSq = adjCentroid.distanceToSquared(map.faceCentroids[seed]);
+            }
+            if (minDistSq > widthSpreadMmSq) continue;
+          }
+
           const normalDeviation = seedNormal.angleTo(nAdj);
           const nCurr = map.faceNormals[curr];
           const edgeDihedral = nCurr.angleTo(nAdj);
@@ -341,7 +468,6 @@ function walkMacroFace(
               queue.push(adj);
             }
           } else {
-            // 35 deg = 0.61 rad, 25 deg = 0.43 rad
             if (normalDeviation < 0.61 && edgeDihedral < 0.43) {
               visited.add(adj);
               queue.push(adj);

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import * as THREE from 'three';
-import { type ClientAdjacencyMap, walkRoughEdge, walkSoftRidge } from '../useClientAdjacencyMap';
+import { type ClientAdjacencyMap, walkRoughEdge, walkSoftRidge, walkMacroFace } from '../useClientAdjacencyMap';
 import { simplifyLoopEuclidean, applyAlphaShapeToLoops } from '../supportScriptingEngine';
 
 describe('Support Painter - New Smart Brushes Unit Tests', () => {
@@ -256,6 +256,72 @@ describe('Support Painter - New Smart Brushes Unit Tests', () => {
       // Propagation should terminate immediately, selecting only the seed face!
       assert.strictEqual(selected.length, 1, 'Should terminate propagation at junction and select only the seed face');
       assert.strictEqual(selected[0], 0);
+    });
+  });
+
+  describe('MacroFace Brush with Centerline Constraints', () => {
+    it('should constrain propagation to a narrow corridor and terminate on curvature limit', () => {
+      // 3x3 grid of faces:
+      // Centroids form a cross structure:
+      // Row 0: face 0, 1, 2
+      // Row 1: face 3, 4, 5
+      // Row 2: face 6, 7, 8
+      // Seed is face 4 (center).
+      // We will trace centerline through 4, then to 3 (left) and 5 (right).
+      // If width spread is 0.3mm, and spacing is 1.0mm:
+      // Neighbors like 1 (above, distance 1.0mm) and 7 (below, distance 1.0mm) should be rejected
+      // since their distance from the centerline (4-3-5) is 1.0mm > 0.3mm.
+      const mockCorridorMap: ClientAdjacencyMap = {
+        faceCount: 9,
+        faceNormals: Array.from({ length: 9 }, () => new THREE.Vector3(0, 0, -1)),
+        faceCentroids: [
+          new THREE.Vector3(-1.0, 1.0, 0),  // 0
+          new THREE.Vector3(0.0, 1.0, 0),   // 1 (directly above 4)
+          new THREE.Vector3(1.0, 1.0, 0),   // 2
+          new THREE.Vector3(-1.0, 0.0, 0),  // 3 (left of 4)
+          new THREE.Vector3(0.0, 0.0, 0),   // 4 (seed)
+          new THREE.Vector3(1.0, 0.0, 0),   // 5 (right of 4)
+          new THREE.Vector3(-1.0, -1.0, 0), // 6
+          new THREE.Vector3(0.0, -1.0, 0),  // 7 (directly below 4)
+          new THREE.Vector3(1.0, -1.0, 0),  // 8
+        ],
+        faceZBounds: Array.from({ length: 9 }, () => ({ min: -0.1, max: 0.1 })),
+        faceToFaces: [
+          [1, 3],       // 0
+          [0, 2],       // 1
+          [1, 5],       // 2
+          [0, 4, 6, 1], // 3
+          [3, 5],       // 4 (seed only connected to 3, 5 to force horizontal centerline)
+          [2, 4, 8, 7], // 5
+          [3],          // 6
+          [5, 8],       // 7
+          [5, 7],       // 8
+        ],
+      };
+
+      const mockCustomBrush: any = {
+        selection: {
+          enableCenterlineConstraints: true,
+          centerlineWidthSpreadMm: 0.3,
+          centerlineCurvatureLimitDeg: 25,
+          enableSlopeLimit: false,
+          enableNormalConeLimit: false,
+          enableDihedralLimit: false,
+        }
+      };
+
+      const localUp = new THREE.Vector3(0, 0, 1);
+      const selected = walkMacroFace(mockCorridorMap, 4, localUp, mockCustomBrush);
+      const resultSet = new Set(selected);
+
+      // Verify that seed (4), left (3), and right (5) are selected (forming the centerline)
+      assert.ok(resultSet.has(4), 'Seed 4 should be selected');
+      assert.ok(resultSet.has(3), 'Centerline neighbor 3 should be selected');
+      assert.ok(resultSet.has(5), 'Centerline neighbor 5 should be selected');
+
+      // Verify that lateral neighbors 1 and 7 are rejected since they are 1.0mm away (> 0.3mm limit)
+      assert.ok(!resultSet.has(1), 'Lateral neighbor 1 should be rejected');
+      assert.ok(!resultSet.has(7), 'Lateral neighbor 7 should be rejected');
     });
   });
 });

@@ -76,6 +76,11 @@ export interface CustomBrushTemplate {
     // Point-path specific parameters
     pointPathWidthMm?: number;
     pointPathMode?: 'line' | 'polygon';
+
+    // Centerline constraints parameters
+    enableCenterlineConstraints?: boolean;
+    centerlineWidthSpreadMm?: number;
+    centerlineCurvatureLimitDeg?: number;
   };
 
   // Ordered operational pipeline

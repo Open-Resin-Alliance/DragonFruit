@@ -512,6 +512,59 @@ export function CustomBrushModal({
                       </div>
                     </div>
                   </div>
+
+                  {/* Centerline corridor constraints */}
+                  <div className="flex flex-col gap-4 border-t pt-4 text-xs" style={{ borderColor: 'var(--border-subtle, #2d3748)' }}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-gray-300 uppercase tracking-wider text-[10px]">Centerline Corridor Constraints</span>
+                      <input
+                        type="checkbox"
+                        checked={!!brush.selection.enableCenterlineConstraints}
+                        onChange={e => updateSelection({ enableCenterlineConstraints: e.target.checked })}
+                        className="w-3.5 h-3.5 cursor-pointer accent-accent"
+                      />
+                    </div>
+
+                    {brush.selection.enableCenterlineConstraints && (
+                      <div className="grid grid-cols-2 gap-4 animate-fade-in">
+                        <div className="flex flex-col gap-1.5">
+                          <span className="font-semibold text-gray-300">Corridor Width Spread (± mm)</span>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="range"
+                              min="0.1"
+                              max="2.0"
+                              step="0.1"
+                              value={safeNum(brush.selection.centerlineWidthSpreadMm, 0.3)}
+                              onChange={e => updateSelection({ centerlineWidthSpreadMm: parseFloat(e.target.value) })}
+                              className="flex-1 accent-accent cursor-pointer"
+                            />
+                            <span className="font-bold min-w-[32px] text-right">
+                              {safeNum(brush.selection.centerlineWidthSpreadMm, 0.3).toFixed(1)} mm
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <span className="font-semibold text-gray-300">Centerline Curvature Limit</span>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="range"
+                              min="5"
+                              max="90"
+                              step="5"
+                              value={safeNum(brush.selection.centerlineCurvatureLimitDeg, 25)}
+                              onChange={e => updateSelection({ centerlineCurvatureLimitDeg: parseInt(e.target.value) })}
+                              className="flex-1 accent-accent cursor-pointer"
+                            />
+                            <span className="font-bold min-w-[32px] text-right">
+                              {safeNum(brush.selection.centerlineCurvatureLimitDeg, 25)}°
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
