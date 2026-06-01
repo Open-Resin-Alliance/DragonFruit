@@ -1310,10 +1310,50 @@ export async function generateSupportsFromPainter(
         candidates.sort((a, b) => a.pos.z - b.pos.z);
         rawMinima.push(...candidates);
       } else if (stage.type === 'perimeter') {
-        const spine = regionSpines.get(region.id);
-        if (spine) {
-          const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
-          const samples = sampleSpineWithNormals(spine.points, spine.normals, spacing);
+        const loops = regionBoundaryLoops.get(region.id) || [];
+        
+        // 1. Alpha-Shape Envelope to bridge disjointed triangle islands
+        const alphaRadius = region.customBrush?.selection?.alphaRadiusMm ?? state.brushRadiusMm ?? 1.5;
+        const bridgedLoops = applyAlphaShapeToLoops(loops, uniqueVertices, vertexNormals, alphaRadius);
+        
+        // 2. Dynamic Euclidean Decimation Filter
+        const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
+        const tolerance = Math.max(0.5, spacing * 0.2);
+
+        const simplifiedLoops = bridgedLoops.map(loop => ({
+          ...loop,
+          vertexIds: simplifyLoopEuclidean(loop.vertexIds, uniqueVertices, tolerance),
+        }));
+
+        for (const loop of simplifiedLoops) {
+          if (loop.vertexIds.length < 2) continue;
+          let samples: BasicSampledPoint[] = [];
+
+          if (stage.spacing.useInflectionPoints) {
+            const solverMode = stage.spacing.solverMode || 'standard';
+            samples = solvePerimeterWithInflections(
+              loop.vertexIds,
+              spacing,
+              solverMode,
+              uniqueVertices,
+              vertexNormals
+            );
+          } else if (stage.spacing.sequence && stage.spacing.sequence.length > 0) {
+            samples = sampleSequencePolyline(
+              loop.vertexIds,
+              stage.spacing.sequence,
+              uniqueVertices,
+              vertexNormals
+            );
+          } else {
+            samples = samplePolylineWithNormals(
+              loop.vertexIds,
+              spacing,
+              uniqueVertices,
+              vertexNormals
+            );
+          }
+
           for (const sample of samples) {
             candidates.push({
               pos: sample.pos,
@@ -1323,62 +1363,6 @@ export async function generateSupportsFromPainter(
               regionTriCount: region.triangleIds.size,
               stage: 'perimeter',
             });
-          }
-        } else {
-          const loops = regionBoundaryLoops.get(region.id) || [];
-          
-          // 1. Alpha-Shape Envelope to bridge disjointed triangle islands
-          const alphaRadius = region.customBrush?.selection?.alphaRadiusMm ?? state.brushRadiusMm ?? 1.5;
-          const bridgedLoops = applyAlphaShapeToLoops(loops, uniqueVertices, vertexNormals, alphaRadius);
-          
-          // 2. Dynamic Euclidean Decimation Filter
-          const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
-          const tolerance = Math.max(0.5, spacing * 0.2);
-
-          const simplifiedLoops = bridgedLoops.map(loop => ({
-            ...loop,
-            vertexIds: simplifyLoopEuclidean(loop.vertexIds, uniqueVertices, tolerance),
-          }));
-
-          for (const loop of simplifiedLoops) {
-            if (loop.vertexIds.length < 2) continue;
-            let samples: BasicSampledPoint[] = [];
-
-            if (stage.spacing.useInflectionPoints) {
-              const solverMode = stage.spacing.solverMode || 'standard';
-              samples = solvePerimeterWithInflections(
-                loop.vertexIds,
-                spacing,
-                solverMode,
-                uniqueVertices,
-                vertexNormals
-              );
-            } else if (stage.spacing.sequence && stage.spacing.sequence.length > 0) {
-              samples = sampleSequencePolyline(
-                loop.vertexIds,
-                stage.spacing.sequence,
-                uniqueVertices,
-                vertexNormals
-              );
-            } else {
-              samples = samplePolylineWithNormals(
-                loop.vertexIds,
-                spacing,
-                uniqueVertices,
-                vertexNormals
-              );
-            }
-
-            for (const sample of samples) {
-              candidates.push({
-                pos: sample.pos,
-                normal: sample.normal,
-                regionId: region.id,
-                regionType: region.brushType,
-                regionTriCount: region.triangleIds.size,
-                stage: 'perimeter',
-              });
-            }
           }
         }
         rawPerimeter.push(...candidates);

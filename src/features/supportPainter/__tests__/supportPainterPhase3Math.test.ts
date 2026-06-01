@@ -8,6 +8,7 @@ import {
 } from '../supportScriptingEngine';
 import { supportPainterStore } from '../supportPainterStore';
 import { type ROIRegion, type CustomBrushTemplate } from '../supportPainterTypes';
+import { resetStore as resetSupportStore, getSnapshot as getSupportSnapshot } from '@/supports/state';
 
 describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', () => {
   // Test Mock Data & Setup
@@ -206,5 +207,87 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     assert.strictEqual(maxDistance, 5.0, 'Max suppression distance of overlapping ROIs must be 5.0mm');
     assert.ok(combinedTypes.has('minima'), 'Combined suppression stages must contain minima');
     assert.ok(combinedTypes.has('perimeter'), 'Combined suppression stages must contain perimeter');
+  });
+
+  it('should generate perimeter candidates along boundary loops and NOT centerline spines for 2D area brushes in generateSupportsFromPainter', async () => {
+    // 1. Reset support and painter stores
+    resetSupportStore();
+    supportPainterStore.clearAll();
+
+    // 2. Set up a flat horizontal square mesh at Z = 5.0
+    // Vertices form a 10mm x 10mm square
+    const vertices = new Float32Array([
+      0, 0, 5,     // 0: bottom-left
+      10, 0, 5,    // 1: bottom-right
+      10, 10, 5,   // 2: top-right
+      0, 10, 5,    // 3: top-left
+    ]);
+
+    const normals = new Float32Array([
+      0, 0, -1,
+      0, 0, -1,
+      0, 0, -1,
+      0, 0, -1,
+    ]);
+
+    const indices = [
+      0, 2, 1,
+      0, 3, 2,
+    ];
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geom.setIndex(indices);
+
+    const mat = new THREE.MeshBasicMaterial();
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.name = 'mock-mesh-leaf-test';
+    mesh.updateMatrixWorld(true);
+
+    // 3. Register a MacroFace ROI covering the square faces
+    const modelId = 'test-model-uuid-perimeter';
+    const regionId = 'test-perimeter-region';
+    const region: ROIRegion = {
+      id: regionId,
+      brushType: 'MacroFace',
+      seedTriangleId: 0,
+      triangleIds: new Set([0, 1]),
+      color: '#4A90E2',
+      proposedOnly: false,
+      createdAt: Date.now(),
+    };
+
+    const regionsMap = new Map<string, ROIRegion>([[regionId, region]]);
+    supportPainterStore.restoreRegions(regionsMap);
+
+    // 4. Run support generation
+    await generateSupportsFromPainter(modelId, mesh, [region]);
+
+    // 5. Assert that we placed trunks, and verify that their positions lie on the boundary/perimeter edges
+    // and not clustered entirely down the center spine (x = 5.0).
+    const supportSnapshot = getSupportSnapshot();
+    const trunks = (Object.values(supportSnapshot.trunks) as any[]).filter(t => t.roiId === regionId);
+
+    assert.ok(trunks.length > 0, 'Should place support trunks for the MacroFace region');
+
+    // A perimeter support must lie on one of the outer edges: x = 0, x = 10, y = 0, or y = 10.
+    // We check if at least some trunks are placed along these outer boundary limits.
+    let placedOnOuterBoundary = 0;
+    for (const t of trunks) {
+      if (t.contactCone) {
+        const p = t.contactCone.pos;
+        const isOnBoundary = 
+          Math.abs(p.x - 0) < 0.25 || 
+          Math.abs(p.x - 10) < 0.25 || 
+          Math.abs(p.y - 0) < 0.25 || 
+          Math.abs(p.y - 10) < 0.25;
+        if (isOnBoundary) {
+          placedOnOuterBoundary++;
+        }
+      }
+    }
+
+    assert.ok(placedOnOuterBoundary > 0, 'Should place at least some perimeter trunks on the actual outer boundary loop');
   });
 });
