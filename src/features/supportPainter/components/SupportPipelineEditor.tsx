@@ -261,18 +261,10 @@ export function SupportPipelineEditor({
                           <div className="flex items-center gap-1.5 justify-between w-full">
                             <span className="flex items-center gap-1">
                               {op.enableZHeightDensity
-                                ? 'Starting Spacing (Dense Zone) (mm)'
+                                ? 'Base Spacing (mm) [Managed by Z-Density]'
                                 : op.type === 'minima' && op.spacing.attemptLeafCreation
                                   ? 'Leaf Search Interval (mm)'
                                   : 'Base Spacing (mm)'}
-                              {op.enableZHeightDensity && (
-                                <span className="group relative cursor-pointer text-accent hover:opacity-85">
-                                  <Info className="w-3.5 h-3.5" />
-                                  <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-48 hidden group-hover:block bg-black/90 text-white text-[9px] p-2 rounded shadow-lg z-10 font-normal leading-relaxed border border-gray-700">
-                                    Controls the dense support spacing near the Z-minima. As height increases up to the Z End Interval, spacing scales up by the Z-Factor.
-                                  </span>
-                                </span>
-                              )}
                             </span>
                             {compOp && compOp.spacing.baseSpacingMm !== op.spacing.baseSpacingMm && (
                               <span className="text-[9px] text-[#A5A6B5] font-semibold bg-black/35 px-1.5 py-0.5 rounded">
@@ -284,6 +276,7 @@ export function SupportPipelineEditor({
                             type="number"
                             step="0.1"
                             min="0.5"
+                            disabled={op.enableZHeightDensity}
                             value={isNaN(op.spacing.baseSpacingMm) ? '' : op.spacing.baseSpacingMm}
                             onChange={e => {
                               const val = parseFloat(e.target.value);
@@ -295,7 +288,7 @@ export function SupportPipelineEditor({
                                 }
                               });
                             }}
-                            className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                            className="px-2.5 py-1.5 rounded border font-medium outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                             style={{
                               background: 'var(--surface-1, #151a22)',
                               borderColor: 'var(--border-subtle, #2d3748)',
@@ -636,8 +629,41 @@ export function SupportPipelineEditor({
                       
                       {op.enableZHeightDensity && (
                         <div className="grid grid-cols-2 gap-3 mt-1 animate-fade-in">
+                          <div className="col-span-2 flex flex-col gap-1">
+                            <span className="flex items-center gap-1">
+                              Starting Spacing (Dense Zone) (mm)
+                              <span className="group relative cursor-pointer text-accent hover:opacity-85">
+                                <Info className="w-3.5 h-3.5" />
+                                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-48 hidden group-hover:block bg-black/90 text-white text-[9px] p-2 rounded shadow-lg z-10 font-normal leading-relaxed border border-gray-700">
+                                  Controls the dense support spacing near the Z-minima. As height increases up to the Z End Offset, spacing scales up by the Z-Factor.
+                                </span>
+                              </span>
+                            </span>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0.5"
+                              value={isNaN(op.spacing.baseSpacingMm) ? '' : op.spacing.baseSpacingMm}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateOp(index, {
+                                  isIntervalDirectlyEdited: true,
+                                  spacing: {
+                                    ...op.spacing,
+                                    baseSpacingMm: isNaN(val) ? 0 : val,
+                                  }
+                                });
+                              }}
+                              className="px-2.5 py-1.5 rounded border font-medium outline-none"
+                              style={{
+                                background: 'var(--surface-1, #151a22)',
+                                borderColor: 'var(--border-subtle, #2d3748)',
+                              }}
+                            />
+                          </div>
+
                           <div className="flex flex-col gap-1">
-                            <span>Minima Start Interval (mm)</span>
+                            <span>Dense Zone Height / Z Start Offset (mm)</span>
                             <input
                               type="number"
                               step="0.1"
@@ -659,7 +685,7 @@ export function SupportPipelineEditor({
                           </div>
                           
                           <div className="flex flex-col gap-1">
-                            <span>Minima End Interval (mm / auto)</span>
+                            <span>Transition End Height / Z End Offset (mm / auto)</span>
                             <input
                               type="text"
                               value={op.minimaEndInterval ?? 'auto'}

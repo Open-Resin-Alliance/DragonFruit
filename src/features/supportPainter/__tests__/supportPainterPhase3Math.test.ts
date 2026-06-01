@@ -441,4 +441,26 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     assert.ok(defaultPipeline.some(op => op.type === 'infill'));
     assert.ok(defaultPipeline.some(op => op.type === 'centerline'));
   });
+
+  it('should calculate overall region Z bounds correctly and scale Z-density spacing without Alpha-Shape bridging', () => {
+    // Verify Z-density calculations scale correctly using simulated region Z bounds
+    const op: any = {
+      type: 'perimeter',
+      enableZHeightDensity: true,
+      minimaStartInterval: 0.5,
+      minimaEndInterval: 4.0,
+      zFactor: 2.0,
+      zFactorCurve: 'linear',
+      spacing: { baseSpacingMm: 2.0 }
+    };
+    
+    // Z span is 10.0mm (from Z=0 to Z=10)
+    // zStart = 0.5mm, zEnd = Math.min(4.0, 10.0) = 4.0mm
+    // At point Z = 2.25mm: zRel = 2.25 - 0 = 2.25mm
+    // t = (2.25 - 0.5) / (4.0 - 0.5) = 1.75 / 3.5 = 0.5
+    // scaleFactor = 1.0 + 0.5 * (2.0 - 1.0) = 1.5
+    // expectedSpacing = 2.0 * 1.5 = 3.0mm
+    const spacing = calculateZHeightDensitySpacing(2.25, 0.0, 10.0, op, 1.0);
+    assert.strictEqual(spacing, 3.0);
+  });
 });

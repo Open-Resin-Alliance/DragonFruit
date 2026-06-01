@@ -1435,6 +1435,21 @@ export async function generateSupportsFromPainter(
 
     if (!combinedEnabled) return false;
 
+    const getRegionZBounds = (r: ROIRegion): { minZ: number; maxZ: number } => {
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      if (r.triangleIds && r.triangleIds.size > 0) {
+        for (const triId of r.triangleIds) {
+          const tri = triangles[triId];
+          if (!tri) continue;
+          minZ = Math.min(minZ, tri.v0.z, tri.v1.z, tri.v2.z);
+          maxZ = Math.max(maxZ, tri.v0.z, tri.v1.z, tri.v2.z);
+        }
+      }
+      if (minZ === Infinity) return { minZ: 0.0, maxZ: 1.0 };
+      return { minZ, maxZ };
+    };
+
     for (const acc of accepted) {
       if (combinedTypes.has(acc.stage)) {
         if (combinedMode === 'all' || (combinedMode === 'current' && acc.regionId === cand.regionId)) {
@@ -1442,6 +1457,23 @@ export async function generateSupportsFromPainter(
           if (cand.regionType === 'RoughEdge' || acc.regionType === 'RoughEdge' ||
               cand.regionType === 'SoftRidge' || acc.regionType === 'SoftRidge') {
             effectiveRadius = Math.max(effectiveRadius, trunkWidth * 3.0);
+          } else {
+            // Apply Z-density dynamic scaling to suppression distance if enabled
+            const op = region.customBrush?.operations?.find(o => o.type === cand.stage && o.enabled);
+            if (op && op.enableZHeightDensity) {
+              const { minZ, maxZ } = getRegionZBounds(region);
+              const preset = op.supportPresetId ? getPresetById(op.supportPresetId) : undefined;
+              const opTrunkWidth = preset ? preset.settings.shaft.diameterMm : getSettings().shaft.diameterMm;
+              
+              const baseOp = {
+                ...op,
+                spacing: {
+                  ...op.spacing,
+                  baseSpacingMm: maxDistance,
+                }
+              };
+              effectiveRadius = calculateZHeightDensitySpacing(cand.pos.z, minZ, maxZ, baseOp, opTrunkWidth);
+            }
           }
 
           if (distance2D(cand.pos, acc.pos) < effectiveRadius) {
@@ -1458,6 +1490,20 @@ export async function generateSupportsFromPainter(
   for (const region of regions) {
     const vertexNormals = regionVertexNormals.get(region.id);
     if (!vertexNormals) continue;
+
+    // Scan all vertices of the region's triangles to find absolute ROI Z span boundaries once per region
+    let regionMinZ = Infinity;
+    let regionMaxZ = -Infinity;
+    if (region.triangleIds && region.triangleIds.size > 0) {
+      for (const triId of region.triangleIds) {
+        const tri = triangles[triId];
+        if (!tri) continue;
+        regionMinZ = Math.min(regionMinZ, tri.v0.z, tri.v1.z, tri.v2.z);
+        regionMaxZ = Math.max(regionMaxZ, tri.v0.z, tri.v1.z, tri.v2.z);
+      }
+    }
+    if (regionMinZ === Infinity) regionMinZ = 0.0;
+    if (regionMaxZ === -Infinity) regionMaxZ = 1.0;
 
     const pipeline: {
       type: 'minima' | 'perimeter' | 'infill' | 'centerline';
@@ -1560,9 +1606,8 @@ export async function generateSupportsFromPainter(
       } else if (stage.type === 'perimeter') {
         const loops = regionBoundaryLoops.get(region.id) || [];
         
-        // 1. Alpha-Shape Envelope to bridge disjointed triangle islands
-        const alphaRadius = region.customBrush?.selection?.alphaRadiusMm ?? state.brushRadiusMm ?? 1.5;
-        const bridgedLoops = applyAlphaShapeToLoops(loops, uniqueVertices, vertexNormals, alphaRadius);
+        // 1. Alpha-Shape Envelope bypassed to preserve high-fidelity boundaries and prevent air bridging
+        const bridgedLoops = loops;
         
         // 2. Dynamic Euclidean Decimation Filter
         const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
@@ -1633,19 +1678,12 @@ export async function generateSupportsFromPainter(
           const simplifiedIndices = simplifyLoopEuclidean(loopIndices, uniqueVertices, tolerance);
           let samples: BasicSampledPoint[] = [];
 
-          // Setup Z-height density spacing parameters lookup
+          // Setup Z-height density spacing parameters lookup windowed/normalized to region Z bounds
           let zDensityParams: any = undefined;
           if ((stage as any).enableZHeightDensity) {
-            let minZ = Infinity;
-            let maxZ = -Infinity;
-            for (const idx of loop.vertexIds) {
-              const pt = uniqueVertices[idx];
-              if (pt.z < minZ) minZ = pt.z;
-              if (pt.z > maxZ) maxZ = pt.z;
-            }
             zDensityParams = {
-              minimaZ: minZ,
-              maximaZ: maxZ,
+              minimaZ: regionMinZ,
+              maximaZ: regionMaxZ,
               op: stage,
               activeTrunkDiameter: activeTrunkDiameter || 1.0,
             };
@@ -1725,18 +1763,12 @@ export async function generateSupportsFromPainter(
               normsB.push(spine.normals[j]);
             }
 
-            // Setup Z-height density spacing parameters lookup
+            // Setup Z-height density spacing parameters lookup windowed/normalized to region Z bounds
             let zDensityParams: any = undefined;
             if ((stage as any).enableZHeightDensity) {
-              let minZ = Infinity;
-              let maxZ = -Infinity;
-              for (const pt of spine.points) {
-                if (pt.z < minZ) minZ = pt.z;
-                if (pt.z > maxZ) maxZ = pt.z;
-              }
               zDensityParams = {
-                minimaZ: minZ,
-                maximaZ: maxZ,
+                minimaZ: regionMinZ,
+                maximaZ: regionMaxZ,
                 op: stage,
                 activeTrunkDiameter: activeTrunkDiameter || 1.0,
               };
@@ -1752,18 +1784,12 @@ export async function generateSupportsFromPainter(
               samples.push(...samplesB.slice(1));
             }
           } else {
-            // Setup Z-height density spacing parameters lookup
+            // Setup Z-height density spacing parameters lookup windowed/normalized to region Z bounds
             let zDensityParams: any = undefined;
             if ((stage as any).enableZHeightDensity) {
-              let minZ = Infinity;
-              let maxZ = -Infinity;
-              for (const pt of spine.points) {
-                if (pt.z < minZ) minZ = pt.z;
-                if (pt.z > maxZ) maxZ = pt.z;
-              }
               zDensityParams = {
-                minimaZ: minZ,
-                maximaZ: maxZ,
+                minimaZ: regionMinZ,
+                maximaZ: regionMaxZ,
                 op: stage,
                 activeTrunkDiameter: activeTrunkDiameter || 1.0,
               };
