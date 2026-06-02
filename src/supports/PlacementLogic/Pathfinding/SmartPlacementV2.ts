@@ -28,6 +28,7 @@ import { gridAStar, type GridAStarDebugSnapshot, type WarmStartState } from './G
 import type { SupportOccupancy } from './SupportOccupancy';
 import {
     getSupportPathfindingDebugEnabled,
+    getSupportPathfindingDebugTuningEnabled,
     setSupportPathfindingDebugSnapshot,
     type SupportPathfindingDebugEvent,
     type SupportPathfindingDebugOutcome,
@@ -71,7 +72,7 @@ const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 
 // Global standoff distance from model geometry to reduce resin overexposure
 // fusion risk when supports are placed close to surfaces.
-const COLLISION_AVOIDANCE_MM = 0.8;
+const COLLISION_AVOIDANCE_MM = 0.48;
 
 /** Number of XY perimeter samples around the roots cone at each height slice. */
 const ROOTS_DISK_PERIMETER_SAMPLES = 16;
@@ -85,9 +86,9 @@ const CONTACT_CONE_TIP_IGNORE_MM = 0.25;
 const CONTACT_CONE_COLLISION_SAMPLE_STEP_MM = 0.2;
 
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
-const MIN_ROUTING_SEARCH_LATERAL_MM = 60;
-const MAX_ROUTING_SEARCH_LATERAL_MM = 120;
-const ROUTING_SEARCH_LATERAL_PER_VERTICAL_MM = 3.0;
+const MIN_ROUTING_SEARCH_LATERAL_MM = 72;
+const MAX_ROUTING_SEARCH_LATERAL_MM = 144;
+const ROUTING_SEARCH_LATERAL_PER_VERTICAL_MM = 3.6;
 const ROUTING_SEARCH_SWEEP_RADII_MM = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30, 36, 44, 52, 60, 72, 84, 96, 108];
 const STRAIGHT_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4];
 const STRAIGHT_SOCKET_RESCUE_DIRECTIONS = 16;
@@ -98,8 +99,8 @@ const MIXED_SOCKET_RESCUE_JOINT_DIRECTIONS = 12;
 const MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM = 2.0;
 const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM = [0, 0.5, 1, 1.5, 2.2, 3.0, 3.8];
 const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_Z_STEP_MM = 1.0;
-const BASE_WIDE_PASS_EXPANSIONS_AT_2MM = 600;
-const BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM = 250;
+const BASE_WIDE_PASS_EXPANSIONS_AT_2MM = 810;
+const BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM = 338;
 const ENABLE_AGGRESSIVE_POST_PATH_STRAIGHTENING = false;
 
 // Cone rescue scoring is intentionally biased toward preserving a short,
@@ -112,11 +113,71 @@ const CONTACT_CONE_ANGLE_WEIGHT = 0.04;
 const CONTACT_CONE_ANGLE_OVER_45_WEIGHT = 0.18;
 const CONTACT_CONE_WORSENING_WEIGHT = 0.16;
 const CONTACT_CONE_WORSENING_OVER_45_WEIGHT = 0.3;
-const CONTACT_CONE_MAX_STRETCH_RATIO = 0.40;
+const CONTACT_CONE_MAX_STRETCH_RATIO = 0.52;
 const CONTACT_DISK_IDEAL_DIRECTION_DEVIATION_DEG = 20;
 const CONTACT_DISK_DIRECTION_DEVIATION_WEIGHT = 0.06;
 const CONTACT_DISK_DIRECTION_DEVIATION_QUADRATIC_WEIGHT = 0.04;
-const CONTACT_DISK_MAX_CONE_AXIS_ANGLE_DEG = 70;
+const CONTACT_DISK_MAX_CONE_AXIS_ANGLE_DEG = 78;
+
+interface DebugAutoTuneProfile {
+    envelopeLateralScale: number;
+    rescueRadiusScale: number;
+    coneSeedLateralScale: number;
+    fineExpansionScale: number;
+    wideExpansionScale: number;
+    collisionAvoidanceScale: number;
+    maxSegmentAngleBonusDeg: number;
+    minRoutingZSpanScale: number;
+    coneStretchRatioScale: number;
+    coneAxisAngleBonusDeg: number;
+}
+
+const DEFAULT_PATHFINDING_PROFILE: DebugAutoTuneProfile = {
+    envelopeLateralScale: 1,
+    rescueRadiusScale: 1,
+    coneSeedLateralScale: 1,
+    fineExpansionScale: 1,
+    wideExpansionScale: 1,
+    collisionAvoidanceScale: 1,
+    maxSegmentAngleBonusDeg: 0,
+    minRoutingZSpanScale: 1,
+    coneStretchRatioScale: 1,
+    coneAxisAngleBonusDeg: 0,
+};
+
+const EXTRA_DEBUG_TUNE_PROFILE: DebugAutoTuneProfile = {
+    envelopeLateralScale: 1.1,
+    rescueRadiusScale: 1.1,
+    coneSeedLateralScale: 1.1,
+    fineExpansionScale: 1.2,
+    wideExpansionScale: 1.15,
+    collisionAvoidanceScale: 0.85,
+    maxSegmentAngleBonusDeg: 2,
+    minRoutingZSpanScale: 0.85,
+    coneStretchRatioScale: 1.15,
+    coneAxisAngleBonusDeg: 4,
+};
+
+interface ConeAutoTuneProfile {
+    stretchRatioScale: number;
+    axisAngleBonusDeg: number;
+}
+
+function combineDebugAutoTuneProfiles(base: DebugAutoTuneProfile, extra?: DebugAutoTuneProfile | null): DebugAutoTuneProfile {
+    if (!extra) return base;
+    return {
+        envelopeLateralScale: base.envelopeLateralScale * extra.envelopeLateralScale,
+        rescueRadiusScale: base.rescueRadiusScale * extra.rescueRadiusScale,
+        coneSeedLateralScale: base.coneSeedLateralScale * extra.coneSeedLateralScale,
+        fineExpansionScale: base.fineExpansionScale * extra.fineExpansionScale,
+        wideExpansionScale: base.wideExpansionScale * extra.wideExpansionScale,
+        collisionAvoidanceScale: base.collisionAvoidanceScale * extra.collisionAvoidanceScale,
+        maxSegmentAngleBonusDeg: base.maxSegmentAngleBonusDeg + extra.maxSegmentAngleBonusDeg,
+        minRoutingZSpanScale: base.minRoutingZSpanScale * extra.minRoutingZSpanScale,
+        coneStretchRatioScale: base.coneStretchRatioScale * extra.coneStretchRatioScale,
+        coneAxisAngleBonusDeg: base.coneAxisAngleBonusDeg + extra.coneAxisAngleBonusDeg,
+    };
+}
 
 function buildUnitCircleDirections(count: number): Array<{ x: number; y: number }> {
     const directions: Array<{ x: number; y: number }> = [];
@@ -183,6 +244,34 @@ export function getSmartPlacementV2SearchEnvelope(args: {
     return {
         maxTotalLateralMm,
         rescueSweepRadiiMm,
+    };
+}
+
+function applyDebugTunedSearchEnvelope(
+    envelope: SmartPlacementV2SearchEnvelope,
+    tuning: DebugAutoTuneProfile | null,
+): SmartPlacementV2SearchEnvelope {
+    if (!tuning) return envelope;
+
+    const tunedMaxLateral = Math.min(
+        MAX_ROUTING_SEARCH_LATERAL_MM,
+        Math.round(envelope.maxTotalLateralMm * tuning.envelopeLateralScale * 2) / 2,
+    );
+    const tunedRescueRadii = ROUTING_SEARCH_SWEEP_RADII_MM
+        .map((radius) => Math.round(radius * tuning.rescueRadiusScale * 2) / 2)
+        .filter((radius, index, arr) => radius > 0 && arr.indexOf(radius) === index)
+        .filter((radius) => radius < tunedMaxLateral - 0.000001);
+
+    if (
+        tunedRescueRadii.length === 0
+        || Math.abs(tunedRescueRadii[tunedRescueRadii.length - 1] - tunedMaxLateral) > 0.000001
+    ) {
+        tunedRescueRadii.push(tunedMaxLateral);
+    }
+
+    return {
+        maxTotalLateralMm: tunedMaxLateral,
+        rescueSweepRadiiMm: tunedRescueRadii,
     };
 }
 
@@ -288,8 +377,9 @@ function getContactConeRescuePenaltyMetrics(args: {
     socketPos: Vec3;
     coneScoring: ContactConeRescueScoringInput;
     reference?: Pick<ContactConeRescuePenaltyMetrics, 'lengthMm' | 'angleFromSurfaceNormalDeg' | 'axis'>;
+    tuning?: ConeAutoTuneProfile | null;
 }): ContactConeRescuePenaltyMetrics {
-    const { socketPos, coneScoring, reference } = args;
+    const { socketPos, coneScoring, reference, tuning } = args;
     const surfaceNormal = normalizeVectorOrFallback(
         new THREE.Vector3(coneScoring.tipNormal.x, coneScoring.tipNormal.y, coneScoring.tipNormal.z),
         new THREE.Vector3(0, 0, 1),
@@ -352,6 +442,9 @@ function getContactConeRescuePenaltyMetrics(args: {
         directionDeviationOverIdealDeg * CONTACT_DISK_DIRECTION_DEVIATION_WEIGHT
         + directionDeviationOverIdealDeg * directionDeviationOverIdealDeg * CONTACT_DISK_DIRECTION_DEVIATION_QUADRATIC_WEIGHT;
 
+    const stretchRatioScale = tuning?.stretchRatioScale ?? 1;
+    const axisAngleBonusDeg = tuning?.axisAngleBonusDeg ?? 0;
+
     return {
         axis: { x: finalAxis.x, y: finalAxis.y, z: finalAxis.z },
         lengthMm: coneLengthMm,
@@ -359,9 +452,9 @@ function getContactConeRescuePenaltyMetrics(args: {
         angleFromSurfaceNormalDeg,
         addedLengthMm,
         directionDeviationDeg,
-        exceedsStretchLimit: addedLengthMm > referenceLengthMm * CONTACT_CONE_MAX_STRETCH_RATIO + 0.000001,
+        exceedsStretchLimit: addedLengthMm > referenceLengthMm * CONTACT_CONE_MAX_STRETCH_RATIO * stretchRatioScale + 0.000001,
         exceedsDiskAngleLimit: coneScoring.tipProfile.type === 'disk'
-            && angleFromSurfaceNormalDeg > CONTACT_DISK_MAX_CONE_AXIS_ANGLE_DEG + 0.000001,
+            && angleFromSurfaceNormalDeg > CONTACT_DISK_MAX_CONE_AXIS_ANGLE_DEG + axisAngleBonusDeg + 0.000001,
     };
 }
 
@@ -490,6 +583,7 @@ function findContactConeClearSocketSeed(args: {
     maxTotalLateralMm: number;
     coneScoring: ContactConeRescueScoringInput;
     contactConeBlockedAt: ContactConeBlockedAt;
+    coneTuning?: ConeAutoTuneProfile | null;
 }): ContactConeClearSocketSeed | null {
     const candidates = buildMixedSocketRescueCandidates({
         socketPos: args.socketPos,
@@ -498,6 +592,7 @@ function findContactConeClearSocketSeed(args: {
     const baselineConePenaltyMetrics = getContactConeRescuePenaltyMetrics({
         socketPos: args.socketPos,
         coneScoring: args.coneScoring,
+        tuning: args.coneTuning,
     });
 
     let best: ContactConeClearSocketSeed | null = null;
@@ -512,6 +607,7 @@ function findContactConeClearSocketSeed(args: {
             socketPos: candidateSocketPos,
             coneScoring: args.coneScoring,
             reference: baselineConePenaltyMetrics,
+            tuning: args.coneTuning,
         });
         if (metrics.exceedsStretchLimit || metrics.exceedsDiskAngleLimit) {
             continue;
@@ -607,6 +703,7 @@ export function findMixedSocketRescueCandidate(args: {
     segmentBlockedBetween?: SegmentBlockedBetween;
     contactConeBlockedAt?: ContactConeBlockedAt;
     requireJoint?: boolean;
+    coneTuning?: ConeAutoTuneProfile | null;
 }): { socketPos: Vec3; base: ResolvedBaseCandidate; joints: Vec3[] } | null {
     const candidates = buildMixedSocketRescueCandidates({
         socketPos: args.socketPos,
@@ -615,6 +712,7 @@ export function findMixedSocketRescueCandidate(args: {
     const baselineConePenaltyMetrics = getContactConeRescuePenaltyMetrics({
         socketPos: args.socketPos,
         coneScoring: args.coneScoring,
+        tuning: args.coneTuning,
     });
     const resolvedBaseCache = new Map<string, ResolvedBaseCandidate | null>();
     const segmentBlockedCache = new Map<string, boolean>();
@@ -643,6 +741,7 @@ export function findMixedSocketRescueCandidate(args: {
             socketPos: candidateSocketPos,
             coneScoring: args.coneScoring,
             reference: baselineConePenaltyMetrics,
+            tuning: args.coneTuning,
         });
         conePenaltyCache.set(key, metrics);
         return metrics;
@@ -808,6 +907,7 @@ export function findStraightSocketRescueCandidate(args: {
     rootsDiskBlockedAt?: RootsDiskBlockedAt;
     segmentBlockedBetween?: SegmentBlockedBetween;
     contactConeBlockedAt?: ContactConeBlockedAt;
+    coneTuning?: ConeAutoTuneProfile | null;
 }): { socketPos: Vec3; base: ResolvedBaseCandidate } | null {
     const candidates = buildStraightSocketRescueCandidates({
         socketPos: args.socketPos,
@@ -817,6 +917,7 @@ export function findStraightSocketRescueCandidate(args: {
         ? getContactConeRescuePenaltyMetrics({
             socketPos: args.socketPos,
             coneScoring: args.coneScoring,
+            tuning: args.coneTuning,
         })
         : null;
 
@@ -853,6 +954,7 @@ export function findStraightSocketRescueCandidate(args: {
             socketPos: candidateSocketPos,
             coneScoring: args.coneScoring,
             reference: baselineConePenaltyMetrics ?? undefined,
+            tuning: args.coneTuning,
         });
         conePenaltyCache.set(key, metrics);
         return metrics;
@@ -1413,14 +1515,27 @@ export function calculateSmartPlacementV2(
     const { mesh, modelId } = input;
     const settings = getSettings();
     const shaftRadius = settings.shaft.diameterMm / 2;
-    const clearance = shaftRadius + COLLISION_AVOIDANCE_MM;
     const debugEnabled = getSupportPathfindingDebugEnabled();
+    const debugTuningEnabled = getSupportPathfindingDebugTuningEnabled();
+    const debugAutoTuneProfile = combineDebugAutoTuneProfiles(
+        DEFAULT_PATHFINDING_PROFILE,
+        debugTuningEnabled ? EXTRA_DEBUG_TUNE_PROFILE : null,
+    );
+        const debugConeTuning: ConeAutoTuneProfile | null = debugAutoTuneProfile
+            ? {
+                stretchRatioScale: debugAutoTuneProfile.coneStretchRatioScale,
+                axisAngleBonusDeg: debugAutoTuneProfile.coneAxisAngleBonusDeg,
+            }
+            : null;
+    const collisionAvoidanceMm = COLLISION_AVOIDANCE_MM * (debugAutoTuneProfile?.collisionAvoidanceScale ?? 1);
+    const clearance = shaftRadius + collisionAvoidanceMm;
     let debugPasses: GridAStarDebugSnapshot[] = [];
     const debugEvents: SupportPathfindingDebugEvent[] = [];
     let debugOutcome: SupportPathfindingDebugOutcome = {
         status: 'pending',
         reason: 'search in progress',
     };
+    const debugBlockedReasons: string[] = [];
     let debugBasePos: Vec3 | undefined;
     let debugFinalChain: Vec3[] | undefined;
     const recordDebugEvent = (event: SupportPathfindingDebugEvent): void => {
@@ -1430,9 +1545,28 @@ export function calculateSmartPlacementV2(
             debugEvents.splice(0, debugEvents.length - 24);
         }
     };
-    const setDebugOutcome = (status: SupportPathfindingDebugOutcome['status'], reason: string): void => {
+    const addBlockedReason = (reason: string): void => {
         if (!debugEnabled) return;
-        debugOutcome = { status, reason };
+        if (!reason) return;
+        if (debugBlockedReasons.includes(reason)) return;
+        debugBlockedReasons.push(reason);
+    };
+    const setDebugOutcome = (
+        status: SupportPathfindingDebugOutcome['status'],
+        reason: string,
+        blockedReasons?: string[],
+    ): void => {
+        if (!debugEnabled) return;
+        const resolvedBlockedReasons = status === 'blocked'
+            ? (blockedReasons ?? debugBlockedReasons)
+            : undefined;
+        debugOutcome = {
+            status,
+            reason,
+            blockedReasons: resolvedBlockedReasons && resolvedBlockedReasons.length > 0
+                ? [...resolvedBlockedReasons]
+                : undefined,
+        };
     };
     const rootsRadius = settings.roots.diameterMm / 2;
     const diskHeight = settings.roots.diskHeightMm;
@@ -1442,7 +1576,13 @@ export function calculateSmartPlacementV2(
     // the configured trunk angle on the resolved route.  A* exploration uses a
     // separate, more generous angle so the pathfinder can route around overhangs
     // without being artificially constrained by the same value.
-    const maxSegmentAngleFromVerticalDeg = Math.min(88, (90 - minRoutedTrunkAngleDeg) + ROUTED_DETOUR_ANGLE_SLACK_DEG);
+    const maxSegmentAngleFromVerticalDeg = Math.min(
+        89,
+        (90 - minRoutedTrunkAngleDeg)
+            + ROUTED_DETOUR_ANGLE_SLACK_DEG
+            + (debugAutoTuneProfile?.maxSegmentAngleBonusDeg ?? 0),
+    );
+    const minRoutingZSpanMm = MIN_ROUTING_Z_SPAN_MM * (debugAutoTuneProfile?.minRoutingZSpanScale ?? 1);
     // ROUTING_ANGLE_FROM_VERTICAL_DEG: generous A* budget (80°) so the pathfinder
     // can take lateral steps to navigate around overhangs. Final trunk angle is
     // validated via maxSegmentAngleFromVerticalDeg after the path is resolved.
@@ -1475,6 +1615,7 @@ export function calculateSmartPlacementV2(
                 tipNormal: input.tipNormal,
                 tipProfile: input.tipProfile,
             },
+            tuning: debugConeTuning,
         });
         setSupportPathfindingDebugSnapshot(
             {
@@ -1520,12 +1661,19 @@ export function calculateSmartPlacementV2(
         );
     };
     const isPreview = context?.isPreview ?? false;
-    let { maxTotalLateralMm, rescueSweepRadiiMm } = getSmartPlacementV2SearchEnvelope({
+    const initialSearchEnvelope = getSmartPlacementV2SearchEnvelope({
         socketPos: nominalSocketPos,
         rootTopZ,
         spacingMm: settings.grid.spacingMm,
     });
+    let {
+        maxTotalLateralMm,
+        rescueSweepRadiiMm,
+    } = applyDebugTunedSearchEnvelope(initialSearchEnvelope, debugAutoTuneProfile);
     const nominalMaxTotalLateralMm = maxTotalLateralMm;
+    const coneSeedMaxTotalLateralMm = debugAutoTuneProfile
+        ? Math.min(MAX_ROUTING_SEARCH_LATERAL_MM, Math.round(nominalMaxTotalLateralMm * debugAutoTuneProfile.coneSeedLateralScale * 2) / 2)
+        : nominalMaxTotalLateralMm;
     const rootsDiskBlockedAt = createRootsDiskBlockedMemo({
         sdf,
         diskHeight,
@@ -1542,6 +1690,15 @@ export function calculateSmartPlacementV2(
     });
 
     const coneClear = !contactConeBlockedAt(nominalSocketPos);
+    if (debugTuningEnabled) {
+        const activeTuningProfile = EXTRA_DEBUG_TUNE_PROFILE;
+        recordDebugEvent({
+            stage: 'tuning',
+            severity: 'info',
+            message: 'Extra debug tuning profile active',
+            details: `envelope×${activeTuningProfile.envelopeLateralScale.toFixed(2)} fine×${activeTuningProfile.fineExpansionScale.toFixed(2)} wide×${activeTuningProfile.wideExpansionScale.toFixed(2)} clearance×${activeTuningProfile.collisionAvoidanceScale.toFixed(2)} angle+${activeTuningProfile.maxSegmentAngleBonusDeg.toFixed(0)}deg zSpan×${activeTuningProfile.minRoutingZSpanScale.toFixed(2)}`,
+        });
+    }
     recordDebugEvent({
         stage: 'cone',
         severity: coneClear ? 'success' : 'warning',
@@ -1560,13 +1717,14 @@ export function calculateSmartPlacementV2(
 
         coneClearSocketSeedCache = findContactConeClearSocketSeed({
             socketPos: nominalSocketPos,
-            maxTotalLateralMm: nominalMaxTotalLateralMm,
+            maxTotalLateralMm: coneSeedMaxTotalLateralMm,
             coneScoring: {
                 tipPos: input.tipPos,
                 tipNormal: input.tipNormal,
                 tipProfile: input.tipProfile,
             },
             contactConeBlockedAt,
+            coneTuning: debugConeTuning,
         });
 
         return coneClearSocketSeedCache;
@@ -1602,6 +1760,7 @@ export function calculateSmartPlacementV2(
             rootsDiskBlockedAt,
             segmentBlockedBetween,
             contactConeBlockedAt,
+            coneTuning: debugConeTuning,
         });
 
         return straightRescueCache;
@@ -1646,6 +1805,7 @@ export function calculateSmartPlacementV2(
             rootsDiskBlockedAt,
             segmentBlockedBetween,
             contactConeBlockedAt,
+            coneTuning: debugConeTuning,
         });
 
         return mixedSocketRescueCache;
@@ -1683,6 +1843,7 @@ export function calculateSmartPlacementV2(
             segmentBlockedBetween,
             contactConeBlockedAt,
             requireJoint: true,
+            coneTuning: debugConeTuning,
         });
 
         return jointedMixedSocketRescueCache;
@@ -1801,11 +1962,12 @@ export function calculateSmartPlacementV2(
                 message: 'Used cone-clear socket seed',
                 details: `shift=${coneClearSeed?.socketShiftMm.toFixed(2) ?? '0.00'}mm added cone=${coneClearSeed?.addedLengthMm.toFixed(2) ?? '0.00'}mm`,
             });
-            ({ maxTotalLateralMm, rescueSweepRadiiMm } = getSmartPlacementV2SearchEnvelope({
+            const rescuedEnvelope = getSmartPlacementV2SearchEnvelope({
                 socketPos,
                 rootTopZ,
                 spacingMm: settings.grid.spacingMm,
-            }));
+            });
+            ({ maxTotalLateralMm, rescueSweepRadiiMm } = applyDebugTunedSearchEnvelope(rescuedEnvelope, debugAutoTuneProfile));
             if (!isPreview) {
                 console.log(
                     `[SmartPlacementV2] cone-clear seed — nominal=(${nominalSocketPos.x.toFixed(2)},${nominalSocketPos.y.toFixed(2)},${nominalSocketPos.z.toFixed(2)}) seed=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) addedLength=${coneClearSeed?.addedLengthMm.toFixed(2) ?? '0.00'} shift=${coneClearSeed?.socketShiftMm.toFixed(2) ?? '0.00'}`,
@@ -1813,6 +1975,8 @@ export function calculateSmartPlacementV2(
             }
         } else {
             if (isPreview) {
+                addBlockedReason('Contact cone blocked at nominal socket position');
+                addBlockedReason('No cone-clear socket seed found');
                 setDebugOutcome('blocked', 'contact cone blocked during preview');
                 recordDebugEvent({
                     stage: 'cone',
@@ -1830,6 +1994,9 @@ export function calculateSmartPlacementV2(
             if (straightRescueFallback) {
                 return straightRescueFallback;
             }
+            addBlockedReason('Contact cone blocked at nominal socket position');
+            addBlockedReason('Cone-clear socket seed search failed');
+            addBlockedReason('Socket rescue fallback failed');
             setDebugOutcome('blocked', 'contact cone blocked');
             recordDebugEvent({
                 stage: 'cone',
@@ -1884,6 +2051,8 @@ export function calculateSmartPlacementV2(
     //     This turns repeated probes at similar positions from ~600 A* expansions
     //     to a single distance check — the primary performance win for interior hovers.
     if (isNearStagnationPoint(mesh.uuid, socketPos)) {
+        addBlockedReason('Nearby stagnation cache hit');
+        setDebugOutcome('blocked', 'nearby stagnation cache');
         publishPathfindingDebugSnapshot();
         return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
     }
@@ -1892,6 +2061,8 @@ export function calculateSmartPlacementV2(
     // Uses a tighter radius (PREVIEW_EXHAUSTED_RADIUS_SQ) than true stagnation so
     // we don't block valid positions 1-2mm away from an exhausted query.
     if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos, PREVIEW_EXHAUSTED_RADIUS_SQ)) {
+        addBlockedReason('Nearby preview query already exhausted expansion budget');
+        setDebugOutcome('blocked', 'nearby preview budget exhausted');
         publishPathfindingDebugSnapshot();
         return { ...standard, error: 'COLLISION_WITH_MODEL', exhaustedBudget: true };
     }
@@ -1952,7 +2123,10 @@ export function calculateSmartPlacementV2(
         minAngleFromVerticalDeg: ROUTING_ANGLE_FROM_VERTICAL_DEG,
         occupancy: context?.occupancy,
         ignoreSupportId: context?.placingSupportId,
-        maxExpansions: scaleExpansionsForStep(context?.maxExpansions ?? 2000, FINE_ASTAR_STEP_MM),
+        maxExpansions: scaleExpansionsForStep(
+            Math.round((context?.maxExpansions ?? 2000) * (debugAutoTuneProfile?.fineExpansionScale ?? 1)),
+            FINE_ASTAR_STEP_MM,
+        ),
         stepMm: FINE_ASTAR_STEP_MM,
         goalValidator,
         // For hover preview, use endpoint-only SDF checks in the A* neighbor loop.
@@ -1999,7 +2173,7 @@ export function calculateSmartPlacementV2(
             ignoreSupportId: context?.placingSupportId,
             // Preview should remain responsive; use a smaller wide-step budget.
             maxExpansions: scaleExpansionsForStep(
-                getWidePassBaseExpansionsAt2mm(maxTotalLateralMm, isPreview),
+                Math.round(getWidePassBaseExpansionsAt2mm(maxTotalLateralMm, isPreview) * (debugAutoTuneProfile?.wideExpansionScale ?? 1)),
                 WIDE_ASTAR_STEP_MM,
             ),
             stepMm: WIDE_ASTAR_STEP_MM,
@@ -2084,6 +2258,9 @@ export function calculateSmartPlacementV2(
                 if (straightRescueFallback) {
                     return straightRescueFallback;
                 }
+                addBlockedReason('Contact cone blocked after wide-pass route resolution');
+                addBlockedReason('Socket rescue fallback failed');
+                setDebugOutcome('blocked', 'contact cone blocked after wide pass');
                 publishPathfindingDebugSnapshot();
                 return {
                     ...standard,
@@ -2488,13 +2665,15 @@ export function calculateSmartPlacementV2(
             // through a model crack — reject it rather than embed the support.
             if (_finalJoints.length >= 2) {
                 const _routingSpan = socketPos.z - _finalJoints[_finalJoints.length - 1].z;
-                if (_routingSpan < MIN_ROUTING_Z_SPAN_MM) {
+                if (_routingSpan < minRoutingZSpanMm) {
                     if (!isPreview) {
                         console.log(
-                            `[SmartPlacementV2] WIDE-STEP rejected — tight crack (routingSpan=${_routingSpan.toFixed(2)}mm < ${MIN_ROUTING_Z_SPAN_MM}mm with ${_finalJoints.length} joints)`,
+                            `[SmartPlacementV2] WIDE-STEP rejected — tight crack (routingSpan=${_routingSpan.toFixed(2)}mm < ${minRoutingZSpanMm.toFixed(2)}mm with ${_finalJoints.length} joints)`,
                         );
                     }
                     // No usable path — fall through to COLLISION_WITH_MODEL.
+                    addBlockedReason(`Routing Z span too small (${_routingSpan.toFixed(2)}mm)`);
+                    setDebugOutcome('blocked', 'wide-pass route squeezed through a crack');
                     publishPathfindingDebugSnapshot();
                     return {
                         ...standard,
@@ -2572,6 +2751,11 @@ export function calculateSmartPlacementV2(
         if (straightRescueFallback) {
             return straightRescueFallback;
         }
+        if (result.stagnated) addBlockedReason('A* stagnated before reaching root target');
+        if (result.hitExpansionLimit) addBlockedReason('A* hit expansion budget before reaching root target');
+        if (!result.reached) addBlockedReason('No valid path reached root target');
+        if (result.path.length < 2) addBlockedReason('Path result was too short to form a support chain');
+        setDebugOutcome('blocked', 'pathfinding failed to reach a valid root target');
         publishPathfindingDebugSnapshot();
         return {
             ...standard,
@@ -2653,6 +2837,8 @@ export function calculateSmartPlacementV2(
             return straightRescueFallback;
         }
         // No valid grid-snapped base found
+        addBlockedReason('No valid committed base candidate found');
+        setDebugOutcome('blocked', 'base candidate resolution failed');
         publishPathfindingDebugSnapshot();
         return {
             ...standard,
@@ -2665,6 +2851,8 @@ export function calculateSmartPlacementV2(
         if (straightRescueFallback) {
             return straightRescueFallback;
         }
+        addBlockedReason('Contact cone became blocked before commit');
+        setDebugOutcome('blocked', 'contact cone blocked before commit');
         publishPathfindingDebugSnapshot();
         return {
             ...standard,
@@ -2839,11 +3027,13 @@ export function calculateSmartPlacementV2(
     //    tight Z band near the socket — signature of squeezing through a crack.
     if (finalJoints.length >= 2) {
         const routingZSpan = socketPos.z - finalJoints[finalJoints.length - 1].z;
-        if (routingZSpan < MIN_ROUTING_Z_SPAN_MM) {
+        if (routingZSpan < minRoutingZSpanMm) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
                 return straightRescueFallback;
             }
+            addBlockedReason(`Routing joints compressed into ${routingZSpan.toFixed(2)}mm Z span`);
+            setDebugOutcome('blocked', 'route compressed into crack-like span');
             publishPathfindingDebugSnapshot();
             return {
                 ...standard,
@@ -2874,6 +3064,8 @@ export function calculateSmartPlacementV2(
             if (straightRescueFallback) {
                 return straightRescueFallback;
             }
+            addBlockedReason(`Final chain segment ${i} collides with model`);
+            setDebugOutcome('blocked', 'final chain collision check failed');
             publishPathfindingDebugSnapshot();
             return {
                 ...standard,
@@ -2886,6 +3078,9 @@ export function calculateSmartPlacementV2(
             if (straightRescueFallback) {
                 return straightRescueFallback;
             }
+            addBlockedReason(`Final chain segment ${i} violates max angle constraint`);
+            setDebugOutcome('blocked', 'final chain angle validation failed');
+            publishPathfindingDebugSnapshot();
             return {
                 ...standard,
                 error: 'COLLISION_WITH_MODEL',

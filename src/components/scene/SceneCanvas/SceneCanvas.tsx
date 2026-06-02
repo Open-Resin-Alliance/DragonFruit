@@ -131,6 +131,7 @@ import {
   getSupportPathfindingDebugState,
   subscribeToSupportPathfindingDebugState,
   toggleSupportPathfindingDebugEnabled,
+  toggleSupportPathfindingDebugTuningEnabled,
 } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
@@ -564,6 +565,7 @@ export function SceneCanvas({
     getSupportPathfindingDebugState,
   );
   const supportPathfindingDebugLastTapMsRef = React.useRef<number>(0);
+  const [showSupportPathfindingTuningSuggestions, setShowSupportPathfindingTuningSuggestions] = React.useState(false);
 
   const [isLightTheme, setIsLightTheme] = React.useState(() => {
     if (typeof window === 'undefined') return false;
@@ -3641,6 +3643,7 @@ export function SceneCanvas({
   React.useEffect(() => {
     if (mode !== 'support') {
       supportPathfindingDebugLastTapMsRef.current = 0;
+      setShowSupportPathfindingTuningSuggestions(false);
       return;
     }
 
@@ -3658,6 +3661,15 @@ export function SceneCanvas({
         || tag === 'SELECT'
       );
       if (isTypingContext) return;
+
+      const isMHotkey = event.code === 'KeyM' || event.key.toLowerCase() === 'm';
+      if (isMHotkey && supportPathfindingDebugState.enabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSupportPathfindingDebugTuningEnabled();
+        setShowSupportPathfindingTuningSuggestions((prev) => !prev);
+        return;
+      }
 
       const isJHotkey = event.code === 'KeyJ' || event.key.toLowerCase() === 'j';
       if (!isJHotkey) return;
@@ -3678,7 +3690,12 @@ export function SceneCanvas({
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [mode]);
+  }, [mode, supportPathfindingDebugState.enabled]);
+
+  React.useEffect(() => {
+    if (supportPathfindingDebugState.enabled) return;
+    setShowSupportPathfindingTuningSuggestions(false);
+  }, [supportPathfindingDebugState.enabled]);
 
   // Handle canvas background clicks (deselect support)
   const handleCanvasClick = React.useCallback(
@@ -6347,7 +6364,11 @@ export function SceneCanvas({
       </Canvas>
 
       {mode === 'support' && supportPathfindingDebugState.enabled && (
-        <SupportPathfindingDebugHud snapshot={supportPathfindingDebugState.snapshot} />
+        <SupportPathfindingDebugHud
+          snapshot={supportPathfindingDebugState.snapshot}
+          showTuningSuggestions={showSupportPathfindingTuningSuggestions}
+          tuningApplied={supportPathfindingDebugState.tuningEnabled}
+        />
       )}
 
       <SceneMoodOverlay />

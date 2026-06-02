@@ -41,6 +41,7 @@ export interface SupportPathfindingSearchDebugEnvelope {
 export interface SupportPathfindingDebugOutcome {
     status: 'pending' | 'placed' | 'straight' | 'routed' | 'fallback' | 'blocked' | 'preview';
     reason: string;
+    blockedReasons?: string[];
 }
 
 export interface SupportPathfindingDebugSnapshot {
@@ -61,11 +62,13 @@ export interface SupportPathfindingDebugSnapshot {
 
 interface SupportPathfindingDebugState {
     enabled: boolean;
+    tuningEnabled: boolean;
     snapshot: SupportPathfindingDebugSnapshot | null;
 }
 
 let state: SupportPathfindingDebugState = {
     enabled: false,
+    tuningEnabled: false,
     snapshot: null,
 };
 
@@ -93,6 +96,7 @@ export function setSupportPathfindingDebugEnabled(enabled: boolean): void {
     state = {
         ...state,
         enabled,
+        tuningEnabled: enabled ? state.tuningEnabled : false,
         snapshot: enabled ? state.snapshot : null,
     };
     emit();
@@ -100,6 +104,24 @@ export function setSupportPathfindingDebugEnabled(enabled: boolean): void {
 
 export function toggleSupportPathfindingDebugEnabled(): void {
     setSupportPathfindingDebugEnabled(!state.enabled);
+}
+
+export function getSupportPathfindingDebugTuningEnabled(): boolean {
+    return state.enabled && state.tuningEnabled;
+}
+
+export function setSupportPathfindingDebugTuningEnabled(enabled: boolean): void {
+    if (!state.enabled) return;
+    if (state.tuningEnabled === enabled) return;
+    state = {
+        ...state,
+        tuningEnabled: enabled,
+    };
+    emit();
+}
+
+export function toggleSupportPathfindingDebugTuningEnabled(): void {
+    setSupportPathfindingDebugTuningEnabled(!state.tuningEnabled);
 }
 
 export function setSupportPathfindingDebugSnapshot(snapshot: SupportPathfindingDebugSnapshot | null): void {

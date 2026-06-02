@@ -99,7 +99,76 @@ function severityColor(severity: 'info' | 'success' | 'warning' | 'error'): stri
   return '#bfdbfe';
 }
 
-export function SupportPathfindingDebugHud({ snapshot }: { snapshot: SupportPathfindingDebugSnapshot | null }) {
+function buildTuningSuggestions(snapshot: SupportPathfindingDebugSnapshot): string[] {
+  const suggestions: string[] = [];
+  const seen = new Set<string>();
+  const blockedReasons = snapshot.outcome?.blockedReasons ?? [];
+  const lowerReasons = blockedReasons.map((reason) => reason.toLowerCase());
+
+  const hasReason = (needle: string) => lowerReasons.some((reason) => reason.includes(needle));
+  const pushSuggestion = (text: string) => {
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    suggestions.push(text);
+  };
+
+  if (hasReason('contact cone blocked') || hasReason('cone-clear socket seed')) {
+    pushSuggestion('Expand cone-clear seed search (more angular samples and slightly larger lateral seed radius).');
+    pushSuggestion('Relax cone rescue limits a bit (disk-angle/cone-stretch) for hard overhang starts.');
+  }
+
+  if (hasReason('socket rescue fallback failed')) {
+    pushSuggestion('Increase mixed/straight socket rescue sweep radii and retry count.');
+  }
+
+  if (hasReason('stagnation') || hasReason('stagnated')) {
+    pushSuggestion('Increase lateral envelope (maxTotalLateralMm) to escape local cavities before declaring stagnation.');
+  }
+
+  if (hasReason('expansion budget') || snapshot.passes.some((pass) => pass.hitExpansionLimit)) {
+    pushSuggestion('Raise A* expansion budgets (fine/wide) or trigger wide-step fallback earlier.');
+  }
+
+  if (hasReason('no valid path reached root target')) {
+    pushSuggestion('Increase rescue radii coverage and allow a slightly wider routing angle envelope.');
+  }
+
+  if (hasReason('no valid committed base candidate') || hasReason('base candidate resolution failed')) {
+    pushSuggestion('Loosen base resolution constraints (node search rings / snap tolerance) near reachable root targets.');
+  }
+
+  if (hasReason('too short to form a support chain') || hasReason('path result was too short')) {
+    pushSuggestion('Adjust short-path acceptance threshold to keep valid micro-routes that pass collision checks.');
+  }
+
+  if (hasReason('compressed') || hasReason('z span')) {
+    pushSuggestion('Lower crack-rejection strictness (MIN_ROUTING_Z_SPAN_MM) incrementally for tight-but-valid routes.');
+  }
+
+  if (hasReason('violates max angle') || hasReason('angle validation')) {
+    pushSuggestion('Slightly relax max segment angle-from-vertical for routed supports only (keep final collision checks strict).');
+  }
+
+  if (hasReason('segment') && hasReason('collides')) {
+    pushSuggestion('If failures are near-surface only, reduce clearance margin slightly or improve segment simplification heuristics.');
+  }
+
+  if (suggestions.length === 0 && snapshot.outcome?.status === 'blocked') {
+    pushSuggestion('Collect a few blocked snapshots and tune the dominant reason cluster first (cone, search budget, or quality gate).');
+  }
+
+  return suggestions;
+}
+
+export function SupportPathfindingDebugHud({
+  snapshot,
+  showTuningSuggestions = false,
+  tuningApplied = false,
+}: {
+  snapshot: SupportPathfindingDebugSnapshot | null;
+  showTuningSuggestions?: boolean;
+  tuningApplied?: boolean;
+}) {
   if (!snapshot) return null;
 
   const passLines = snapshot.passes.map((pass) => {
@@ -113,6 +182,8 @@ export function SupportPathfindingDebugHud({ snapshot }: { snapshot: SupportPath
   const latestEvents = (snapshot.events ?? []).slice(-8);
   const cone = snapshot.cone;
   const outcome = snapshot.outcome;
+  const blockedReasons = outcome?.status === 'blocked' ? (outcome.blockedReasons ?? []) : [];
+  const tuningSuggestions = showTuningSuggestions ? buildTuningSuggestions(snapshot) : [];
   const socketShift = snapshot.nominalSocketPos
     ? Math.hypot(
       snapshot.socketPos.x - snapshot.nominalSocketPos.x,
@@ -134,8 +205,9 @@ export function SupportPathfindingDebugHud({ snapshot }: { snapshot: SupportPath
         fontSize: 11,
         lineHeight: 1.35,
         width: 'min(360px, calc(100vw - 24px))',
-        maxHeight: 'min(42vh, 360px)',
-        overflow: 'hidden',
+        maxHeight: 'min(60vh, 520px)',
+        overflowY: 'auto',
+        overflowX: 'hidden',
         padding: '10px 12px',
         borderRadius: 10,
         background: 'linear-gradient(135deg, rgba(9, 14, 26, 0.92), rgba(21, 33, 53, 0.82))',
@@ -154,6 +226,36 @@ export function SupportPathfindingDebugHud({ snapshot }: { snapshot: SupportPath
           {outcome ? `${outcome.status} (${outcome.reason})` : 'pending'}
         </span>
       </div>
+      <div style={{ marginTop: 4, color: '#94a3b8' }}>
+        {tuningApplied
+          ? 'Press M to disable extra debug tuning'
+          : 'Press M to enable extra debug tuning + suggestions'}
+      </div>
+      <div style={{ marginTop: 2, color: tuningApplied ? '#93c5fd' : '#64748b' }}>
+        defaults: tuned, extra tuning: {tuningApplied ? 'on' : 'off'}
+      </div>
+      {blockedReasons.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ color: '#fca5a5' }}>blocked reasons:</div>
+          {blockedReasons.slice(0, 5).map((reason) => (
+            <div key={reason} style={{ color: '#fecaca' }}>• {reason}</div>
+          ))}
+          {blockedReasons.length > 5 && (
+            <div style={{ color: '#94a3b8' }}>…and {blockedReasons.length - 5} more</div>
+          )}
+        </div>
+      )}
+      {showTuningSuggestions && tuningSuggestions.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ color: '#93c5fd' }}>tuning suggestions:</div>
+          {tuningSuggestions.slice(0, 6).map((suggestion) => (
+            <div key={suggestion} style={{ color: '#dbeafe' }}>• {suggestion}</div>
+          ))}
+          {tuningSuggestions.length > 6 && (
+            <div style={{ color: '#94a3b8' }}>…and {tuningSuggestions.length - 6} more</div>
+          )}
+        </div>
+      )}
       {cone && (
         <div style={{ marginTop: 6 }}>
           <div><span style={{ color: '#94a3b8' }}>cone:</span> nominal {cone.nominalClear ? 'clear' : 'blocked'}, active {cone.activeClear ? 'clear' : 'blocked'}</div>
@@ -183,9 +285,8 @@ export function SupportPathfindingDebugHud({ snapshot }: { snapshot: SupportPath
           style={{
             marginTop: 6,
             maxHeight: '124px',
-            overflow: 'hidden',
-            WebkitMaskImage: 'linear-gradient(to bottom, black 82%, transparent)',
-            maskImage: 'linear-gradient(to bottom, black 82%, transparent)',
+            overflowY: 'auto',
+            overflowX: 'hidden',
           }}
         >
           <div style={{ color: '#94a3b8' }}>events:</div>
