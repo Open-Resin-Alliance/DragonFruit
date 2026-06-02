@@ -209,6 +209,7 @@ export function SupportPainterPanel({
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(true);
   const [activeTab, setActiveTab] = useState<'active' | 'history'>('active');
   const [isMaintenanceExpanded, setIsMaintenanceExpanded] = useState(false);
+  const [isDiagnosticsExpanded, setIsDiagnosticsExpanded] = useState(true);
   const trunkWidth = activeSettings?.shaft?.diameterMm ?? 1.0;
   const defaultSpacing = isNaN(trunkWidth) ? 4.0 : trunkWidth * 4.0;
 
@@ -2465,6 +2466,120 @@ export function SupportPainterPanel({
               </div>
             )}
           </div>
+
+          {/* Placement Diagnostics Walker Collapsible */}
+          {state.failedCandidates.length > 0 && (
+            <div
+              className="flex flex-col gap-2 border-t pt-2.5 text-left font-medium"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              <div
+                className="flex items-center justify-between cursor-pointer select-none"
+                onClick={() => setIsDiagnosticsExpanded(!isDiagnosticsExpanded)}
+              >
+                <div className="flex items-center gap-1">
+                  <IconButton
+                    className="!p-0.5 animate-none"
+                    title={isDiagnosticsExpanded ? "Collapse Diagnostics" : "Expand Diagnostics"}
+                  >
+                    {isDiagnosticsExpanded ? (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    )}
+                  </IconButton>
+                  <span
+                    className="text-[10px] uppercase tracking-wider font-bold"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Placement Diagnostics ({state.failedCandidates.length})
+                  </span>
+                </div>
+              </div>
+
+              {isDiagnosticsExpanded && (
+                <div className="flex flex-col gap-2.5 mt-1">
+                  {(() => {
+                    const activeIndex = state.activeFailureIndex ?? 0;
+                    const activeCandidate = state.failedCandidates[activeIndex];
+                    if (!activeCandidate) return null;
+                    
+                    const formatCoord = (val: number) => val.toFixed(2);
+                    const stageLabel = activeCandidate.stage.charAt(0).toUpperCase() + activeCandidate.stage.slice(1);
+
+                    return (
+                      <div
+                        className="flex flex-col gap-1.5 p-2 rounded-lg border text-xs"
+                        style={{
+                          background: 'var(--surface-2, #1a202c)',
+                          borderColor: 'var(--border-subtle, #2d3748)',
+                        }}
+                      >
+                        <div className="flex justify-between items-center font-bold">
+                          <span style={{ color: 'var(--text-strong)' }}>
+                            Failure {activeIndex + 1} of {state.failedCandidates.length}
+                          </span>
+                          <span
+                            className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider"
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.15)',
+                              color: 'var(--danger, #ef4444)',
+                            }}
+                          >
+                            {stageLabel}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-1 font-medium text-[11px] leading-relaxed mt-0.5" style={{ color: 'var(--text-strong)' }}>
+                          <div>
+                            <span style={{ color: 'var(--text-muted)' }}>Reason:</span>{' '}
+                            <span className="font-semibold" style={{ color: 'var(--danger, #ef4444)' }}>
+                              {activeCandidate.reason}
+                            </span>
+                          </div>
+                          <div>
+                            <span style={{ color: 'var(--text-muted)' }}>Coordinate:</span>{' '}
+                            <span className="font-mono text-[10px]">
+                              [{formatCoord(activeCandidate.pos.x)}, {formatCoord(activeCandidate.pos.y)}, {formatCoord(activeCandidate.pos.z)}]
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Prev / Next / Clear actions */}
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => supportPainterStore.goToPrevFailure()}
+                            className="flex-1 !text-[10px] py-1"
+                          >
+                            Prev
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => supportPainterStore.goToNextFailure()}
+                            className="flex-1 !text-[10px] py-1"
+                          >
+                            Next
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => supportPainterStore.clearFailedCandidates()}
+                            className="flex-1 !text-[10px] py-1 hover:!bg-red-500/10"
+                            style={{ color: 'var(--danger, #ef4444)' }}
+                          >
+                            Clear
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
             </div>
           )}
         </div>

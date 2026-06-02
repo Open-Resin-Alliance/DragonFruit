@@ -277,6 +277,19 @@ export interface SupportPainterState {
 
   // ─── Phase 3 Config Pack / Import Conflict State ───
   conflictState:          { conflicts: ConflictItem[]; pendingRoiExt: VoxlROIExtension } | null;
+
+  // ─── Phase 4 Failed Placements Tracking & Walker State ───
+  failedCandidates:       FailedPlacementCandidate[];
+  activeFailureIndex:     number | null;
+}
+
+export interface FailedPlacementCandidate {
+  id: string;
+  pos: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+  stage: 'minima' | 'perimeter' | 'infill' | 'centerline';
+  regionId: string;
+  reason: string;
 }
 
 export interface ConflictItem {

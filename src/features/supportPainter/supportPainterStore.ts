@@ -16,6 +16,7 @@ import {
   type SupportPlacementScript,
   type CustomSupportOperationType,
   type ConflictItem,
+  type FailedPlacementCandidate,
   BRUSH_COLORS,
   upgradePipeline,
   arePipelinesEquivalent,
@@ -306,6 +307,10 @@ let pointPathClosed = false;
 let activeBrushPipeline: CustomSupportOperation[] | null = null;
 let conflictState: { conflicts: ConflictItem[]; pendingRoiExt: VoxlROIExtension } | null = null;
 
+// ─── Phase 4 Failed Placements Tracking & Walker State ───
+let failedCandidates: FailedPlacementCandidate[] = [];
+let activeFailureIndex: number | null = null;
+
 const LOCAL_STORAGE_KEY = 'dragonfruit.support-painter.custom-brushes';
 
 function saveCustomBrushesToLocalStorage() {
@@ -399,6 +404,8 @@ let storeSnapshot: SupportPainterState = {
   pointPathClosed,
   activeBrushPipeline: null,
   conflictState: null,
+  failedCandidates: [],
+  activeFailureIndex: null,
 };
 
 function notify() {
@@ -448,6 +455,8 @@ function updateSnapshot() {
     pointPathClosed,
     activeBrushPipeline: activeBrushPipeline ? [...activeBrushPipeline] : null,
     conflictState: conflictState ? { ...conflictState } : null,
+    failedCandidates: [...failedCandidates],
+    activeFailureIndex,
   };
 }
 
@@ -1856,6 +1865,48 @@ export const supportPainterStore = {
     } catch (err: any) {
       return { success: false, error: err?.message || 'Failed to parse configuration pack.' };
     }
+  },
+
+  setFailedCandidates(candidates: FailedPlacementCandidate[]) {
+    failedCandidates = candidates;
+    activeFailureIndex = candidates.length > 0 ? 0 : null;
+    updateSnapshot();
+    notify();
+  },
+
+  setActiveFailureIndex(index: number | null) {
+    activeFailureIndex = index;
+    updateSnapshot();
+    notify();
+  },
+
+  clearFailedCandidates() {
+    failedCandidates = [];
+    activeFailureIndex = null;
+    updateSnapshot();
+    notify();
+  },
+
+  goToNextFailure() {
+    if (failedCandidates.length === 0) return;
+    if (activeFailureIndex === null) {
+      activeFailureIndex = 0;
+    } else {
+      activeFailureIndex = (activeFailureIndex + 1) % failedCandidates.length;
+    }
+    updateSnapshot();
+    notify();
+  },
+
+  goToPrevFailure() {
+    if (failedCandidates.length === 0) return;
+    if (activeFailureIndex === null) {
+      activeFailureIndex = failedCandidates.length - 1;
+    } else {
+      activeFailureIndex = (activeFailureIndex - 1 + failedCandidates.length) % failedCandidates.length;
+    }
+    updateSnapshot();
+    notify();
   },
 };
 

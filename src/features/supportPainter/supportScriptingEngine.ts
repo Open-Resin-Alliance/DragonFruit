@@ -7,6 +7,7 @@ import {
   type BrushMetadata,
   type SupportGenerationMetadata,
   type CustomSupportOperation,
+  type FailedPlacementCandidate,
   upgradePipeline,
 } from './supportPainterTypes';
 import { supportPainterStore } from './supportPainterStore';
@@ -922,6 +923,7 @@ export async function generateSupportsFromPainter(
   regions: ROIRegion[]
 ): Promise<void> {
   if (!mesh || !regions || regions.length === 0) return;
+  supportPainterStore.clearFailedCandidates();
 
   // ─── Spacing Override Core Configuration [SPACING_OVERRIDES] ───
   // [AGENT_NOTE] Spacing is fetched from supportPainterStore. If null, falls back to dynamic 4.0 * shaftDiameter.
@@ -2417,6 +2419,7 @@ export async function generateSupportsFromPainter(
   beginSupportStateBatch();
 
   const settings = getSettings();
+  const failedList: FailedPlacementCandidate[] = [];
 
   const processPointPlacement = (col: SampledPoint) => {
     registerAttempt(col);
@@ -2523,6 +2526,14 @@ export async function generateSupportsFromPainter(
 
         if (!foundAcceptablePerturbation) {
           console.warn(`[SupportScriptingEngine] Could not find any valid perturbed tip. Proposing original coordinate as fallback.`);
+          failedList.push({
+            id: generateUuid(),
+            pos: { x: col.pos.x, y: col.pos.y, z: col.pos.z },
+            normal: { x: col.normal.x, y: col.normal.y, z: col.normal.z },
+            stage: col.stage,
+            regionId: col.regionId,
+            reason: 'COLLISION_OR_UNPRINTABLE',
+          });
         }
       }
 
@@ -2636,6 +2647,15 @@ export async function generateSupportsFromPainter(
 
       if (res.success) {
         registerPlacement(col);
+      } else {
+        failedList.push({
+          id: generateUuid(),
+          pos: { x: finalPos.x, y: finalPos.y, z: finalPos.z },
+          normal: { x: finalNormal.x, y: finalNormal.y, z: finalNormal.z },
+          stage: col.stage,
+          regionId: col.regionId,
+          reason: res.error || 'PLACEMENT_DECISION_FAILED',
+        });
       }
     } finally {
       if (settingsOverridden) {
@@ -2660,6 +2680,8 @@ export async function generateSupportsFromPainter(
   } finally {
     endSupportStateBatch();
   }
+
+  supportPainterStore.setFailedCandidates(failedList);
 
   // 5. Save stats inside the actual region objects in the store map
   const finalRegions = new Map(supportPainterStore.getSnapshot().regions);
