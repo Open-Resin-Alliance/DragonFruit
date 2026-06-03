@@ -50,7 +50,7 @@ export function HolePunchPreviewCylinder({
 
   // Split into two segments so we can layer them differently vs xray:
   // - inside segment (below xray)
-  // - 1mm outside segment (above xray)
+  // - 0.25mm outside segment (above xray)
   const insideDisplayPosition = React.useMemo(
     () => position.clone().add(safeNormal.clone().multiplyScalar(insideDepth * 0.5)),
     [insideDepth, position, safeNormal],

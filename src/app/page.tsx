@@ -541,7 +541,7 @@ const EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT: HomeKickstandCollectionsSnapsho
   knots: {},
 };
 
-const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 0.25;
+const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 3;
 const HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM = 1;
 
 function getDefaultHolePunchDepthMm(shellThicknessMm: number): number {
