@@ -3441,8 +3441,8 @@ export function ProfileSettingsModal({
           </button>
         </div>
 
-        <div className={`px-4 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-hidden flex' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
-          <div className={`flex flex-col gap-3 ${hasPrinters ? 'w-full min-h-0 flex-1' : 'w-full h-full min-h-0'}`}>
+        <div className={`px-4 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
+          <div className={`flex flex-col gap-3 ${hasPrinters ? 'w-full min-h-full' : 'w-full h-full min-h-0'}`}>
           {isCustomSelectedPrinter && (
             <div
               className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
@@ -3498,7 +3498,7 @@ export function ProfileSettingsModal({
           )}
 
           {hasPrinters && (
-          <section className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
+          <section className="rounded-lg border overflow-hidden shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -3964,7 +3964,7 @@ export function ProfileSettingsModal({
 
           {hasPrinters && selectedPrinter && (
           <section
-            className="rounded-lg border overflow-hidden flex flex-col min-h-0 flex-1"
+            className="rounded-lg border overflow-hidden flex flex-col min-h-[320px] flex-1 shrink-0"
             style={{
               borderColor: 'var(--border-subtle)',
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))',
@@ -4489,7 +4489,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <button
                   type="button"
                   onClick={handleResetFleetUnitDraft}
@@ -4530,7 +4530,15 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
-            <div className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div
+              className="w-full max-w-[1040px] min-h-0 rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
+              style={{
+                borderColor: 'var(--border-strong)',
+                background: 'var(--surface-0)',
+                height: 'min(90vh, 820px)',
+                maxHeight: 'calc(100vh - 2rem)',
+              }}
+            >
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <div className="flex items-center gap-2.5">
                   <span
@@ -4558,7 +4566,7 @@ export function ProfileSettingsModal({
                 </button>
               </div>
 
-              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] flex-1 min-h-0 overflow-hidden">
                 <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                   <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="relative">
@@ -4640,7 +4648,7 @@ export function ProfileSettingsModal({
               </div>
 
               {/* Printer Library footer */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryPresetIds.size > 0
                     ? `${selectedLibraryPresetIds.size} printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''} selected`
@@ -4719,7 +4727,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -5122,7 +5130,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Changes are applied immediately.
                 </span>
@@ -5148,8 +5156,13 @@ export function ProfileSettingsModal({
             }}
           >
             <div
-              className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
-              style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}
+              className="w-full max-w-[1040px] min-h-0 rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
+              style={{
+                borderColor: 'var(--border-strong)',
+                background: 'var(--surface-0)',
+                height: 'min(90vh, 820px)',
+                maxHeight: 'calc(100vh - 2rem)',
+              }}
             >
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <div className="flex items-center gap-2.5">
@@ -5177,7 +5190,7 @@ export function ProfileSettingsModal({
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] flex-1 min-h-0 overflow-hidden">
                 <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                   <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="relative">
@@ -5336,7 +5349,7 @@ export function ProfileSettingsModal({
               </div>
 
               {/* Material Library footer */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryMaterialKeys.size > 0
                     ? `${selectedLibraryMaterialKeys.size} material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''} selected`
