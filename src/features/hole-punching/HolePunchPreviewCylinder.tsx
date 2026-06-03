@@ -6,6 +6,7 @@ interface HolePunchPreviewCylinderProps {
   normal: THREE.Vector3;
   radiusMm: number;
   lengthMm: number;
+  cavityBoundaryDepthMm?: number | null;
   variant?: 'placed' | 'selected' | 'hover';
   applied?: boolean;
   onClick?: () => void;
@@ -28,6 +29,7 @@ export function HolePunchPreviewCylinder({
   normal,
   radiusMm,
   lengthMm,
+  cavityBoundaryDepthMm = null,
   variant = 'placed',
   applied = false,
   onClick,
@@ -133,6 +135,49 @@ export function HolePunchPreviewCylinder({
     };
   }, [applied, variant]);
 
+  const cavityAid = React.useMemo(() => {
+    if (cavityBoundaryDepthMm == null || !Number.isFinite(cavityBoundaryDepthMm)) {
+      return {
+        shellDepth: insideDepth,
+        cavityDepth: 0,
+      };
+    }
+
+    const boundaryDepth = THREE.MathUtils.clamp(cavityBoundaryDepthMm, 0, insideDepth);
+    const shellDepth = boundaryDepth;
+    const cavityDepth = Math.max(0, insideDepth - shellDepth);
+
+    return {
+      shellDepth,
+      cavityDepth,
+    };
+  }, [cavityBoundaryDepthMm, insideDepth]);
+
+  const shellDisplayPosition = React.useMemo(
+    () => position.clone().add(safeNormal.clone().multiplyScalar(cavityAid.shellDepth * 0.5)),
+    [cavityAid.shellDepth, position, safeNormal],
+  );
+
+  const cavityDisplayPosition = React.useMemo(
+    () => position.clone().add(safeNormal.clone().multiplyScalar(cavityAid.shellDepth + cavityAid.cavityDepth * 0.5)),
+    [cavityAid.cavityDepth, cavityAid.shellDepth, position, safeNormal],
+  );
+
+  const inversePalette = React.useMemo(() => {
+    const base = new THREE.Color(palette.color);
+    const inverse = new THREE.Color(1 - base.r, 1 - base.g, 1 - base.b);
+    return {
+      color: `#${inverse.getHexString()}`,
+      emissive: `#${inverse.getHexString()}`,
+      emissiveIntensity: Math.min(0.28, palette.emissiveIntensity + 0.04),
+      opacity: palette.opacity,
+    };
+  }, [palette.color, palette.emissiveIntensity, palette.opacity]);
+
+  const SEGMENT_EPSILON_MM = 0.001;
+  const showShellSegment = cavityAid.shellDepth > SEGMENT_EPSILON_MM;
+  const showCavitySegment = cavityAid.cavityDepth > SEGMENT_EPSILON_MM;
+
   return (
     <>
       {(onClick || onHoverStart || onHoverEnd) && (
@@ -163,24 +208,47 @@ export function HolePunchPreviewCylinder({
         </mesh>
       )}
 
-      <mesh
-        position={insideDisplayPosition}
-        quaternion={quaternion}
-        renderOrder={insideRenderOrder}
-      >
-        <cylinderGeometry args={[radius, radius, insideDepth, 24, 1, false]} />
-        <meshStandardMaterial
-          color={palette.color}
-          emissive={palette.emissive}
-          emissiveIntensity={palette.emissiveIntensity}
-          roughness={0.52}
-          metalness={0.04}
-          transparent
-          opacity={palette.opacity}
-          depthWrite={!forceOverlayRendering}
-          depthTest={!forceOverlayRendering}
-        />
-      </mesh>
+      {showShellSegment && (
+        <mesh
+          position={shellDisplayPosition}
+          quaternion={quaternion}
+          renderOrder={insideRenderOrder}
+        >
+          <cylinderGeometry args={[radius, radius, cavityAid.shellDepth, 24, 1, false]} />
+          <meshStandardMaterial
+            color={palette.color}
+            emissive={palette.emissive}
+            emissiveIntensity={palette.emissiveIntensity}
+            roughness={0.52}
+            metalness={0.04}
+            transparent
+            opacity={palette.opacity}
+            depthWrite={!forceOverlayRendering}
+            depthTest={!forceOverlayRendering}
+          />
+        </mesh>
+      )}
+
+      {showCavitySegment && (
+        <mesh
+          position={cavityDisplayPosition}
+          quaternion={quaternion}
+          renderOrder={insideRenderOrder}
+        >
+          <cylinderGeometry args={[radius, radius, cavityAid.cavityDepth, 24, 1, false]} />
+          <meshStandardMaterial
+            color={inversePalette.color}
+            emissive={inversePalette.emissive}
+            emissiveIntensity={inversePalette.emissiveIntensity}
+            roughness={0.52}
+            metalness={0.04}
+            transparent
+            opacity={inversePalette.opacity}
+            depthWrite={!forceOverlayRendering}
+            depthTest={!forceOverlayRendering}
+          />
+        </mesh>
+      )}
 
       <mesh
         position={outsideDisplayPosition}
@@ -194,10 +262,10 @@ export function HolePunchPreviewCylinder({
           emissiveIntensity={palette.emissiveIntensity}
           roughness={0.52}
           metalness={0.04}
-          transparent
-          opacity={palette.opacity}
-          depthWrite={!forceOverlayRendering}
-          depthTest={!forceOverlayRendering}
+          transparent={false}
+          opacity={1}
+          depthWrite
+          depthTest
         />
       </mesh>
     </>

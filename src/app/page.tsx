@@ -9737,11 +9737,54 @@ export default function Home() {
 
   const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
     if (modelId == null) {
+      if (
+        scene.mode === 'prepare'
+        && transformMgr.transformMode === 'hollowing'
+        && selectedHolePunchPlacementId
+      ) {
+        setSelectedHolePunchPlacementId(null);
+        setHoveredHolePunchPlacementId(null);
+        setHolePunchHoverPlacement(null);
+        return;
+      }
       scene.clearModelSelection();
       return;
     }
     scene.selectModel(modelId, options?.selectionMode ?? 'single');
-  }, [scene]);
+  }, [scene, selectedHolePunchPlacementId, transformMgr.transformMode]);
+
+  React.useEffect(() => {
+    if (
+      scene.mode !== 'prepare'
+      || transformMgr.transformMode !== 'hollowing'
+      || !selectedHolePunchPlacementId
+    ) {
+      return;
+    }
+
+    const handleEscToDeselectHolePunch = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && target.closest('input, textarea, select, [contenteditable="true"]')
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      setSelectedHolePunchPlacementId(null);
+      setHoveredHolePunchPlacementId(null);
+      setHolePunchHoverPlacement(null);
+    };
+
+    window.addEventListener('keydown', handleEscToDeselectHolePunch, true);
+    return () => {
+      window.removeEventListener('keydown', handleEscToDeselectHolePunch, true);
+    };
+  }, [scene.mode, selectedHolePunchPlacementId, transformMgr.transformMode]);
 
   const handleSceneMarqueeSelection = React.useCallback((ids: string[]) => {
     const deduped = Array.from(new Set(ids));
@@ -14879,6 +14922,42 @@ export default function Home() {
     }
   }, [holePunchPlacements]);
 
+  const handleDeleteSelectedHolePunchPlacement = React.useCallback(() => {
+    const selectedPlacementId = selectedHolePunchPlacementId;
+    if (!selectedPlacementId) return;
+
+    const nextPlacements = holePunchPlacements.filter((placement) => placement.id !== selectedPlacementId);
+
+    setHolePunchPlacements(nextPlacements);
+    setSelectedHolePunchPlacementId(null);
+    setHoveredHolePunchPlacementId(null);
+    setHolePunchHoverPlacement(null);
+  }, [holePunchPlacements, selectedHolePunchPlacementId]);
+
+  React.useEffect(() => {
+    const unregister = registerDeleteHandler(
+      () => (
+        scene.mode === 'prepare'
+        && transformMgr.transformMode === 'hollowing'
+        && selectedHolePunchPlacementId != null
+        && selectedHolePunchPlacement?.modelId === scene.activeModel?.id
+      ),
+      handleDeleteSelectedHolePunchPlacement,
+      50,
+    );
+
+    return () => {
+      unregister();
+    };
+  }, [
+    handleDeleteSelectedHolePunchPlacement,
+    scene.activeModel?.id,
+    scene.mode,
+    selectedHolePunchPlacement,
+    selectedHolePunchPlacementId,
+    transformMgr.transformMode,
+  ]);
+
   const handleHolePunchStateChange = React.useCallback((next: HolePunchPanelState) => {
     setHolePunchState(next);
     setHolePunchPlacements((previous) => {
@@ -14936,10 +15015,26 @@ export default function Home() {
         .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
 
       if (persisted.length === 0) {
+        const restored = geometryFromSnapshot({
+          sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+          sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+        });
+
+        if (restored) {
+          const restoredGeometry = restored.clone();
+          const replaced = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Hole Punching (Removed)');
+          if (!replaced) {
+            restoredGeometry.dispose();
+          }
+          restored.dispose();
+        }
+
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: [],
           holePunchesBakedIntoGeometry: false,
+          holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+          holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
         });
         return;
       }
@@ -16735,6 +16830,9 @@ export default function Home() {
                 : null;
               const activeModelId = scene.activeModel?.id ?? null;
               const showHolePunchMarkers = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+              const holePunchCavityBoundaryDepthMm = (hollowingDraftEnabled || isHollowingApplied)
+                ? Math.max(0, hollowingState.shellThicknessMm)
+                : null;
               const placedPunches = activeModelId
                 ? holePunchPlacements.filter((placement) => placement.modelId === activeModelId)
                 : [];
@@ -16757,6 +16855,7 @@ export default function Home() {
                       normal={placement.worldNormal}
                       radiusMm={placement.radiusMm}
                       lengthMm={placement.depthMm}
+                      cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
                       applied={isHolePunchApplied && !isHolePunchDirty}
                       variant={placement.id === selectedHolePunchPlacementId
                         ? 'selected'
@@ -16781,6 +16880,7 @@ export default function Home() {
                       normal={hoverPunchPreview.worldNormal}
                       radiusMm={holePunchState.radiusMm}
                       lengthMm={holePunchState.depthMm}
+                      cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
                       variant="hover"
                     />
                   )}

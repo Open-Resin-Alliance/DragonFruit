@@ -835,6 +835,14 @@ if (uDitherAmount > 0.0) {
           }
 
           if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchClick) {
+            if (!isActiveModel) {
+              e.stopPropagation();
+              if (onActiveModelChange) {
+                onActiveModelChange(modelId, { selectionMode: 'single' });
+              }
+              return;
+            }
+
             const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
             if (isGizmoHoverCategory || firstIsGizmo) {
               return;
