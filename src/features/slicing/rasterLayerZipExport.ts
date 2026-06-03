@@ -2111,6 +2111,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
 
   const settings = resolveEffectiveSettings(options);
   const perfSettings = getSavedSlicingPerformanceSettings();
+
   const modelTriangleCount = countModelWorldTriangles(visibleModels);
   const collector = new TriangleFloatCollector(
     modelTriangleCount + 4096,

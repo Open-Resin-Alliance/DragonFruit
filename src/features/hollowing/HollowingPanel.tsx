@@ -1,5 +1,5 @@
 import React from 'react';
-import { Droplets, Loader2 } from 'lucide-react';
+import { Droplets } from 'lucide-react';
 import type { HollowMode, OpenFace } from '@/utils/meshHollowing';
 import { Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
@@ -14,17 +14,21 @@ export interface HollowingPanelState {
 interface HollowingPanelProps {
   state: HollowingPanelState;
   onStateChange: (next: HollowingPanelState) => void;
+  onReset: () => void;
   onApply: () => void;
   isApplying?: boolean;
   isPreviewing?: boolean;
+  canApply?: boolean;
 }
 
 export function HollowingPanel({
   state,
   onStateChange,
+  onReset,
   onApply,
   isApplying = false,
   isPreviewing = false,
+  canApply = true,
 }: HollowingPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
 
@@ -171,19 +175,25 @@ export function HollowingPanel({
             </div>
           )}
 
-          <button
-            type="button"
-            className="ui-button ui-button-accent w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
-            onClick={onApply}
-            disabled={isApplying || isPreviewing}
-          >
-            {isPreviewing ? (
-              <span className="inline-flex items-center justify-center gap-1.5">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                <span>Refreshing</span>
-              </span>
-            ) : isApplying ? 'Applying…' : 'Apply'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+              onClick={onReset}
+              disabled={isApplying || isPreviewing}
+            >
+              Reset
+            </button>
+
+            <button
+              type="button"
+              className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+              onClick={onApply}
+              disabled={isApplying || !canApply}
+            >
+              {isApplying ? 'Applying…' : 'Apply'}
+            </button>
+          </div>
         </div>
       )}
     </Card>

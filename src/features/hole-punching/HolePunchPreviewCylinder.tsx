@@ -7,6 +7,7 @@ interface HolePunchPreviewCylinderProps {
   radiusMm: number;
   lengthMm: number;
   variant?: 'placed' | 'selected' | 'hover';
+  applied?: boolean;
   onClick?: () => void;
 }
 
@@ -18,6 +19,7 @@ export function HolePunchPreviewCylinder({
   radiusMm,
   lengthMm,
   variant = 'placed',
+  applied = false,
   onClick,
 }: HolePunchPreviewCylinderProps) {
   const quaternion = React.useMemo(() => {
@@ -38,9 +40,9 @@ export function HolePunchPreviewCylinder({
   const palette = React.useMemo(() => {
     if (variant === 'selected') {
       return {
-        outer: '#7df9ff',
+        outer: applied ? '#8cffb2' : '#7df9ff',
         outerOpacity: 0.62,
-        inner: '#2dd4ff',
+        inner: applied ? '#3ddc84' : '#2dd4ff',
         innerOpacity: 0.24,
       };
     }
@@ -53,12 +55,12 @@ export function HolePunchPreviewCylinder({
       };
     }
     return {
-      outer: '#ffd166',
+      outer: applied ? '#7ef29f' : '#ffd166',
       outerOpacity: 0.42,
-      inner: '#ff8f3d',
+      inner: applied ? '#2bbf6a' : '#ff8f3d',
       innerOpacity: 0.14,
     };
-  }, [variant]);
+  }, [applied, variant]);
 
   return (
     <group position={position} quaternion={quaternion}>

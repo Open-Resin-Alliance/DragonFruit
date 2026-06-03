@@ -11,10 +11,8 @@ export interface HolePunchPanelState {
 interface HolePunchPanelProps {
   state: HolePunchPanelState;
   onStateChange: (next: HolePunchPanelState) => void;
+  onReset: () => void;
   onApply: () => void;
-  onClearSelectedPlacement: () => void;
-  onClearAllPlacements: () => void;
-  hasSelectedPlacement: boolean;
   placementCount: number;
   isApplying?: boolean;
   canApply?: boolean;
@@ -23,10 +21,8 @@ interface HolePunchPanelProps {
 export function HolePunchPanel({
   state,
   onStateChange,
+  onReset,
   onApply,
-  onClearSelectedPlacement,
-  onClearAllPlacements,
-  hasSelectedPlacement,
   placementCount,
   isApplying = false,
   canApply = false,
@@ -80,9 +76,8 @@ export function HolePunchPanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Step 2</div>
             <div className="rounded-md border px-2 py-2 text-[11px] leading-snug" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 76%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)', color: 'var(--text-strong)' }}>
-              Click faces to place multiple drain holes. Click an existing hole to edit or clear only that one.
+              Click faces to place drain holes. Click an existing hole to edit its settings.
             </div>
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Placed holes: {placementCount}
@@ -123,18 +118,10 @@ export function HolePunchPanel({
             <button
               type="button"
               className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
-              onClick={onClearSelectedPlacement}
-              disabled={isApplying || !hasSelectedPlacement}
+              onClick={onReset}
+              disabled={isApplying}
             >
-              Clear Selected
-            </button>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
-              onClick={onClearAllPlacements}
-              disabled={isApplying || placementCount === 0}
-            >
-              Clear All
+              Reset
             </button>
             <button
               type="button"
@@ -145,12 +132,11 @@ export function HolePunchPanel({
               {isApplying ? (
                 <span className="inline-flex items-center justify-center gap-1.5">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  <span>Applying…</span>
+                  <span>Saving…</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center justify-center gap-1.5">
-                  <Sparkles className="h-3 w-3" />
-                  <span>Apply Punch</span>
+                  <span>Apply</span>
                 </span>
               )}
             </button>

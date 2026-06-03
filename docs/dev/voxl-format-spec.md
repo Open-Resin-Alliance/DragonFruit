@@ -7,9 +7,10 @@ VOXL is DragonFruit’s native scene container. This page captures the core cont
 | Generation | Container                                                | Status                       |
 | ---------- | -------------------------------------------------------- | ---------------------------- |
 | V1         | UTF-8 JSON (direct document or compressed JSON envelope) | Legacy read support required |
-| V2         | Binary chunk container                                   | Current read/write target    |
+| V2.0       | Binary chunk container                                   | Historical                   |
+| V2.1       | Binary chunk container                                   | Current read/write target    |
 
-Readers must support both V1 and V2. Writers should emit V2.
+Readers must support V1 and V2.x. Writers should emit V2.1 semantics.
 
 ## Core conventions
 
@@ -70,7 +71,7 @@ V2 layout:
 Header requirements:
 
 - `magic = VOXL`
-- `version = 2`
+- `version = 2` (container-major; V2.0 and V2.1 both use this)
 - little-endian integer fields
 
 Compression codes:
@@ -96,6 +97,25 @@ Chunk types:
 Unknown chunk types may be ignored.
 
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)`.
+
+### V2.1 semantic revision (current)
+
+V2.1 is a semantic revision of the V2 binary container; it does **not** change the binary header major version.
+
+V2.1 additionally requires:
+
+- `MODL[*].meshModifiers` persistence for model modifier state.
+- Hollowing source snapshot persistence in the hollowing modifier payload:
+	- `sourcePositionsBase64`
+	- `sourcePositionCount`
+- `bakedIntoGeometry` semantics for modifiers that are already baked into mesh geometry.
+
+Behavioral requirement:
+
+- Hollowing re-apply must use persisted source snapshot geometry.
+- Implementations must **not** fall back to re-hollowing the already-baked mesh when the snapshot is missing.
+
+This is required so hollowing and hole-punch workflows remain re-editable after VOXL round-trips.
 
 ## Supports and extensions
 

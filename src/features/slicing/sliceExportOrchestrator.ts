@@ -1,6 +1,7 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
+import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
@@ -608,19 +609,34 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     }
   };
 
-  const meshPrepStartMs = performance.now();
-  const solidMesh = await buildSolidSliceMeshForWasm({
-    models: options.models,
-    printerProfile: options.printerProfile,
-    materialProfile: options.materialProfile,
-    filenameBase: options.filenameBase,
-    flushBinaryMeshChunk: meshTransferMode === 'streamed'
-      ? handleMeshChunk
-      : meshTransferMode === 'file-backed'
-        ? handleMeshFileChunk
-        : undefined,
-    meshChunkTargetBytes,
+  const visibleModels = options.models.filter((model) => model.visible);
+  const modifierBakeStartMs = performance.now();
+  options.onProgress?.(0, 1, 'Baking Modifiers');
+  const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
+  const modifierBakeMs = performance.now() - modifierBakeStartMs;
+  logDebug('Prepared models for slice/export handoff', {
+    visibleModelCount: visibleModels.length,
+    modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
+    modifierBakeMs,
   });
+  const meshPrepStartMs = performance.now();
+  let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
+  try {
+    solidMesh = await buildSolidSliceMeshForWasm({
+      models: preparedModelsForOutput.models,
+      printerProfile: options.printerProfile,
+      materialProfile: options.materialProfile,
+      filenameBase: options.filenameBase,
+      flushBinaryMeshChunk: meshTransferMode === 'streamed'
+        ? handleMeshChunk
+        : meshTransferMode === 'file-backed'
+          ? handleMeshFileChunk
+          : undefined,
+      meshChunkTargetBytes,
+    });
+  } finally {
+    preparedModelsForOutput.dispose();
+  }
   const meshPrepMs = performance.now() - meshPrepStartMs;
 
   if (meshTransferMode === 'single-shot') {
@@ -676,6 +692,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     meshTransportEncoding,
     meshTransferMode,
     meshStageFilePath,
+    modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
   });
   emitDiagnosticProgress('Preparing mesh complete', 1, 1, {
     meshPrepMs,

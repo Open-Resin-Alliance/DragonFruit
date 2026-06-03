@@ -37,6 +37,7 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -141,6 +142,7 @@ function cloneLoadedModel(model: LoadedModel): LoadedModel {
   return {
     ...model,
     transform: cloneTransform(model.transform),
+    meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
   };
 }
 
@@ -755,6 +757,7 @@ export interface LoadedModel {
   visible: boolean;
   color: string;
   polygonCount: number;
+  meshModifiers?: ModelMeshModifiers;
   ignoreAutoLift?: boolean;
   manualZMoveOverride?: boolean;
 }
@@ -847,6 +850,7 @@ type ModelClipboardEntry = {
   transform: ModelTransform;
   color: string;
   polygonCount: number;
+  meshModifiers?: ModelMeshModifiers;
   supportClipboard: SupportClipboardPayload | null;
 };
 
@@ -2447,6 +2451,14 @@ export function useSceneCollectionManager() {
     ));
   }, []);
 
+  const setModelMeshModifiers = useCallback((id: string, meshModifiers: ModelMeshModifiers | undefined) => {
+    setModels(prev => prev.map((model) => (
+      model.id === id
+        ? { ...model, meshModifiers }
+        : model
+    )));
+  }, []);
+
   const setModelManualZMoveOverride = useCallback((id: string, manualZMoveOverride: boolean) => {
     setModels(prev => prev.map((model) => (
       model.id === id
@@ -2742,6 +2754,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
+        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
         supportClipboard,
       },
     ]);
@@ -2770,6 +2783,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
+        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
         supportClipboard,
       };
     }));
@@ -2808,6 +2822,7 @@ export function useSceneCollectionManager() {
       visible: true,
       color: first.color,
       polygonCount: first.polygonCount,
+      meshModifiers: first.meshModifiers ? clonePlainObject(first.meshModifiers) : undefined,
     };
 
     const nextModels = [...models, pastedModel];
@@ -3181,6 +3196,7 @@ export function useSceneCollectionManager() {
         visible: true,
         color: entry.color,
         polygonCount: entry.polygonCount,
+        meshModifiers: entry.meshModifiers ? clonePlainObject(entry.meshModifiers) : undefined,
       };
     });
 
@@ -3252,6 +3268,7 @@ export function useSceneCollectionManager() {
         visible: source.visible,
         color: source.color,
         polygonCount: source.polygonCount,
+        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
       };
     });
 
@@ -3757,6 +3774,7 @@ export function useSceneCollectionManager() {
             visible: model.visible,
             color,
             polygonCount,
+            meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
             ignoreAutoLift: true,
             manualZMoveOverride: true,
           });
@@ -4304,6 +4322,7 @@ export function useSceneCollectionManager() {
     finalizeModelGeometryPostProcessing,
     setModelManualZMoveOverride,
     setModelVisibility,
+    setModelMeshModifiers,
     renameModel,
     groupModels,
     ungroupModels,

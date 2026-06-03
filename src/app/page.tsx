@@ -39,7 +39,7 @@ import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetri
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { HollowingPanel, type HollowingPanelState } from '../features/hollowing';
-import { HolePunchPanel, type HolePunchPanelState } from '@/features/hole-punching/HolePunchPanel';
+import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
 import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
@@ -192,7 +192,7 @@ import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/fe
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { fetchRtspRelayStatus } from '@/utils/rtspRelayBridge';
 import { hollowFromGeometry, type HollowOptions, type HollowReport } from '@/utils/meshHollowing';
-import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
+import type { ModelMeshModifiers, ModelHolePunchPlacement, ModelHollowingModifier } from '@/features/mesh-modifiers/types';
 
 interface ShaftHoverDebugDetail {
   segmentId: string | null;
@@ -289,6 +289,10 @@ type HollowPreviewState = {
   optionsKey: string;
 };
 
+type HollowingSourceEntry = {
+  geometry: THREE.BufferGeometry;
+};
+
 type HolePunchPlacementState = {
   id: string;
   modelId: string;
@@ -299,6 +303,225 @@ type HolePunchPlacementState = {
   radiusMm: number;
   depthMm: number;
 };
+
+function normalizeDirectionTuple(x: number, y: number, z: number): [number, number, number] {
+  const dir = new THREE.Vector3(x, y, z);
+  if (dir.lengthSq() <= 1e-12) {
+    return [0, 0, -1];
+  }
+  dir.normalize();
+  return [dir.x, dir.y, dir.z];
+}
+
+function toPersistedHolePunchPlacements(
+  model: { geometry: GeometryWithBounds },
+  placements: HolePunchPlacementState[],
+): ModelHolePunchPlacement[] {
+  const geometry = model.geometry.geometry;
+  const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+    geometry.getAttribute('position') as THREE.BufferAttribute,
+  );
+  const size = bbox.getSize(new THREE.Vector3());
+  const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
+
+  return placements.map((placement) => {
+    const direction = normalizeDirectionTuple(
+      placement.localNormal.x,
+      placement.localNormal.y,
+      placement.localNormal.z,
+    );
+    return {
+      id: placement.id,
+      centerNorm: [
+        toNorm(placement.localPoint.x, bbox.min.x, size.x),
+        toNorm(placement.localPoint.y, bbox.min.y, size.y),
+        toNorm(placement.localPoint.z, bbox.min.z, size.z),
+      ],
+      radiusMm: placement.radiusMm,
+      depthMm: placement.depthMm,
+      direction,
+    };
+  });
+}
+
+function fromPersistedHolePunchPlacements(
+  model: { id: string; geometry: GeometryWithBounds; transform: ModelTransform },
+  persisted: ModelHolePunchPlacement[],
+): HolePunchPlacementState[] {
+  if (persisted.length === 0) return [];
+
+  const bbox = model.geometry.bbox;
+  const size = model.geometry.size;
+  const toMm = (norm: number, min: number, span: number) => min + (norm * (span <= 1e-9 ? 0 : span));
+
+  const meshMatrix = new THREE.Matrix4()
+    .compose(
+      model.transform.position.clone(),
+      quaternionFromGlobalEuler(model.transform.rotation),
+      model.transform.scale.clone(),
+    )
+    .multiply(new THREE.Matrix4().makeTranslation(
+      -model.geometry.center.x,
+      -model.geometry.center.y,
+      -model.geometry.center.z,
+    ));
+
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
+
+  return persisted.map((placement) => {
+    const localPoint = new THREE.Vector3(
+      toMm(placement.centerNorm[0], bbox.min.x, size.x),
+      toMm(placement.centerNorm[1], bbox.min.y, size.y),
+      toMm(placement.centerNorm[2], bbox.min.z, size.z),
+    );
+
+    const localNormal = new THREE.Vector3(
+      placement.direction[0],
+      placement.direction[1],
+      placement.direction[2],
+    );
+    if (localNormal.lengthSq() <= 1e-12) {
+      localNormal.set(0, 0, -1);
+    } else {
+      localNormal.normalize();
+    }
+
+    const worldPoint = localPoint.clone().applyMatrix4(meshMatrix);
+    const worldNormal = localNormal.clone().applyNormalMatrix(normalMatrix).normalize();
+
+    return {
+      id: placement.id,
+      modelId: model.id,
+      worldPoint,
+      worldNormal,
+      localPoint,
+      localNormal,
+      radiusMm: placement.radiusMm,
+      depthMm: placement.depthMm,
+    };
+  });
+}
+
+function serializeHollowingModifier(modifier: ModelHollowingModifier | null | undefined): string {
+  if (!modifier?.enabled) return 'disabled';
+  return JSON.stringify({
+    enabled: true,
+    mode: modifier.mode,
+    voxelResolution: modifier.voxelResolution,
+    shellThicknessMm: Number(modifier.shellThicknessMm.toFixed(4)),
+    openFace: modifier.openFace,
+  });
+}
+
+function serializeHolePunchPlacements(placements: ModelHolePunchPlacement[]): string {
+  const sorted = [...placements]
+    .map((placement) => ({
+      id: placement.id,
+      centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
+      radiusMm: Number(placement.radiusMm.toFixed(4)),
+      depthMm: Number(placement.depthMm.toFixed(4)),
+      direction: placement.direction.map((value) => Number(value.toFixed(6))),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  return JSON.stringify(sorted);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof btoa === 'function') {
+    const CHUNK_SIZE = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+      const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  }
+
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+
+  throw new Error('Base64 encoding is unavailable in this environment.');
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const normalized = base64.replace(/\s+/g, '');
+
+  if (typeof atob === 'function') {
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(normalized, 'base64'));
+  }
+
+  throw new Error('Base64 decoding is unavailable in this environment.');
+}
+
+function snapshotGeometryPositions(geometry: THREE.BufferGeometry): {
+  sourcePositionsBase64: string;
+  sourcePositionCount: number;
+} {
+  const position = geometry.getAttribute('position');
+  if (!(position instanceof THREE.BufferAttribute)) {
+    throw new Error('Geometry has no position attribute.');
+  }
+
+  const floatArray = position.array instanceof Float32Array
+    ? position.array
+    : new Float32Array(position.array);
+  const bytes = new Uint8Array(
+    floatArray.buffer,
+    floatArray.byteOffset,
+    floatArray.byteLength,
+  );
+
+  return {
+    sourcePositionsBase64: bytesToBase64(bytes),
+    sourcePositionCount: position.count,
+  };
+}
+
+function geometryFromSnapshot(snapshot: {
+  sourcePositionsBase64?: string;
+  sourcePositionCount?: number;
+}): THREE.BufferGeometry | null {
+  const base64 = snapshot.sourcePositionsBase64;
+  const count = snapshot.sourcePositionCount;
+  if (!base64 || !Number.isFinite(count) || (count as number) <= 0) {
+    return null;
+  }
+
+  const bytes = base64ToBytes(base64);
+  if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    return null;
+  }
+
+  const view = new Float32Array(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength / Float32Array.BYTES_PER_ELEMENT,
+  );
+  const positions = new Float32Array(view.length);
+  positions.set(view);
+
+  if (positions.length !== (count as number) * 3) {
+    return null;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
 
 const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = {
   trunks: {},
@@ -1154,6 +1377,7 @@ export default function Home() {
     shellThicknessMm: 2.0,
     openFace: 'z_max',
   });
+  const [hollowingDraftEnabled, setHollowingDraftEnabled] = React.useState(false);
   const [holePunchState, setHolePunchState] = React.useState<HolePunchPanelState>({
     radiusMm: 2.0,
     depthMm: 12.0,
@@ -1204,6 +1428,19 @@ export default function Home() {
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
+
+  const defaultHollowingState = React.useMemo<HollowingPanelState>(() => ({
+    mode: 'cavity',
+    voxelResolution: 96,
+    shellThicknessMm: 2.0,
+    openFace: 'z_max',
+  }), []);
+
+  const defaultHolePunchState = React.useMemo<HolePunchPanelState>(() => ({
+    radiusMm: 2.0,
+    depthMm: 12.0,
+  }), []);
+  const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
   const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
   const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
@@ -14206,60 +14443,210 @@ export default function Home() {
     transformMgr.setIsTransforming(true);
   }, [ensurePendingTransformHistoryForActiveModel, scene, transformMgr]);
 
-  const handleApplyHollowing = React.useCallback(async () => {
-    if (isApplyingHollowing) return;
+  const persistActiveModelModifiers = React.useCallback((next: ModelMeshModifiers | undefined) => {
+    const activeModelId = scene.activeModel?.id;
+    if (!activeModelId) return;
+    scene.setModelMeshModifiers(activeModelId, next);
+  }, [scene]);
+
+  const handleApplyHollowing = React.useCallback(() => {
+    void (async () => {
+      const activeModel = scene.activeModel;
+      if (!activeModel) return;
+
+      const persistedHollowing = activeModel.meshModifiers?.hollowing;
+      const shouldApply = hollowingDraftEnabled || !persistedHollowing?.enabled;
+      if (!shouldApply) return;
+
+      const existingSource = hollowingSourceByModelIdRef.current.get(activeModel.id);
+      const needsNewSource = !existingSource || !persistedHollowing?.enabled;
+
+      let sourceGeometry: THREE.BufferGeometry;
+      if (needsNewSource) {
+        if (existingSource) {
+          existingSource.geometry.dispose();
+        }
+
+        if (persistedHollowing?.enabled) {
+          const restoredFromSnapshot = geometryFromSnapshot(persistedHollowing);
+          if (!restoredFromSnapshot) {
+            setExportErrorToast({
+              id: Date.now(),
+              text: 'Hollowing source snapshot is missing or invalid in this VOXL file. Re-apply cannot continue.',
+            });
+            setIsExportErrorToastVisible(true);
+            return;
+          }
+          sourceGeometry = restoredFromSnapshot;
+        } else {
+          sourceGeometry = activeModel.geometry.geometry.clone();
+        }
+
+        hollowingSourceByModelIdRef.current.set(activeModel.id, {
+          geometry: sourceGeometry,
+        });
+      } else {
+        sourceGeometry = existingSource.geometry;
+      }
+
+      setIsApplyingHollowing(true);
+      try {
+        const options: HollowOptions = {
+          mode: hollowingState.mode,
+          voxelResolution: hollowingState.voxelResolution,
+          shellThicknessMm: hollowingState.shellThicknessMm,
+          openFace: hollowingState.openFace,
+          drainHoles: [],
+          previewCavityOnly: false,
+        };
+
+        const result = await hollowFromGeometry(sourceGeometry, options);
+        if (!result) {
+          setExportErrorToast({ id: Date.now(), text: 'Hollowing is available in DragonFruit Desktop only.' });
+          setIsExportErrorToastVisible(true);
+          return;
+        }
+
+        const nextGeometry = new THREE.BufferGeometry();
+        nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
+        nextGeometry.computeVertexNormals();
+        nextGeometry.computeBoundingBox();
+        nextGeometry.computeBoundingSphere();
+
+        const modeLabel = hollowingState.mode === 'shell_open_face' ? 'Shell Hollowing' : 'Cavity Hollowing';
+        const replaced = scene.replaceModelGeometry(
+          activeModel.id,
+          nextGeometry,
+          `${modeLabel} (${result.report.outputTriangleCount.toLocaleString()} tris)`,
+        );
+        if (!replaced) {
+          nextGeometry.dispose();
+          return;
+        }
+
+        const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
+
+        persistActiveModelModifiers({
+          ...(activeModel.meshModifiers ?? {}),
+          hollowing: {
+            enabled: true,
+            bakedIntoGeometry: true,
+            sourcePositionsBase64: sourceSnapshot.sourcePositionsBase64,
+            sourcePositionCount: sourceSnapshot.sourcePositionCount,
+            mode: hollowingState.mode,
+            voxelResolution: hollowingState.voxelResolution,
+            shellThicknessMm: hollowingState.shellThicknessMm,
+            openFace: hollowingState.openFace,
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setExportErrorToast({ id: Date.now(), text: `Hollowing failed: ${message}` });
+        setIsExportErrorToastVisible(true);
+      } finally {
+        setIsApplyingHollowing(false);
+      }
+    })();
+  }, [hollowingDraftEnabled, hollowingState, persistActiveModelModifiers, scene]);
+
+  const handleResetHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
     if (!activeModel) return;
 
-    const options: HollowOptions = {
-      mode: hollowingState.mode,
-      voxelResolution: hollowingState.voxelResolution,
-      shellThicknessMm: hollowingState.shellThicknessMm,
-      openFace: hollowingState.openFace,
-      drainHoles: [],
-      previewCavityOnly: false,
-    };
+    const sourceEntry = hollowingSourceByModelIdRef.current.get(activeModel.id)
+      ?? (() => {
+        const restored = geometryFromSnapshot(activeModel.meshModifiers?.hollowing ?? {});
+        if (!restored) return null;
+        const entry = { geometry: restored };
+        hollowingSourceByModelIdRef.current.set(activeModel.id, entry);
+        return entry;
+      })();
 
-    setIsApplyingHollowing(true);
-    try {
-      const result = await hollowFromGeometry(activeModel.geometry.geometry, options);
-      if (!result) {
-        setExportErrorToast({ id: Date.now(), text: 'Hollowing is available in DragonFruit Desktop only.' });
-        setIsExportErrorToastVisible(true);
-        return;
+    if (sourceEntry) {
+      const restoredGeometry = sourceEntry.geometry.clone();
+      const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Reset Hollowing');
+      if (!restored) {
+        restoredGeometry.dispose();
       }
-
-      const nextGeometry = new THREE.BufferGeometry();
-      nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
-      nextGeometry.computeVertexNormals();
-      nextGeometry.computeBoundingBox();
-      nextGeometry.computeBoundingSphere();
-
-      const modeLabel = hollowingState.mode === 'shell_open_face' ? 'Shell Hollowing' : 'Cavity Hollowing';
-      scene.replaceModelGeometry(
-        activeModel.id,
-        nextGeometry,
-        `${modeLabel} (${result.report.outputTriangleCount.toLocaleString()} tris)`,
-      );
-
-      setHollowPreview((previous) => {
-        if (previous) previous.geometry.dispose();
-        return null;
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setExportErrorToast({ id: Date.now(), text: `Hollowing failed: ${message}` });
-      setIsExportErrorToastVisible(true);
-    } finally {
-      setIsApplyingHollowing(false);
     }
-  }, [hollowingState, isApplyingHollowing, scene]);
+
+    setHollowingState(defaultHollowingState);
+    setHollowingDraftEnabled(false);
+    persistActiveModelModifiers({
+      ...(activeModel.meshModifiers ?? {}),
+      hollowing: {
+        enabled: false,
+        bakedIntoGeometry: false,
+        sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
+        sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
+        mode: defaultHollowingState.mode,
+        voxelResolution: defaultHollowingState.voxelResolution,
+        shellThicknessMm: defaultHollowingState.shellThicknessMm,
+        openFace: defaultHollowingState.openFace,
+      },
+    });
+  }, [defaultHollowingState, persistActiveModelModifiers, scene.activeModel]);
+
+  const handleHollowingStateChange = React.useCallback((next: HollowingPanelState) => {
+    setHollowingState(next);
+    setHollowingDraftEnabled(true);
+  }, []);
 
   const selectedHolePunchPlacement = React.useMemo(() => (
     selectedHolePunchPlacementId
       ? holePunchPlacements.find((placement) => placement.id === selectedHolePunchPlacementId) ?? null
       : null
   ), [holePunchPlacements, selectedHolePunchPlacementId]);
+
+  const activeHolePunchPlacements = React.useMemo(() => {
+    const activeModelId = scene.activeModel?.id;
+    if (!activeModelId) return [] as HolePunchPlacementState[];
+    return holePunchPlacements.filter((placement) => placement.modelId === activeModelId);
+  }, [holePunchPlacements, scene.activeModel?.id]);
+
+  const persistedHolePunchPlacementsSignature = React.useMemo(() => {
+    const activeModel = scene.activeModel;
+    if (!activeModel) return '[]';
+    return serializeHolePunchPlacements(activeModel.meshModifiers?.holePunches ?? []);
+  }, [scene.activeModel]);
+
+  const draftHolePunchPlacementsSignature = React.useMemo(() => {
+    const activeModel = scene.activeModel;
+    if (!activeModel) return '[]';
+    const persistedDraft = toPersistedHolePunchPlacements(activeModel, activeHolePunchPlacements);
+    return serializeHolePunchPlacements(persistedDraft);
+  }, [activeHolePunchPlacements, scene.activeModel]);
+
+  const isHolePunchApplied = React.useMemo(() => {
+    const activeModel = scene.activeModel;
+    if (!activeModel) return false;
+    return (activeModel.meshModifiers?.holePunches?.length ?? 0) > 0;
+  }, [scene.activeModel]);
+
+  const isHolePunchDirty = draftHolePunchPlacementsSignature !== persistedHolePunchPlacementsSignature;
+
+  const persistedHollowingSignature = React.useMemo(
+    () => serializeHollowingModifier(scene.activeModel?.meshModifiers?.hollowing),
+    [scene.activeModel],
+  );
+
+  const draftHollowingSignature = React.useMemo(
+    () => serializeHollowingModifier({
+      enabled: hollowingDraftEnabled,
+      mode: hollowingState.mode,
+      voxelResolution: hollowingState.voxelResolution,
+      shellThicknessMm: hollowingState.shellThicknessMm,
+      openFace: hollowingState.openFace,
+    }),
+    [hollowingDraftEnabled, hollowingState.mode, hollowingState.openFace, hollowingState.shellThicknessMm, hollowingState.voxelResolution],
+  );
+
+  const isHollowingApplied = React.useMemo(() => {
+    const modifier = scene.activeModel?.meshModifiers?.hollowing;
+    return Boolean(modifier?.enabled && modifier?.bakedIntoGeometry);
+  }, [scene.activeModel]);
+
+  const isHollowingDirty = draftHollowingSignature !== persistedHollowingSignature;
 
   const buildHolePunchPlacementFromHit = React.useCallback((hit: THREE.Intersection, modelId: string): HolePunchPlacementState => {
     const localPoint = hit.object.worldToLocal(hit.point.clone());
@@ -14322,90 +14709,45 @@ export default function Home() {
 
   const handleHolePunchStateChange = React.useCallback((next: HolePunchPanelState) => {
     setHolePunchState(next);
-    if (!selectedHolePunchPlacementId) return;
-
-    setHolePunchPlacements((previous) => previous.map((placement) => (
-      placement.id === selectedHolePunchPlacementId
-        ? { ...placement, radiusMm: next.radiusMm, depthMm: next.depthMm }
-        : placement
-    )));
+    setHolePunchPlacements((previous) => {
+      if (!selectedHolePunchPlacementId) return previous;
+      return previous.map((placement) => (
+        placement.id === selectedHolePunchPlacementId
+          ? { ...placement, radiusMm: next.radiusMm, depthMm: next.depthMm }
+          : placement
+      ));
+    });
   }, [selectedHolePunchPlacementId]);
 
-  const handleClearSelectedHolePunchPlacement = React.useCallback(() => {
-    if (!selectedHolePunchPlacementId) return;
-    setHolePunchPlacements((previous) => previous.filter((placement) => placement.id !== selectedHolePunchPlacementId));
-    setSelectedHolePunchPlacementId(null);
-  }, [selectedHolePunchPlacementId]);
+  const handleResetHolePunch = React.useCallback(() => {
+    const activeModel = scene.activeModel;
+    const activeModelId = activeModel?.id ?? null;
+    if (!activeModelId || !activeModel) return;
 
-  const handleClearAllHolePunchPlacements = React.useCallback(() => {
-    const activeModelId = scene.activeModel?.id ?? null;
-    if (!activeModelId) return;
-
-    setHolePunchPlacements((previous) => previous.filter((placement) => placement.modelId !== activeModelId));
+    setHolePunchPlacements((previous) => {
+      const updated = previous.filter((placement) => placement.modelId !== activeModelId);
+      persistActiveModelModifiers({
+        ...(activeModel.meshModifiers ?? {}),
+        holePunches: [],
+      });
+      return updated;
+    });
+    setHolePunchState(defaultHolePunchState);
     setSelectedHolePunchPlacementId(null);
     setHolePunchHoverPlacement(null);
-  }, [scene.activeModel?.id]);
+  }, [defaultHolePunchState, persistActiveModelModifiers, scene.activeModel]);
 
-  const handleApplyHolePunch = React.useCallback(async () => {
+  const handleApplyHolePunch = React.useCallback(() => {
     const activeModel = scene.activeModel;
     if (!activeModel) return;
 
-    const placements = holePunchPlacements.filter((placement) => placement.modelId === activeModel.id);
-    if (placements.length === 0) return;
-
-    const geometry = activeModel.geometry.geometry;
-    const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      geometry.getAttribute('position') as THREE.BufferAttribute,
-    );
-
-    const size = bbox.getSize(new THREE.Vector3());
-    const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
-
-    const punchOptions: PunchOptions = {
-      punches: placements.map((placement) => ({
-        centerNorm: [
-          toNorm(placement.localPoint.x, bbox.min.x, size.x),
-          toNorm(placement.localPoint.y, bbox.min.y, size.y),
-          toNorm(placement.localPoint.z, bbox.min.z, size.z),
-        ],
-        radiusMm: placement.radiusMm,
-        direction: [placement.localNormal.x, placement.localNormal.y, placement.localNormal.z],
-        lengthMm: placement.depthMm,
-      })),
-    };
-
-    setIsApplyingHolePunch(true);
-    try {
-      const result = await punchFromGeometry(geometry, punchOptions);
-      if (!result) {
-        setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-        setIsExportErrorToastVisible(true);
-        return;
-      }
-
-      const nextGeometry = new THREE.BufferGeometry();
-      nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
-      nextGeometry.computeVertexNormals();
-      nextGeometry.computeBoundingBox();
-      nextGeometry.computeBoundingSphere();
-
-      scene.replaceModelGeometry(
-        activeModel.id,
-        nextGeometry,
-        `Punch Holes (${result.report.removedTriangleCount.toLocaleString()} tris removed)`,
-      );
-
-      setHolePunchPlacements((previous) => previous.filter((placement) => placement.modelId !== activeModel.id));
-      setSelectedHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setExportErrorToast({ id: Date.now(), text: `Hole punching failed: ${message}` });
-      setIsExportErrorToastVisible(true);
-    } finally {
-      setIsApplyingHolePunch(false);
-    }
-  }, [holePunchPlacements, scene]);
+    const placements = activeHolePunchPlacements;
+    const persisted = toPersistedHolePunchPlacements(activeModel, placements);
+    persistActiveModelModifiers({
+      ...(activeModel.meshModifiers ?? {}),
+      holePunches: persisted,
+    });
+  }, [activeHolePunchPlacements, persistActiveModelModifiers, scene.activeModel]);
 
   const clearPendingHollowPreviewDebounce = React.useCallback(() => {
     if (hollowPreviewDebounceTimerRef.current !== null) {
@@ -14443,7 +14785,15 @@ export default function Home() {
     setIsPreviewingHollowing(true);
 
     try {
-      const result = await hollowFromGeometry(activeModel.geometry.geometry, options);
+      const sourceEntry = hollowingSourceByModelIdRef.current.get(activeModel.id);
+      const restoredFromSnapshot = activeModel.meshModifiers?.hollowing?.sourcePositionsBase64
+        ? geometryFromSnapshot(activeModel.meshModifiers.hollowing)
+        : null;
+      if (!sourceEntry && restoredFromSnapshot) {
+        hollowingSourceByModelIdRef.current.set(activeModel.id, { geometry: restoredFromSnapshot });
+      }
+      const sourceGeometry = sourceEntry?.geometry ?? restoredFromSnapshot ?? activeModel.geometry.geometry;
+      const result = await hollowFromGeometry(sourceGeometry, options);
       if (!result) {
         if (notifyUnavailable) {
           setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
@@ -14512,6 +14862,24 @@ export default function Home() {
   }, [clearPendingHollowPreviewDebounce]);
 
   React.useEffect(() => {
+    const liveIds = new Set(scene.models.map((model) => model.id));
+    for (const [modelId, entry] of hollowingSourceByModelIdRef.current.entries()) {
+      if (liveIds.has(modelId)) continue;
+      entry.geometry.dispose();
+      hollowingSourceByModelIdRef.current.delete(modelId);
+    }
+  }, [scene.models]);
+
+  React.useEffect(() => {
+    return () => {
+      for (const entry of hollowingSourceByModelIdRef.current.values()) {
+        entry.geometry.dispose();
+      }
+      hollowingSourceByModelIdRef.current.clear();
+    };
+  }, []);
+
+  React.useEffect(() => {
     if (!hollowPreview) return;
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
       clearHollowPreview();
@@ -14524,30 +14892,57 @@ export default function Home() {
   }, [clearHollowPreview, hollowPreview, scene.mode, scene.models, transformMgr.transformMode]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
-      if (holePunchPlacements.length > 0) setHolePunchPlacements([]);
-      if (selectedHolePunchPlacementId) setSelectedHolePunchPlacementId(null);
-      if (holePunchHoverPlacement) setHolePunchHoverPlacement(null);
+    const activeModel = scene.activeModel;
+    if (!activeModel) {
+      setHolePunchPlacements([]);
+      setSelectedHolePunchPlacementId(null);
+      setHolePunchHoverPlacement(null);
+      setHollowingState(defaultHollowingState);
+      setHollowingDraftEnabled(false);
+      setHolePunchState(defaultHolePunchState);
       return;
     }
 
-    const activeModelId = scene.activeModel?.id ?? null;
-    if (holePunchPlacements.some((placement) => placement.modelId !== activeModelId)) {
-      setHolePunchPlacements((previous) => previous.filter((placement) => placement.modelId === activeModelId));
+    const persistedPlacements = fromPersistedHolePunchPlacements(
+      activeModel,
+      activeModel.meshModifiers?.holePunches ?? [],
+    );
+    setHolePunchPlacements(persistedPlacements);
+
+    setSelectedHolePunchPlacementId((previous) => (
+      previous && persistedPlacements.some((placement) => placement.id === previous)
+        ? previous
+        : null
+    ));
+    setHolePunchHoverPlacement(null);
+
+    const persistedHollowing = activeModel.meshModifiers?.hollowing;
+    if (persistedHollowing?.enabled) {
+      setHollowingDraftEnabled(true);
+      setHollowingState({
+        mode: persistedHollowing.mode,
+        voxelResolution: persistedHollowing.voxelResolution,
+        shellThicknessMm: persistedHollowing.shellThicknessMm,
+        openFace: persistedHollowing.openFace,
+      });
+    } else {
+      setHollowingDraftEnabled(false);
+      setHollowingState(defaultHollowingState);
     }
-    if (selectedHolePunchPlacementId && !holePunchPlacements.some((placement) => placement.id === selectedHolePunchPlacementId)) {
-      setSelectedHolePunchPlacementId(null);
-    }
-    if (holePunchHoverPlacement && holePunchHoverPlacement.modelId !== activeModelId) {
-      setHolePunchHoverPlacement(null);
+
+    if (persistedPlacements.length > 0) {
+      const preferredPlacement = persistedPlacements[0];
+      setHolePunchState({
+        radiusMm: preferredPlacement.radiusMm,
+        depthMm: preferredPlacement.depthMm,
+      });
+    } else {
+      setHolePunchState(defaultHolePunchState);
     }
   }, [
-    holePunchHoverPlacement,
-    holePunchPlacements,
-    scene.activeModel?.id,
-    scene.mode,
-    selectedHolePunchPlacementId,
-    transformMgr.transformMode,
+    scene.activeModel,
+    defaultHolePunchState,
+    defaultHollowingState,
   ]);
 
   React.useEffect(() => {
@@ -15188,23 +15583,23 @@ export default function Home() {
                 <HollowingPanel
                   key="prepare-hollowing-panel"
                   state={hollowingState}
-                  onStateChange={setHollowingState}
+                  onStateChange={handleHollowingStateChange}
+                  onReset={handleResetHollowing}
                   onApply={() => { void handleApplyHollowing(); }}
                   isApplying={isApplyingHollowing}
                   isPreviewing={isPreviewingHollowing}
+                  canApply={isHollowingDirty || !isHollowingApplied}
                 />
 
                 <HolePunchPanel
                   key="prepare-hole-punch-panel"
                   state={holePunchState}
                   onStateChange={handleHolePunchStateChange}
+                  onReset={handleResetHolePunch}
                   onApply={() => { void handleApplyHolePunch(); }}
-                  onClearSelectedPlacement={handleClearSelectedHolePunchPlacement}
-                  onClearAllPlacements={handleClearAllHolePunchPlacements}
-                  hasSelectedPlacement={!!selectedHolePunchPlacement}
-                  placementCount={holePunchPlacements.filter((placement) => placement.modelId === scene.activeModel?.id).length}
+                  placementCount={activeHolePunchPlacements.length}
                   isApplying={isApplyingHolePunch}
-                  canApply={holePunchPlacements.some((placement) => placement.modelId === scene.activeModel?.id)}
+                  canApply={isHolePunchDirty}
                 />
               </>
             )}
@@ -15875,6 +16270,7 @@ export default function Home() {
                       normal={placement.worldNormal}
                       radiusMm={placement.radiusMm}
                       lengthMm={placement.depthMm}
+                      applied={isHolePunchApplied && !isHolePunchDirty}
                       variant={placement.id === selectedHolePunchPlacementId ? 'selected' : 'placed'}
                       onClick={() => handleSelectHolePunchPlacement(placement.id)}
                     />
@@ -15908,8 +16304,8 @@ export default function Home() {
                         renderOrder={6}
                       >
                         <meshStandardMaterial
-                          color="#66ecff"
-                          emissive="#3be6f2"
+                          color={isHollowingApplied && !isHollowingDirty ? '#71f1a2' : '#66ecff'}
+                          emissive={isHollowingApplied && !isHollowingDirty ? '#3ddc84' : '#3be6f2'}
                           emissiveIntensity={0.18}
                           transparent
                           opacity={0.62}

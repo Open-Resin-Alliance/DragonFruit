@@ -1,4 +1,5 @@
 import type { DragonfruitImportFormat } from '@/supports/types';
+import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 
 export const VOXL_MAGIC = 'VOXL' as const;
 export const VOXL_VERSION = 1 as const;
@@ -41,6 +42,7 @@ export type VoxlModelEntry = {
   fileSizeBytes?: number;
   transform: VoxlModelTransform;
   mesh: VoxlMeshRef;
+  meshModifiers?: ModelMeshModifiers;
 };
 
 export type VoxlMeta = {
@@ -97,6 +99,7 @@ export type VoxlModelRuntimeLike = {
     scale: { x: number; y: number; z: number };
   };
   mesh?: VoxlMeshRef;
+  meshModifiers?: ModelMeshModifiers;
 };
 
 export type BuildVoxlDocumentInput = {
@@ -119,6 +122,6 @@ export type ParsedVoxlResult = {
   document: VoxlDocumentV1;
   /** Pre-decoded mesh bytes keyed by model ID (populated for V2 files). */
   meshBytes: Map<string, Uint8Array>;
-  /** The container format version that was actually read (1 or 2). */
+  /** The VOXL format version that was read (e.g. 1, 2.1). */
   sourceVersion: number;
 };

@@ -201,6 +201,7 @@ function mapModelToVoxl(model: VoxlModelRuntimeLike): VoxlModelEntry {
       rotation: toVec3(model.transform.rotation),
       scale: toVec3(model.transform.scale),
     },
+    meshModifiers: model.meshModifiers,
     mesh: model.mesh ?? {
       mode: 'external-file',
       fileName: model.name,

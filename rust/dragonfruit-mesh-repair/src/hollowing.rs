@@ -761,7 +761,17 @@ pub fn punch_cylinders(mesh: IndexedMesh, options: &HolePunchOptions) -> HolePun
 
         let mut remove = false;
         for punch in &options.punches {
-            if point_in_punch_cylinder(centroid, punch, &bbox, tolerance_mm) {
+            // Centroid-only tests are too aggressive on coarse meshes and can
+            // erase large swaths of triangles when a cylinder passes nearby.
+            // Require stronger evidence of overlap: at least two triangle
+            // vertices inside the cylinder, or one vertex + centroid.
+            let inside_a = point_in_punch_cylinder(a, punch, &bbox, tolerance_mm);
+            let inside_b = point_in_punch_cylinder(b, punch, &bbox, tolerance_mm);
+            let inside_c = point_in_punch_cylinder(c, punch, &bbox, tolerance_mm);
+            let inside_count = inside_a as u8 + inside_b as u8 + inside_c as u8;
+            let centroid_inside = point_in_punch_cylinder(centroid, punch, &bbox, tolerance_mm);
+
+            if inside_count >= 2 || (inside_count >= 1 && centroid_inside) {
                 remove = true;
                 break;
             }
