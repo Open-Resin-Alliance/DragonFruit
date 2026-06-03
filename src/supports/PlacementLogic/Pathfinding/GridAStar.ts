@@ -213,6 +213,84 @@ function heapPop(heap: AStarEntry[]): AStarEntry | undefined {
     return top;
 }
 
+type HeapCompare = (a: AStarEntry, b: AStarEntry) => number;
+
+function heapSwap(heap: AStarEntry[], heapIndexByKey: Map<number, number>, i: number, j: number): void {
+    const a = heap[i];
+    const b = heap[j];
+    heap[i] = b;
+    heap[j] = a;
+    heapIndexByKey.set(a.key, j);
+    heapIndexByKey.set(b.key, i);
+}
+
+function heapSiftUp(heap: AStarEntry[], heapIndexByKey: Map<number, number>, startIndex: number, compare: HeapCompare): void {
+    let i = startIndex;
+    while (i > 0) {
+        const pi = (i - 1) >> 1;
+        if (compare(heap[pi], heap[i]) <= 0) break;
+        heapSwap(heap, heapIndexByKey, pi, i);
+        i = pi;
+    }
+}
+
+function heapSiftDown(heap: AStarEntry[], heapIndexByKey: Map<number, number>, startIndex: number, compare: HeapCompare): void {
+    let i = startIndex;
+    const len = heap.length;
+    while (true) {
+        const l = i * 2 + 1;
+        const r = l + 1;
+        let smallest = i;
+        if (l < len && compare(heap[l], heap[smallest]) < 0) smallest = l;
+        if (r < len && compare(heap[r], heap[smallest]) < 0) smallest = r;
+        if (smallest === i) break;
+        heapSwap(heap, heapIndexByKey, i, smallest);
+        i = smallest;
+    }
+}
+
+function heapPushOrUpdate(
+    heap: AStarEntry[],
+    heapIndexByKey: Map<number, number>,
+    entry: AStarEntry,
+    compare: HeapCompare,
+): void {
+    const existingIndex = heapIndexByKey.get(entry.key);
+    if (existingIndex !== undefined) {
+        const existing = heap[existingIndex];
+        if (compare(entry, existing) >= 0) {
+            return;
+        }
+        heap[existingIndex] = entry;
+        heapIndexByKey.set(entry.key, existingIndex);
+        heapSiftUp(heap, heapIndexByKey, existingIndex, compare);
+        heapSiftDown(heap, heapIndexByKey, heapIndexByKey.get(entry.key)!, compare);
+        return;
+    }
+
+    heap.push(entry);
+    const index = heap.length - 1;
+    heapIndexByKey.set(entry.key, index);
+    heapSiftUp(heap, heapIndexByKey, index, compare);
+}
+
+function heapPopIndexed(heap: AStarEntry[], heapIndexByKey: Map<number, number>, compare: HeapCompare): AStarEntry | undefined {
+    if (heap.length === 0) return undefined;
+    const top = heap[0];
+    heapIndexByKey.delete(top.key);
+
+    if (heap.length === 1) {
+        heap.pop();
+        return top;
+    }
+
+    const last = heap.pop()!;
+    heap[0] = last;
+    heapIndexByKey.set(last.key, 0);
+    heapSiftDown(heap, heapIndexByKey, 0, compare);
+    return top;
+}
+
 // ---------- Heuristic ----------
 
 /** Octile-distance heuristic in 3D (admissible for 26-connected grids). */
@@ -291,6 +369,17 @@ export function gridAStar(
     const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
 
     const q = (v: number) => Math.round(v * invStep);
+    const compareHeapEntries: HeapCompare = (a, b) => {
+        const fDiff = a.f - b.f;
+        if (Math.abs(fDiff) > 1e-12) return fDiff;
+
+        const zDiff = a.z - b.z;
+        if (zDiff !== 0) return zDiff;
+
+        const aLatSq = (a.x - sqx) * (a.x - sqx) + (a.y - sqy) * (a.y - sqy);
+        const bLatSq = (b.x - sqx) * (b.x - sqx) + (b.y - sqy) * (b.y - sqy);
+        return aLatSq - bLatSq;
+    };
 
     // Quantized start / goal
     const sqx = q(startPos.x);
@@ -300,6 +389,7 @@ export function gridAStar(
 
     // ---- Warm-start or fresh ----
     let openSet: AStarEntry[];
+    const openSetIndexByKey = new Map<number, number>();
     const nodeState = new Map<number, NodeRuntimeState>();
 
     const canWarmStart = warmStart &&
@@ -309,7 +399,7 @@ export function gridAStar(
 
     if (canWarmStart && warmStart) {
         // Re-seed from previous search state
-        openSet = [...warmStart.openEntries];
+        openSet = [];
         for (const [k, v] of warmStart.gScores) {
             const existing = nodeState.get(k);
             if (existing) {
@@ -326,11 +416,14 @@ export function gridAStar(
                 nodeState.set(k, { g: Infinity, cameFrom: v, closed: false });
             }
         }
+        for (const entry of warmStart.openEntries) {
+            heapPushOrUpdate(openSet, openSetIndexByKey, entry, compareHeapEntries);
+        }
     } else {
         const startKey = cellKeyInt(sqx, sqy, sqz);
         const h = goalPlaneHeuristic(sqz);
         openSet = [];
-        heapPush(openSet, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h });
+        heapPushOrUpdate(openSet, openSetIndexByKey, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h }, compareHeapEntries);
         nodeState.set(startKey, { g: 0, closed: false });
     }
 
@@ -390,7 +483,7 @@ export function gridAStar(
     }
 
     while (openSet.length > 0 && expansions < maxExp) {
-        const current = heapPop(openSet)!;
+        const current = heapPopIndexed(openSet, openSetIndexByKey, compareHeapEntries)!;
         const currentState = nodeState.get(current.key);
         if (!currentState) continue;
         if (current.g > currentState.g) continue;
@@ -483,7 +576,7 @@ export function gridAStar(
             }
 
             const h = goalPlaneHeuristic(nz);
-            heapPush(openSet, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h });
+            heapPushOrUpdate(openSet, openSetIndexByKey, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h }, compareHeapEntries);
         }
     }
 
