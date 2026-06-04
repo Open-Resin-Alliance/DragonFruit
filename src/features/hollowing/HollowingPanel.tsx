@@ -123,7 +123,7 @@ export function HollowingPanel({
                 style={state.mode === 'shell_open_face' ? activeModeStyle : undefined}
                 disabled={isApplying}
               >
-                Open-Face Shell
+                Shell
               </button>
             </div>
           </div>
