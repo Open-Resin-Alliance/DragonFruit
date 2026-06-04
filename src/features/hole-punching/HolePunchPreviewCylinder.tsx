@@ -16,11 +16,9 @@ interface HolePunchPreviewCylinderProps {
 
 const UP = new THREE.Vector3(0, 1, 0);
 const PUNCH_PREVIEW_OUTSIDE_PROTRUSION_MM = 0.25;
-// Keep punch previews above hollowing overlays (renderOrder 6 in page.tsx),
-// but below xray model meshes.
-const PUNCH_PREVIEW_RENDER_ORDER_INSIDE = 10000;
-// Render outside protrusion above xray so the exposed segment stays solid.
-const PUNCH_PREVIEW_RENDER_ORDER_OUTSIDE = 10020;
+const APPLIED_PREVIEW_RADIUS_INSET_MM = 0.01;
+// Interaction mesh stays high-priority for reliable hover/click targeting.
+const PUNCH_PREVIEW_RENDER_ORDER_INTERACTION = 10021;
 const PUNCH_PREVIEW_RENDER_ORDER_NORMAL_INSIDE = 4;
 const PUNCH_PREVIEW_RENDER_ORDER_NORMAL_OUTSIDE = 5;
 
@@ -38,7 +36,10 @@ export function HolePunchPreviewCylinder({
 }: HolePunchPreviewCylinderProps) {
   const insideDepth = Math.max(0.2, lengthMm);
   const outsideDepth = PUNCH_PREVIEW_OUTSIDE_PROTRUSION_MM;
-  const radius = Math.max(0.1, radiusMm);
+  const baseRadius = Math.max(0.1, radiusMm);
+  const renderRadius = applied
+    ? Math.max(0.05, baseRadius - APPLIED_PREVIEW_RADIUS_INSET_MM)
+    : baseRadius;
 
   const safeNormal = React.useMemo(() => {
     const n = normal.clone();
@@ -75,14 +76,9 @@ export function HolePunchPreviewCylinder({
     [insideDepth, outsideDepth, position, safeNormal],
   );
 
-  const interactionRadius = Math.max(radius * 1.1, radius + 0.15);
-  const forceOverlayRendering = variant !== 'placed';
-  const insideRenderOrder = forceOverlayRendering
-    ? PUNCH_PREVIEW_RENDER_ORDER_INSIDE
-    : PUNCH_PREVIEW_RENDER_ORDER_NORMAL_INSIDE;
-  const outsideRenderOrder = forceOverlayRendering
-    ? PUNCH_PREVIEW_RENDER_ORDER_OUTSIDE
-    : PUNCH_PREVIEW_RENDER_ORDER_NORMAL_OUTSIDE;
+  const interactionRadius = Math.max(baseRadius * 1.1, baseRadius + 0.15);
+  const insideRenderOrder = PUNCH_PREVIEW_RENDER_ORDER_NORMAL_INSIDE;
+  const outsideRenderOrder = PUNCH_PREVIEW_RENDER_ORDER_NORMAL_OUTSIDE;
 
   const palette = React.useMemo(() => {
     if (!applied) {
@@ -184,7 +180,7 @@ export function HolePunchPreviewCylinder({
         <mesh
           position={interactionPosition}
           quaternion={quaternion}
-          renderOrder={PUNCH_PREVIEW_RENDER_ORDER_OUTSIDE + 1}
+          renderOrder={PUNCH_PREVIEW_RENDER_ORDER_INTERACTION}
           onClick={onClick ? (event) => {
             event.stopPropagation();
             onClick();
@@ -214,7 +210,7 @@ export function HolePunchPreviewCylinder({
           quaternion={quaternion}
           renderOrder={insideRenderOrder}
         >
-          <cylinderGeometry args={[radius, radius, cavityAid.shellDepth, 24, 1, false]} />
+          <cylinderGeometry args={[renderRadius, renderRadius, cavityAid.shellDepth, 24, 1, false]} />
           <meshStandardMaterial
             color={palette.color}
             emissive={palette.emissive}
@@ -223,8 +219,8 @@ export function HolePunchPreviewCylinder({
             metalness={0.04}
             transparent
             opacity={palette.opacity}
-            depthWrite={!forceOverlayRendering}
-            depthTest={!forceOverlayRendering}
+            depthWrite
+            depthTest
           />
         </mesh>
       )}
@@ -235,7 +231,7 @@ export function HolePunchPreviewCylinder({
           quaternion={quaternion}
           renderOrder={insideRenderOrder}
         >
-          <cylinderGeometry args={[radius, radius, cavityAid.cavityDepth, 24, 1, false]} />
+          <cylinderGeometry args={[renderRadius, renderRadius, cavityAid.cavityDepth, 24, 1, false]} />
           <meshStandardMaterial
             color={inversePalette.color}
             emissive={inversePalette.emissive}
@@ -244,8 +240,8 @@ export function HolePunchPreviewCylinder({
             metalness={0.04}
             transparent
             opacity={inversePalette.opacity}
-            depthWrite={!forceOverlayRendering}
-            depthTest={!forceOverlayRendering}
+            depthWrite
+            depthTest
           />
         </mesh>
       )}
@@ -255,7 +251,7 @@ export function HolePunchPreviewCylinder({
         quaternion={quaternion}
         renderOrder={outsideRenderOrder}
       >
-        <cylinderGeometry args={[radius, radius, outsideDepth, 24, 1, false]} />
+        <cylinderGeometry args={[renderRadius, renderRadius, outsideDepth, 24, 1, false]} />
         <meshStandardMaterial
           color={palette.color}
           emissive={palette.emissive}

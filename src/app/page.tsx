@@ -431,17 +431,29 @@ function serializeHollowingModifier(modifier: ModelHollowingModifier | null | un
 }
 
 function serializeHolePunchPlacements(placements: ModelHolePunchPlacement[]): string {
+  const normalizePlacement = (placement: ModelHolePunchPlacement) => ({
+    id: placement.id,
+    centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
+    radiusMm: Number(placement.radiusMm.toFixed(4)),
+    depthMm: Number(placement.depthMm.toFixed(4)),
+    direction: placement.direction.map((value) => Number(value.toFixed(6))),
+  });
+
   const sorted = [...placements]
-    .map((placement) => ({
-      id: placement.id,
-      centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
-      radiusMm: Number(placement.radiusMm.toFixed(4)),
-      depthMm: Number(placement.depthMm.toFixed(4)),
-      direction: placement.direction.map((value) => Number(value.toFixed(6))),
-    }))
+    .map(normalizePlacement)
     .sort((a, b) => a.id.localeCompare(b.id));
 
   return JSON.stringify(sorted);
+}
+
+function serializeSingleHolePunchPlacement(placement: ModelHolePunchPlacement): string {
+  return JSON.stringify({
+    id: placement.id,
+    centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
+    radiusMm: Number(placement.radiusMm.toFixed(4)),
+    depthMm: Number(placement.depthMm.toFixed(4)),
+    direction: placement.direction.map((value) => Number(value.toFixed(6))),
+  });
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -14840,6 +14852,37 @@ export default function Home() {
 
   const isHolePunchDirty = draftHolePunchPlacementsSignature !== persistedHolePunchPlacementsSignature;
 
+  const appliedHolePunchPlacementIds = React.useMemo(() => {
+    const activeModel = scene.activeModel;
+    if (!activeModel?.meshModifiers?.holePunchesBakedIntoGeometry) {
+      return new Set<string>();
+    }
+
+    const persisted = activeModel.meshModifiers?.holePunches ?? [];
+    if (persisted.length === 0) {
+      return new Set<string>();
+    }
+
+    const persistedById = new Map<string, string>();
+    for (const placement of persisted) {
+      persistedById.set(placement.id, serializeSingleHolePunchPlacement(placement));
+    }
+
+    const draftAsPersisted = toPersistedHolePunchPlacements(activeModel, activeHolePunchPlacements)
+      .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
+
+    const appliedIds = new Set<string>();
+    for (const placement of draftAsPersisted) {
+      const persistedSignature = persistedById.get(placement.id);
+      if (!persistedSignature) continue;
+      if (persistedSignature === serializeSingleHolePunchPlacement(placement)) {
+        appliedIds.add(placement.id);
+      }
+    }
+
+    return appliedIds;
+  }, [activeHolePunchPlacements, scene.activeModel]);
+
   const persistedHollowingSignature = React.useMemo(
     () => serializeHollowingModifier(scene.activeModel?.meshModifiers?.hollowing),
     [scene.activeModel],
@@ -15014,6 +15057,45 @@ export default function Home() {
       const persisted = toPersistedHolePunchPlacements(activeModel, placements)
         .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
 
+      const bakedPlacements = activeModel.meshModifiers?.holePunches ?? [];
+      const bakedPlacementSignaturesById = new Map<string, string>();
+      for (const placement of bakedPlacements) {
+        bakedPlacementSignaturesById.set(placement.id, serializeSingleHolePunchPlacement(placement));
+      }
+
+      const draftPlacementSignaturesById = new Map<string, string>();
+      for (const placement of persisted) {
+        draftPlacementSignaturesById.set(placement.id, serializeSingleHolePunchPlacement(placement));
+      }
+
+      const bakedPlacementsUnchanged = bakedPlacements.every((placement) => (
+        draftPlacementSignaturesById.get(placement.id) === serializeSingleHolePunchPlacement(placement)
+      ));
+
+      const appendOnlyNewPlacements = (
+        activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+        && bakedPlacementsUnchanged
+        && persisted.length > bakedPlacements.length
+      )
+        ? persisted.filter((placement) => !bakedPlacementSignaturesById.has(placement.id))
+        : [];
+
+      const hasStoredPunchSource = Boolean(
+        activeModel.meshModifiers?.holePunchSourcePositionsBase64
+        && Number.isFinite(activeModel.meshModifiers?.holePunchSourcePositionCount)
+        && (activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0) > 0,
+      );
+
+      const useAppendOnlyFastPath = Boolean(
+        activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+        && hasStoredPunchSource
+        && appendOnlyNewPlacements.length > 0,
+      );
+
+      const punchesToApply = useAppendOnlyFastPath
+        ? appendOnlyNewPlacements
+        : persisted;
+
       if (persisted.length === 0) {
         const restored = geometryFromSnapshot({
           sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
@@ -15044,8 +15126,19 @@ export default function Home() {
       try {
         let sourceGeometry: THREE.BufferGeometry;
         let ownsSourceGeometry = false;
+        let sourceSnapshot: {
+          sourcePositionsBase64: string;
+          sourcePositionCount: number;
+        };
 
-        if (activeModel.meshModifiers?.holePunchesBakedIntoGeometry) {
+        if (useAppendOnlyFastPath) {
+          sourceGeometry = activeModel.geometry.geometry.clone();
+          ownsSourceGeometry = true;
+          sourceSnapshot = {
+            sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64 ?? '',
+            sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0,
+          };
+        } else if (activeModel.meshModifiers?.holePunchesBakedIntoGeometry) {
           const restoredFromSnapshot = geometryFromSnapshot({
             sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
             sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15062,12 +15155,12 @@ export default function Home() {
 
           sourceGeometry = restoredFromSnapshot;
           ownsSourceGeometry = true;
+          sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
         } else {
           sourceGeometry = activeModel.geometry.geometry.clone();
           ownsSourceGeometry = true;
+          sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
         }
-
-        const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
 
         const sourceBbox = sourceGeometry.boundingBox
           ?? new THREE.Box3().setFromBufferAttribute(sourceGeometry.getAttribute('position') as THREE.BufferAttribute);
@@ -15076,7 +15169,7 @@ export default function Home() {
         const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
 
         const punchOptions: PunchOptions = {
-          punches: persisted.map((placement) => {
+          punches: punchesToApply.map((placement) => {
             const axis = new THREE.Vector3(
               placement.direction[0],
               placement.direction[1],
@@ -15144,7 +15237,9 @@ export default function Home() {
           }),
         };
 
-        const punchSourceKey = activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+        const punchSourceKey = useAppendOnlyFastPath
+          ? `${activeModel.id}::append:${buildGeometryVersionKey(activeModel.geometry.geometry)}::${appendOnlyNewPlacements.length}`
+          : activeModel.meshModifiers?.holePunchesBakedIntoGeometry
           ? `${activeModel.id}::hole-source:${activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0}:${activeModel.meshModifiers?.holePunchSourcePositionsBase64?.length ?? 0}`
           : `${activeModel.id}::geom:${buildGeometryVersionKey(activeModel.geometry.geometry)}`;
 
@@ -16856,7 +16951,7 @@ export default function Home() {
                       radiusMm={placement.radiusMm}
                       lengthMm={placement.depthMm}
                       cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
-                      applied={isHolePunchApplied && !isHolePunchDirty}
+                      applied={appliedHolePunchPlacementIds.has(placement.id)}
                       variant={placement.id === selectedHolePunchPlacementId
                         ? 'selected'
                         : placement.id === hoveredHolePunchPlacementId
