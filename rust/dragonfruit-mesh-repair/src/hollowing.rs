@@ -376,14 +376,18 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
 
     // Fill interior = !outside. This includes the surface layer itself.
     let mut solid = vec![false; nx * ny * nz];
-    let mut occupied_voxels = 0usize;
     for i in 0..solid.len() {
-        let is_solid = !outside[i];
-        solid[i] = is_solid;
-        if is_solid {
-            occupied_voxels += 1;
-        }
+        solid[i] = !outside[i];
     }
+
+    // Flood-fill alone treats sealed air pockets in already-hollow source
+    // shells as "solid". Classify only the non-surface components with parity
+    // so nested/smushed shells preserve their existing cavities without paying
+    // for a parity test on every occupied voxel.
+    refine_non_surface_solid_components_with_parity(&grid, &surface, &mut solid, &mesh);
+    let source_void_components = label_void_components(&grid, &solid);
+
+    let occupied_voxels = solid.iter().filter(|v| **v).count();
 
     // Multi-source BFS over solid voxels from boundary-adjacent solid cells.
     // Two-pass 26-neighbour chamfer distance transform.
@@ -399,30 +403,13 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
     // (cost √3) steps.  Scan order: z-outer, y-middle, x-inner.
     let mut dist = vec![f32::INFINITY; nx * ny * nz];
 
-    // Seed: surface-touching solid voxels get distance 0.
+    // Seed every mesh-surface voxel so thickness is preserved to both exterior
+    // walls and any pre-existing interior cavity walls.
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
                 let i = grid.idx(x, y, z);
-                if !solid[i] {
-                    continue;
-                }
-                let mut touches_outside = false;
-                'seed: for (dx, dy, dz) in N6 {
-                    let ax = x as isize + dx;
-                    let ay = y as isize + dy;
-                    let az = z as isize + dz;
-                    if !grid.in_bounds(ax, ay, az) {
-                        touches_outside = true;
-                        break 'seed;
-                    }
-                    let ni = grid.idx(ax as usize, ay as usize, az as usize);
-                    if !solid[ni] {
-                        touches_outside = true;
-                        break 'seed;
-                    }
-                }
-                if touches_outside {
+                if solid[i] && surface[i] {
                     dist[i] = 0.0;
                 }
             }
@@ -502,6 +489,12 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         }
     }
 
+    // Preserve separator voxels that sit between different source void
+    // regions (outside or pre-existing enclosed cavities). This prevents the
+    // generated cavity from "punching through" shell walls in multi-shell
+    // source meshes when voxelization under-resolves nearby sheets.
+    preserve_source_void_separators(&grid, &solid, &source_void_components, &mut keep);
+
     // Optional drain holes for cavity mode.
     if matches!(options.mode, HollowMode::Cavity) && !options.drain_holes.is_empty() {
         for hole in &options.drain_holes {
@@ -540,6 +533,7 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         for _ in 0..passes {
             apply_internal_cavity_chamfer_pass(&grid, &solid, &mut keep, &dist);
         }
+        preserve_source_void_separators(&grid, &solid, &source_void_components, &mut keep);
     }
 
     // In cavity mode, keep exactly one connected interior cavity.
@@ -1578,6 +1572,160 @@ fn refine_solid_near_punches_with_parity(
     }
 }
 
+fn refine_non_surface_solid_components_with_parity(
+    grid: &GridSpec,
+    surface: &[bool],
+    solid: &mut [bool],
+    mesh: &IndexedMesh,
+) {
+    let mut visited = vec![false; solid.len()];
+    let bvh = Bvh::build(mesh);
+    let mut component = Vec::<usize>::new();
+    let mut queue = VecDeque::<usize>::new();
+
+    for start in 0..solid.len() {
+        if visited[start] || !solid[start] || surface[start] {
+            continue;
+        }
+
+        visited[start] = true;
+        queue.push_back(start);
+        component.clear();
+
+        while let Some(i) = queue.pop_front() {
+            component.push(i);
+            let z = i / (grid.nx * grid.ny);
+            let rem = i - z * grid.nx * grid.ny;
+            let y = rem / grid.nx;
+            let x = rem - y * grid.nx;
+
+            for (dx, dy, dz) in N6 {
+                let nx_i = x as isize + dx;
+                let ny_i = y as isize + dy;
+                let nz_i = z as isize + dz;
+                if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                    continue;
+                }
+
+                let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+                if visited[ni] || !solid[ni] || surface[ni] {
+                    continue;
+                }
+
+                visited[ni] = true;
+                queue.push_back(ni);
+            }
+        }
+
+        let sample = component[0];
+        let z = sample / (grid.nx * grid.ny);
+        let rem = sample - z * grid.nx * grid.ny;
+        let y = rem / grid.nx;
+        let x = rem - y * grid.nx;
+        let sample_p = grid.center_world(x, y, z);
+
+        if !point_inside_mesh_parity(mesh, &bvh, sample_p, grid.voxel_mm) {
+            for &i in &component {
+                solid[i] = false;
+            }
+        }
+    }
+}
+
+fn label_void_components(grid: &GridSpec, solid: &[bool]) -> Vec<i32> {
+    let mut labels = vec![-1i32; solid.len()];
+    let mut queue = VecDeque::<usize>::new();
+    let mut next_label = 0i32;
+
+    for start in 0..solid.len() {
+        if solid[start] || labels[start] >= 0 {
+            continue;
+        }
+
+        labels[start] = next_label;
+        queue.push_back(start);
+
+        while let Some(i) = queue.pop_front() {
+            let z = i / (grid.nx * grid.ny);
+            let rem = i - z * grid.nx * grid.ny;
+            let y = rem / grid.nx;
+            let x = rem - y * grid.nx;
+
+            for (dx, dy, dz) in N6 {
+                let nx_i = x as isize + dx;
+                let ny_i = y as isize + dy;
+                let nz_i = z as isize + dz;
+                if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                    continue;
+                }
+
+                let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+                if solid[ni] || labels[ni] >= 0 {
+                    continue;
+                }
+
+                labels[ni] = next_label;
+                queue.push_back(ni);
+            }
+        }
+
+        next_label += 1;
+    }
+
+    labels
+}
+
+fn preserve_source_void_separators(
+    grid: &GridSpec,
+    solid: &[bool],
+    void_components: &[i32],
+    keep: &mut [bool],
+) {
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let i = grid.idx(x, y, z);
+                if !solid[i] || keep[i] {
+                    continue;
+                }
+
+                let mut first_label = -1i32;
+                let mut separates_distinct_voids = false;
+
+                for (dx, dy, dz) in N6 {
+                    let nx_i = x as isize + dx;
+                    let ny_i = y as isize + dy;
+                    let nz_i = z as isize + dz;
+                    if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                        continue;
+                    }
+
+                    let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+                    if solid[ni] {
+                        continue;
+                    }
+
+                    let label = void_components[ni];
+                    if label < 0 {
+                        continue;
+                    }
+
+                    if first_label < 0 {
+                        first_label = label;
+                    } else if label != first_label {
+                        separates_distinct_voids = true;
+                        break;
+                    }
+                }
+
+                if separates_distinct_voids {
+                    keep[i] = true;
+                }
+            }
+        }
+    }
+}
+
 fn point_inside_mesh_parity(mesh: &IndexedMesh, bvh: &Bvh, p: Vec3, voxel_mm: f32) -> bool {
     // Skewed direction avoids axis-aligned degeneracy against many triangles.
     let ray_dir = Vec3::new(0.893, 0.372, 0.254);
@@ -1754,6 +1902,130 @@ fn vec3_normalize(v: Vec3) -> Option<Vec3> {
         None
     } else {
         Some(v.scale(1.0 / len))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parity_refinement_clears_enclosed_non_surface_cavity_component() {
+        let grid = GridSpec {
+            nx: 5,
+            ny: 5,
+            nz: 5,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let mut surface = vec![false; solid.len()];
+
+        for z in 1..=3 {
+            for y in 1..=3 {
+                for x in 1..=3 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    surface[i] = x == 1 || x == 3 || y == 1 || y == 3 || z == 1 || z == 3;
+                }
+            }
+        }
+
+        let cavity_index = grid.idx(2, 2, 2);
+        assert!(solid[cavity_index]);
+        assert!(!surface[cavity_index]);
+
+        let mesh = hollow_box_mesh(1.0, 4.0, 2.0, 3.0);
+        refine_non_surface_solid_components_with_parity(&grid, &surface, &mut solid, &mesh);
+
+        assert!(
+            !solid[cavity_index],
+            "parity refinement should clear the enclosed cavity center"
+        );
+    }
+
+    #[test]
+    fn source_void_separator_voxel_is_preserved() {
+        let grid = GridSpec {
+            nx: 3,
+            ny: 3,
+            nz: 3,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![true; grid.nx * grid.ny * grid.nz];
+        let left_void = grid.idx(0, 1, 1);
+        let right_void = grid.idx(2, 1, 1);
+        let separator = grid.idx(1, 1, 1);
+
+        solid[left_void] = false;
+        solid[right_void] = false;
+
+        let void_components = label_void_components(&grid, &solid);
+        assert_ne!(void_components[left_void], void_components[right_void]);
+
+        let mut keep = solid.clone();
+        keep[separator] = false;
+
+        preserve_source_void_separators(&grid, &solid, &void_components, &mut keep);
+
+        assert!(
+            keep[separator],
+            "separator voxel between distinct source voids should be preserved"
+        );
+    }
+
+    fn hollow_box_mesh(
+        outer_min: f32,
+        outer_max: f32,
+        inner_min: f32,
+        inner_max: f32,
+    ) -> IndexedMesh {
+        merge_meshes(
+            &box_mesh(outer_min, outer_max, false),
+            &box_mesh(inner_min, inner_max, true),
+        )
+    }
+
+    fn box_mesh(min: f32, max: f32, flip: bool) -> IndexedMesh {
+        let positions = vec![
+            Vec3::new(min, min, min),
+            Vec3::new(max, min, min),
+            Vec3::new(max, max, min),
+            Vec3::new(min, max, min),
+            Vec3::new(min, min, max),
+            Vec3::new(max, min, max),
+            Vec3::new(max, max, max),
+            Vec3::new(min, max, max),
+        ];
+
+        let mut triangles = vec![
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ];
+
+        if flip {
+            for tri in &mut triangles {
+                tri.swap(1, 2);
+            }
+        }
+
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 }
 
