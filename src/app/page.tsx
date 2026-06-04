@@ -14770,6 +14770,7 @@ export default function Home() {
         shellThicknessMm: defaultHollowingState.shellThicknessMm,
         openFace: defaultHollowingState.openFace,
       },
+      holePunchAppliedPlacements: [],
       holePunchesBakedIntoGeometry: false,
       holePunchSourcePositionsBase64: undefined,
       holePunchSourcePositionCount: undefined,
@@ -14835,10 +14836,14 @@ export default function Home() {
     selectedHolePunchPlacementId,
   ]);
 
-  const persistedHolePunchPlacementsSignature = React.useMemo(() => {
+  const appliedHolePunchPlacementsSignature = React.useMemo(() => {
     const activeModel = scene.activeModel;
     if (!activeModel) return '[]';
-    return serializeHolePunchPlacements(activeModel.meshModifiers?.holePunches ?? []);
+    const appliedPlacements = activeModel.meshModifiers?.holePunchAppliedPlacements
+      ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+        ? (activeModel.meshModifiers?.holePunches ?? [])
+        : []);
+    return serializeHolePunchPlacements(appliedPlacements);
   }, [scene.activeModel]);
 
   const draftHolePunchPlacementsSignature = React.useMemo(() => {
@@ -14871,32 +14876,40 @@ export default function Home() {
     return placements.length > 0 || hasSourceSnapshot;
   }, [scene.activeModel]);
 
-  const isHolePunchDirty = draftHolePunchPlacementsSignature !== persistedHolePunchPlacementsSignature;
+  const isHolePunchDirty = draftHolePunchPlacementsSignature !== appliedHolePunchPlacementsSignature;
 
   const appliedHolePunchPlacementIds = React.useMemo(() => {
     const activeModel = scene.activeModel;
-    if (!activeModel?.meshModifiers?.holePunchesBakedIntoGeometry) {
+    if (!activeModel) {
       return new Set<string>();
     }
 
-    const persisted = activeModel.meshModifiers?.holePunches ?? [];
-    if (persisted.length === 0) {
+    const appliedPlacements = activeModel.meshModifiers?.holePunchAppliedPlacements
+      ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+        ? (activeModel.meshModifiers?.holePunches ?? [])
+        : []);
+
+    if (appliedPlacements.length === 0) {
       return new Set<string>();
     }
 
-    const persistedById = new Map<string, string>();
-    for (const placement of persisted) {
-      persistedById.set(placement.id, serializeSingleHolePunchPlacement(placement));
-    }
-
-    const draftAsPersisted = toPersistedHolePunchPlacements(activeModel, activeHolePunchPlacements)
+    const currentPersistedPlacements = toPersistedHolePunchPlacements(activeModel, activeHolePunchPlacements)
       .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
 
+    if (currentPersistedPlacements.length === 0) {
+      return new Set<string>();
+    }
+
+    const currentById = new Map<string, string>();
+    for (const placement of currentPersistedPlacements) {
+      currentById.set(placement.id, serializeSingleHolePunchPlacement(placement));
+    }
+
     const appliedIds = new Set<string>();
-    for (const placement of draftAsPersisted) {
-      const persistedSignature = persistedById.get(placement.id);
-      if (!persistedSignature) continue;
-      if (persistedSignature === serializeSingleHolePunchPlacement(placement)) {
+    for (const placement of appliedPlacements) {
+      const currentSignature = currentById.get(placement.id);
+      if (!currentSignature) continue;
+      if (currentSignature === serializeSingleHolePunchPlacement(placement)) {
         appliedIds.add(placement.id);
       }
     }
@@ -14939,6 +14952,7 @@ export default function Home() {
     const activeModel = scene.activeModel;
     if (!activeModel) return false;
     return activeHolePunchPlacements.length > 0
+      || (activeModel.meshModifiers?.holePunchAppliedPlacements?.length ?? 0) > 0
       || Boolean(
         activeModel.meshModifiers?.holePunchesBakedIntoGeometry
         && (activeModel.meshModifiers?.holePunches?.length ?? 0) > 0,
@@ -14983,6 +14997,10 @@ export default function Home() {
       persistActiveModelModifiers({
         ...(activeModel.meshModifiers ?? {}),
         holePunches: nextPersisted,
+        holePunchAppliedPlacements: activeModel.meshModifiers?.holePunchAppliedPlacements
+          ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+            ? (activeModel.meshModifiers?.holePunches ?? [])
+            : []),
         holePunchesBakedIntoGeometry: false,
         holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
         holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15037,6 +15055,10 @@ export default function Home() {
     persistActiveModelModifiers({
       ...(activeModel.meshModifiers ?? {}),
       holePunches: nextPersisted,
+      holePunchAppliedPlacements: activeModel.meshModifiers?.holePunchAppliedPlacements
+        ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+          ? (activeModel.meshModifiers?.holePunches ?? [])
+          : []),
       holePunchesBakedIntoGeometry: false,
       holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
       holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15086,6 +15108,10 @@ export default function Home() {
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: nextPersisted,
+          holePunchAppliedPlacements: activeModel.meshModifiers?.holePunchAppliedPlacements
+            ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+              ? (activeModel.meshModifiers?.holePunches ?? [])
+              : []),
           holePunchesBakedIntoGeometry: false,
           holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
           holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15119,6 +15145,7 @@ export default function Home() {
       persistActiveModelModifiers({
         ...(activeModel.meshModifiers ?? {}),
         holePunches: [],
+        holePunchAppliedPlacements: [],
         holePunchesBakedIntoGeometry: true,
         holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
         holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15219,6 +15246,7 @@ export default function Home() {
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: [],
+          holePunchAppliedPlacements: [],
           holePunchesBakedIntoGeometry: true,
           holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
           holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15394,6 +15422,7 @@ export default function Home() {
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: persisted,
+          holePunchAppliedPlacements: persisted,
           holePunchesBakedIntoGeometry: true,
           holePunchSourcePositionsBase64: sourceSnapshot.sourcePositionsBase64,
           holePunchSourcePositionCount: sourceSnapshot.sourcePositionCount,
