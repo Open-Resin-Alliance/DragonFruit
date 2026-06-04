@@ -14657,15 +14657,7 @@ export default function Home() {
 
         if (persistedHollowing?.enabled) {
           const restoredFromSnapshot = geometryFromSnapshot(persistedHollowing);
-          if (!restoredFromSnapshot) {
-            setExportErrorToast({
-              id: Date.now(),
-              text: 'Hollowing source snapshot is missing or invalid in this VOXL file. Re-apply cannot continue.',
-            });
-            setIsExportErrorToastVisible(true);
-            return;
-          }
-          sourceGeometry = restoredFromSnapshot;
+          sourceGeometry = restoredFromSnapshot ?? activeModel.geometry.geometry.clone();
         } else {
           sourceGeometry = activeModel.geometry.geometry.clone();
         }
@@ -14781,7 +14773,24 @@ export default function Home() {
   const handleHollowingStateChange = React.useCallback((next: HollowingPanelState) => {
     setHollowingState(next);
     setHollowingDraftEnabled(true);
-  }, []);
+
+    const activeModel = scene.activeModel;
+    if (!activeModel) return;
+
+    persistActiveModelModifiers({
+      ...(activeModel.meshModifiers ?? {}),
+      hollowing: {
+        enabled: true,
+        bakedIntoGeometry: false,
+        sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
+        sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
+        mode: next.mode,
+        voxelResolution: next.voxelResolution,
+        shellThicknessMm: next.shellThicknessMm,
+        openFace: next.openFace,
+      },
+    });
+  }, [persistActiveModelModifiers, scene.activeModel]);
 
   const selectedHolePunchPlacement = React.useMemo(() => (
     selectedHolePunchPlacementId
@@ -14846,8 +14855,14 @@ export default function Home() {
     const activeModel = scene.activeModel;
     if (!activeModel) return false;
     const placements = activeModel.meshModifiers?.holePunches ?? [];
-    if (placements.length === 0) return false;
-    return !activeModel.meshModifiers?.holePunchesBakedIntoGeometry;
+    const hasSourceSnapshot = Boolean(
+      activeModel.meshModifiers?.holePunchSourcePositionsBase64
+      && Number.isFinite(activeModel.meshModifiers?.holePunchSourcePositionCount)
+      && (activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0) > 0,
+    );
+
+    if (activeModel.meshModifiers?.holePunchesBakedIntoGeometry) return false;
+    return placements.length > 0 || hasSourceSnapshot;
   }, [scene.activeModel]);
 
   const isHolePunchDirty = draftHolePunchPlacementsSignature !== persistedHolePunchPlacementsSignature;
@@ -14935,10 +14950,25 @@ export default function Home() {
     if (hitModelId !== activeModel.id) return;
 
     const placement = buildHolePunchPlacementFromHit(hit, activeModel.id);
-    setHolePunchPlacements((previous) => [...previous, placement]);
+    setHolePunchPlacements((previous) => {
+      const nextPlacements = [...previous, placement];
+      const nextActivePlacements = nextPlacements.filter((entry) => entry.modelId === activeModel.id);
+      const nextPersisted = toPersistedHolePunchPlacements(activeModel, nextActivePlacements)
+        .filter((entry) => entry.radiusMm > 0 && entry.depthMm > 0);
+
+      persistActiveModelModifiers({
+        ...(activeModel.meshModifiers ?? {}),
+        holePunches: nextPersisted,
+        holePunchesBakedIntoGeometry: false,
+        holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+        holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+      });
+
+      return nextPlacements;
+    });
     setSelectedHolePunchPlacementId(placement.id);
     setHolePunchHoverPlacement(null);
-  }, [buildHolePunchPlacementFromHit, scene.activeModel]);
+  }, [buildHolePunchPlacementFromHit, persistActiveModelModifiers, scene.activeModel]);
 
   const handleHolePunchHover = React.useCallback((hit: THREE.Intersection | null) => {
     const activeModel = scene.activeModel;
@@ -14966,16 +14996,28 @@ export default function Home() {
   }, [holePunchPlacements]);
 
   const handleDeleteSelectedHolePunchPlacement = React.useCallback(() => {
+    const activeModel = scene.activeModel;
     const selectedPlacementId = selectedHolePunchPlacementId;
-    if (!selectedPlacementId) return;
+    if (!activeModel || !selectedPlacementId) return;
 
     const nextPlacements = holePunchPlacements.filter((placement) => placement.id !== selectedPlacementId);
+    const nextActivePlacements = nextPlacements.filter((placement) => placement.modelId === activeModel.id);
+    const nextPersisted = toPersistedHolePunchPlacements(activeModel, nextActivePlacements)
+      .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
 
     setHolePunchPlacements(nextPlacements);
     setSelectedHolePunchPlacementId(null);
     setHoveredHolePunchPlacementId(null);
     setHolePunchHoverPlacement(null);
-  }, [holePunchPlacements, selectedHolePunchPlacementId]);
+
+    persistActiveModelModifiers({
+      ...(activeModel.meshModifiers ?? {}),
+      holePunches: nextPersisted,
+      holePunchesBakedIntoGeometry: false,
+      holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+      holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+    });
+  }, [holePunchPlacements, persistActiveModelModifiers, scene.activeModel, selectedHolePunchPlacementId]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
@@ -15005,13 +15047,30 @@ export default function Home() {
     setHolePunchState(next);
     setHolePunchPlacements((previous) => {
       if (!selectedHolePunchPlacementId) return previous;
-      return previous.map((placement) => (
+      const nextPlacements = previous.map((placement) => (
         placement.id === selectedHolePunchPlacementId
           ? { ...placement, radiusMm: next.radiusMm, depthMm: next.depthMm }
           : placement
       ));
+
+      const activeModel = scene.activeModel;
+      if (activeModel) {
+        const nextActivePlacements = nextPlacements.filter((placement) => placement.modelId === activeModel.id);
+        const nextPersisted = toPersistedHolePunchPlacements(activeModel, nextActivePlacements)
+          .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
+
+        persistActiveModelModifiers({
+          ...(activeModel.meshModifiers ?? {}),
+          holePunches: nextPersisted,
+          holePunchesBakedIntoGeometry: false,
+          holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+          holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+        });
+      }
+
+      return nextPlacements;
     });
-  }, [selectedHolePunchPlacementId]);
+  }, [persistActiveModelModifiers, scene.activeModel, selectedHolePunchPlacementId]);
 
   const handleResetHolePunch = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -15036,7 +15095,7 @@ export default function Home() {
       persistActiveModelModifiers({
         ...(activeModel.meshModifiers ?? {}),
         holePunches: [],
-        holePunchesBakedIntoGeometry: false,
+        holePunchesBakedIntoGeometry: true,
         holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
         holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
       });
@@ -15114,7 +15173,7 @@ export default function Home() {
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: [],
-          holePunchesBakedIntoGeometry: false,
+          holePunchesBakedIntoGeometry: true,
           holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
           holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
         });
@@ -15138,7 +15197,7 @@ export default function Home() {
             sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64 ?? '',
             sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0,
           };
-        } else if (activeModel.meshModifiers?.holePunchesBakedIntoGeometry) {
+        } else if (hasStoredPunchSource) {
           const restoredFromSnapshot = geometryFromSnapshot({
             sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
             sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
@@ -15239,7 +15298,7 @@ export default function Home() {
 
         const punchSourceKey = useAppendOnlyFastPath
           ? `${activeModel.id}::append:${buildGeometryVersionKey(activeModel.geometry.geometry)}::${appendOnlyNewPlacements.length}`
-          : activeModel.meshModifiers?.holePunchesBakedIntoGeometry
+          : hasStoredPunchSource
           ? `${activeModel.id}::hole-source:${activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0}:${activeModel.meshModifiers?.holePunchSourcePositionsBase64?.length ?? 0}`
           : `${activeModel.id}::geom:${buildGeometryVersionKey(activeModel.geometry.geometry)}`;
 
