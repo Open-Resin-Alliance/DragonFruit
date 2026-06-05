@@ -8,6 +8,8 @@ export interface HollowingPanelState {
   mode: HollowMode;
   voxelResolution: number;
   shellThicknessMm: number;
+  infillCellMm: number;
+  infillBeamRadiusMm: number;
   openFace: OpenFace;
 }
 
@@ -173,6 +175,40 @@ export function HollowingPanel({
               className="mt-1"
             />
           </div>
+
+          {state.mode === 'infill' && (
+            <>
+              <div className="rounded-md border p-2 space-y-1.5" style={panelCardStyle}>
+                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cell Size</label>
+                <ScrollableNumberField
+                  value={state.infillCellMm}
+                  onChange={(value) => setState({ infillCellMm: clampFloat(value, 3, 24, 1) })}
+                  min={3}
+                  max={24}
+                  step={0.5}
+                  unit="mm"
+                  ariaLabel="Infill cell size in millimeters"
+                  disabled={isApplying}
+                  className="mt-1"
+                />
+              </div>
+
+              <div className="rounded-md border p-2 space-y-1.5" style={panelCardStyle}>
+                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Beam Radius</label>
+                <ScrollableNumberField
+                  value={state.infillBeamRadiusMm}
+                  onChange={(value) => setState({ infillBeamRadiusMm: clampFloat(value, 0.3, 3, 2) })}
+                  min={0.3}
+                  max={3}
+                  step={0.05}
+                  unit="mm"
+                  ariaLabel="Infill beam radius in millimeters"
+                  disabled={isApplying}
+                  className="mt-1"
+                />
+              </div>
+            </>
+          )}
 
           {state.mode === 'shell_open_face' && (
             <div className="rounded-md border p-2" style={panelCardStyle}>

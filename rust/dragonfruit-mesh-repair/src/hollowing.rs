@@ -43,6 +43,8 @@ pub struct HollowOptions {
     pub mode: HollowMode,
     pub voxel_resolution: u16,
     pub shell_thickness_mm: f32,
+    pub infill_cell_mm: f32,
+    pub infill_beam_radius_mm: f32,
     pub open_face: OpenFace,
     pub drain_holes: Vec<DrainHoleSpec>,
     pub preview_cavity_only: bool,
@@ -58,6 +60,8 @@ impl Default for HollowOptions {
             mode: HollowMode::Cavity,
             voxel_resolution: 96,
             shell_thickness_mm: 2.0,
+            infill_cell_mm: 8.0,
+            infill_beam_radius_mm: 0.8,
             open_face: OpenFace::ZMax,
             drain_holes: Vec::new(),
             preview_cavity_only: false,
@@ -514,18 +518,6 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
     // source meshes when voxelization under-resolves nearby sheets.
     preserve_source_void_separators(&grid, &solid, &source_void_components, &mut keep);
 
-    if matches!(options.mode, HollowMode::Infill) {
-        apply_infill_lattice(
-            &grid,
-            &solid,
-            &dist,
-            &mut keep,
-            shell_voxels_f,
-            options.shell_thickness_mm,
-        );
-        preserve_source_void_separators(&grid, &solid, &source_void_components, &mut keep);
-    }
-
     // Optional drain holes for cavity mode.
     if matches!(options.mode, HollowMode::Cavity) && !options.drain_holes.is_empty() {
         for hole in &options.drain_holes {
@@ -558,7 +550,7 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
 
     // Optional voxel-level chamfering on cavity boundaries to turn hard
     // orthogonal internal steps into printable ~45° transitions.
-    if options.internal_chamfer_passes > 0 && !matches!(options.mode, HollowMode::Infill) {
+    if options.internal_chamfer_passes > 0 {
         let passes = effective_internal_cavity_chamfer_passes(
             options.shell_thickness_mm,
             shell_voxels_f,
@@ -864,23 +856,6 @@ impl HollowSession {
             &mut keep,
         );
 
-        if matches!(options.mode, HollowMode::Infill) {
-            apply_infill_lattice(
-                &self.grid,
-                &self.solid,
-                &self.dist,
-                &mut keep,
-                shell_voxels_f,
-                options.shell_thickness_mm,
-            );
-            preserve_source_void_separators(
-                &self.grid,
-                &self.solid,
-                &self.source_void_components,
-                &mut keep,
-            );
-        }
-
         if matches!(options.mode, HollowMode::Cavity) && !options.drain_holes.is_empty() {
             for hole in &options.drain_holes {
                 apply_drain_hole_corridor(
@@ -914,7 +889,7 @@ impl HollowSession {
             }
         }
 
-        if options.internal_chamfer_passes > 0 && !matches!(options.mode, HollowMode::Infill) {
+        if options.internal_chamfer_passes > 0 {
             let passes = effective_internal_cavity_chamfer_passes(
                 options.shell_thickness_mm,
                 shell_voxels_f,
@@ -1265,18 +1240,6 @@ fn build_smoothed_cavity_scalar_field(
     field
 }
 
-fn build_binary_boundary_scalar_field(positive: &[bool], negative: &[bool]) -> Vec<f32> {
-    let mut field = vec![-1.0f32; positive.len()];
-    for i in 0..field.len() {
-        if positive[i] {
-            field[i] = 1.0;
-        } else if negative[i] {
-            field[i] = -1.0;
-        }
-    }
-    field
-}
-
 fn build_hollow_output_mesh(
     source_mesh: &IndexedMesh,
     source_bbox: &Aabb,
@@ -1288,28 +1251,12 @@ fn build_hollow_output_mesh(
     shell_voxels_f: f32,
     smoothing_profile: InternalCavitySmoothingProfile,
 ) -> IndexedMesh {
-    let mut cavity_positive = keep.to_vec();
-    let mut cavity_negative = vec![false; solid.len()];
-    let mut infill_positive = vec![false; solid.len()];
-    let mut infill_negative = vec![false; solid.len()];
-
-    if matches!(options.mode, HollowMode::Infill) {
-        for i in 0..solid.len() {
-            let is_infill_member = solid[i] && keep[i] && dist[i] > shell_voxels_f;
-            if is_infill_member {
-                cavity_positive[i] = false;
-                infill_positive[i] = true;
-            }
-            if solid[i] && !keep[i] {
-                cavity_negative[i] = true;
-                infill_negative[i] = true;
-            }
-        }
-    } else {
-        for i in 0..solid.len() {
-            cavity_negative[i] = solid[i] && !keep[i];
-        }
-    }
+    let cavity_positive = keep.to_vec();
+    let cavity_negative: Vec<bool> = solid
+        .iter()
+        .zip(keep.iter())
+        .map(|(is_solid, is_kept)| *is_solid && !*is_kept)
+        .collect();
 
     let cavity_scalar = build_smoothed_cavity_scalar_field(
         grid,
@@ -1328,30 +1275,28 @@ fn build_hollow_output_mesh(
         grid.voxel_mm,
     );
     let infill_mesh = if matches!(options.mode, HollowMode::Infill) {
-        let infill_scalar = build_binary_boundary_scalar_field(&infill_positive, &infill_negative);
-        stabilize_cavity_mesh_for_boolean(
-            organic_boundary_mesh(grid, &infill_positive, &infill_negative, &infill_scalar),
-            grid.voxel_mm,
+        build_smooth_infill_mesh(
+            source_bbox,
+            grid,
+            solid,
+            keep,
+            options.infill_cell_mm,
+            options.infill_beam_radius_mm,
         )
     } else {
         IndexedMesh::default()
     };
     let has_infill_mesh = !infill_mesh.triangles.is_empty();
     let combined_internal_mesh = if infill_mesh.triangles.is_empty() {
-        cavity_mesh
+        cavity_mesh.clone()
     } else if cavity_mesh.triangles.is_empty() {
-        infill_mesh
+        infill_mesh.clone()
     } else {
         merge_meshes(&cavity_mesh, &infill_mesh)
     };
     let out_mesh = if options.preview_cavity_only {
         if matches!(options.mode, HollowMode::Infill) && has_infill_mesh {
-            organic_boundary_mesh(
-                grid,
-                &infill_positive,
-                &infill_negative,
-                &build_binary_boundary_scalar_field(&infill_positive, &infill_negative),
-            )
+            infill_mesh
         } else {
             combined_internal_mesh
         }
@@ -2417,85 +2362,146 @@ fn corridor_index_bounds(
     (min_x, max_x, min_y, max_y, min_z, max_z)
 }
 
-fn apply_infill_lattice(
+fn build_smooth_infill_mesh(
+    source_bbox: &Aabb,
     grid: &GridSpec,
     solid: &[bool],
-    dist: &[f32],
-    keep: &mut [bool],
-    shell_voxels_f: f32,
-    shell_thickness_mm: f32,
-) {
-    let spacing_mm = (shell_thickness_mm * 4.0).clamp(3.0, 12.0);
-    let spacing_voxels = ((spacing_mm / grid.voxel_mm).round() as usize).clamp(4, 24);
-    let beam_radius_mm = (shell_thickness_mm * 0.35)
-        .clamp(grid.voxel_mm * 0.7, (spacing_voxels as f32 * grid.voxel_mm) * 0.22);
+    keep: &[bool],
+    infill_cell_mm: f32,
+    infill_beam_radius_mm: f32,
+) -> IndexedMesh {
+    let spacing_mm = infill_cell_mm.clamp(3.0, 24.0);
+    let radius_mm = infill_beam_radius_mm.clamp(0.25, 3.0);
+    let sample_step = (grid.voxel_mm * 0.75).clamp(0.2, 1.2);
+    let embed_pad = (radius_mm * 0.8).max(grid.voxel_mm * 0.8);
+    let min_run_length = spacing_mm * 0.45;
+    let circumference = std::f32::consts::TAU * radius_mm;
+    let radial_segments = ((circumference / 0.45).ceil() as usize).clamp(14, 56);
 
-    let diagonal_families = [
-        (
-            Vec3::new(1.0, 1.0, 0.0),
-            Vec3::new(1.0, -1.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-        ),
-        (
-            Vec3::new(1.0, -1.0, 0.0),
-            Vec3::new(1.0, 1.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-        ),
+    let center = source_bbox.min.add(source_bbox.max).scale(0.5);
+    let extent = source_bbox.max.sub(source_bbox.min).scale(0.5);
+    let dir_extent_pad = extent.length() + spacing_mm * 1.5;
+
+    let directions = [
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, 1.0, -1.0),
+        Vec3::new(1.0, -1.0, 1.0),
+        Vec3::new(1.0, -1.0, -1.0),
     ];
 
-    for z in 0..grid.nz {
-        for y in 0..grid.ny {
-            for x in 0..grid.nx {
-                let i = grid.idx(x, y, z);
-                if !solid[i] || keep[i] || dist[i] <= shell_voxels_f {
-                    continue;
+    let mut soup = Vec::<f32>::new();
+    for direction in directions {
+        let axis = vec3_normalize(direction).unwrap_or(Vec3::new(1.0, 1.0, 1.0));
+        let helper = if axis.z.abs() < 0.95 {
+            Vec3::new(0.0, 0.0, 1.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let basis_u = vec3_normalize(helper.cross(axis)).unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+        let basis_v = vec3_normalize(axis.cross(basis_u)).unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+
+        let u_extent = projected_half_extent(extent, basis_u) + spacing_mm;
+        let v_extent = projected_half_extent(extent, basis_v) + spacing_mm;
+        let line_span = dir_extent_pad * 2.0;
+        let line_sample_count = (line_span / sample_step).ceil() as usize;
+        let u_steps = ((u_extent * 2.0) / spacing_mm).ceil() as isize;
+        let v_steps = ((v_extent * 2.0) / spacing_mm).ceil() as isize;
+
+        for u_step in 0..=u_steps {
+            let u_offset = -u_extent + u_step as f32 * spacing_mm;
+            for v_step in 0..=v_steps {
+                let v_offset = -v_extent + v_step as f32 * spacing_mm;
+                let line_origin = center
+                    .add(basis_u.scale(u_offset))
+                    .add(basis_v.scale(v_offset))
+                    .sub(axis.scale(dir_extent_pad));
+
+                let mut run_start: Option<f32> = None;
+                let mut last_inside_t = 0.0f32;
+                for sample_idx in 0..=line_sample_count {
+                    let t = sample_idx as f32 * sample_step;
+                    let point = line_origin.add(axis.scale(t));
+                    let inside = point_samples_carved_cavity(grid, solid, keep, point);
+                    if inside {
+                        if run_start.is_none() {
+                            run_start = Some(t);
+                        }
+                        last_inside_t = t;
+                    } else if let Some(start_t) = run_start.take() {
+                        append_infill_beam_segment(
+                            &mut soup,
+                            line_origin,
+                            axis,
+                            start_t,
+                            last_inside_t,
+                            embed_pad,
+                            min_run_length,
+                            radius_mm,
+                            radial_segments,
+                        );
+                    }
                 }
 
-                let p = grid.center_world(x, y, z);
-                let on_diagonal_beam = diagonal_families.iter().any(|&(dir, perp_a, perp_b)| {
-                    distance_to_periodic_line_family(
-                        p,
-                        dir,
-                        perp_a,
-                        perp_b,
-                        spacing_mm,
-                        beam_radius_mm,
-                    )
-                });
-
-                if on_diagonal_beam {
-                    keep[i] = true;
+                if let Some(start_t) = run_start.take() {
+                    append_infill_beam_segment(
+                        &mut soup,
+                        line_origin,
+                        axis,
+                        start_t,
+                        last_inside_t,
+                        embed_pad,
+                        min_run_length,
+                        radius_mm,
+                        radial_segments,
+                    );
                 }
             }
         }
     }
-}
 
-#[inline]
-fn distance_to_periodic_line_family(
-    point: Vec3,
-    direction: Vec3,
-    perp_a: Vec3,
-    perp_b: Vec3,
-    spacing_mm: f32,
-    beam_radius_mm: f32,
-) -> bool {
-    let _ = vec3_normalize(direction).unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-    let axis_a = vec3_normalize(perp_a).unwrap_or(Vec3::new(0.0, 1.0, 0.0));
-    let axis_b = vec3_normalize(perp_b).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-    let da = periodic_distance_mm(point.dot(axis_a), spacing_mm);
-    let db = periodic_distance_mm(point.dot(axis_b), spacing_mm);
-    (da * da + db * db) <= beam_radius_mm * beam_radius_mm
-}
-
-#[inline]
-fn periodic_distance_mm(value: f32, spacing_mm: f32) -> f32 {
-    if spacing_mm <= 1e-6 {
-        return 0.0;
+    if soup.is_empty() {
+        return IndexedMesh::default();
     }
-    let offset = spacing_mm * 0.5;
-    let phase = (value - offset).rem_euclid(spacing_mm);
-    phase.min(spacing_mm - phase)
+
+    normalize_mesh_for_boolean(IndexedMesh::from_triangle_soup(&soup, 1e-6))
+}
+
+fn append_infill_beam_segment(
+    soup: &mut Vec<f32>,
+    line_origin: Vec3,
+    axis: Vec3,
+    start_t: f32,
+    end_t: f32,
+    embed_pad: f32,
+    min_run_length: f32,
+    radius_mm: f32,
+    radial_segments: usize,
+) {
+    let length = (end_t - start_t) + embed_pad * 2.0;
+    if length < min_run_length {
+        return;
+    }
+
+    let origin = line_origin.add(axis.scale((start_t - embed_pad).max(0.0)));
+    let beam = build_cylinder_mesh(origin, axis, radius_mm, length, radial_segments);
+    soup.extend_from_slice(&beam.to_triangle_soup());
+}
+
+#[inline]
+fn point_samples_carved_cavity(grid: &GridSpec, solid: &[bool], keep: &[bool], point: Vec3) -> bool {
+    let x = ((point.x - grid.min.x) / grid.voxel_mm).floor() as isize;
+    let y = ((point.y - grid.min.y) / grid.voxel_mm).floor() as isize;
+    let z = ((point.z - grid.min.z) / grid.voxel_mm).floor() as isize;
+    if !grid.in_bounds(x, y, z) {
+        return false;
+    }
+    let i = grid.idx(x as usize, y as usize, z as usize);
+    solid[i] && !keep[i]
+}
+
+#[inline]
+fn projected_half_extent(extent: Vec3, axis: Vec3) -> f32 {
+    extent.x * axis.x.abs() + extent.y * axis.y.abs() + extent.z * axis.z.abs()
 }
 
 pub fn punch_cylinders(mesh: IndexedMesh, options: &HolePunchOptions) -> HolePunchOutcome {
@@ -2909,7 +2915,6 @@ fn punch_cylinders_manifold(
     })
 }
 
-#[cfg(feature = "manifold")]
 fn build_cylinder_mesh(
     origin: Vec3,
     axis: Vec3,
@@ -3638,9 +3643,10 @@ mod tests {
         let cavity = hollow_voxel(mesh.clone(), &cavity_options);
         let infill = hollow_voxel(mesh, &infill_options);
 
-        assert!(
-            infill.report.removed_voxels < cavity.report.removed_voxels,
-            "infill should preserve more interior voxels than plain cavity hollowing"
+        assert_eq!(
+            infill.report.removed_voxels,
+            cavity.report.removed_voxels,
+            "smooth infill keeps the same cavity carve and adds support geometry afterward"
         );
         assert!(
             infill.mesh.triangle_count() > cavity.mesh.triangle_count(),

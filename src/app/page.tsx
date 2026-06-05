@@ -438,6 +438,8 @@ function serializeHollowingModifier(modifier: ModelHollowingModifier | null | un
     mode: modifier.mode,
     voxelResolution: modifier.voxelResolution,
     shellThicknessMm: Number(modifier.shellThicknessMm.toFixed(4)),
+    infillCellMm: Number((modifier.infillCellMm ?? 8.0).toFixed(4)),
+    infillBeamRadiusMm: Number((modifier.infillBeamRadiusMm ?? 0.8).toFixed(4)),
     openFace: modifier.openFace,
     openFaceSelected: modifier.mode === 'shell_open_face'
       ? (modifier.openFaceSelected ?? true)
@@ -1553,6 +1555,8 @@ export default function Home() {
     mode: 'cavity',
     voxelResolution: 96,
     shellThicknessMm: 2.0,
+    infillCellMm: 8.0,
+    infillBeamRadiusMm: 0.8,
     openFace: 'z_max',
   });
   const [isShellOpenFaceSelected, setIsShellOpenFaceSelected] = React.useState(true);
@@ -1634,6 +1638,8 @@ export default function Home() {
     mode: 'cavity',
     voxelResolution: 96,
     shellThicknessMm: 2.0,
+    infillCellMm: 8.0,
+    infillBeamRadiusMm: 0.8,
     openFace: 'z_max',
   }), []);
 
@@ -14746,11 +14752,13 @@ export default function Home() {
           mode: effectiveHollowMode,
           voxelResolution: hollowingState.voxelResolution,
           shellThicknessMm: worldMmToLocalMm(hollowingState.shellThicknessMm, shellScaleFactor),
+          infillCellMm: worldMmToLocalMm(hollowingState.infillCellMm, shellScaleFactor),
+          infillBeamRadiusMm: worldMmToLocalMm(hollowingState.infillBeamRadiusMm, shellScaleFactor),
           openFace: hollowingState.openFace,
           drainHoles: [],
           previewCavityOnly: false,
-          smoothInternalSurfaces: effectiveHollowMode !== 'infill',
-          internalChamferPasses: effectiveHollowMode === 'infill' ? 0 : 2,
+          smoothInternalSurfaces: true,
+          internalChamferPasses: 2,
         };
         const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
         const staged = await stageHollowPreviewSource(
@@ -14806,6 +14814,8 @@ export default function Home() {
             mode: effectiveHollowMode,
             voxelResolution: hollowingState.voxelResolution,
             shellThicknessMm: hollowingState.shellThicknessMm,
+            infillCellMm: hollowingState.infillCellMm,
+            infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
             openFace: hollowingState.openFace,
             openFaceSelected: hollowingState.mode === 'shell_open_face'
               ? isShellOpenFaceSelected
@@ -14856,6 +14866,8 @@ export default function Home() {
         mode: defaultHollowingState.mode,
         voxelResolution: defaultHollowingState.voxelResolution,
         shellThicknessMm: defaultHollowingState.shellThicknessMm,
+        infillCellMm: defaultHollowingState.infillCellMm,
+        infillBeamRadiusMm: defaultHollowingState.infillBeamRadiusMm,
         openFace: defaultHollowingState.openFace,
         openFaceSelected: true,
       },
@@ -14899,6 +14911,8 @@ export default function Home() {
         mode: next.mode,
         voxelResolution: next.voxelResolution,
         shellThicknessMm: next.shellThicknessMm,
+        infillCellMm: next.infillCellMm,
+        infillBeamRadiusMm: next.infillBeamRadiusMm,
         openFace: next.openFace,
         openFaceSelected: nextShellOpenFaceSelected,
       },
@@ -15100,6 +15114,8 @@ export default function Home() {
       mode: hollowingState.mode,
       voxelResolution: hollowingState.voxelResolution,
       shellThicknessMm: hollowingState.shellThicknessMm,
+      infillCellMm: hollowingState.infillCellMm,
+      infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
       openFace: hollowingState.openFace,
       openFaceSelected: hollowingState.mode === 'shell_open_face'
         ? isShellOpenFaceSelected
@@ -15110,6 +15126,8 @@ export default function Home() {
       hollowingState.mode,
       hollowingState.openFace,
       hollowingState.shellThicknessMm,
+      hollowingState.infillBeamRadiusMm,
+      hollowingState.infillCellMm,
       hollowingState.voxelResolution,
       isShellOpenFaceSelected,
     ],
@@ -15277,10 +15295,10 @@ export default function Home() {
 
     if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
       const pickedOpenFace = inferOpenFaceFromHit(hit, hollowingState.openFace);
-      const nextHollowingState: HollowingPanelState = {
-        ...hollowingState,
-        openFace: pickedOpenFace,
-      };
+        const nextHollowingState: HollowingPanelState = {
+          ...hollowingState,
+          openFace: pickedOpenFace,
+        };
 
       setHollowingState(nextHollowingState);
       setIsShellOpenFaceSelected(true);
@@ -15299,6 +15317,8 @@ export default function Home() {
           mode: nextHollowingState.mode,
           voxelResolution: nextHollowingState.voxelResolution,
           shellThicknessMm: nextHollowingState.shellThicknessMm,
+          infillCellMm: nextHollowingState.infillCellMm,
+          infillBeamRadiusMm: nextHollowingState.infillBeamRadiusMm,
           openFace: nextHollowingState.openFace,
           openFaceSelected: true,
         },
@@ -15885,15 +15905,25 @@ export default function Home() {
         shellThicknessMmWorld,
         getUniformScaleFactorForThickness(modelScale),
       ),
+      infillCellMm: worldMmToLocalMm(
+        hollowingState.infillCellMm,
+        getUniformScaleFactorForThickness(modelScale),
+      ),
+      infillBeamRadiusMm: worldMmToLocalMm(
+        hollowingState.infillBeamRadiusMm,
+        getUniformScaleFactorForThickness(modelScale),
+      ),
       openFace: hollowingState.openFace,
       drainHoles: [],
       previewCavityOnly: false,
-      smoothInternalSurfaces: effectiveHollowMode !== 'infill' && !preview,
-      internalChamferPasses: preview || effectiveHollowMode === 'infill' ? 0 : 2,
+      smoothInternalSurfaces: !preview,
+      internalChamferPasses: preview ? 0 : 2,
     };
   }, [
     hollowingState.mode,
     hollowingState.openFace,
+    hollowingState.infillBeamRadiusMm,
+    hollowingState.infillCellMm,
     hollowingState.shellThicknessMm,
     hollowingState.voxelResolution,
   ]);
@@ -16110,6 +16140,8 @@ export default function Home() {
           mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
           voxelResolution: persistedHollowing.voxelResolution,
           shellThicknessMm: persistedHollowing.shellThicknessMm,
+          infillCellMm: persistedHollowing.infillCellMm ?? defaultHollowingState.infillCellMm,
+          infillBeamRadiusMm: persistedHollowing.infillBeamRadiusMm ?? defaultHollowingState.infillBeamRadiusMm,
           openFace: persistedHollowing.openFace,
         }
       : defaultHollowingState;

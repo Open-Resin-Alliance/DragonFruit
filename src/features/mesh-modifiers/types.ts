@@ -9,6 +9,8 @@ export type ModelHollowingModifier = {
   mode: MeshModifierHollowMode;
   voxelResolution: number;
   shellThicknessMm: number;
+  infillCellMm?: number;
+  infillBeamRadiusMm?: number;
   openFace: MeshModifierOpenFace;
   openFaceSelected?: boolean;
 };

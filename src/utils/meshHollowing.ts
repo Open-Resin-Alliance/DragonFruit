@@ -23,6 +23,8 @@ export interface HollowOptions {
   mode: HollowMode;
   voxelResolution: number;
   shellThicknessMm: number;
+  infillCellMm: number;
+  infillBeamRadiusMm: number;
   openFace: OpenFace;
   drainHoles: DrainHoleSpec[];
   previewCavityOnly?: boolean;
