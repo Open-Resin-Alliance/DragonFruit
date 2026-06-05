@@ -11864,7 +11864,7 @@ export default function Home() {
         ],
       );
 
-      transformMgr.setTransformMode('select');
+      transformMgr.setTransformMode('arrange');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -11920,7 +11920,7 @@ export default function Home() {
 
       if (updates.length > 1) {
         applyArrangeTransforms(updates);
-        transformMgr.setTransformMode('select');
+        transformMgr.setTransformMode('arrange');
       }
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -12076,7 +12076,7 @@ export default function Home() {
       if (updates.length <= 1) return;
 
       applyArrangeTransforms(updates);
-      transformMgr.setTransformMode('select');
+      transformMgr.setTransformMode('arrange');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -13761,7 +13761,7 @@ export default function Home() {
   const handlePlaceOnFace = React.useCallback((modelId: string) => {
     if (scene.activeModelId !== modelId) return;
     handleTransformEnd('rotate');
-    transformMgr.setTransformMode('transform');
+    transformMgr.setTransformMode('placeOnFace');
   }, [handleTransformEnd, scene.activeModelId, transformMgr]);
 
   const handlePlaceOnFaceBeforeApply = React.useCallback((_normal: THREE.Vector3, continueApply: () => void) => {
