@@ -1574,6 +1574,7 @@ export default function Home() {
   const [hoveredHolePunchPlacementId, setHoveredHolePunchPlacementId] = React.useState<string | null>(null);
   const [holePunchHoverPlacement, setHolePunchHoverPlacement] = React.useState<HolePunchPlacementState | null>(null);
   const [isApplyingHolePunch, setIsApplyingHolePunch] = React.useState(false);
+  const [pendingHolePunchAutoApplyModelId, setPendingHolePunchAutoApplyModelId] = React.useState<string | null>(null);
   const holePunchDragStateRef = React.useRef<{
     pointerId: number;
     placementId: string;
@@ -14806,6 +14807,9 @@ export default function Home() {
             : { ...previous, depthMode: 'auto' }
         ));
 
+        const persistedHolePunches = activeModel.meshModifiers?.holePunches ?? [];
+        const shouldAutoReapplyHolePunches = persistedHolePunches.length > 0;
+
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           hollowing: {
@@ -14823,7 +14827,15 @@ export default function Home() {
               ? isShellOpenFaceSelected
               : true,
           },
+          holePunchAppliedPlacements: [],
+          holePunchesBakedIntoGeometry: false,
+          holePunchSourcePositionsBase64: undefined,
+          holePunchSourcePositionCount: undefined,
         });
+
+        if (shouldAutoReapplyHolePunches) {
+          setPendingHolePunchAutoApplyModelId(activeModel.id);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setExportErrorToast({ id: Date.now(), text: `Hollowing failed: ${message}` });
@@ -15860,6 +15872,30 @@ export default function Home() {
       }
     })();
   }, [activeHolePunchPlacements, persistActiveModelModifiers, scene, sleep]);
+
+  React.useEffect(() => {
+    if (!pendingHolePunchAutoApplyModelId) return;
+    if (isApplyingHollowing || isApplyingHolePunch) return;
+
+    const activeModel = scene.activeModel;
+    if (!activeModel || activeModel.id !== pendingHolePunchAutoApplyModelId) {
+      return;
+    }
+
+    if ((activeModel.meshModifiers?.holePunches?.length ?? 0) === 0) {
+      setPendingHolePunchAutoApplyModelId(null);
+      return;
+    }
+
+    setPendingHolePunchAutoApplyModelId(null);
+    handleApplyHolePunch();
+  }, [
+    handleApplyHolePunch,
+    isApplyingHolePunch,
+    isApplyingHollowing,
+    pendingHolePunchAutoApplyModelId,
+    scene.activeModel,
+  ]);
 
   const clearPendingHollowPreviewDebounce = React.useCallback(() => {
     if (hollowPreviewDebounceTimerRef.current !== null) {
