@@ -142,16 +142,24 @@ export function HollowingPanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           {isEditMode ? (
-            <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
-              <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Voxel Editing Mode</div>
-              <p className="text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
-                Use the lasso tool to mark voxels as blocked. Blocked voxels turn blue and will be applied when you press Done.
-              </p>
+            <div
+              className="rounded-md border p-2 space-y-1.5 text-center min-h-[4.5rem] box-border"
+              style={{
+                borderColor: 'var(--accent-secondary-action-border)',
+                background: 'var(--accent-secondary-action-bg-92)',
+              }}
+            >
+              <div className="ui-meta font-semibold" style={{ color: 'var(--accent-secondary-action-color)' }}>Voxel Editing Mode</div>
+              <div className="flex items-start justify-center min-h-8">
+                <p className="text-[10px] leading-snug line-clamp-2" style={{ color: 'var(--text-muted)' }}>
+                  Lasso to set hollowing blockers.<br /><span style={{ color: 'var(--accent-secondary-action-color)', fontWeight: 600 }}>Clear</span> to reset blockers, <span style={{ color: 'var(--accent-secondary-action-color)', fontWeight: 600 }}>Done</span> to apply edits.
+                </p>
+              </div>
             </div>
           ) : (
-            <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
+            <div className="rounded-md border p-2 space-y-1.5 min-h-[4.5rem] box-border" style={accentCardStyle}>
               <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Mode</div>
-              <div className="grid grid-cols-2 gap-1">
+              <div className="grid grid-cols-2 gap-1 min-h-8">
                 <button
                   type="button"
                   className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
