@@ -345,28 +345,39 @@ export function gridAStar(
     const goalPlaneHeuristic = (qz: number): number => Math.max(0, qz - gqz) * step;
 
     // Per-neighbor static costs (independent of node position).
+    // Resin printing philosophy: go straight down. Only deviate the minimum
+    // amount needed to clear an obstruction.  Lateral and shallow-angle
+    // movement are heavily penalised so the A* treats them as a last resort.
     const neighborStaticCosts = new Array<number>(NEIGHBOR_RUNTIME.length);
     for (let i = 0; i < NEIGHBOR_RUNTIME.length; i++) {
         const n = NEIGHBOR_RUNTIME[i];
         const moveCost = n.stepCostFactor * step;
-        const verticalityPenalty = n.lateralCells * step * 1.5;
+        // Strong penalty for any lateral (XY) displacement — each 1mm lateral
+        // costs ~2.5mm of vertical equivalent.
+        const verticalityPenalty = n.lateralCells * step * 2.5;
         let shallowAnglePenalty = 0;
         if (n.lateralCells > 0) {
             if (n.dz !== 0) {
                 const ratio = n.lateralPerDrop;
-                shallowAnglePenalty = ratio * ratio * step * 0.8;
+                // Quadratic penalty on shallow angles — moving at 45° from
+                // vertical costs much more than moving at 15°.
+                shallowAnglePenalty = ratio * ratio * step * 1.5;
             } else {
-                // Pure horizontal: maximum angle penalty
-                shallowAnglePenalty = step * 4.0;
+                // Pure horizontal: nearly forbidden — only used when absolutely
+                // necessary to route around a thin obstruction.
+                shallowAnglePenalty = step * 8.0;
             }
         }
-        const climbPenalty = n.dz > 0 ? step * 3 : 0;
+        // Climbing (moving upward): heavily penalised — only for escaping
+        // local concavities, not for "reach-around" routes.
+        const climbPenalty = n.dz > 0 ? step * 5 : 0;
         neighborStaticCosts[i] = moveCost + verticalityPenalty + shallowAnglePenalty + climbPenalty;
     }
 
-    // Maximum upward climb in grid cells — allows routing over protrusions
-    // but prevents the path from going far above the socket
-    const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
+    // Maximum upward climb: tight limit so the A* can't "reach around" overhangs
+    // by climbing far above the socket.  Small climbs (~12mm) are allowed for
+    // escaping local concavities.
+    const maxClimbCells = Math.max(3, Math.ceil(12 / step));
 
     const q = (v: number) => Math.round(v * invStep);
     const compareHeapEntries: HeapCompare = (a, b) => {

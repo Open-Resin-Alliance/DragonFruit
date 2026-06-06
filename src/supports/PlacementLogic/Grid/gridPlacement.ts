@@ -2,6 +2,7 @@ import type { Knot, Roots, SupportState, Trunk, Vec3 } from '../../types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
 import type { SnappedTrunkRouteResult } from '../../SupportTypes/Trunk/trunkRouteTypes';
 import { buildBranchData } from '../../SupportTypes/Branch/branchBuilder';
+import { getSettings } from '../../Settings';
 import {
     getDefaultSnappedValidity,
     getResolvedSnappedNodeKey,
@@ -242,26 +243,37 @@ function branchCollidesWithMesh(
     mesh: THREE.Mesh,
     shaftDiameterMm: number
 ): boolean {
-    const { branch } = buildBranchData({ tipPos, tipNormal, modelId, parentKnot: knot, mesh });
+    // Lightweight collision check: approximate branch geometry using nominal
+    // cone axis from the tip normal instead of doing full socket search via
+    // buildBranchData → findBestBranchConePlacement. This avoids expensive
+    // BVH socket searches for every knot candidate during grid placement.
     const radius = shaftDiameterMm / 2 + 0.25;
+
+    // Approximate socket position: tipPos offset by nominal cone length along
+    // the surface normal. This is a reasonable proxy for the actual socket
+    // position that findBestBranchConePlacement would compute.
+    const settings = getSettings();
+    const nominalConeLengthMm = settings.tip.lengthMm;
+    const socketApprox: Vec3 = {
+        x: tipPos.x + tipNormal.x * nominalConeLengthMm,
+        y: tipPos.y + tipNormal.y * nominalConeLengthMm,
+        z: tipPos.z + tipNormal.z * nominalConeLengthMm,
+    };
 
     const raycaster = new THREE.Raycaster();
 
-    // Bottom segment: Knot -> Middle joint
-    const bottom = branch.segments[0];
-    const midPos = bottom.topJoint?.pos;
-    if (midPos) {
-        const hit = checkShaftCollision(knot.pos, midPos, radius, mesh, raycaster);
-        if (hit.hit) return true;
-    }
+    // Middle joint: midpoint between knot and approximated socket
+    const midPos: Vec3 = {
+        x: (knot.pos.x + socketApprox.x) / 2,
+        y: (knot.pos.y + socketApprox.y) / 2,
+        z: (knot.pos.z + socketApprox.z) / 2,
+    };
 
-    // Top segment: Middle joint -> Socket joint
-    const top = branch.segments[1];
-    const socketPos = top.topJoint?.pos ?? (branch.contactCone ? getFinalSocketPosition(branch.contactCone) : null);
-    if (midPos && socketPos) {
-        const hit = checkShaftCollision(midPos, socketPos, radius, mesh, raycaster);
-        if (hit.hit) return true;
-    }
+    // Bottom segment: Knot → Middle joint
+    if (checkShaftCollision(knot.pos, midPos, radius, mesh, raycaster).hit) return true;
+
+    // Top segment: Middle joint → Approximated socket
+    if (checkShaftCollision(midPos, socketApprox, radius, mesh, raycaster).hit) return true;
 
     return false;
 }
@@ -330,11 +342,22 @@ function selectHighestValidAttachment(args: {
     const { hostTrunk, hostRoot, tipPos, minAngleDeg, settings, attachStepMm, mesh, tipNormal, modelId } = args;
     const shaftDiameterMm = settings.shaft.diameterMm;
 
-    // Iterate segments from top (last) to bottom (first)
+    // Iterate segments from top (last) to bottom (first).
+    // Early-exit when a segment's bottom joint is above the tip — all remaining
+    // segments (lower on the trunk) will be even farther below and irrelevant.
     for (let segIndex = hostTrunk.segments.length - 1; segIndex >= 0; segIndex--) {
         const segment = hostTrunk.segments[segIndex];
         const endpoints = getTrunkSegmentEndpointsWithSettings(hostTrunk, hostRoot, segIndex, settings);
         if (!segment || !endpoints) continue;
+
+        // If this segment's top (highest point) is already below the tip,
+        // all lower segments will be even farther below — no need to check them.
+        if (endpoints.end.z < tipPos.z - 0.001) continue;
+
+        // Coarse pre-filter: if the segment's bottom joint is above the tip,
+        // there's no valid attachment point on this segment (all points on it
+        // are above the tip). Skip to the next segment.
+        if (endpoints.start.z >= tipPos.z) continue;
 
         const approxLen = Math.max(
             0.001,
@@ -627,6 +650,17 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         };
     }
 
+    // ================================================================
+    // A host trunk already occupies this grid node.
+    //
+    // STRATEGY (revised): Try the standalone trunk FIRST.  Only fall
+    // back to branch attachment when the trunk path is blocked by the
+    // model (collision).  Branches create hidden dependencies between
+    // supports and are harder to edit; standalone trunks with A*-routed
+    // bends (e.g. "go up → 45° bend → contact cone") are the preferred
+    // outcome whenever the pathfinder can reach the target.
+    // ================================================================
+
     if (host.trunk.segments.length === 0) {
         return {
             kind: 'reject',
@@ -641,6 +675,87 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         };
     }
 
+    // --- Step 1: Try standalone trunk at the preferred node ---
+    const trunkClearAtPreferred = !mesh || !trunkCollidesWithMesh(snappedCandidate, settings, mesh);
+    if (trunkClearAtPreferred) {
+        // The trunk pathfinder already found a valid route — use it.
+        // When the new tip is HIGHER than the existing host's contact,
+        // try to promote the old trunk to a branch on the new one.
+        // Otherwise just place as a standalone trunk (the old trunk at
+        // this grid node will be naturally replaced by the new one).
+        const hostTrunkContactZ = host.trunk.contactCone?.pos.z ?? Number.NEGATIVE_INFINITY;
+        if (tipPos.z > hostTrunkContactZ + 0.000001) {
+            const oldKnot = selectHighestValidAttachment({
+                hostTrunk: host.trunk,
+                hostRoot: host.root,
+                tipPos,
+                minAngleDeg,
+                settings,
+                attachStepMm,
+                mesh,
+                tipNormal,
+                modelId,
+            });
+            if (oldKnot) {
+                const { branch: promoteBranch } = buildBranchData({
+                    tipPos,
+                    tipNormal,
+                    modelId,
+                    parentKnot: oldKnot,
+                    mesh,
+                });
+                return {
+                    kind: 'replace_trunk',
+                    nodeKey,
+                    hostTrunkId: host.trunkId,
+                    trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                        snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
+                        snappedNodeKey: nodeKey,
+                        snappedValidity: getResolvedSnappedValidity(snappedCandidate.route) ?? getDefaultSnappedValidity(snappedCandidate.route),
+                    }),
+                    promoteKnot: oldKnot,
+                    promoteBranch,
+                    oldTrunkKnot: null,
+                    oldTrunkBranch: null,
+                };
+            }
+        }
+
+        // Trunk is clear and no promotion needed — place as standalone trunk.
+        return {
+            kind: 'place_trunk',
+            trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate.route, snappedCandidate.root.transform.pos),
+                snappedNodeKey: nodeKey,
+                snappedValidity: getResolvedSnappedValidity(snappedCandidate.route) ?? getDefaultSnappedValidity(snappedCandidate.route),
+            }),
+            nodeKey,
+        };
+    }
+
+    // --- Step 2: Try standalone trunk at alternate grid nodes ---
+    for (const alternateNodeKey of candidateNodeKeys) {
+        if (alternateNodeKey === nodeKey) continue;
+
+        const nodeCandidate = hasResolvedSnappedRoot(candidate.route) && alternateNodeKey === resolvedNodeKey
+            ? candidate
+            : applyGridSnapToNodeKey(candidate, spacingMm, alternateNodeKey);
+        const alternateHost = findHostTrunkAtNode(snapshot, modelId, alternateNodeKey, spacingMm);
+        if (alternateHost) continue;
+        if (mesh && trunkCollidesWithMesh(nodeCandidate, settings, mesh)) continue;
+
+        return {
+            kind: 'place_trunk',
+            trunkBuild: withResolvedSnappedRoute(nodeCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(nodeCandidate.route, nodeCandidate.root.transform.pos),
+                snappedNodeKey: alternateNodeKey,
+                snappedValidity: getResolvedSnappedValidity(nodeCandidate.route) ?? getDefaultSnappedValidity(nodeCandidate.route),
+            }),
+            nodeKey: alternateNodeKey,
+        };
+    }
+
+    // --- Step 3: All trunk options are blocked → fall back to branch ---
     const selectedKnot = selectHighestValidAttachment({
         hostTrunk: host.trunk,
         hostRoot: host.root,
@@ -654,6 +769,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     });
 
     if (!selectedKnot) {
+        // No valid knot on the co-located host — try distant hosts.
         const fallbackHost = findNearestReachableHostTrunkAttachment({
             snapshot,
             modelId,
@@ -667,6 +783,19 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             excludeTrunkIds: new Set([host.trunkId]),
         });
         if (fallbackHost) {
+            const leafDecision = tryBuildAutoLeafDecision({
+                nodeKey: fallbackHost.nodeKey,
+                hostTrunkId: fallbackHost.trunkId,
+                knot: fallbackHost.knot,
+                tipPos,
+                tipNormal,
+                modelId,
+                settings,
+            });
+            if (leafDecision) {
+                return leafDecision;
+            }
+
             const { branch, supportData } = buildBranchData({
                 tipPos,
                 tipNormal,
@@ -697,6 +826,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         };
     }
 
+    // --- Step 4: Build branch as last resort ---
     const { branch, supportData } = buildBranchData({
         tipPos,
         tipNormal,

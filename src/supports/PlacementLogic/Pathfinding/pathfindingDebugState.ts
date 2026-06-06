@@ -58,6 +58,24 @@ export interface SupportPathfindingDebugSnapshot {
     events?: SupportPathfindingDebugEvent[];
     passes: GridAStarDebugPassSnapshot[];
     updatedAtMs: number;
+    // Extended diagnostics for tuning
+    /** True when this is a hover-preview call (reduced budget, endpoint-only checks). */
+    isPreview?: boolean;
+    /** The A* routing angle budget in degrees (may differ from final angle validation). */
+    routingAngleDeg?: number;
+    /** The final angle validation threshold in degrees. */
+    maxSegmentAngleDeg?: number;
+    /** True when the stagnation cache was bypassed due to wide envelope. */
+    stagnationCacheBypassed?: boolean;
+    /** Max lateral reach of the cone-clear seed search (mm). */
+    coneSeedMaxRadiusMm?: number;
+    /** True when the straight-down pre-flight check was clear. */
+    straightPreflightClear?: boolean;
+    /** True when roots fit under the straight-down socket. */
+    rootsFitStraightDown?: boolean;
+    /** A* grid step sizes (mm) for fine and wide passes. */
+    fineStepMm?: number;
+    wideStepMm?: number;
 }
 
 interface SupportPathfindingDebugState {

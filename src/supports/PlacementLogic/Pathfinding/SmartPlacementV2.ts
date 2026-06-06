@@ -86,13 +86,18 @@ const CONTACT_CONE_TIP_IGNORE_MM = 0.25;
 const CONTACT_CONE_COLLISION_SAMPLE_STEP_MM = 0.2;
 
 const ROUTED_DETOUR_ANGLE_SLACK_DEG = 10;
-const MIN_ROUTING_SEARCH_LATERAL_MM = 72;
-const MAX_ROUTING_SEARCH_LATERAL_MM = 144;
-const ROUTING_SEARCH_LATERAL_PER_VERTICAL_MM = 3.6;
+// Resin printing: only small lateral adjustments.  The A* should find the
+// closest viable root, not the farthest reachable one.
+const MIN_ROUTING_SEARCH_LATERAL_MM = 48;
+const MAX_ROUTING_SEARCH_LATERAL_MM = 72;
+const ROUTING_SEARCH_LATERAL_PER_VERTICAL_MM = 2.5;
 const ROUTING_SEARCH_SWEEP_RADII_MM = [1, 2, 3, 4, 6, 8, 10, 14, 18, 24, 30, 36, 44, 52, 60, 72, 84, 96, 108];
-const STRAIGHT_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4];
+// Rescue radii for cone-clear seed and socket-shift searches.
+// Keep these tight — the A* handles large-scale routing.  These only need
+// to cover nearby socket shifts to clear the contact cone attachment region.
+const STRAIGHT_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4, 6, 8];
 const STRAIGHT_SOCKET_RESCUE_DIRECTIONS = 16;
-const MIXED_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4, 5, 6];
+const MIXED_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12];
 const MIXED_SOCKET_RESCUE_DIRECTIONS = 8;
 const MIXED_SOCKET_RESCUE_JOINT_RADII_MM = [0, 0.6, 1.2, 1.8];
 const MIXED_SOCKET_RESCUE_JOINT_DIRECTIONS = 12;
@@ -186,6 +191,88 @@ function buildUnitCircleDirections(count: number): Array<{ x: number; y: number 
         directions.push({ x: Math.cos(angle), y: Math.sin(angle) });
     }
     return directions;
+}
+
+/**
+ * Computes a contact-cone axis that aligns with the actual first shaft segment
+ * direction rather than the surface normal.  This prevents the visual disconnect
+ * where the cone points one way (based on surface normal) but the shaft goes
+ * another way (based on A* routing).
+ *
+ * The axis is the normalized direction from socketPos toward the first joint,
+ * clamped to at most 45° from the surface-normal-derived axis so the cone
+ * doesn't point radically away from the attachment surface.
+ *
+ * Additionally, the cone axis is never allowed to point upward (positive Z) —
+ * in resin printing the cone must point toward the build plate.  If the
+ * computed axis has a positive Z component, it is clamped to horizontal
+ * (Z=0) or slightly downward.
+ */
+function computeConeAxisFromShaftDirection(
+    socketPos: Vec3,
+    firstJoint: Vec3,
+    surfaceNormalAxis: Vec3,
+): Vec3 {
+    const shaftDir = new THREE.Vector3(
+        firstJoint.x - socketPos.x,
+        firstJoint.y - socketPos.y,
+        firstJoint.z - socketPos.z,
+    );
+    const shaftLen = shaftDir.length();
+    if (shaftLen < 0.01) return clampConeAxisDownward(surfaceNormalAxis);
+
+    shaftDir.normalize();
+
+    const normalAxis = new THREE.Vector3(
+        surfaceNormalAxis.x, surfaceNormalAxis.y, surfaceNormalAxis.z,
+    ).normalize();
+
+    // Clamp: don't let the cone axis deviate more than 30° from the
+    // surface-normal-derived axis.  This keeps the cone and contact disk
+    // facing roughly the same direction — the disk is oriented along the
+    // surface normal, so the cone must stay within a modest angle of it
+    // to avoid a visual disconnect.
+    const maxDeviationRad = Math.PI / 6; // 30°
+    const deviationRad = shaftDir.angleTo(normalAxis);
+    let result: Vec3;
+    if (deviationRad <= maxDeviationRad + 1e-6) {
+        result = { x: shaftDir.x, y: shaftDir.y, z: shaftDir.z };
+    } else {
+        // Clamp to max deviation: rotate the normal axis toward the shaft direction.
+        const rotationAxis = new THREE.Vector3().crossVectors(normalAxis, shaftDir).normalize();
+        if (rotationAxis.lengthSq() < 1e-10) {
+            result = surfaceNormalAxis;
+        } else {
+            const clamped = normalAxis.clone().applyAxisAngle(rotationAxis, maxDeviationRad).normalize();
+            result = { x: clamped.x, y: clamped.y, z: clamped.z };
+        }
+    }
+
+    return clampConeAxisDownward(result);
+}
+
+/**
+ * Ensures the cone axis never points upward (positive Z).
+ * In resin printing, the cone must point toward the build plate.
+ * If the axis has a positive Z component, it is projected to horizontal.
+ */
+function clampConeAxisDownward(axis: Vec3): Vec3 {
+    if (axis.z <= 0) return axis;
+
+    // Project to horizontal: keep XY direction, set Z to a slight downward tilt.
+    const hLen = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+    if (hLen < 0.001) {
+        // Axis was pointing nearly straight up — default to straight down.
+        return { x: 0, y: 0, z: -1 };
+    }
+    // 5° downward tilt from horizontal
+    const tiltRad = Math.PI / 36; // 5°
+    const scale = 1 / hLen;
+    return {
+        x: axis.x * scale * Math.cos(tiltRad),
+        y: axis.y * scale * Math.cos(tiltRad),
+        z: -Math.sin(tiltRad),
+    };
 }
 
 const STRAIGHT_SOCKET_RESCUE_DIRECTION_VECTORS = buildUnitCircleDirections(STRAIGHT_SOCKET_RESCUE_DIRECTIONS);
@@ -643,6 +730,11 @@ function findContactConeClearSocketSeed(args: {
         if (candidate.socketShiftMm < best.socketShiftMm - eps) {
             best = candidate;
         }
+
+        // Early termination: perfect seed (nominal cone, zero shift) — stop.
+        if (candidate.addedLengthMm <= 0.001 && candidate.socketShiftMm <= 0.001) {
+            break;
+        }
     }
 
     return best;
@@ -777,6 +869,10 @@ export function findMixedSocketRescueCandidate(args: {
     };
 
     let best: MixedSocketRescueCandidate | null = null;
+    // Track whether we've found a "perfect" candidate to enable early termination
+    // without relying on TypeScript's closure-aware narrowing of `best`.
+    let foundPerfectCandidate = false;
+    let foundGoodEnoughCandidate = false;
 
     for (const candidateSocketPos of candidates) {
         if (args.contactConeBlockedAt?.(candidateSocketPos)) {
@@ -834,10 +930,27 @@ export function findMixedSocketRescueCandidate(args: {
 
             if (!best || isMixedSocketRescueCandidateBetter(candidate, best)) {
                 best = candidate;
+                foundPerfectCandidate = candidate.coneAddedLengthMm <= 0.001
+                    && candidate.socketShiftMm <= 0.001
+                    && candidate.joints.length === 0;
+                foundGoodEnoughCandidate = candidate.coneAddedLengthMm <= 0.001
+                    && candidate.socketShiftMm <= 2.0;
             }
         };
 
         considerCandidate([]);
+
+        // Early termination: if we already have a "perfect" candidate
+        // (zero cone stretch, tiny socket shift, zero joints), stop.
+        // Further candidates can't improve on this.
+        if (foundPerfectCandidate) {
+            break;
+        }
+
+        // Secondary early exit: if a good-enough candidate exists (no cone stretch,
+        // socket shift ≤ 2mm), skip expensive joint search for remaining candidates
+        // since they'll only differ in socket shift which is a lower-priority metric.
+        const skipJointSearch = foundGoodEnoughCandidate;
 
         const jointZStepMm = preferNominalReachAround
             ? MIXED_SOCKET_RESCUE_NOMINAL_JOINT_Z_STEP_MM
@@ -846,7 +959,7 @@ export function findMixedSocketRescueCandidate(args: {
             ? MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM
             : MIXED_SOCKET_RESCUE_JOINT_RADII_MM;
         const availableDrop = candidateSocketPos.z - args.rootTopZ;
-        if (availableDrop <= jointZStepMm + 0.000001) {
+        if (availableDrop <= jointZStepMm + 0.000001 || skipJointSearch) {
             continue;
         }
 
@@ -1443,17 +1556,26 @@ const previewWarmStartByModel = new Map<string, WarmStartState>(); // hover prev
  * Keyed by mesh uuid so it auto-invalidates when the model changes.
  * Entries are cleared when the model matrix changes (SDF refresh),
  * when SDF caches are cleared, or when warm-starts are cleared.
+ *
+ * IMPORTANT: stagnation entries become stale when the A* search envelope
+ * changes (e.g. wider lateral limits, shallower routing angles).  To
+ * prevent false-positive cache hits, entries are only trusted when the
+ * current maxTotalLateralMm is at or below the envelope width that was
+ * in effect when the entry was recorded.  With the wider 200mm envelope
+ * active, old 144mm-era entries are silently ignored.
  */
-// True-stagnation radius: positions within 1.5mm of a confirmed cavity are
-// also treated as cavities (saves A* re-run for tiny hover jitter).
-const STAGNATION_RADIUS_MM = 1.5;
+// True-stagnation radius: tightened to 0.5mm (was 1.5mm).  Only positions
+// within half a millimeter of a confirmed cavity skip A* — positions 0.5–1.5mm
+// away now re-run A* with the current wider search envelope.
+const STAGNATION_RADIUS_MM = 0.5;
 const STAGNATION_RADIUS_SQ = STAGNATION_RADIUS_MM * STAGNATION_RADIUS_MM;
-// Preview-exhausted radius: smaller than stagnation because exhausted-budget
-// is NOT a confirmed dead-end — the full-budget solver may still succeed.
-// 1mm avoids re-running preview A* on identical pixel, but doesn't block
-// valid positions 1-2mm away from an exhausted query.
-const PREVIEW_EXHAUSTED_RADIUS_MM = 1.0;
+// Preview-exhausted radius: also tightened to 0.5mm to match stagnation.
+const PREVIEW_EXHAUSTED_RADIUS_MM = 0.5;
 const PREVIEW_EXHAUSTED_RADIUS_SQ = PREVIEW_EXHAUSTED_RADIUS_MM * PREVIEW_EXHAUSTED_RADIUS_MM;
+// If the current search envelope's maxLateralMm exceeds this value, the
+// stagnation cache is bypassed entirely — entries recorded with narrower
+// historical envelope limits are not trustworthy.
+const STAGNATION_CACHE_MAX_TRUSTED_ENVELOPE_MM = 80;
 const MAX_STAGNATION_ENTRIES = 512;
 const stagnationCache = new Map<string, Vec3[]>();
 
@@ -1583,10 +1705,11 @@ export function calculateSmartPlacementV2(
             + (debugAutoTuneProfile?.maxSegmentAngleBonusDeg ?? 0),
     );
     const minRoutingZSpanMm = MIN_ROUTING_Z_SPAN_MM * (debugAutoTuneProfile?.minRoutingZSpanScale ?? 1);
-    // ROUTING_ANGLE_FROM_VERTICAL_DEG: generous A* budget (80°) so the pathfinder
-    // can take lateral steps to navigate around overhangs. Final trunk angle is
-    // validated via maxSegmentAngleFromVerticalDeg after the path is resolved.
-    const ROUTING_ANGLE_FROM_VERTICAL_DEG = 80;
+    // ROUTING_ANGLE_FROM_VERTICAL_DEG: tight A* budget (60°) — the pathfinder
+    // should only take small lateral steps to clear local obstructions, not
+    // execute wild reach-around routes.  Final trunk angle is validated via
+    // maxSegmentAngleFromVerticalDeg after the path is resolved.
+    const ROUTING_ANGLE_FROM_VERTICAL_DEG = 60;
 
     // 1. Standard placement (baseline — no collision check)
     const standard = calculateStandardPlacement(input);
@@ -1657,6 +1780,16 @@ export function calculateSmartPlacementV2(
                     simplifiedPath: pass.simplifiedPath,
                 })),
                 updatedAtMs: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+                // Extended diagnostics
+                isPreview,
+                routingAngleDeg: ROUTING_ANGLE_FROM_VERTICAL_DEG,
+                maxSegmentAngleDeg: maxSegmentAngleFromVerticalDeg,
+                stagnationCacheBypassed: maxTotalLateralMm > STAGNATION_CACHE_MAX_TRUSTED_ENVELOPE_MM + 0.5,
+                coneSeedMaxRadiusMm: Math.min(coneSeedMaxTotalLateralMm, MIXED_SOCKET_RESCUE_RADII_MM[MIXED_SOCKET_RESCUE_RADII_MM.length - 1]),
+                straightPreflightClear: straightClear,
+                rootsFitStraightDown: rootsFitStandard,
+                fineStepMm: FINE_ASTAR_STEP_MM,
+                wideStepMm: WIDE_ASTAR_STEP_MM,
             },
         );
     };
@@ -1974,44 +2107,44 @@ export function calculateSmartPlacementV2(
                 );
             }
         } else {
-            if (isPreview) {
-                addBlockedReason('Contact cone blocked at nominal socket position');
-                addBlockedReason('No cone-clear socket seed found');
-                setDebugOutcome('blocked', 'contact cone blocked during preview');
-                recordDebugEvent({
-                    stage: 'cone',
-                    severity: 'error',
-                    message: 'No clear contact-cone seed found',
-                });
-                publishPathfindingDebugSnapshot();
-                return {
-                    ...standard,
-                    error: 'COLLISION_WITH_MODEL',
-                };
+            // No cone-clear socket seed found and no jointed rescue available.
+            // DO NOT fail immediately in preview mode — the A* pathfinder may
+            // still find a route where the shaft bends away from the blocked cone
+            // region.  Only fail if A* also can't find a path (caught below).
+            // Click-time placement still tries the expensive straight/mixed
+            // rescue fallbacks since it has the full expansion budget.
+            if (!isPreview) {
+                const straightRescueFallback = buildStraightRescueFallback();
+                if (straightRescueFallback) {
+                    return straightRescueFallback;
+                }
             }
-
-            const straightRescueFallback = buildStraightRescueFallback();
-            if (straightRescueFallback) {
-                return straightRescueFallback;
-            }
+            // Fall through: let A* attempt routing with the blocked cone socket.
+            // The cone-blocked flag is recorded but doesn't prevent A* from trying.
             addBlockedReason('Contact cone blocked at nominal socket position');
             addBlockedReason('Cone-clear socket seed search failed');
-            addBlockedReason('Socket rescue fallback failed');
-            setDebugOutcome('blocked', 'contact cone blocked');
+            if (!isPreview) {
+                addBlockedReason('Socket rescue fallback failed');
+            }
             recordDebugEvent({
                 stage: 'cone',
-                severity: 'error',
-                message: 'Cone blocked and all socket rescues failed',
+                severity: 'warning',
+                message: isPreview
+                    ? 'Cone blocked in preview — deferring to A* routing'
+                    : 'Cone blocked and all socket rescues failed — deferring to A*',
             });
         }
     }
 
-    // Shaft + roots checks now use SDF sphere-tracing and bounding-ball
+    // Preflight check results — declared early so the debug snapshot closure
+    // can capture them.  Initialised to false; overwritten before A* runs.
+    let straightClear = false;
+    let rootsFitStandard = false;
     // early-outs, so preview no longer needs the old coarse approximations —
     // the accurate versions are fast in open space and equally accurate.
-    const straightClear = !segmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
+    straightClear = !segmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
     const baseXY: Vec3 = { x: socketPos.x, y: socketPos.y, z: 0 };
-    const rootsFitStandard = !rootsDiskBlockedAt(baseXY.x, baseXY.y);
+    rootsFitStandard = !rootsDiskBlockedAt(baseXY.x, baseXY.y);
 
     if (!isPreview) {
         console.log(`[SmartPlacementV2] called — nominalSocket=(${nominalSocketPos.x.toFixed(2)},${nominalSocketPos.y.toFixed(2)},${nominalSocketPos.z.toFixed(2)}) activeSocket=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)} nominalConeClear=${coneClear} activeConeClear=${activeConeClear} straightClear=${straightClear} rootsFit=${rootsFitStandard}`);
@@ -2046,11 +2179,35 @@ export function calculateSmartPlacementV2(
         }; // Cone, shaft, and roots are all clear — no routing needed
     }
 
-    // 3b. Spatial caches: skip A* if a previous search from a nearby socketPos
+    // 3b. Quick SDF pre-check for preview mode: if the socket is deep inside
+    //     the model (SDF distance < -1.5mm), skip the expensive A* search.
+    //     This catches interior positions where the cone-clear seed search
+    //     already failed and A* is very unlikely to escape the cavity within
+    //     the preview budget.  Single SDF query vs ~15k for a full A* run.
+    if (isPreview && sdf.distanceAt(socketPos.x, socketPos.y, socketPos.z) < -1.5) {
+        addBlockedReason('Socket deep inside model — preview fast-fail');
+        setDebugOutcome('blocked', 'socket deep inside model');
+        recordDebugEvent({
+            stage: 'preflight',
+            severity: 'info',
+            message: 'Preview: socket deep inside model, skipping A*',
+        });
+        publishPathfindingDebugSnapshot();
+        return { ...standard, error: 'COLLISION_WITH_MODEL', stagnated: true };
+    }
+
+    // 3c. Spatial caches: skip A* if a previous search from a nearby socketPos
     //     already stagnated (cavity) or exhausted the preview budget.
     //     This turns repeated probes at similar positions from ~600 A* expansions
     //     to a single distance check — the primary performance win for interior hovers.
-    if (isNearStagnationPoint(mesh.uuid, socketPos)) {
+    //
+    //     IMPORTANT: only trust the stagnation cache when the current search
+    //     envelope width is within the range where old entries are valid.
+    //     When maxTotalLateralMm > STAGNATION_CACHE_MAX_TRUSTED_ENVELOPE_MM
+    //     (e.g. our new 200mm envelope), existing cache entries were recorded
+    //     with a narrower search and may be stale — bypass the cache entirely.
+    if (maxTotalLateralMm <= STAGNATION_CACHE_MAX_TRUSTED_ENVELOPE_MM + 0.5
+        && isNearStagnationPoint(mesh.uuid, socketPos)) {
         addBlockedReason('Nearby stagnation cache hit');
         setDebugOutcome('blocked', 'nearby stagnation cache');
         publishPathfindingDebugSnapshot();
@@ -2058,8 +2215,8 @@ export function calculateSmartPlacementV2(
     }
     // Preview-exhausted fast-fail: if this is a preview call and a nearby position
     // already exhausted the reduced budget, skip A* for this frame too.
-    // Uses a tighter radius (PREVIEW_EXHAUSTED_RADIUS_SQ) than true stagnation so
-    // we don't block valid positions 1-2mm away from an exhausted query.
+    // Uses a tighter radius (PREVIEW_EXHAUSTED_RADIUS_SQ = 0.5mm) so we only
+    // skip positions essentially identical to a previous exhausted query.
     if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos, PREVIEW_EXHAUSTED_RADIUS_SQ)) {
         addBlockedReason('Nearby preview query already exhausted expansion budget');
         setDebugOutcome('blocked', 'nearby preview budget exhausted');
@@ -2864,6 +3021,10 @@ export function calculateSmartPlacementV2(
     // full-chain validation on every hover frame. Click-time placement (isPreview=false)
     // still executes the full quality pipeline below.
     if (isPreview) {
+        const surfaceConeAxis = standard.coneAxis ?? input.tipNormal;
+        const effectiveConeAxis = pathJoints.length > 0 && pathJoints[0]
+            ? computeConeAxisFromShaftDirection(socketPos, pathJoints[0]!, surfaceConeAxis)
+            : surfaceConeAxis;
         return {
             socketPos,
             joints: pathJoints,
@@ -2873,7 +3034,7 @@ export function calculateSmartPlacementV2(
             snappedNodeKey: bestBase.nodeKey,
             warning: standard.warning,
             angle: standard.angle,
-            coneAxis: standard.coneAxis,
+            coneAxis: effectiveConeAxis,
         };
     }
 
@@ -3088,7 +3249,15 @@ export function calculateSmartPlacementV2(
         }
     }
 
-    // 9. Build the result
+    // 9. Build the result.
+    // When the path has joints, align the contact cone axis with the first
+    // shaft segment direction (socket → first joint) instead of the surface
+    // normal.  This prevents the cone pointing north while the shaft goes
+    // west — the cone and shaft should form one continuous line.
+    const surfaceConeAxisFinal = standard.coneAxis ?? input.tipNormal;
+    const effectiveConeAxis = finalJoints.length > 0 && finalJoints[0]
+        ? computeConeAxisFromShaftDirection(socketPos, finalJoints[0]!, surfaceConeAxisFinal)
+        : surfaceConeAxisFinal;
     const finalResult: TrunkPlacementResult = {
         socketPos,
         joints: finalJoints,
@@ -3098,7 +3267,7 @@ export function calculateSmartPlacementV2(
         snappedNodeKey: finalBase.nodeKey,
         warning: standard.warning,
         angle: standard.angle,
-        coneAxis: standard.coneAxis,
+        coneAxis: effectiveConeAxis,
     };
     setDebugOutcome(finalJoints.length === 0 ? 'straight' : 'routed', 'final validated chain');
     debugBasePos = finalBase.basePos;

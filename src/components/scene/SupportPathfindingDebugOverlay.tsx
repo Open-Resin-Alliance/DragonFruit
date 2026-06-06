@@ -271,9 +271,47 @@ export function SupportPathfindingDebugHud({
       )}
       {snapshot.envelope && (
         <div style={{ marginTop: 6 }}>
-          <span style={{ color: '#94a3b8' }}>envelope:</span> lateral {fmtMm(snapshot.envelope.maxTotalLateralMm)}, clearance {fmtMm(snapshot.envelope.clearanceMm)}, rescue radii {snapshot.envelope.rescueRadiiMm.length}
+          <span style={{ color: '#94a3b8' }}>envelope:</span>{' '}
+          <span style={{ color: '#e5eefb' }}>{fmtMm(snapshot.envelope.maxTotalLateralMm)}</span>
+          {' '}<span style={{ color: '#64748b' }}>lateral</span>
+          {' | '}<span style={{ color: '#64748b' }}>clearance</span> {fmtMm(snapshot.envelope.clearanceMm)}
+          {' | '}<span style={{ color: '#64748b' }}>rescue</span> {snapshot.envelope.rescueRadiiMm.length}
         </div>
       )}
+      {/* Extended diagnostics */}
+      <div style={{ marginTop: 6, color: '#94a3b8', fontSize: 10 }}>
+        <div>
+          mode:{' '}
+          <span style={{ color: snapshot.isPreview ? '#fde68a' : '#86efac' }}>
+            {snapshot.isPreview ? 'preview' : 'click'}
+          </span>
+          {' | '}routing angle:{' '}
+          <span style={{ color: '#e5eefb' }}>{snapshot.routingAngleDeg ?? '?'}°</span>
+          {' | '}final angle:{' '}
+          <span style={{ color: '#e5eefb' }}>{snapshot.maxSegmentAngleDeg ?? '?'}°</span>
+        </div>
+        <div>
+          stagnation cache:{' '}
+          <span style={{ color: snapshot.stagnationCacheBypassed ? '#fde68a' : '#86efac' }}>
+            {snapshot.stagnationCacheBypassed ? 'BYPASSED' : 'active'}
+          </span>
+          {' | '}cone seed:{' '}
+          <span style={{ color: '#e5eefb' }}>{fmtMm(snapshot.coneSeedMaxRadiusMm)}</span>
+        </div>
+        <div>
+          straight:{' '}
+          <span style={{ color: snapshot.straightPreflightClear ? '#86efac' : '#fca5a5' }}>
+            {snapshot.straightPreflightClear === undefined ? 'pending' : snapshot.straightPreflightClear ? 'clear' : 'blocked'}
+          </span>
+          {' | '}roots straight:{' '}
+          <span style={{ color: snapshot.rootsFitStraightDown ? '#86efac' : '#fca5a5' }}>
+            {snapshot.rootsFitStraightDown === undefined ? 'pending' : snapshot.rootsFitStraightDown ? 'fit' : 'blocked'}
+          </span>
+        </div>
+        <div>
+          A* steps: fine {fmtMm(snapshot.fineStepMm)} | wide {fmtMm(snapshot.wideStepMm)}
+        </div>
+      </div>
       {passLines.length > 0 && (
         <div style={{ marginTop: 6 }}>
           <div style={{ color: '#94a3b8' }}>passes:</div>

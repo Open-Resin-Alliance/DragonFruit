@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 
-const MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG = 35;
+const MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG = 30;
 
 export interface ConeAxisPolicyInput {
     surfaceNormal: Vec3;
@@ -109,9 +109,34 @@ export function resolveConeAxisPolicy(input: ConeAxisPolicyInput): ConeAxisPolic
 
     const coneAxis: Vec3 = { x: coneAxisVec.x, y: coneAxisVec.y, z: coneAxisVec.z };
 
+    // Never let the cone axis point upward — in resin printing the cone must
+    // point toward the build plate (negative Z).  If the computed axis has a
+    // positive Z component, project it to horizontal with a slight downward tilt.
+    const clampedAxis = clampAxisDownward(coneAxis);
+
     return {
         surfaceAngleFromUpDeg,
         minAllowedSurfaceAngleFromUpDeg,
-        coneAxis,
+        coneAxis: clampedAxis,
+    };
+}
+
+/**
+ * Ensures a cone axis never points upward (positive Z).
+ * Projects upward-pointing axes to horizontal with a 5° downward tilt.
+ */
+function clampAxisDownward(axis: Vec3): Vec3 {
+    if (axis.z <= 0) return axis;
+
+    const hLen = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+    if (hLen < 0.001) {
+        return { x: 0, y: 0, z: -1 };
+    }
+    const tiltRad = Math.PI / 36; // 5°
+    const scale = 1 / hLen;
+    return {
+        x: axis.x * scale * Math.cos(tiltRad),
+        y: axis.y * scale * Math.cos(tiltRad),
+        z: -Math.sin(tiltRad),
     };
 }
