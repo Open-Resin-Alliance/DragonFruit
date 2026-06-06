@@ -85,6 +85,11 @@ import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionMa
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
+import { useAutoOrientManager } from '@/features/autoOrient/useAutoOrientManager';
+import { AutoOrientPanel } from '@/features/autoOrient/AutoOrientPanel';
+import { ProtectedFacePaintTool } from '@/features/autoOrient/ProtectedFacePaintTool';
+import { clearProtectedMask, protectedFaceCount } from '@/features/autoOrient/logic/protectedMask';
+import { DEFAULT_AUTO_ORIENT_GOALS, type AutoOrientGoals } from '@/features/autoOrient/types';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
@@ -12164,6 +12169,9 @@ export default function Home() {
       suppressTransformPersistenceCycles(10);
       finalizeMirrorSessionRef.current();
     }
+    if (transformMgr.transformMode === 'autoOrient' && nextMode !== 'autoOrient') {
+      setAutoOrientPainting(false);
+    }
     transformMgr.setTransformMode(nextMode);
   }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
 
@@ -12805,6 +12813,65 @@ export default function Home() {
     skipNextTransformEndCommitRef.current = null;
   }, [captureTransformSupportSnapshot, scene]);
 
+  // Shared commit path for applying a batch of model transforms: records undo
+  // history, re-syncs supports, and updates the active model's transform inputs.
+  // Used by the multi-gizmo commit and by auto-orient.
+  const applyModelTransformUpdates = React.useCallback((
+    updates: Array<{ id: string; transform: ModelTransform }>,
+  ) => {
+    if (updates.length === 0) {
+      beginSupportDragSyncTransaction([], {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      });
+      return;
+    }
+
+    const transformCommitResult = scene.updateModelTransforms(updates);
+    beginSupportDragSyncTransaction(
+      transformCommitResult.updated
+        ? updates.map((entry) => ({
+            modelId: entry.id,
+            transform: {
+              position: entry.transform.position.clone(),
+              rotation: entry.transform.rotation.clone(),
+              scale: entry.transform.scale.clone(),
+            },
+          }))
+        : [],
+      transformCommitResult,
+    );
+
+    const activeUpdate = scene.activeModelId
+      ? updates.find((entry) => entry.id === scene.activeModelId)
+      : undefined;
+    if (activeUpdate) {
+      const { position, rotation, scale } = activeUpdate.transform;
+      transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+      transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+      transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+    }
+
+    setSupportRenderRefreshNonce((value) => value + 1);
+    skipNextTransformEndCommitRef.current = null;
+  }, [beginSupportDragSyncTransaction, scene, transformMgr.transformHook]);
+
+  const [autoOrientGoals, setAutoOrientGoals] = React.useState<AutoOrientGoals>(DEFAULT_AUTO_ORIENT_GOALS);
+  const [autoOrientPainting, setAutoOrientPainting] = React.useState(false);
+  const [autoOrientMaskNonce, setAutoOrientMaskNonce] = React.useState(0);
+  const autoOrientProtectedFaceCount = React.useMemo(() => {
+    void autoOrientMaskNonce; // recompute when the mask changes
+    const geom = scene.activeModel?.geometry.geometry;
+    return geom ? protectedFaceCount(geom) : 0;
+  }, [scene.activeModel, autoOrientMaskNonce]);
+  const autoOrient = useAutoOrientManager({
+    models: scene.models,
+    selectedModelIds: scene.selectedModelIds,
+    activeModelId: scene.activeModelId,
+    applyTransforms: applyModelTransformUpdates,
+  });
+
   const handleGizmoTransformGroupCommit = React.useCallback((payload: {
     operation: 'move' | 'rotate' | 'scale';
     entries: Array<{
@@ -12855,43 +12922,8 @@ export default function Home() {
     })));
     console.groupEnd();
 
-    if (updates.length === 0) {
-      beginSupportDragSyncTransaction([], {
-        updated: false,
-        supportsChanged: false,
-        kickstandsChanged: false,
-      });
-      return;
-    }
-
-    const transformCommitResult = scene.updateModelTransforms(updates);
-    beginSupportDragSyncTransaction(
-      transformCommitResult.updated
-        ? updates.map((entry) => ({
-            modelId: entry.id,
-            transform: {
-              position: entry.transform.position.clone(),
-              rotation: entry.transform.rotation.clone(),
-              scale: entry.transform.scale.clone(),
-            },
-          }))
-        : [],
-      transformCommitResult,
-    );
-
-    const activeUpdate = scene.activeModelId
-      ? updates.find((entry) => entry.id === scene.activeModelId)
-      : undefined;
-    if (activeUpdate) {
-      const { position, rotation, scale } = activeUpdate.transform;
-      transformMgr.transformHook.setPosition(position.x, position.y, position.z);
-      transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
-      transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
-    }
-
-    setSupportRenderRefreshNonce((value) => value + 1);
-    skipNextTransformEndCommitRef.current = null;
-  }, [beginSupportDragSyncTransaction, isFiniteTransform, scene, transformMgr.transformHook]);
+    applyModelTransformUpdates(updates);
+  }, [applyModelTransformUpdates, isFiniteTransform, scene.activeModelId]);
 
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {
@@ -14356,6 +14388,29 @@ export default function Home() {
               </div>
             )}
 
+            {scene.models.length > 0 && transformMgr.transformMode === 'autoOrient' && (
+              <AutoOrientPanel
+                key="prepare-auto-orient-panel"
+                goals={autoOrientGoals}
+                onGoalsChange={setAutoOrientGoals}
+                onRun={() => { setAutoOrientPainting(false); void autoOrient.run(autoOrientGoals); }}
+                onCancel={autoOrient.cancel}
+                running={autoOrient.running}
+                progress={autoOrient.progress}
+                targetCount={autoOrient.targetCount}
+                protectedFaceCount={autoOrientProtectedFaceCount}
+                painting={autoOrientPainting}
+                onTogglePaint={() => setAutoOrientPainting((p) => !p)}
+                onClearPaint={() => {
+                  const geom = scene.activeModel?.geometry.geometry;
+                  if (geom) {
+                    clearProtectedMask(geom);
+                    setAutoOrientMaskNonce((n) => n + 1);
+                  }
+                }}
+              />
+            )}
+
             {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
               <>
                 <ArrangePanel
@@ -15041,6 +15096,13 @@ export default function Home() {
                 resolveAnimatedTransform={transformMgr.resolveLiveTransform}
                 onFaceSelect={handlePlaceOnFace}
                 onBeforeFaceApply={handlePlaceOnFaceBeforeApply}
+              />
+            )}
+            {scene.mode === 'prepare' && transformMgr.transformMode === 'autoOrient' && autoOrientPainting && (
+              <ProtectedFacePaintTool
+                models={scene.models}
+                activeModelId={scene.activeModelId}
+                onMaskChange={() => setAutoOrientMaskNonce((n) => n + 1)}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (
