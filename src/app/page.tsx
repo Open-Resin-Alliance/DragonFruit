@@ -15764,7 +15764,7 @@ export default function Home() {
       depthMm: holePunchState.depthMm,
       depthMode: canUseAutoHolePunchDepth ? holePunchState.depthMode : 'manual',
     }, hit);
-  }, [buildHolePunchPlacementForHit, canUseAutoHolePunchDepth, holePunchState.depthMm, holePunchState.depthMode, holePunchState.radiusMm]);
+  }, [buildHolePunchPlacementForHit, canUseAutoHolePunchDepth, holePunchState.depthMm, holePunchState.depthMode, holePunchState.radiusMm, holePunchState.radiusYMm]);
 
   const handleHolePunchClick = React.useCallback((hit: THREE.Intersection) => {
     const activeModel = scene.activeModel;
