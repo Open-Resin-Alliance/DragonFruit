@@ -104,8 +104,8 @@ const MIXED_SOCKET_RESCUE_JOINT_DIRECTIONS = 12;
 const MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM = 2.0;
 const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM = [0, 0.5, 1, 1.5, 2.2, 3.0, 3.8];
 const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_Z_STEP_MM = 1.0;
-const BASE_WIDE_PASS_EXPANSIONS_AT_2MM = 810;
-const BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM = 338;
+const BASE_WIDE_PASS_EXPANSIONS_AT_2MM = 400;
+const BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM = 150;
 const ENABLE_AGGRESSIVE_POST_PATH_STRAIGHTENING = false;
 
 // Cone rescue scoring is intentionally biased toward preserving a short,
@@ -286,11 +286,9 @@ const MIXED_SOCKET_RESCUE_JOINT_DIRECTION_VECTORS = buildUnitCircleDirections(MI
 const MIN_ROUTING_Z_SPAN_MM = 5.0;
 
 // A* lattice resolution.
-// Fine pass: high-precision routing to avoid multiple supports collapsing
-// into a shared quantized root position when grid mode is disabled.
-// Wide pass: coarser rescue search for large detours, but still much finer
-// than legacy 6mm to keep roots tight.
-const FINE_ASTAR_STEP_MM = 0.25;
+// Coarser step (0.5mm) for speed — the tight vertical-preference cost function
+// means the A* doesn't need sub-millimeter precision for shaft routing.
+const FINE_ASTAR_STEP_MM = 0.5;
 const WIDE_ASTAR_STEP_MM = 0.6;
 const LEGACY_BASE_STEP_MM = 2.0;
 
@@ -2292,7 +2290,7 @@ export function calculateSmartPlacementV2(
         // ~30k–60k uncacheable BVH queries per hover frame on interior surfaces.
         // Endpoint-only checks hit grid-aligned cells that ARE cached after first
         // visit, dropping first-frame cold cost from ~30k to ~600 BVH calls.
-        endpointOnlyCollisionCheck: isPreview,
+        endpointOnlyCollisionCheck: true,
         debugLabel: 'fine',
         captureDebug: debugEnabled,
     }, warmStart);

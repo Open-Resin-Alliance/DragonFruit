@@ -328,7 +328,7 @@ export function gridAStar(
 ): GridAStarResult {
     const step = opts.stepMm ?? 2.0; // Coarse grid for pathfinding (2mm default)
     const invStep = 1 / step;
-    const maxExp = opts.maxExpansions ?? 2000;
+    const maxExp = opts.maxExpansions ?? 1000;
     const clearance = opts.clearanceMm;
     const maxLateral = opts.maxLateralMm ?? 30;
     const maxLateralSq = maxLateral * maxLateral;
@@ -445,7 +445,7 @@ export function gridAStar(
     const nodeDistanceCache = new Map<number, number>();
     const occupancyCache = new Map<number, boolean>();
 
-    const STAGNATION_LIMIT = 600;
+    const STAGNATION_LIMIT = 400;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 

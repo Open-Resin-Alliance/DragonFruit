@@ -236,7 +236,7 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         // Preview uses lower budget (1200 expansions) for responsiveness, but same
         // collision detection rigor as click. This trades slightly slower preview
         // exploration for correct collision avoidance.
-        const v2Context = isPreview ? { maxExpansions: 1200 } : undefined;
+        const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
         const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
         placement = result;
     } else {
