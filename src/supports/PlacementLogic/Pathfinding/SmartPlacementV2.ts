@@ -2968,7 +2968,7 @@ export function calculateSmartPlacementV2(
     } : null;
 
     // Find best grid node for the base
-    const bestBase = resolveCommittedBaseCandidate({
+    let bestBase = resolveCommittedBaseCandidate({
         preferredBottomPos: unsnappedBottomPos,
         lastSegmentStart: pathJoints.length > 0 ? pathJoints[pathJoints.length - 1] : pathEnd,
         rootTopZ,
@@ -3000,6 +3000,44 @@ export function calculateSmartPlacementV2(
             ...standard,
             error: 'COLLISION_WITH_MODEL',
         };
+    }
+
+    // If the final segment from the last joint (or socket) to the root
+    // bends laterally, try going straight down from that point instead.
+    // This keeps the bottom-most shaft section vertical, preventing the
+    // "skirt to the side" visual artifact near the root.
+    const lastPointBeforeBase = pathJoints.length > 0
+        ? pathJoints[pathJoints.length - 1]
+        : { x: socketPos.x, y: socketPos.y, z: socketPos.z };
+    const finalSegmentLateralMm = distanceXY(lastPointBeforeBase, bestBase.rootTopTarget);
+    const FINAL_SEGMENT_STRAIGHTEN_THRESHOLD_MM = 1.5;
+    if (finalSegmentLateralMm > FINAL_SEGMENT_STRAIGHTEN_THRESHOLD_MM) {
+        const straightDownBase: Vec3 = {
+            x: lastPointBeforeBase.x,
+            y: lastPointBeforeBase.y,
+            z: 0,
+        };
+        const straightDownRootTop: Vec3 = {
+            x: lastPointBeforeBase.x,
+            y: lastPointBeforeBase.y,
+            z: rootTopZ,
+        };
+        const rootsOk = !rootsDiskBlockedAt(straightDownBase.x, straightDownBase.y);
+        const shaftOk = !segmentBlockedBetween(lastPointBeforeBase, straightDownRootTop);
+        const angleOk = segmentSatisfiesLengthAwareMaxAngleFromVertical(
+            lastPointBeforeBase, straightDownRootTop, maxSegmentAngleFromVerticalDeg,
+        );
+        if (rootsOk && shaftOk && angleOk) {
+            bestBase = {
+                basePos: straightDownBase,
+                rootTopTarget: straightDownRootTop,
+                inboundLateralMm: 0,
+                snapDistance: distanceXY(straightDownBase, unsnappedBottomPos),
+                nodeKey: gridEnabled
+                    ? gridNodeKeyFromXY(straightDownBase.x, straightDownBase.y, spacingMm)
+                    : null,
+            };
+        }
     }
 
     if (contactConeBlockedAt(socketPos)) {
