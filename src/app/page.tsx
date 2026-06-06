@@ -15122,24 +15122,9 @@ export default function Home() {
   }, [hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
 
   const handleResetHollowingSettings = React.useCallback(() => {
-    const activeModel = scene.activeModel;
-    const persistedHollowing = activeModel?.meshModifiers?.hollowing;
-    if (!persistedHollowing) {
-      setHollowingState(defaultHollowingState);
-      setIsShellOpenFaceSelected(true);
-      return;
-    }
-    setHollowingState({
-      mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
-      voxelResolution: persistedHollowing.voxelResolution,
-      shellThicknessMm: persistedHollowing.shellThicknessMm,
-      infillMode: persistedHollowing.infillMode ?? defaultHollowingState.infillMode,
-      infillCellMm: persistedHollowing.infillCellMm ?? defaultHollowingState.infillCellMm,
-      infillBeamRadiusMm: persistedHollowing.infillBeamRadiusMm ?? defaultHollowingState.infillBeamRadiusMm,
-      openFace: persistedHollowing.openFace,
-    });
-    setIsShellOpenFaceSelected(persistedHollowing.openFaceSelected ?? true);
-  }, [defaultHollowingState, scene.activeModel]);
+    setHollowingState(defaultHollowingState);
+    setIsShellOpenFaceSelected(true);
+  }, [defaultHollowingState]);
 
   const handleHollowingStateChange = React.useCallback((next: HollowingPanelState) => {
     const openFaceChanged = next.openFace !== hollowingState.openFace;

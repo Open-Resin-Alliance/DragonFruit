@@ -349,21 +349,23 @@ export function HollowingPanel({
             <div className="flex gap-2">
               {isHollowingApplied ? (
                 <>
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
-                    onClick={onResetSettings}
-                    disabled={isApplying || isPreviewing}
-                  >
-                    Reset
-                  </button>
+                  {canApply && (
+                    <button
+                      type="button"
+                      className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+                      onClick={onResetSettings}
+                      disabled={isApplying || isPreviewing}
+                    >
+                      Reset
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="ui-button ui-button-accent flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
                     onClick={onReset}
                     disabled={isApplying || isPreviewing}
                   >
-                    Clear
+                    Remove Hollowing
                   </button>
                 </>
               ) : (
