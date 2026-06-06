@@ -9,7 +9,7 @@ export type ModelHollowingModifier = {
   sourcePositionCount?: number;
   blockedVoxelIndices?: number[];
   mode: MeshModifierHollowMode;
-  voxelResolution: number;
+  voxelSizeMm: number;
   shellThicknessMm: number;
   infillMode?: MeshModifierInfillMode;
   infillCellMm?: number;

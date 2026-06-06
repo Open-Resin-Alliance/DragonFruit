@@ -451,7 +451,7 @@ function serializeHollowingModifier(modifier: ModelHollowingModifier | null | un
     enabled: true,
     blockedVoxelIndices: [...(modifier.blockedVoxelIndices ?? [])].sort((a, b) => a - b),
     mode: modifier.mode,
-    voxelResolution: modifier.voxelResolution,
+    voxelSizeMm: Number(modifier.voxelSizeMm.toFixed(4)),
     shellThicknessMm: Number(modifier.shellThicknessMm.toFixed(4)),
     infillMode: modifier.infillMode ?? 'lattice',
     infillCellMm: Number((modifier.infillCellMm ?? 4.2426).toFixed(4)),
@@ -692,6 +692,13 @@ function getUniformScaleFactorForThickness(scale: THREE.Vector3): number {
 
 function worldMmToLocalMm(worldMm: number, scaleFactor: number): number {
   return Math.max(1e-4, worldMm / Math.max(1e-6, scaleFactor));
+}
+
+/** Convert a desired voxel size (mm) to a voxel resolution count, given the
+ *  model's largest bounding-box extent in local space. Clamped to [24, 192]. */
+function computeVoxelResolution(voxelSizeMm: number, maxExtent: number): number {
+  const raw = Math.round(maxExtent / Math.max(0.05, voxelSizeMm));
+  return Math.min(192, Math.max(24, raw));
 }
 
 function buildGeometryVersionKey(geometry: THREE.BufferGeometry): string {
@@ -1617,7 +1624,7 @@ export default function Home() {
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [hollowingState, setHollowingState] = React.useState<HollowingPanelState>({
     mode: 'cavity',
-    voxelResolution: 64,
+    voxelSizeMm: 0.65,
     shellThicknessMm: 2.0,
     infillMode: 'lattice',
     infillCellMm: 4.2426,
@@ -1713,7 +1720,7 @@ export default function Home() {
 
   const defaultHollowingState = React.useMemo<HollowingPanelState>(() => ({
     mode: 'cavity',
-    voxelResolution: 64,
+    voxelSizeMm: 0.65,
     shellThicknessMm: 2.0,
     infillMode: 'lattice',
     infillCellMm: 4.2426,
@@ -14899,9 +14906,13 @@ export default function Home() {
           ? 'cavity'
           : hollowingState.mode;
         const shellScaleFactor = getUniformScaleFactorForThickness(activeModel.transform.scale);
+        const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+          sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
+        );
+        const maxExtent = bbox.getSize(new THREE.Vector3()).length();
         const options: HollowOptions = {
           mode: effectiveHollowMode,
-          voxelResolution: hollowingState.voxelResolution,
+          voxelResolution: computeVoxelResolution(hollowingState.voxelSizeMm, maxExtent),
           shellThicknessMm: worldMmToLocalMm(hollowingState.shellThicknessMm, shellScaleFactor),
           blockedVoxelIndices: blockedHollowVoxelIndices,
           infillMode: hollowingState.infillMode,
@@ -14989,7 +15000,7 @@ export default function Home() {
             sourcePositionCount: sourceSnapshot.sourcePositionCount,
             blockedVoxelIndices: blockedHollowVoxelIndices,
             mode: effectiveHollowMode,
-            voxelResolution: hollowingState.voxelResolution,
+            voxelSizeMm: hollowingState.voxelSizeMm,
             shellThicknessMm: hollowingState.shellThicknessMm,
             infillMode: hollowingState.infillMode,
             infillCellMm: hollowingState.infillCellMm,
@@ -15056,7 +15067,7 @@ export default function Home() {
         sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
         blockedVoxelIndices: [],
         mode: defaultHollowingState.mode,
-        voxelResolution: defaultHollowingState.voxelResolution,
+        voxelSizeMm: defaultHollowingState.voxelSizeMm,
         shellThicknessMm: defaultHollowingState.shellThicknessMm,
         infillMode: defaultHollowingState.infillMode,
         infillCellMm: defaultHollowingState.infillCellMm,
@@ -15106,7 +15117,7 @@ export default function Home() {
         blockedVoxelIndices: [],
         // Keep current settings — don't reset to defaults.
         mode: hollowingState.mode,
-        voxelResolution: hollowingState.voxelResolution,
+        voxelSizeMm: hollowingState.voxelSizeMm,
         shellThicknessMm: hollowingState.shellThicknessMm,
         infillMode: hollowingState.infillMode,
         infillCellMm: hollowingState.infillCellMm,
@@ -15130,7 +15141,7 @@ export default function Home() {
 
   const handleHollowingStateChange = React.useCallback((next: HollowingPanelState) => {
     const openFaceChanged = next.openFace !== hollowingState.openFace;
-    const resolutionChanged = next.voxelResolution !== hollowingState.voxelResolution;
+    const resolutionChanged = Math.abs(next.voxelSizeMm - hollowingState.voxelSizeMm) > 1e-6;
     const thicknessChanged = Math.abs(next.shellThicknessMm - hollowingState.shellThicknessMm) > 1e-6;
     const blockedVoxelIndices = resolutionChanged
       ? []
@@ -15178,7 +15189,7 @@ export default function Home() {
         sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
         blockedVoxelIndices,
         mode: next.mode,
-        voxelResolution: next.voxelResolution,
+        voxelSizeMm: next.voxelSizeMm,
         shellThicknessMm: next.shellThicknessMm,
         infillMode: next.infillMode,
         infillCellMm: next.infillCellMm,
@@ -15187,7 +15198,7 @@ export default function Home() {
         openFaceSelected: nextShellOpenFaceSelected,
       },
     });
-  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelResolution, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
+  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelSizeMm, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
 
   const selectedHolePunchPlacementIdSet = React.useMemo(
     () => new Set(selectedHolePunchPlacementIds),
@@ -15384,7 +15395,7 @@ export default function Home() {
       enabled: hollowingDraftEnabled,
       blockedVoxelIndices: blockedHollowVoxelIndices,
       mode: hollowingState.mode,
-      voxelResolution: hollowingState.voxelResolution,
+      voxelSizeMm: hollowingState.voxelSizeMm,
       shellThicknessMm: hollowingState.shellThicknessMm,
       infillMode: hollowingState.infillMode,
       infillCellMm: hollowingState.infillCellMm,
@@ -15403,7 +15414,7 @@ export default function Home() {
       hollowingState.shellThicknessMm,
       hollowingState.infillBeamRadiusMm,
       hollowingState.infillCellMm,
-      hollowingState.voxelResolution,
+      hollowingState.voxelSizeMm,
       isShellOpenFaceSelected,
     ],
   );
@@ -15562,7 +15573,7 @@ export default function Home() {
         sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
         blockedVoxelIndices: nextIndices,
         mode: hollowingState.mode,
-        voxelResolution: hollowingState.voxelResolution,
+        voxelSizeMm: hollowingState.voxelSizeMm,
         shellThicknessMm: hollowingState.shellThicknessMm,
         infillMode: hollowingState.infillMode,
         infillCellMm: hollowingState.infillCellMm,
@@ -15784,7 +15795,7 @@ export default function Home() {
           sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
           sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
           mode: nextHollowingState.mode,
-          voxelResolution: nextHollowingState.voxelResolution,
+          voxelSizeMm: nextHollowingState.voxelSizeMm,
           shellThicknessMm: nextHollowingState.shellThicknessMm,
           infillMode: nextHollowingState.infillMode,
           infillCellMm: nextHollowingState.infillCellMm,
@@ -16086,7 +16097,7 @@ export default function Home() {
     setPendingBlockerResetState(null);
     if (!next) return;
     // Re-apply the state change that was deferred — this clears blockers.
-    const resolutionChanged = next.voxelResolution !== hollowingState.voxelResolution;
+    const resolutionChanged = Math.abs(next.voxelSizeMm - hollowingState.voxelSizeMm) > 1e-6;
     const blockedVoxelIndices = resolutionChanged ? [] : [];
     setHollowingState(next);
     setIsShellOpenFaceSelected(next.mode === 'shell_open_face' ? false : true);
@@ -16104,7 +16115,7 @@ export default function Home() {
         bakedIntoGeometry: false,
         blockedVoxelIndices,
         mode: next.mode,
-        voxelResolution: next.voxelResolution,
+        voxelSizeMm: next.voxelSizeMm,
         shellThicknessMm: next.shellThicknessMm,
         infillMode: next.infillMode ?? defaultHollowingState.infillMode,
         infillCellMm: next.infillCellMm ?? defaultHollowingState.infillCellMm,
@@ -16426,7 +16437,8 @@ export default function Home() {
 
   const buildHollowingOptions = React.useCallback((
     modelScale: THREE.Vector3,
-    tuning?: { preview?: boolean; previewVoxelResolution?: number; previewShellThicknessMm?: number },
+    maxExtent: number,
+    tuning?: { preview?: boolean; previewShellThicknessMm?: number },
     stateOverride?: HollowingPanelState,
   ): HollowOptions => {
     const preview = Boolean(tuning?.preview);
@@ -16434,9 +16446,10 @@ export default function Home() {
     const effectiveHollowMode = state.mode === 'shell_open_face'
       ? 'cavity'
       : state.mode;
+    const computedResolution = computeVoxelResolution(state.voxelSizeMm, maxExtent);
     const voxelResolution = preview
-      ? (tuning?.previewVoxelResolution ?? Math.min(state.voxelResolution, 72))
-      : state.voxelResolution;
+      ? Math.min(computedResolution, 72)
+      : computedResolution;
     const shellThicknessMmWorld = preview
       ? (tuning?.previewShellThicknessMm ?? state.shellThicknessMm)
       : state.shellThicknessMm;
@@ -16472,7 +16485,7 @@ export default function Home() {
     hollowingState.infillBeamRadiusMm,
     hollowingState.infillCellMm,
     hollowingState.shellThicknessMm,
-    hollowingState.voxelResolution,
+    hollowingState.voxelSizeMm,
     blockedHollowVoxelIndices,
   ]);
 
@@ -16481,14 +16494,16 @@ export default function Home() {
     overrideState?: HollowingPanelState,
   ) => {
     const previewState = overrideState ?? hollowingState;
-    const previewVoxelResolution = previewState.voxelResolution;
     const previewShellThicknessMm = quantizePreviewShellThicknessMm(previewState.shellThicknessMm);
     const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
     const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
+    const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+      sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
+    );
+    const maxExtent = bbox.getSize(new THREE.Vector3()).length();
     const options: HollowOptions = {
-      ...buildHollowingOptions(activeModel.transform.scale, {
+      ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
         preview: true,
-        previewVoxelResolution,
         previewShellThicknessMm,
       }, previewState),
       previewCavityOnly: true,
@@ -16505,7 +16520,7 @@ export default function Home() {
   }, [
     buildHollowingOptions,
     hollowingState.shellThicknessMm,
-    hollowingState.voxelResolution,
+    hollowingState.voxelSizeMm,
     resolveHollowPreviewSourceGeometry,
   ]);
 
@@ -16636,7 +16651,7 @@ export default function Home() {
           const warmupState: HollowingPanelState = persistedHollowing?.enabled
             ? {
                 mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
-                voxelResolution: persistedHollowing.voxelResolution,
+                voxelSizeMm: persistedHollowing.voxelSizeMm,
                 shellThicknessMm: persistedHollowing.shellThicknessMm,
                 infillMode: persistedHollowing.infillMode ?? defaultHollowingState.infillMode,
                 infillCellMm: persistedHollowing.infillCellMm ?? defaultHollowingState.infillCellMm,
@@ -16981,7 +16996,7 @@ export default function Home() {
     const warmupState: HollowingPanelState = persistedHollowing?.enabled
       ? {
           mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
-          voxelResolution: persistedHollowing.voxelResolution,
+          voxelSizeMm: persistedHollowing.voxelSizeMm,
           shellThicknessMm: persistedHollowing.shellThicknessMm,
           infillMode: persistedHollowing.infillMode ?? defaultHollowingState.infillMode,
           infillCellMm: persistedHollowing.infillCellMm ?? defaultHollowingState.infillCellMm,
@@ -17040,7 +17055,7 @@ export default function Home() {
     );
     const nextHollowingPanelState = {
       mode: (persistedHollowing?.mode ?? defaultHollowingState.mode) === 'shell_open_face' ? 'cavity' : (persistedHollowing?.mode ?? defaultHollowingState.mode),
-      voxelResolution: persistedHollowing?.voxelResolution ?? defaultHollowingState.voxelResolution,
+      voxelSizeMm: persistedHollowing?.voxelSizeMm ?? defaultHollowingState.voxelSizeMm,
       shellThicknessMm: persistedHollowing?.shellThicknessMm ?? defaultHollowingState.shellThicknessMm,
       infillMode: persistedHollowing?.infillMode ?? defaultHollowingState.infillMode,
       infillCellMm: persistedHollowing?.infillCellMm ?? defaultHollowingState.infillCellMm,
@@ -17136,19 +17151,21 @@ export default function Home() {
       return;
     }
 
-    const previewVoxelResolution = hollowingState.voxelResolution;
     const previewShellThicknessMm = quantizePreviewShellThicknessMm(hollowingState.shellThicknessMm);
+    const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
+    const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
+    const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+      sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
+    );
+    const maxExtent = bbox.getSize(new THREE.Vector3()).length();
 
     const options: HollowOptions = {
-      ...buildHollowingOptions(activeModel.transform.scale, {
+      ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
         preview: true,
-        previewVoxelResolution,
         previewShellThicknessMm,
       }),
       previewCavityOnly: true,
     };
-    const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
-    const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
     const optionsKey = JSON.stringify(options);
     const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
 

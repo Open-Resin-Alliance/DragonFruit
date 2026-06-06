@@ -6,7 +6,7 @@ import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export interface HollowingPanelState {
   mode: HollowMode;
-  voxelResolution: number;
+  voxelSizeMm: number;
   shellThicknessMm: number;
   infillMode: InfillMode;
   infillCellMm: number;
@@ -187,15 +187,15 @@ export function HollowingPanel({
           )}
 
           <div className="rounded-md border p-2 space-y-1.5" style={panelCardStyle}>
-            <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Voxel Resolution</label>
+            <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Voxel Size</label>
             <ScrollableNumberField
-              value={state.voxelResolution}
-              onChange={(value) => setState({ voxelResolution: clampInt(value, 24, 192) })}
-              min={24}
-              max={192}
-              step={1}
-              unit="vox"
-              ariaLabel="Voxel resolution"
+              value={state.voxelSizeMm}
+              onChange={(value) => setState({ voxelSizeMm: clampFloat(value, 0.2, 10, 2) })}
+              min={0.2}
+              max={10}
+              step={0.1}
+              unit="mm"
+              ariaLabel="Voxel size"
               disabled={isApplying}
               className="mt-1"
             />

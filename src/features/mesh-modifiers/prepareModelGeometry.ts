@@ -47,7 +47,7 @@ function buildModifierSignature(model: LoadedModel): string | null {
   const normalized = {
     hollowing: hollowing?.enabled ? {
       mode: hollowing.mode,
-      voxelResolution: hollowing.voxelResolution,
+      voxelSizeMm: hollowing.voxelSizeMm,
       shellThicknessMm: hollowing.shellThicknessMm,
       infillMode: hollowing.infillMode ?? 'lattice',
       infillCellMm: hollowing.infillCellMm ?? 4.2426,
@@ -163,9 +163,11 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
   };
 
   if (shouldApplyHollowing && hollowing) {
+    const maxExtent = Math.max(sourceBounds.size.x, sourceBounds.size.y, sourceBounds.size.z);
+    const voxelResolution = Math.min(192, Math.max(24, Math.round(maxExtent / Math.max(0.05, hollowing.voxelSizeMm))));
     const hollowOptions: HollowOptions = {
       mode: hollowing.mode,
-      voxelResolution: hollowing.voxelResolution,
+      voxelResolution,
       shellThicknessMm: hollowing.shellThicknessMm,
       infillMode: hollowing.infillMode ?? 'lattice',
       infillCellMm: hollowing.infillCellMm ?? 4.2426,
