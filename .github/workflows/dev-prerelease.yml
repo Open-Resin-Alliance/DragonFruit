@@ -1,4 +1,4 @@
-name: Dev Prerelease
+name: Dev Pre-Release
 
 on:
   workflow_dispatch:
@@ -100,24 +100,10 @@ jobs:
             artifact_name: dragonfruit-linux-flatpak-x64
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Add SSH private keys for submodule repositories
-        uses: webfactory/ssh-agent@v0.10.0
-        with:
-          ssh-private-key: |
-            ${{ secrets.CTB_DEPLOY }}
-            ${{ secrets.ELEGOO_DEPLOY }}
-            ${{ secrets.SDCP_V3_DEPLOY }}
-
-      - name: Checkout parent
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Checkout submodules
-        run: |
-          git submodule sync
-          git submodule update --init --recursive
+          submodules: recursive
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'

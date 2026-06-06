@@ -202,7 +202,7 @@
                   return;
             }
 
-            const versionTag = nightlyRelease.tag_name || nightlyRelease.name || 'Nightly';
+            const versionTag = nightlyRelease.name || nightlyRelease.tag_name || 'Nightly';
             const preferredPlatform = detectPlatform();
             const preferredAsset = preferredPlatform ? pickBestAsset(nightlyRelease.assets || [], preferredPlatform) : null;
 
@@ -336,6 +336,8 @@
             fetchJson(RELEASES_API_URL)
                   .then((releases) => {
                         const nightly = (releases || []).find(
+                              (r) => r.prerelease && r.tag_name && r.tag_name.startsWith('nightly_'),
+                        ) || (releases || []).find(
                               (r) => r.prerelease && r.tag_name && r.tag_name.startsWith('dev_'),
                         );
                         hydrateNightlyDownload(nightly || null);
