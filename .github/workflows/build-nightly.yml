@@ -51,24 +51,40 @@ jobs:
             const commentUser = process.env.COMMENT_USER;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const ADMIN_TEAM = 'administrators';
 
+            // Check 1 — direct collaborator with write+ access
+            let hasWrite = false;
             try {
               const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
                 owner,
                 repo,
                 username: commentUser,
               });
-              const permission = data.permission;
-              const hasWrite = ['write', 'admin', 'maintain'].includes(permission);
-              core.info(`User ${commentUser} has ${permission} permission — ${hasWrite ? 'granted' : 'denied'}.`);
-              return hasWrite ? 'granted' : 'denied';
+              hasWrite = ['write', 'admin', 'maintain'].includes(data.permission);
+              core.info(`Repo permission: ${data.permission} → ${hasWrite ? 'granted' : 'denied'}.`);
             } catch (e) {
-              if (e.status === 404) {
-                core.warning(`User ${commentUser} is not a collaborator — denied.`);
-                return 'denied';
-              }
-              throw e;
+              if (e.status !== 404) throw e;
+              core.info(`User is not a direct collaborator.`);
             }
+
+            // Check 2 — override: member of the administrators team
+            let isAdmin = false;
+            try {
+              const { data } = await github.rest.teams.getMembershipForUserInOrg({
+                org: owner,
+                team_slug: ADMIN_TEAM,
+                username: commentUser,
+              });
+              isAdmin = data.state === 'active' || data.state === 'pending';
+              if (isAdmin) core.info(`User is a member of @${owner}/${ADMIN_TEAM} — override granted.`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              core.info(`User is not a member of @${owner}/${ADMIN_TEAM}.`);
+            }
+
+            if (hasWrite || isAdmin) return 'granted';
+            return 'denied';
 
       - name: Abort if not authorized
         if: steps.check_access.outputs.result != 'granted'
@@ -78,7 +94,23 @@ jobs:
         run: |
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
-            --body "❌ Sorry, only collaborators with write access can trigger nightly builds."
+            --body $'### ❌ Access Denied\n\nSorry, only **collaborators with write access** can trigger nightly builds.\n\nIf you believe this is a mistake, please contact a maintainer.'
+
+      - name: Fetch PR head branch
+        id: pr_info
+        if: steps.check_access.outputs.result == 'granted'
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ github.event.issue.number }}
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(process.env.PR),
+            });
+            return pr.head.ref;
 
       - name: Add nightly-build label
         if: steps.check_access.outputs.result == 'granted'
@@ -88,15 +120,26 @@ jobs:
         run: |
           gh issue edit "$PR" --add-label "${{ env.NIGHTLY_LABEL }}" --repo "${{ github.repository }}"
 
+      - name: Trigger immediate nightly build
+        if: steps.check_access.outputs.result == 'granted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.pr_info.outputs.result }}
+        run: |
+          gh workflow run build-nightly.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$BRANCH"
+
       - name: Acknowledge activation
         if: steps.check_access.outputs.result == 'granted'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.issue.number }}
+          BRANCH: ${{ steps.pr_info.outputs.result }}
         run: |
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
-            --body "🚀 Nightly builds activated! Every new commit pushed to this PR will now automatically trigger an updated nightly pre-release."
+            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Every new push to this PR will automatically rebuild |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
 
   # ── Derive metadata (branch, tag, names) ────────────────────────────────
   derive:
@@ -173,11 +216,91 @@ jobs:
           echo "is_pr=${{ github.event_name == 'pull_request' && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
           echo "pr_number=${{ github.event.pull_request.number || '' }}" >> "$GITHUB_OUTPUT"
 
+  # ── Gate: wait for PR Linux build to pass ───────────────────────────────
+  check-pr-build:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'nightly-build'))
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+    steps:
+      - name: Skip gate for manual triggers
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "Manual trigger — no PR build to wait for."
+
+      - name: Wait for PR Linux build check to complete
+        id: check
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const headSha = process.env.HEAD_SHA;
+            const workflowName = 'PR Linux Build Check';
+            const pollIntervalMs = 60_000;
+            const maxAttempts = 45;  // 45 minutes total
+
+            core.info(`Waiting for ${workflowName} to pass on commit ${headSha}...`);
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              // List check runs for the head commit
+              const { data } = await github.rest.checks.listForRef({
+                owner,
+                repo,
+                ref: headSha,
+              });
+
+              const prBuildRun = data.check_runs.find(
+                (run) => run.name.includes(workflowName) || run.name === 'linux-build',
+              );
+
+              if (!prBuildRun) {
+                core.info(`Attempt ${attempt}/${maxAttempts}: No PR build check run found yet. Retrying in 60s...`);
+                await new Promise((r) => setTimeout(r, pollIntervalMs));
+                continue;
+              }
+
+              const status = prBuildRun.conclusion || 'in_progress';
+              const name = prBuildRun.name;
+              core.info(
+                `Attempt ${attempt}/${maxAttempts}: ${name} → status=${prBuildRun.status}, conclusion=${prBuildRun.conclusion}`
+              );
+
+              if (prBuildRun.status !== 'completed') {
+                core.info(`Still in progress. Retrying in 60s...`);
+                await new Promise((r) => setTimeout(r, pollIntervalMs));
+                continue;
+              }
+
+              if (status === 'success') {
+                core.info(`PR build check passed! Proceeding with nightly.`);
+                core.setOutput('status', 'passed');
+                return;
+              }
+
+              core.setFailed(
+                `PR Linux build check finished with status: ${status}. ` +
+                `Nightly build aborted — compilation would likely fail.`
+              );
+              return;
+            }
+
+            core.setFailed(
+              `Timed out after ${maxAttempts * pollIntervalMs / 60_000} minutes waiting for ` +
+              `the PR Linux build check to complete. Aborting nightly.`
+            );
+
   # ── Build matrix ────────────────────────────────────────────────────────
   build-tauri:
     name: Build ${{ matrix.artifact_name }}
     needs:
       - derive
+      - check-pr-build
     strategy:
       fail-fast: false
       matrix:
@@ -425,6 +548,4 @@ jobs:
           release_url="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
-            --body "✅ **${NAME}** pre-release ready!
-
-          [Download nightly build](${release_url})"
+            --body $'### ✅ Nightly Build Complete\n\n**'"${NAME}"$'** is ready for download.\n\n| | |\n|---|---|\n| 📦 **Release** | ['"${TAG}"$']('"${release_url}"$') |\n| 🖥️ **Platforms** | Windows, macOS, Linux |\n\n---\n\n> 💡 The next commit pushed to this PR will automatically rebuild and update this release.'

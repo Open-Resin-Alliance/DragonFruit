@@ -74,32 +74,64 @@ jobs:
             const issue_number = context.payload.pull_request.number;
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
 
+            const emojiMap = {
+              success: "✅",
+              failure: "❌",
+              cancelled: "⚠️",
+              skipped: "⏭️",
+            };
+
             const statusMap = {
               success: {
-                title: "Linux build check passed",
+                icon: emojiMap.success,
+                title: "Compilation Succeeded",
+                badge: "Passed",
+                color: "brightgreen",
                 body: "The PR compiled successfully for Linux."
               },
               failure: {
-                title: "Linux build check failed",
-                body: "The Linux compile check failed. Please inspect the workflow logs."
+                icon: emojiMap.failure,
+                title: "Compilation Failed",
+                badge: "Failed",
+                color: "red",
+                body: "The Linux compile check failed. Please inspect the workflow logs for details."
               },
               cancelled: {
-                title: "Linux build check was cancelled",
+                icon: emojiMap.cancelled,
+                title: "Compilation Cancelled",
+                badge: "Cancelled",
+                color: "yellow",
                 body: "The Linux compile check did not finish because the workflow was cancelled."
               }
             };
 
             const status = statusMap[result] ?? {
-              title: `Linux build check ended with status: ${result}`,
+              icon: emojiMap.skipped,
+              title: `Compilation Ended: ${result}`,
+              badge: result,
+              color: "grey",
               body: "The Linux compile check finished with a non-standard result."
             };
 
+            const commitSha = context.payload.pull_request?.head?.sha?.slice(0, 7) || "unknown";
+            const branch = context.payload.pull_request?.head?.ref || "unknown";
+
             const body = [
               marker,
-              `## ${status.title}`,
-              status.body,
+              `## ${status.icon} Linux Build Check — ${status.title}`,
               "",
-              `[View workflow run](${runUrl})`
+              `| | |`,
+              `|---|---|`,
+              `| **Result** | ${status.badge} |`,
+              `| **Branch** | \`${branch}\` |`,
+              `| **Commit** | \`${commitSha}\` |`,
+              `| **Workflow** | [View run](${runUrl}) |`,
+              "",
+              `${status.body}`,
+              "",
+              "---",
+              "",
+              "> 💡 This check runs automatically on every push to the PR."
             ].join("\n");
 
             const comments = await github.paginate(github.rest.issues.listComments, {
