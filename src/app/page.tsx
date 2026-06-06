@@ -1645,6 +1645,7 @@ export default function Home() {
   const [hoveredHolePunchPlacementId, setHoveredHolePunchPlacementId] = React.useState<string | null>(null);
   const [holePunchHoverPlacement, setHolePunchHoverPlacement] = React.useState<HolePunchPlacementState | null>(null);
   const [isApplyingHolePunch, setIsApplyingHolePunch] = React.useState(false);
+  const [isApplyingBlockersHollowing, setIsApplyingBlockersHollowing] = React.useState(false);
   const [pendingHolePunchAutoApplyModelId, setPendingHolePunchAutoApplyModelId] = React.useState<string | null>(null);
   const holePunchDragStateRef = React.useRef<{
     pointerId: number;
@@ -2462,7 +2463,7 @@ export default function Home() {
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(1);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
   const showArrangeBlockingOverlay = isAutoArranging;
-  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isPreviewingHollowing || pendingHolePunchAutoApplyModelId !== null;
+  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null;
   const [modifierApplyOverlayElapsedSec, setModifierApplyOverlayElapsedSec] = React.useState(0);
 
   const arrangeOverlayContent = React.useMemo(() => {
@@ -2536,7 +2537,7 @@ export default function Home() {
       };
     }
 
-    if (isPreviewingHollowing) {
+    if (isApplyingBlockersHollowing) {
       return {
         title: 'Applying Blockers...',
         detailLines: [
@@ -2553,7 +2554,7 @@ export default function Home() {
         'Please wait a moment.',
       ],
     };
-  }, [isApplyingHolePunch, isApplyingHollowing, isPreviewingHollowing, pendingHolePunchAutoApplyModelId]);
+  }, [isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
 
   React.useEffect(() => {
     if (!showArrangeBlockingOverlay) {
@@ -15014,6 +15015,7 @@ export default function Home() {
         setIsExportErrorToastVisible(true);
       } finally {
         setIsApplyingHollowing(false);
+        setIsApplyingBlockersHollowing(false);
       }
     })();
   }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene]);
@@ -16780,6 +16782,7 @@ export default function Home() {
     } finally {
       if (hollowPreviewRequestSeqRef.current === requestSeq) {
         setIsPreviewingHollowing(false);
+        setIsApplyingBlockersHollowing(false);
       }
     }
   }, [cacheHollowPreviewResult, scene.models]);
@@ -16953,6 +16956,7 @@ export default function Home() {
     const nextIndices = [...editingBlockedHollowVoxelIndices].sort((a, b) => a - b);
     commitBlockedHollowVoxelIndices(nextIndices);
     setHollowingEditMode(false);
+    setIsApplyingBlockersHollowing(true);
   }, [commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
 
   React.useEffect(() => {
@@ -17782,7 +17786,7 @@ export default function Home() {
                   onApply={() => { void handleApplyHollowing(); }}
                   isApplying={isApplyingHollowing}
                   isPreviewing={isPreviewingHollowing}
-                  isApplyingBlockers={isPreviewingHollowing}
+                  isApplyingBlockers={isApplyingBlockersHollowing || isPreviewingHollowing}
                   canApply={!isShellFaceSelectionPending && (isHollowingDirty || !isHollowingApplied)}
                   canReset={canResetHollowing}
                   canEdit={!isShellFaceSelectionPending && Boolean(scene.activeModel)}
