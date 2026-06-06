@@ -7,6 +7,7 @@ export type ModelHollowingModifier = {
   bakedIntoGeometry?: boolean;
   sourcePositionsBase64?: string;
   sourcePositionCount?: number;
+  blockedVoxelIndices?: number[];
   mode: MeshModifierHollowMode;
   voxelResolution: number;
   shellThicknessMm: number;

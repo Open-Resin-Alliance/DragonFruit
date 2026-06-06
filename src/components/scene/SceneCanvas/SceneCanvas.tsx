@@ -374,6 +374,7 @@ export function SceneCanvas({
   holdSupportDragDelta,
   supportDragTransactionId = 0,
   renderSceneOverlays,
+  customPrepareMarqueeSelection,
   duplicatePreviewModel,
   duplicatePreviewTransforms,
   duplicateActivePreviewTransform,
@@ -505,6 +506,19 @@ export function SceneCanvas({
   renderSceneOverlays?: (context: {
     raycastActiveModelFromRay: (ray: THREE.Ray) => THREE.Intersection | null;
   }) => React.ReactNode;
+  customPrepareMarqueeSelection?: {
+    enabled: boolean;
+    resolveSelection: (
+      selection: {
+        start: { x: number; y: number };
+        current: { x: number; y: number };
+      },
+      helpers: {
+        projectWorldPoint: (point: THREE.Vector3) => { x: number; y: number; z: number } | null;
+      },
+    ) => string[];
+    onSelectionChange: (ids: string[]) => void;
+  };
   duplicatePreviewModel?: LoadedModel | null;
   duplicatePreviewTransforms?: Array<{
     position: THREE.Vector3;
@@ -2427,6 +2441,30 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!rect || !camera) return [] as string[];
 
+    if (customPrepareMarqueeSelection?.enabled) {
+      const projected = new THREE.Vector3();
+      return customPrepareMarqueeSelection.resolveSelection(selection, {
+        projectWorldPoint: (point: THREE.Vector3) => {
+          projected.copy(point).project(camera);
+          if (
+            !Number.isFinite(projected.x)
+            || !Number.isFinite(projected.y)
+            || !Number.isFinite(projected.z)
+            || projected.z < -1
+            || projected.z > 1
+          ) {
+            return null;
+          }
+
+          return {
+            x: ((projected.x + 1) * 0.5) * rect.width,
+            y: ((1 - projected.y) * 0.5) * rect.height,
+            z: projected.z,
+          };
+        },
+      });
+    }
+
     const minX = Math.min(selection.start.x, selection.current.x);
     const maxX = Math.max(selection.start.x, selection.current.x);
     const minY = Math.min(selection.start.y, selection.current.y);
@@ -2460,7 +2498,7 @@ export function SceneCanvas({
     }
 
     return selectedIds;
-  }, [buildVolumeBounds, computeModelWorldBounds, modelWorldBounds, models]);
+  }, [buildVolumeBounds, computeModelWorldBounds, customPrepareMarqueeSelection, modelWorldBounds, models]);
 
   const resolveMarqueeSelectedSupportIds = React.useCallback((selection: {
     start: { x: number; y: number };
@@ -2593,6 +2631,9 @@ export function SceneCanvas({
     containerRef,
     interactionResetToken: interactionResetNonce,
     mode,
+    prepareMarqueeEnabled: Boolean(mode === 'prepare' && (onMarqueeSelectionChange || customPrepareMarqueeSelection?.enabled)),
+    allowPrepareMarqueeFromHover: Boolean(customPrepareMarqueeSelection?.enabled),
+    prepareMarqueePublishesModelSelectionEvents: !customPrepareMarqueeSelection?.enabled,
     isGizmoDragging,
     isPostGizmoInteractionGuardActive,
     hoveredModelId,
@@ -2602,7 +2643,9 @@ export function SceneCanvas({
     selectedModelIds,
     isOrbitInteracting,
     spaceMouseNavigationActive,
-    onMarqueeSelectionChange,
+    onMarqueeSelectionChange: customPrepareMarqueeSelection?.enabled
+      ? customPrepareMarqueeSelection.onSelectionChange
+      : onMarqueeSelectionChange,
     resolveMarqueeSelectedIds,
     resolveMarqueeSelectedSupportIds,
     suppressNextCanvasClickRef,

@@ -50,6 +50,7 @@ pub struct HollowOptions {
     pub mode: HollowMode,
     pub voxel_resolution: u16,
     pub shell_thickness_mm: f32,
+    pub blocked_voxel_indices: Vec<usize>,
     pub infill_mode: InfillMode,
     pub infill_cell_mm: f32,
     pub infill_beam_radius_mm: f32,
@@ -68,6 +69,7 @@ impl Default for HollowOptions {
             mode: HollowMode::Cavity,
             voxel_resolution: 64,
             shell_thickness_mm: 2.0,
+            blocked_voxel_indices: Vec::new(),
             infill_mode: InfillMode::Lattice,
             infill_cell_mm: 4.2426,
             infill_beam_radius_mm: 0.35,
@@ -85,6 +87,7 @@ impl Default for HollowOptions {
 pub struct HollowReport {
     pub mode: HollowMode,
     pub voxel_resolution: u16,
+    pub voxel_size_mm: f32,
     pub shell_thickness_mm: f32,
     pub source_triangle_count: usize,
     pub output_triangle_count: usize,
@@ -140,6 +143,8 @@ pub struct HolePunchOutcome {
 pub struct HollowOutcome {
     pub mesh: IndexedMesh,
     pub preview_infill_mesh: Option<IndexedMesh>,
+    pub removed_voxel_centers: Vec<f32>,
+    pub removed_voxel_indices: Vec<u32>,
     pub report: HollowReport,
 }
 
@@ -269,9 +274,12 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         return HollowOutcome {
             mesh,
             preview_infill_mesh: None,
+            removed_voxel_centers: Vec::new(),
+            removed_voxel_indices: Vec::new(),
             report: HollowReport {
                 mode: options.mode,
                 voxel_resolution: options.voxel_resolution,
+                voxel_size_mm: 0.0,
                 shell_thickness_mm: options.shell_thickness_mm,
                 source_triangle_count,
                 output_triangle_count: source_triangle_count,
@@ -582,6 +590,12 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         retain_largest_connected_cavity_component(&grid, &solid, &mut keep);
     }
 
+    for &blocked_index in &options.blocked_voxel_indices {
+        if blocked_index < keep.len() && solid[blocked_index] {
+            keep[blocked_index] = true;
+        }
+    }
+
     let removed_voxels = occupied_voxels.saturating_sub(keep.iter().filter(|v| **v).count());
 
     let out_mesh = build_hollow_output_mesh(
@@ -632,9 +646,12 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         } else {
             None
         },
+        removed_voxel_centers: collect_removed_voxel_centers(&grid, &solid, &keep),
+        removed_voxel_indices: collect_removed_voxel_indices(&grid, &solid, &keep),
         report: HollowReport {
             mode: options.mode,
             voxel_resolution: options.voxel_resolution,
+            voxel_size_mm: voxel_mm,
             shell_thickness_mm: options.shell_thickness_mm,
             source_triangle_count,
             output_triangle_count,
@@ -943,6 +960,12 @@ impl HollowSession {
             retain_largest_connected_cavity_component(&self.grid, &self.solid, &mut keep);
         }
 
+        for &blocked_index in &options.blocked_voxel_indices {
+            if blocked_index < keep.len() && self.solid[blocked_index] {
+                keep[blocked_index] = true;
+            }
+        }
+
         let removed_voxels = self
             .occupied_voxels
             .saturating_sub(keep.iter().filter(|v| **v).count());
@@ -994,9 +1017,12 @@ impl HollowSession {
             } else {
                 None
             },
+            removed_voxel_centers: collect_removed_voxel_centers(&self.grid, &self.solid, &keep),
+            removed_voxel_indices: collect_removed_voxel_indices(&self.grid, &self.solid, &keep),
             report: HollowReport {
                 mode: options.mode,
                 voxel_resolution: self.voxel_resolution,
+                voxel_size_mm: self.grid.voxel_mm,
                 shell_thickness_mm: options.shell_thickness_mm,
                 source_triangle_count: self.source_triangle_count,
                 output_triangle_count,
@@ -1007,6 +1033,55 @@ impl HollowSession {
             },
         }
     }
+}
+
+fn collect_removed_voxel_centers(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<f32> {
+    let removed_count = solid
+        .iter()
+        .zip(keep.iter())
+        .filter(|(is_solid, is_kept)| **is_solid && !**is_kept)
+        .count();
+    let mut centers = Vec::with_capacity(removed_count * 3);
+
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let index = grid.idx(x, y, z);
+                if !solid[index] || keep[index] {
+                    continue;
+                }
+                let center = grid.center_world(x, y, z);
+                centers.push(center.x);
+                centers.push(center.y);
+                centers.push(center.z);
+            }
+        }
+    }
+
+    centers
+}
+
+fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<u32> {
+    let removed_count = solid
+        .iter()
+        .zip(keep.iter())
+        .filter(|(is_solid, is_kept)| **is_solid && !**is_kept)
+        .count();
+    let mut indices = Vec::with_capacity(removed_count);
+
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let index = grid.idx(x, y, z);
+                if !solid[index] || keep[index] {
+                    continue;
+                }
+                indices.push(index as u32);
+            }
+        }
+    }
+
+    indices
 }
 
 #[cfg(not(feature = "manifold"))]

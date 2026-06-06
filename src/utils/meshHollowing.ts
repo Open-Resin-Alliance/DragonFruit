@@ -24,6 +24,7 @@ export interface HollowOptions {
   mode: HollowMode;
   voxelResolution: number;
   shellThicknessMm: number;
+  blockedVoxelIndices?: number[];
   infillMode: InfillMode;
   infillCellMm: number;
   infillBeamRadiusMm: number;
@@ -37,6 +38,7 @@ export interface HollowOptions {
 export interface HollowReport {
   mode: HollowMode;
   voxelResolution: number;
+  voxelSizeMm: number;
   shellThicknessMm: number;
   sourceTriangleCount: number;
   outputTriangleCount: number;
@@ -50,6 +52,8 @@ export interface HollowResult {
   report: HollowReport;
   positions: Float32Array;
   infillPositions?: Float32Array;
+  removedVoxelCenters?: Float32Array;
+  removedVoxelIndices?: Uint32Array;
 }
 
 export function isTauriRuntime(): boolean {
@@ -102,7 +106,11 @@ async function stageGeometryToStagedMesh(
 
 async function readPositionsFromCommand(
   invoke: TauriInvoke,
-  command: 'mesh_repair_read_positions' | 'mesh_hollow_preview_read_positions' | 'mesh_hollow_preview_read_infill_positions',
+  command:
+    | 'mesh_repair_read_positions'
+    | 'mesh_hollow_preview_read_positions'
+    | 'mesh_hollow_preview_read_infill_positions'
+    | 'mesh_hollow_preview_read_removed_voxel_centers',
 ): Promise<Float32Array> {
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
   let u8: Uint8Array;
@@ -119,6 +127,27 @@ async function readPositionsFromCommand(
   const copy = new Uint8Array(u8.byteLength);
   copy.set(u8);
   return new Float32Array(copy.buffer);
+}
+
+async function readUint32FromCommand(
+  invoke: TauriInvoke,
+  command: 'mesh_hollow_preview_read_removed_voxel_indices',
+): Promise<Uint32Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
+  let u8: Uint8Array;
+  if (bytes instanceof ArrayBuffer) {
+    u8 = new Uint8Array(bytes);
+  } else if (bytes instanceof Uint8Array) {
+    u8 = bytes;
+  } else if (Array.isArray(bytes)) {
+    u8 = new Uint8Array(bytes);
+  } else {
+    throw new Error(`${command} returned unexpected type`);
+  }
+
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  return new Uint32Array(copy.buffer);
 }
 
 function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
@@ -188,6 +217,8 @@ export async function hollowPreviewFromCapturedSource(
   const report = JSON.parse(reportJson) as HollowReport;
   const positions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_positions');
   let infillPositions: Float32Array | undefined;
+  let removedVoxelCenters: Float32Array | undefined;
+  let removedVoxelIndices: Uint32Array | undefined;
   if (options.mode === 'infill') {
     try {
       infillPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_infill_positions');
@@ -195,7 +226,17 @@ export async function hollowPreviewFromCapturedSource(
       infillPositions = undefined;
     }
   }
-  return { report, positions, infillPositions };
+  try {
+    removedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_centers');
+  } catch {
+    removedVoxelCenters = undefined;
+  }
+  try {
+    removedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_indices');
+  } catch {
+    removedVoxelIndices = undefined;
+  }
+  return { report, positions, infillPositions, removedVoxelCenters, removedVoxelIndices };
 }
 
 export async function hollowApplyFromCapturedSource(
