@@ -195,7 +195,10 @@ struct PendingPerturbRleLayer {
 
 struct PerturbRlePostInput {
     layer_idx: u32,
-    model_receiver: std::sync::mpsc::Receiver<(Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>)>,
+    model_receiver: std::sync::mpsc::Receiver<(
+        Vec<crate::rle::RleRun>,
+        Option<(usize, usize, usize, usize)>,
+    )>,
     support_runs: Option<Vec<crate::rle::RleRun>>,
 }
 
@@ -482,7 +485,8 @@ fn finalize_perturb_rle_post_layer(
 
     if let Some(palette) = dither_palette {
         let lut_start = std::time::Instant::now();
-        final_runs = crate::dither::dither_rle_layer_with_lut_and_gamma(&final_runs, palette, width, height);
+        final_runs =
+            crate::dither::dither_rle_layer_with_lut_and_gamma(&final_runs, palette, width, height);
         post_blur_ns.fetch_add(
             lut_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
             Ordering::Relaxed,
@@ -1600,7 +1604,11 @@ fn process_pending_layer_post(
                     blur_sigma_x,
                     blur_sigma_y,
                     0,
-                    if blur_kernel_gaussian { "gaussian" } else { "box" },
+                    if blur_kernel_gaussian {
+                        "gaussian"
+                    } else {
+                        "box"
+                    },
                 );
             }
         }
@@ -1746,7 +1754,11 @@ fn rasterize_vertical_aa_streaming_v3(
             }
             identity
         });
-        Some(crate::dither::DitherPaletteV3::new(&active_lut, job.dither_device_gamma, bit_depth))
+        Some(crate::dither::DitherPaletteV3::new(
+            &active_lut,
+            job.dither_device_gamma,
+            bit_depth,
+        ))
     } else {
         None
     };
@@ -3476,7 +3488,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
     mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
-    parallel_encode_fn: Option<std::sync::Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>,
+    parallel_encode_fn: Option<
+        std::sync::Arc<
+            dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+        >,
+    >,
     on_encoded_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
@@ -3530,7 +3546,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
             }
             identity
         });
-        Some(Arc::new(crate::dither::DitherPaletteV3::new(&active_lut, job.dither_device_gamma, bit_depth)))
+        Some(Arc::new(crate::dither::DitherPaletteV3::new(
+            &active_lut,
+            job.dither_device_gamma,
+            bit_depth,
+        )))
     } else {
         None
     };
@@ -3612,7 +3632,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
 
                             let final_output = PerturbRlePostOutput {
                                 layer_idx: output.layer_idx,
-                                runs: if parallel_encode_fn.is_some() { None } else { Some(runs) },
+                                runs: if parallel_encode_fn.is_some() {
+                                    None
+                                } else {
+                                    Some(runs)
+                                },
                                 encoded_bytes,
                             };
                             let _ = post_out_tx.send(final_output);
@@ -3661,7 +3685,9 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     u32,
                     Vec<crate::rle::RleRun>,
                 ) -> Result<(), SlicerV3Error>,
-                 on_encoded_layer: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>|
+                 on_encoded_layer: &mut Option<
+                    &mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
+                >|
                  -> Result<(), SlicerV3Error> {
                     if let Some(bytes) = output.encoded_bytes {
                         if let Some(ref mut sink) = on_encoded_layer {
@@ -3685,36 +3711,48 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     Ok(())
                 };
 
-            let mut drain_available =
-                |on_rle_layer: &mut dyn FnMut(
-                    u32,
-                    Vec<crate::rle::RleRun>,
-                ) -> Result<(), SlicerV3Error>,
-                 on_encoded_layer: &mut Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>|
-                 -> Result<(), SlicerV3Error> {
-                    loop {
-                        match post_out_rx.try_recv() {
-                            Ok(output) => handle_post_output(output, on_rle_layer, on_encoded_layer)?,
-                            Err(mpsc::TryRecvError::Empty)
-                            | Err(mpsc::TryRecvError::Disconnected) => {
-                                break;
-                            }
+            let mut drain_available = |on_rle_layer: &mut dyn FnMut(
+                u32,
+                Vec<crate::rle::RleRun>,
+            ) -> Result<
+                (),
+                SlicerV3Error,
+            >,
+                                       on_encoded_layer: &mut Option<
+                &mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
+            >|
+             -> Result<(), SlicerV3Error> {
+                loop {
+                    match post_out_rx.try_recv() {
+                        Ok(output) => handle_post_output(output, on_rle_layer, on_encoded_layer)?,
+                        Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => {
+                            break;
                         }
                     }
-                    Ok(())
-                };
+                }
+                Ok(())
+            };
 
             let mut on_encoded_layer = on_encoded_layer;
             let mut wrapped = |layer_idx: u32,
                                model_runs: Vec<crate::rle::RleRun>,
                                support_runs: Option<Vec<crate::rle::RleRun>>|
-              -> Result<(), SlicerV3Error> {
-                let (tx, rx) = std::sync::mpsc::sync_channel::<(Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>)>(1);
+             -> Result<(), SlicerV3Error> {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<(
+                    Vec<crate::rle::RleRun>,
+                    Option<(usize, usize, usize, usize)>,
+                )>(1);
                 let post_blur_ns_worker = Arc::clone(&post_blur_ns_accum);
                 rayon::spawn(move || {
                     let result = if blur_radius > 0 {
                         let xy_blur_start = std::time::Instant::now();
-                        let res = blur_gray_rle_streaming_with_bounds(&model_runs, width, height, blur_radius, 0);
+                        let res = blur_gray_rle_streaming_with_bounds(
+                            &model_runs,
+                            width,
+                            height,
+                            blur_radius,
+                            0,
+                        );
                         post_blur_ns_worker.fetch_add(
                             xy_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                             Ordering::Relaxed,
@@ -3881,7 +3919,13 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // super-resolution binary RLE before forwarding to the encoder.  The Arc
     // clone is cheap (reference count bump); the heavy work happens per-layer
     // inside the rayon worker pool.
-    let dither_palette = if job.dither_enabled {
+    //
+    // Dithering is skipped when the output is binary (no anti-aliasing):
+    // binary values (0, 255) map directly to the dither target extremes and
+    // downstream encoders (CTB threshold, 1-bit PNG) undo any multi-level
+    // output, making the Floyd-Steinberg pass pure overhead.
+    let output_is_binary = job.produces_binary_output();
+    let dither_palette = if job.dither_enabled && !output_is_binary {
         let bit_depth = job.dither_bit_depth.unwrap_or(3);
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
@@ -3890,7 +3934,11 @@ pub fn slice_and_rasterize_rle_encoded_v3(
             }
             identity
         });
-        Some(Arc::new(crate::dither::DitherPaletteV3::new(&active_lut, job.dither_device_gamma, bit_depth)))
+        Some(Arc::new(crate::dither::DitherPaletteV3::new(
+            &active_lut,
+            job.dither_device_gamma,
+            bit_depth,
+        )))
     } else {
         None
     };
@@ -3903,7 +3951,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
             ) -> Result<Vec<u8>, SlicerV3Error>
             + Send
             + Sync,
-    > = if ssaa_factor > 1 || blur_radius > 0 || job.dither_enabled {
+    > = if ssaa_factor > 1 || blur_radius > 0 || (job.dither_enabled && !output_is_binary) {
         let super_width = raster_job.effective_render_width_px() as usize;
         let super_height = raster_job.source_height_px as usize;
         let out_width = job.effective_render_width_px() as usize;
@@ -3937,7 +3985,12 @@ pub fn slice_and_rasterize_rle_encoded_v3(
                 };
 
                 let final_runs = if let Some(ref palette) = dither_palette {
-                    crate::dither::dither_rle_layer_with_lut_and_gamma(&post_aa_runs, palette, out_width, out_height)
+                    crate::dither::dither_rle_layer_with_lut_and_gamma(
+                        &post_aa_runs,
+                        palette,
+                        out_width,
+                        out_height,
+                    )
                 } else if let Some(lut) = tail_cure_lut.as_ref() {
                     remap_gray_rle_with_lut(&post_aa_runs, lut)
                 } else {
