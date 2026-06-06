@@ -145,6 +145,8 @@ pub struct HollowOutcome {
     pub preview_infill_mesh: Option<IndexedMesh>,
     pub removed_voxel_centers: Vec<f32>,
     pub removed_voxel_indices: Vec<u32>,
+    pub blocked_voxel_centers: Vec<f32>,
+    pub blocked_voxel_indices: Vec<u32>,
     pub report: HollowReport,
 }
 
@@ -276,6 +278,8 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
             preview_infill_mesh: None,
             removed_voxel_centers: Vec::new(),
             removed_voxel_indices: Vec::new(),
+            blocked_voxel_centers: Vec::new(),
+            blocked_voxel_indices: Vec::new(),
             report: HollowReport {
                 mode: options.mode,
                 voxel_resolution: options.voxel_resolution,
@@ -648,6 +652,13 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         },
         removed_voxel_centers: collect_removed_voxel_centers(&grid, &solid, &keep),
         removed_voxel_indices: collect_removed_voxel_indices(&grid, &solid, &keep),
+        blocked_voxel_centers: collect_blocked_voxel_centers(&grid, &options.blocked_voxel_indices),
+        blocked_voxel_indices: options
+            .blocked_voxel_indices
+            .clone()
+            .into_iter()
+            .map(|i| i as u32)
+            .collect(),
         report: HollowReport {
             mode: options.mode,
             voxel_resolution: options.voxel_resolution,
@@ -1019,6 +1030,16 @@ impl HollowSession {
             },
             removed_voxel_centers: collect_removed_voxel_centers(&self.grid, &self.solid, &keep),
             removed_voxel_indices: collect_removed_voxel_indices(&self.grid, &self.solid, &keep),
+            blocked_voxel_centers: collect_blocked_voxel_centers(
+                &self.grid,
+                &options.blocked_voxel_indices,
+            ),
+            blocked_voxel_indices: options
+                .blocked_voxel_indices
+                .clone()
+                .into_iter()
+                .map(|i| i as u32)
+                .collect(),
             report: HollowReport {
                 mode: options.mode,
                 voxel_resolution: self.voxel_resolution,
@@ -1082,6 +1103,26 @@ fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool])
     }
 
     indices
+}
+
+fn collect_blocked_voxel_centers(grid: &GridSpec, blocked_indices: &[usize]) -> Vec<f32> {
+    let mut centers = Vec::with_capacity(blocked_indices.len() * 3);
+    for &index in blocked_indices {
+        let nz = grid.nz;
+        let ny = grid.ny;
+        let nx = grid.nx;
+        let z = index / (nx * ny);
+        let yz = index % (nx * ny);
+        let y = yz / nx;
+        let x = yz % nx;
+        if x < nx && y < ny && z < nz {
+            let c = grid.center_world(x, y, z);
+            centers.push(c.x);
+            centers.push(c.y);
+            centers.push(c.z);
+        }
+    }
+    centers
 }
 
 #[cfg(not(feature = "manifold"))]

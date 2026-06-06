@@ -309,6 +309,7 @@ type HollowPreviewState = {
   infillGeometry: THREE.BufferGeometry | null;
   removedVoxelCenters: Float32Array;
   removedVoxelIndices: Uint32Array;
+  blockedVoxelCenters?: Float32Array;
   report: HollowReport;
   previewKey: string;
 };
@@ -320,6 +321,7 @@ type HollowPreviewCacheEntry = {
   infillPositions?: Float32Array;
   removedVoxelCenters?: Float32Array;
   removedVoxelIndices?: Uint32Array;
+  blockedVoxelCenters?: Float32Array;
   previewGeometry?: THREE.BufferGeometry | null;
   infillGeometry?: THREE.BufferGeometry | null;
 };
@@ -15444,8 +15446,21 @@ export default function Home() {
         next.add(instanceIndex);
       }
     }
+    // Also map committed blocked voxel centers: their instance index is
+    // offset past the removed voxels. If the user cleared a blocked voxel
+    // from the editing set, it won't be in activeBlockedIndexSet and will
+    // render as yellow.
+    if (preview.blockedVoxelCenters) {
+      const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
+      for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
+        const gridIndex = blockedHollowVoxelIndices[blockedIndex];
+        if (activeBlockedIndexSet.has(gridIndex)) {
+          next.add(preview.removedVoxelIndices.length + blockedIndex);
+        }
+      }
+    }
     return next;
-  }, [blockedHollowVoxelIndexSet, editingBlockedHollowVoxelIndexSet, hollowPreview, hollowingEditMode]);
+  }, [blockedHollowVoxelIndexSet, blockedHollowVoxelIndices, editingBlockedHollowVoxelIndexSet, hollowPreview, hollowingEditMode]);
 
   const commitBlockedHollowVoxelIndices = React.useCallback((nextIndices: number[]) => {
     const activeModel = scene.activeModel;
@@ -15477,10 +15492,21 @@ export default function Home() {
 
   const toggleBlockedHollowVoxelIndex = React.useCallback((voxelIndex: number) => {
     const currentPreview = hollowPreview;
-    if (!currentPreview) return;
-    const voxelCount = currentPreview.removedVoxelIndices.length;
-    if (voxelIndex < 0 || voxelIndex >= voxelCount) return;
-    const gridVoxelIndex = currentPreview.removedVoxelIndices[voxelIndex];
+    if (!currentPreview || voxelIndex < 0) return;
+
+    let gridVoxelIndex: number;
+
+    const removedCount = currentPreview.removedVoxelIndices.length;
+    if (voxelIndex < removedCount) {
+      // Instance in the removed voxel array — look up grid index directly.
+      gridVoxelIndex = currentPreview.removedVoxelIndices[voxelIndex];
+    } else {
+      // Instance in the appended blocked-only array — look up via
+      // blockedHollowVoxelIndices (committed set, same order as blocked centers).
+      const blockedOffset = voxelIndex - removedCount;
+      gridVoxelIndex = blockedHollowVoxelIndices[blockedOffset];
+    }
+
     if (!Number.isFinite(gridVoxelIndex)) return;
 
     const next = new Set(editingBlockedHollowVoxelIndexSet);
@@ -15490,7 +15516,7 @@ export default function Home() {
       next.add(gridVoxelIndex);
     }
     applyEditingBlockedHollowVoxelIndices(next);
-  }, [applyEditingBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndexSet, hollowPreview]);
+  }, [applyEditingBlockedHollowVoxelIndices, blockedHollowVoxelIndices, editingBlockedHollowVoxelIndexSet, hollowPreview]);
 
   const canResetHolePunch = React.useMemo(() => {
     const activeModel = scene.activeModel;
@@ -16357,6 +16383,7 @@ export default function Home() {
     infillPositions: Float32Array | undefined,
     removedVoxelCenters: Float32Array | undefined,
     removedVoxelIndices: Uint32Array | undefined,
+    blockedVoxelCenters: Float32Array | undefined,
     previewKey: string,
   ) => {
     const cachedPositions = new Float32Array(positions.length);
@@ -16367,6 +16394,9 @@ export default function Home() {
     const cachedRemovedVoxelIndices = removedVoxelIndices
       ? new Uint32Array(removedVoxelIndices)
       : undefined;
+    const cachedBlockedVoxelCenters = blockedVoxelCenters
+      ? new Float32Array(blockedVoxelCenters)
+      : undefined;
 
     hollowPreviewResultCacheRef.current.set(previewKey, {
       modelId: activeModelId,
@@ -16375,6 +16405,7 @@ export default function Home() {
       infillPositions,
       removedVoxelCenters: cachedRemovedVoxelCenters,
       removedVoxelIndices: cachedRemovedVoxelIndices,
+      blockedVoxelCenters: cachedBlockedVoxelCenters,
       previewGeometry: null,
       infillGeometry: null,
     });
@@ -16440,6 +16471,7 @@ export default function Home() {
         result.infillPositions,
         result.removedVoxelCenters,
         result.removedVoxelIndices,
+        result.blockedVoxelCenters,
         previewKey,
       );
 
@@ -16536,6 +16568,7 @@ export default function Home() {
             infillGeometry,
             removedVoxelCenters: cached.removedVoxelCenters ?? new Float32Array(0),
             removedVoxelIndices: cached.removedVoxelIndices ?? new Uint32Array(0),
+            blockedVoxelCenters: cached.blockedVoxelCenters,
             report: cached.report,
             previewKey,
           };
@@ -16571,6 +16604,7 @@ export default function Home() {
         result.infillPositions,
         result.removedVoxelCenters,
         result.removedVoxelIndices,
+        result.blockedVoxelCenters,
         previewKey,
       );
       const materialized = materializeHollowPreviewCacheEntry(previewKey);
@@ -16599,6 +16633,7 @@ export default function Home() {
           infillGeometry,
           removedVoxelCenters: result.removedVoxelCenters ?? new Float32Array(0),
           removedVoxelIndices: result.removedVoxelIndices ?? new Uint32Array(0),
+          blockedVoxelCenters: result.blockedVoxelCenters,
           report: result.report,
           previewKey,
         };
@@ -16737,8 +16772,28 @@ export default function Home() {
       selected.push(String(preview.removedVoxelIndices[instanceIndex]));
     }
 
+    // Also test blocked-only voxel centers so lassoing over them works.
+    if (preview.blockedVoxelCenters) {
+      const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
+      for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
+        const offset = blockedIndex * 3;
+        const localPoint = new THREE.Vector3(
+          preview.blockedVoxelCenters[offset] - activeModel.geometry.center.x,
+          preview.blockedVoxelCenters[offset + 1] - activeModel.geometry.center.y,
+          preview.blockedVoxelCenters[offset + 2] - activeModel.geometry.center.z,
+        );
+        localPoint.multiply(activeModel.transform.scale);
+        localPoint.applyQuaternion(modelQuaternion);
+        localPoint.add(activeModel.transform.position);
+        const projected = helpers.projectWorldPoint(localPoint);
+        if (!projected) continue;
+        if (!pointInPolygon(projected.x, projected.y)) continue;
+        selected.push(String(blockedHollowVoxelIndices[blockedIndex]));
+      }
+    }
+
     return selected;
-  }, [hollowPreview, scene.activeModel]);
+  }, [hollowPreview, scene.activeModel, blockedHollowVoxelIndices]);
 
   const handleBlockedHollowVoxelMarqueeSelection = React.useCallback((ids: string[]) => {
     if (ids.length === 0) return;
@@ -18356,6 +18411,7 @@ export default function Home() {
                     >
                       <HollowVoxelEditOverlay
                         voxelCenters={hollowPreview.removedVoxelCenters}
+                        blockedVoxelCenters={hollowPreview.blockedVoxelCenters}
                         voxelRadiusMm={Math.max(hollowPreview.report.voxelSizeMm * 0.38, 0.08)}
                         blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
                         meshOffset={new THREE.Vector3(

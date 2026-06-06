@@ -4,6 +4,7 @@ import * as THREE from 'three';
 
 type HollowVoxelEditOverlayProps = {
   voxelCenters: Float32Array;
+  blockedVoxelCenters?: Float32Array;
   voxelRadiusMm: number;
   blockedVoxelIndexSet: Set<number>;
   meshOffset: THREE.Vector3;
@@ -107,6 +108,7 @@ function buildVoxelColors(count: number, blockedVoxelIndexSet: Set<number>): Flo
 
 export function HollowVoxelEditOverlay({
   voxelCenters,
+  blockedVoxelCenters,
   voxelRadiusMm,
   blockedVoxelIndexSet,
   meshOffset,
@@ -114,22 +116,37 @@ export function HollowVoxelEditOverlay({
 }: HollowVoxelEditOverlayProps) {
   const { camera, gl, size } = useThree();
   const pointsRef = React.useRef<THREE.Points>(null);
-  const count = Math.floor(voxelCenters.length / 3);
-  const positions = React.useMemo(
-    () => buildVoxelPositions(voxelCenters, meshOffset.x, meshOffset.y, meshOffset.z),
-    [meshOffset.x, meshOffset.y, meshOffset.z, voxelCenters],
-  );
+  const removedCount = Math.floor(voxelCenters.length / 3);
+  const blockedCount = blockedVoxelCenters
+    ? Math.floor(blockedVoxelCenters.length / 3)
+    : 0;
+  const totalCount = removedCount + blockedCount;
+
+  // Merge removed + blocked positions into one buffer.
+  const mergedPositions = React.useMemo(() => {
+    const merged = new Float32Array(totalCount * 3);
+    const base = buildVoxelPositions(voxelCenters, meshOffset.x, meshOffset.y, meshOffset.z);
+    merged.set(base, 0);
+    if (blockedVoxelCenters && blockedCount > 0) {
+      const blockedPos = buildVoxelPositions(blockedVoxelCenters, meshOffset.x, meshOffset.y, meshOffset.z);
+      merged.set(blockedPos, removedCount * 3);
+    }
+    return merged;
+  }, [blockedCount, blockedVoxelCenters, meshOffset.x, meshOffset.y, meshOffset.z, removedCount, voxelCenters]);
+
+  // blockedVoxelIndexSet includes instance indices for both removed and
+  // blocked-only voxels (mapped by the parent via the editing set).
   const colors = React.useMemo(
-    () => buildVoxelColors(count, blockedVoxelIndexSet),
-    [blockedVoxelIndexSet, count],
+    () => buildVoxelColors(totalCount, blockedVoxelIndexSet),
+    [blockedVoxelIndexSet, totalCount],
   );
 
   const geometry = React.useMemo(() => {
     const next = new THREE.BufferGeometry();
-    next.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    next.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    next.setAttribute('position', new THREE.BufferAttribute(mergedPositions, 3));
+    next.setAttribute('color', new THREE.BufferAttribute(colors.slice(), 3));
     return next;
-  }, [count, positions]);
+  }, [colors, mergedPositions]);
 
   const material = React.useMemo(() => (
     new THREE.ShaderMaterial({
