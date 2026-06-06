@@ -1252,6 +1252,7 @@ fn organic_boundary_mesh(
 fn build_smoothed_cavity_scalar_field(
     grid: &GridSpec,
     solid: &[bool],
+    keep: &[bool],
     dist: &[f32],
     shell_voxels_f: f32,
     smoothing_iterations: usize,
@@ -1262,7 +1263,9 @@ fn build_smoothed_cavity_scalar_field(
 
     for i in 0..solid.len() {
         if solid[i] {
-            field[i] = shell_voxels_f - dist[i];
+            let shell_signed = shell_voxels_f - dist[i];
+            let magnitude = shell_signed.abs();
+            field[i] = if keep[i] { magnitude } else { -magnitude };
         }
     }
 
@@ -1387,6 +1390,7 @@ fn build_hollow_output_mesh(
     let cavity_scalar = build_smoothed_cavity_scalar_field(
         grid,
         solid,
+        keep,
         dist,
         shell_voxels_f,
         smoothing_profile.scalar_field_blur_iterations,
@@ -3684,6 +3688,33 @@ mod tests {
         let disabled = reduced_internal_cavity_smoothing_profile(reduced_thrice).unwrap();
         assert!(disabled.is_disabled());
         assert!(reduced_internal_cavity_smoothing_profile(disabled).is_none());
+    }
+
+    #[test]
+    fn blocked_kept_voxels_stay_positive_in_cavity_scalar_field() {
+        let grid = GridSpec {
+            nx: 3,
+            ny: 1,
+            nz: 1,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let solid = vec![true, true, true];
+        let keep = vec![true, false, true];
+        let dist = vec![0.5, 1.5, 4.5];
+
+        let field = build_smoothed_cavity_scalar_field(&grid, &solid, &keep, &dist, 1.0, 0);
+
+        assert!(
+            field[0] > 0.0,
+            "shell-side kept voxels should stay positive"
+        );
+        assert!(field[1] < 0.0, "carved cavity voxels should stay negative");
+        assert!(
+            field[2] > 0.0,
+            "blocked kept voxels deep in the cavity should remain positive"
+        );
     }
 
     #[test]

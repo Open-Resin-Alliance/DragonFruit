@@ -458,6 +458,25 @@ function serializeHollowingModifier(modifier: ModelHollowingModifier | null | un
   });
 }
 
+function areSortedNumberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isKeyboardTargetEditable(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  if (target.isContentEditable) return true;
+  return Boolean(target.closest('[contenteditable="true"]'));
+}
+
 function inferOpenFaceFromHit(
   hit: THREE.Intersection,
   fallback: MeshModifierOpenFace,
@@ -1603,6 +1622,9 @@ export default function Home() {
   const [hollowingEditMode, setHollowingEditMode] = React.useState(false);
   const [blockedHollowVoxelIndices, setBlockedHollowVoxelIndices] = React.useState<number[]>([]);
   const [editingBlockedHollowVoxelIndices, setEditingBlockedHollowVoxelIndices] = React.useState<number[]>([]);
+  const editingBlockedHollowVoxelIndicesRef = React.useRef<number[]>([]);
+  const hollowVoxelEditUndoStackRef = React.useRef<number[][]>([]);
+  const hollowVoxelEditRedoStackRef = React.useRef<number[][]>([]);
   const [holePunchState, setHolePunchState] = React.useState<HolePunchPanelState>({
     radiusMm: 2.0,
     depthMm: getDefaultHolePunchDepthMm(2.0),
@@ -15314,6 +15336,90 @@ export default function Home() {
     [editingBlockedHollowVoxelIndices],
   );
 
+  React.useEffect(() => {
+    editingBlockedHollowVoxelIndicesRef.current = editingBlockedHollowVoxelIndices;
+  }, [editingBlockedHollowVoxelIndices]);
+
+  React.useEffect(() => {
+    if (hollowingEditMode) return;
+    hollowVoxelEditUndoStackRef.current = [];
+    hollowVoxelEditRedoStackRef.current = [];
+  }, [hollowingEditMode]);
+
+  const applyEditingBlockedHollowVoxelIndices = React.useCallback((
+    nextIndicesInput: Iterable<number>,
+    options?: { recordHistory?: boolean },
+  ) => {
+    const nextIndices = [...new Set(nextIndicesInput)]
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    const previousIndices = editingBlockedHollowVoxelIndicesRef.current;
+    if (areSortedNumberArraysEqual(previousIndices, nextIndices)) {
+      return false;
+    }
+
+    if (options?.recordHistory ?? true) {
+      hollowVoxelEditUndoStackRef.current.push([...previousIndices]);
+      if (hollowVoxelEditUndoStackRef.current.length > 100) {
+        hollowVoxelEditUndoStackRef.current.shift();
+      }
+      hollowVoxelEditRedoStackRef.current = [];
+    }
+
+    editingBlockedHollowVoxelIndicesRef.current = nextIndices;
+    setEditingBlockedHollowVoxelIndices(nextIndices);
+    return true;
+  }, []);
+
+  const undoHollowVoxelEdit = React.useCallback(() => {
+    const previousIndices = hollowVoxelEditUndoStackRef.current.pop();
+    if (!previousIndices) return false;
+
+    hollowVoxelEditRedoStackRef.current.push([...editingBlockedHollowVoxelIndicesRef.current]);
+    editingBlockedHollowVoxelIndicesRef.current = previousIndices;
+    setEditingBlockedHollowVoxelIndices(previousIndices);
+    return true;
+  }, []);
+
+  const redoHollowVoxelEdit = React.useCallback(() => {
+    const nextIndices = hollowVoxelEditRedoStackRef.current.pop();
+    if (!nextIndices) return false;
+
+    hollowVoxelEditUndoStackRef.current.push([...editingBlockedHollowVoxelIndicesRef.current]);
+    editingBlockedHollowVoxelIndicesRef.current = nextIndices;
+    setEditingBlockedHollowVoxelIndices(nextIndices);
+    return true;
+  }, []);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
+      return;
+    }
+
+    const handleHollowVoxelEditHistoryHotkey = (event: KeyboardEvent) => {
+      if (isKeyboardTargetEditable(event.target)) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+
+      const key = event.key.toLowerCase();
+      const handled = key === 'y'
+        ? redoHollowVoxelEdit()
+        : key === 'z'
+          ? (event.shiftKey ? redoHollowVoxelEdit() : undoHollowVoxelEdit())
+          : false;
+
+      if (!handled) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    window.addEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
+    return () => {
+      window.removeEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
+    };
+  }, [hollowingEditMode, redoHollowVoxelEdit, scene.mode, transformMgr.transformMode, undoHollowVoxelEdit]);
+
   const blockedPreviewVoxelInstanceIdSet = React.useMemo(() => {
     const preview = hollowPreview;
     if (!preview) return new Set<number>();
@@ -15372,8 +15478,8 @@ export default function Home() {
     } else {
       next.add(gridVoxelIndex);
     }
-    setEditingBlockedHollowVoxelIndices([...next].sort((a, b) => a - b));
-  }, [editingBlockedHollowVoxelIndexSet, hollowPreview]);
+    applyEditingBlockedHollowVoxelIndices(next);
+  }, [applyEditingBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndexSet, hollowPreview]);
 
   const canResetHolePunch = React.useMemo(() => {
     const activeModel = scene.activeModel;
@@ -16625,27 +16731,26 @@ export default function Home() {
 
   const handleBlockedHollowVoxelMarqueeSelection = React.useCallback((ids: string[]) => {
     if (ids.length === 0) return;
-    const next = new Set(editingBlockedHollowVoxelIndices);
+    const next = new Set(editingBlockedHollowVoxelIndicesRef.current);
     for (const id of ids) {
       const voxelIndex = Number(id);
       if (!Number.isFinite(voxelIndex)) continue;
-      if (next.has(voxelIndex)) {
-        next.delete(voxelIndex);
-      } else {
-        next.add(voxelIndex);
-      }
+      next.add(voxelIndex);
     }
-    setEditingBlockedHollowVoxelIndices([...next].sort((a, b) => a - b));
-  }, [editingBlockedHollowVoxelIndices]);
+    applyEditingBlockedHollowVoxelIndices(next);
+  }, [applyEditingBlockedHollowVoxelIndices]);
 
   const handleStartHollowVoxelEditing = React.useCallback(() => {
+    editingBlockedHollowVoxelIndicesRef.current = blockedHollowVoxelIndices;
+    hollowVoxelEditUndoStackRef.current = [];
+    hollowVoxelEditRedoStackRef.current = [];
     setEditingBlockedHollowVoxelIndices(blockedHollowVoxelIndices);
     setHollowingEditMode(true);
   }, [blockedHollowVoxelIndices]);
 
   const handleClearHollowVoxelEditing = React.useCallback(() => {
-    setEditingBlockedHollowVoxelIndices([]);
-  }, []);
+    applyEditingBlockedHollowVoxelIndices([]);
+  }, [applyEditingBlockedHollowVoxelIndices]);
 
   const handleDoneHollowVoxelEditing = React.useCallback(() => {
     const nextIndices = [...editingBlockedHollowVoxelIndices].sort((a, b) => a - b);

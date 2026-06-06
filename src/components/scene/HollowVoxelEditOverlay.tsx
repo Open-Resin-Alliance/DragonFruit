@@ -104,8 +104,8 @@ export function HollowVoxelEditOverlay({
           emissiveIntensity={0.18}
           roughness={0.38}
           metalness={0.04}
-          depthTest={false}
-          depthWrite={false}
+          depthTest
+          depthWrite
           toneMapped={false}
         />
       </instancedMesh>
@@ -125,8 +125,8 @@ export function HollowVoxelEditOverlay({
           emissiveIntensity={0.16}
           roughness={0.34}
           metalness={0.05}
-          depthTest={false}
-          depthWrite={false}
+          depthTest
+          depthWrite
           toneMapped={false}
         />
       </instancedMesh>
