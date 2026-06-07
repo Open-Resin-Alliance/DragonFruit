@@ -6610,8 +6610,13 @@ export function SceneCanvas({
 
       {(mode === 'support' || mode === 'supportPainter') && (
         <div
-          className="absolute pointer-events-auto"
-          style={{ top: 12, left: 12, width: 320 }}
+          className="absolute pointer-events-auto flex flex-col"
+          style={{
+            top: 12,
+            left: 12,
+            width: 320,
+            maxHeight: painterState.modelStatsCardCollapsed ? 'calc(100vh - 80px)' : 'calc(100vh - 280px)',
+          }}
         >
           <SupportPainterPanel
             activeModelId={activeModelId}

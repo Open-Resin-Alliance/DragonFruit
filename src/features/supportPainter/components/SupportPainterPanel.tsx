@@ -60,6 +60,11 @@ const BRUSH_DETAILS: Record<
     desc: 'Paint coplanar surfaces',
     icon: Focus,
   },
+  TexturedFace: {
+    label: 'Textured Face',
+    desc: 'Paint textured / macro faces',
+    icon: Focus,
+  },
   Ridge: {
     label: 'Ridge Crease',
     desc: 'Trace 1D convex crease',
@@ -210,6 +215,7 @@ export function SupportPainterPanel({
   const [activeTab, setActiveTab] = useState<'active' | 'history'>('active');
   const [isMaintenanceExpanded, setIsMaintenanceExpanded] = useState(false);
   const [isDiagnosticsExpanded, setIsDiagnosticsExpanded] = useState(true);
+  const [isCustomBrushExpanded, setIsCustomBrushExpanded] = useState(true);
   const trunkWidth = activeSettings?.shaft?.diameterMm ?? 1.0;
   const defaultSpacing = isNaN(trunkWidth) ? 4.0 : trunkWidth * 4.0;
 
@@ -819,7 +825,7 @@ export function SupportPainterPanel({
   const isMarkerActive = state.activeBrush === 'Marker' || isCustomMarker;
 
   return (
-    <Card>
+    <Card className="flex flex-col max-h-full min-h-0">
       <CardHeader
         left={
           <>
@@ -841,9 +847,9 @@ export function SupportPainterPanel({
       />
 
       {expanded && (
-        <div className="px-3 pb-3 pt-1 flex flex-col gap-3">
+        <div className="px-3 pb-3 pt-1 flex flex-col gap-3 flex-1 min-h-0">
           {/* Tab Headers */}
-          <div className="flex border-b border-[var(--border-subtle)] mb-2">
+          <div className="flex border-b border-[var(--border-subtle)] mb-2 flex-shrink-0">
             <button
               onClick={() => setActiveTab('active')}
               className={`flex-1 py-2 text-center text-xs font-semibold border-b-2 transition-all ${
@@ -867,7 +873,7 @@ export function SupportPainterPanel({
           </div>
 
           {activeTab === 'active' ? (
-            <div className="flex flex-col gap-3">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1 scrollbar-thin flex flex-col gap-3">
               {/* 1. Painted Regions (Pending List) */}
           {/* Painted Regions List (Pending Only) */}
           <div className="flex flex-col gap-1.5">
@@ -967,18 +973,51 @@ export function SupportPainterPanel({
 
 
 
-              {/* 3. Select Smart Brush */}
+              {/* 3. Smart Brush */}
           {/* Brush Selection */}
           <div className="flex flex-col gap-2">
-            <span
-              className="text-[10px] uppercase tracking-wider font-bold"
-              style={{ color: 'var(--text-muted)' }}
-            >
-              Select Smart Brush
-            </span>
+            <div className="flex items-center justify-between">
+              <span
+                className="text-[10px] uppercase tracking-wider font-bold"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                SMART BRUSH
+              </span>
+              <div className="flex items-center bg-surface-1 rounded border border-border-subtle p-0.5 text-[9px] font-semibold" style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}>
+                <button
+                  type="button"
+                  onClick={() => supportPainterStore.setSmartBrushesDisplayMode('std')}
+                  className="px-1.5 py-0.5 rounded transition-all"
+                  style={{
+                    backgroundColor: state.smartBrushesDisplayMode === 'std' ? 'var(--accent)' : 'transparent',
+                    color: state.smartBrushesDisplayMode === 'std' ? '#fff' : 'var(--text-muted)',
+                  }}
+                >
+                  Std
+                </button>
+                <button
+                  type="button"
+                  onClick={() => supportPainterStore.setSmartBrushesDisplayMode('ext')}
+                  className="px-1.5 py-0.5 rounded transition-all"
+                  style={{
+                    backgroundColor: state.smartBrushesDisplayMode === 'ext' ? 'var(--accent)' : 'transparent',
+                    color: state.smartBrushesDisplayMode === 'ext' ? '#fff' : 'var(--text-muted)',
+                  }}
+                >
+                  Ext
+                </button>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-1.5">
               {(Object.keys(BRUSH_DETAILS) as BrushType[])
                 .filter((brush) => brush !== 'ManualCircle' && brush !== 'ManualSquare' && brush !== 'MinimaIslands' && brush !== 'Unk Legacy Brush')
+                .filter((brush) => {
+                  if (state.smartBrushesDisplayMode === 'std') {
+                    const hiddenBrushes = new Set<BrushType>(['Point', 'RoughEdge', 'SoftRidge', 'Ring', 'PointPath']);
+                    return !hiddenBrushes.has(brush);
+                  }
+                  return true;
+                })
                 .map((brush) => {
                 const isSelected = state.activeBrush === brush && state.activeCustomBrushId === null;
                 const details = BRUSH_DETAILS[brush];
@@ -1522,79 +1561,100 @@ export function SupportPainterPanel({
               {/* 4. Select Custom Brush */}
           {/* Custom Brushes Selection Section */}
           <div className="flex flex-col gap-2 border-t pt-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <span
-              className="text-[10px] uppercase tracking-wider font-bold"
-              style={{ color: 'var(--text-muted)' }}
+            <div
+              className="flex items-center gap-1 cursor-pointer select-none"
+              onClick={() => setIsCustomBrushExpanded(!isCustomBrushExpanded)}
             >
-              Select Custom Brush
-            </span>
-            <div className="flex flex-col gap-1.5">
-              {Array.from(state.customBrushes.values()).map((c) => {
-                const isSelected = state.activeCustomBrushId === c.id;
-                return (
-                  <div
-                    key={c.id}
-                    className="flex items-center gap-1.5 w-full rounded-lg border p-1 text-xs transition-colors"
-                    style={{
-                      background: isSelected ? 'var(--surface-0, #111827)' : 'var(--surface-2, #1f2937)',
-                      borderColor: isSelected ? 'var(--accent, #4a90e2)' : 'var(--border-subtle, #374151)',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        supportPainterStore.setActiveCustomBrushId(c.id);
-                        supportPainterStore.setActiveBrush('MacroFace'); // Custom selections backed by MacroFace mesh walks
-                      }}
-                      className="flex-1 flex items-center gap-2 p-1.5 text-left font-medium text-[11px] min-w-0"
-                    >
-                      <div
-                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        style={{ background: c.color }}
-                      />
-                      <span className="truncate flex-1" style={{ color: 'var(--text-strong, #f3f4f6)' }}>
-                        {c.name}
-                      </span>
-                    </button>
-
-                    <div className="flex items-center gap-1 flex-shrink-0 pr-1">
-                      <IconButton
-                        onClick={() => {
-                          setEditingCustomBrush(c);
-                          setShowCustomBrushModal(true);
-                        }}
-                        className="!p-1 hover:bg-black/20"
-                        title="Edit Custom Brush"
-                      >
-                        <Sliders className="w-3.5 h-3.5" />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => {
-                          supportPainterStore.deleteCustomBrush(c.id);
-                        }}
-                        className="!p-1 hover:bg-black/20"
-                        title="Delete Custom Brush"
-                      >
-                        <Trash className="w-3.5 h-3.5" style={{ color: 'var(--danger, #ef4444)' }} />
-                      </IconButton>
-                    </div>
-                  </div>
-                );
-              })}
-
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setEditingCustomBrush(null);
-                  setShowCustomBrushModal(true);
+              <IconButton
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsCustomBrushExpanded(!isCustomBrushExpanded);
                 }}
-                className="w-full !text-[10px] py-1.5 flex items-center justify-center gap-1.5"
+                className="!p-0.5 animate-none"
+                title={isCustomBrushExpanded ? "Collapse Custom Brushes" : "Expand Custom Brushes"}
               >
-                <Plus className="w-3.5 h-3.5" style={{ color: 'var(--accent, #4a90e2)' }} />
-                Create Custom Brush
-              </Button>
+                {isCustomBrushExpanded ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+              </IconButton>
+              <span
+                className="text-[10px] uppercase tracking-wider font-bold"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                CUSTOM BRUSH
+              </span>
             </div>
+            {isCustomBrushExpanded && (
+              <div className="flex flex-col gap-1.5">
+                {Array.from(state.customBrushes.values()).map((c) => {
+                  const isSelected = state.activeCustomBrushId === c.id;
+                  return (
+                    <div
+                      key={c.id}
+                      className="flex items-center gap-1.5 w-full rounded-lg border p-1 text-xs transition-colors"
+                      style={{
+                        background: isSelected ? 'var(--surface-0, #111827)' : 'var(--surface-2, #1f2937)',
+                        borderColor: isSelected ? 'var(--accent, #4a90e2)' : 'var(--border-subtle, #374151)',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          supportPainterStore.setActiveCustomBrushId(c.id);
+                          supportPainterStore.setActiveBrush('MacroFace'); // Custom selections backed by MacroFace mesh walks
+                        }}
+                        className="flex-1 flex items-center gap-2 p-1.5 text-left font-medium text-[11px] min-w-0"
+                      >
+                        <div
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ background: c.color }}
+                        />
+                        <span className="truncate flex-1" style={{ color: 'var(--text-strong, #f3f4f6)' }}>
+                          {c.name}
+                        </span>
+                      </button>
+
+                      <div className="flex items-center gap-1 flex-shrink-0 pr-1">
+                        <IconButton
+                          onClick={() => {
+                            setEditingCustomBrush(c);
+                            setShowCustomBrushModal(true);
+                          }}
+                          className="!p-1 hover:bg-black/20"
+                          title="Edit Custom Brush"
+                        >
+                          <Sliders className="w-3.5 h-3.5" />
+                        </IconButton>
+                        <IconButton
+                          onClick={() => {
+                            supportPainterStore.deleteCustomBrush(c.id);
+                          }}
+                          className="!p-1 hover:bg-black/20"
+                          title="Delete Custom Brush"
+                        >
+                          <Trash className="w-3.5 h-3.5" style={{ color: 'var(--danger, #ef4444)' }} />
+                        </IconButton>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setEditingCustomBrush(null);
+                    setShowCustomBrushModal(true);
+                  }}
+                  className="w-full !text-[10px] py-1.5 flex items-center justify-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" style={{ color: 'var(--accent, #4a90e2)' }} />
+                  Create Custom Brush
+                </Button>
+              </div>
+            )}
           </div>
           
           {/* Support Placement Script Selection Dropdown & Actions */}
@@ -1675,8 +1735,11 @@ export function SupportPainterPanel({
                 }}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-xs text-gray-300">
-                    Placement Script
+                  <span
+                    className="text-[10px] uppercase tracking-wider font-bold"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    SUPPORT PLACEMENT SCRIPT
                   </span>
                 </div>
                 <div className="flex items-center gap-1 w-full min-w-0">
@@ -1752,7 +1815,7 @@ export function SupportPainterPanel({
                   )}
                 </div>
 
-                <div className="flex items-center gap-1 mt-2 w-full border-t border-border-subtle/30 pt-2 justify-between">
+                <div className="flex items-center gap-1 mt-1.5 w-full justify-between">
                   <Button
                     variant="secondary"
                     size="sm"
@@ -1839,7 +1902,7 @@ export function SupportPainterPanel({
           </Button>
             </div>
           ) : (
-            <div className="flex flex-col gap-3 flex-1 min-h-0">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1 scrollbar-thin flex flex-col gap-3">
               {/* 1. Completed ROI History & Saves list */}
           {/* ROI History and Saves Rollup */}
           <div

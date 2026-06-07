@@ -111,6 +111,24 @@ const presets: Record<BrushType, Partial<CustomBrushTemplate['selection']>> = {
     curvatureMax: 1.0,
     dihedralAngleToleranceDeg: 30,
   },
+  TexturedFace: {
+    enableSlopeLimit: true,
+    enableNormalConeLimit: true,
+    enableDihedralLimit: true,
+    enableCurvatureLimit: false,
+    enableMacroNormalFiltering: true,
+    useMacroNormalForCone: true,
+    useMacroNormalForSlope: true,
+    macroNormalSmoothingIterations: 15,
+    macroNormalSmoothingLambda: 0.5,
+    normalConeAngleMinDeg: 0,
+    normalConeAngleMaxDeg: 30,
+    overhangSlopeMinDeg: 0,
+    overhangSlopeMaxDeg: 90,
+    curvatureMin: 0.0,
+    curvatureMax: 1.0,
+    dihedralAngleToleranceDeg: 45,
+  },
   Ridge: {
     creaseSeedAngleDeg: 8,
     creasePropagateAngleDeg: 3,
@@ -374,6 +392,7 @@ export function CustomBrushModal({
                       }}
                     >
                       <option value="MacroFace">Macro Overhang (MacroFace)</option>
+                      <option value="TexturedFace">Textured/Rough Face (TexturedFace)</option>
                       <option value="Ridge">Crease/Ridge Line (Ridge)</option>
                       <option value="Point">Manual Geodesic (Point)</option>
                       <option value="Ring">Horizontal Ring (Ring)</option>
@@ -417,7 +436,7 @@ export function CustomBrushModal({
                   Preset Starting Templates
                 </label>
                 <div className="flex gap-2">
-                  {(['MacroFace', 'Ridge', 'Point', 'Ring', 'Marker', 'PointPath', 'SoftRidge', 'RoughEdge'] as BrushType[]).map(type => (
+                  {(['MacroFace', 'TexturedFace', 'Ridge', 'Point', 'Ring', 'Marker', 'PointPath', 'SoftRidge', 'RoughEdge'] as BrushType[]).map(type => (
                     <button
                       key={type}
                       type="button"
@@ -446,7 +465,7 @@ export function CustomBrushModal({
               </div>
 
               {/* MacroFace base style controls */}
-              {(brush.baseBrush === 'MacroFace' || !brush.baseBrush) && (
+              {(brush.baseBrush === 'MacroFace' || brush.baseBrush === 'TexturedFace' || !brush.baseBrush) && (
                 <div className="flex flex-col gap-5">
                   <div
                     className="p-4 rounded-xl border flex flex-col gap-6"

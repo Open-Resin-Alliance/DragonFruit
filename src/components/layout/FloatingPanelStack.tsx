@@ -55,6 +55,7 @@ type FloatingPanelItemProps = {
   onContextMenu: (id: string, event: React.MouseEvent<HTMLDivElement>) => void;
   onSizeChange: (id: string, size: PanelSize) => void;
   children: React.ReactNode;
+  maxHeight?: number;
 };
 
 type WindowContextMenuState = {
@@ -591,6 +592,7 @@ function FloatingPanelItem({
   onContextMenu,
   onSizeChange,
   children,
+  maxHeight,
 }: FloatingPanelItemProps) {
   const itemRef = React.useRef<HTMLDivElement | null>(null);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
@@ -619,11 +621,12 @@ function FloatingPanelItem({
   return (
     <div
       ref={itemRef}
-      className="absolute pointer-events-auto"
+      className="absolute pointer-events-auto flex flex-col"
       style={{
         left: position.x,
         top: position.y,
         width: panelWidth,
+        maxHeight: maxHeight !== undefined ? maxHeight : undefined,
         zIndex: isDragging ? 100 : 20 + index,
         cursor: isDragging ? 'grabbing' : 'default',
         boxShadow: magnetic
@@ -659,7 +662,7 @@ function FloatingPanelItem({
         rightClickGestureRef.current = null;
       }}
     >
-      <div className="w-full [&>*]:!w-full">
+      <div className="w-full flex-1 min-h-0 flex flex-col [&>*]:!w-full [&>*]:max-h-full [&>*]:flex-1 [&>*]:min-h-0">
         {children}
       </div>
     </div>
@@ -1439,6 +1442,11 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
         const magnetic = activeDragPanelId === panelId && hasEdgeHint(edgeHint);
 
+        let customMaxHeight: number | undefined;
+        if (panelId === 'support-painter-tooltip') {
+          customMaxHeight = Math.max(120, containerSize.height - panelPosition.y - 160);
+        }
+
         return entry.node ? (
           <FloatingPanelItem
             key={panelId}
@@ -1451,6 +1459,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
             onPointerDown={handlePointerDown}
             onContextMenu={handlePanelContextMenu}
             onSizeChange={handlePanelSizeChange}
+            maxHeight={customMaxHeight}
           >
             {entry.node}
           </FloatingPanelItem>

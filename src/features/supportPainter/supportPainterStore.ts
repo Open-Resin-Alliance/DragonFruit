@@ -30,7 +30,7 @@ import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
 import { getShaftProfile } from '@/supports/Settings';
 
 const KNOWN_BRUSH_TYPES = new Set<string>([
-  'MacroFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
+  'MacroFace', 'TexturedFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
   'ManualCircle', 'ManualSquare', 'Marker', 'PointPath', 'MinimaIslands',
   'Unk Legacy Brush'
 ]);
@@ -89,13 +89,16 @@ let roiTrackingMode: 'none' | 'session' | 'voxl' = 'voxl'; // Default persistent
 let customBrushes = new Map<string, CustomBrushTemplate>();
 let activeCustomBrushId: string | null = null;
 
+let smartBrushesDisplayMode: 'std' | 'ext' = 'std';
+let modelStatsCardCollapsed = false;
+
 // ─── Support Placement Scripts State ───
 const placementScripts = new Map<string, SupportPlacementScript>();
 let activePlacementScriptId: string | null = null;
 let brushDefaultScripts = new Map<string, string>();
 
 const BRUSH_TYPES_LIST: BrushType[] = [
-  'MacroFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
+  'MacroFace', 'TexturedFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
   'ManualCircle', 'ManualSquare', 'Marker', 'PointPath', 'MinimaIslands'
 ];
 
@@ -192,6 +195,7 @@ function _getDefaultScriptIdForBrush(brush: BrushType, pathMode?: 'line' | 'poly
 
   switch (brush) {
     case 'MacroFace':
+    case 'TexturedFace':
     case 'Point':
     case 'ManualCircle':
     case 'ManualSquare':
@@ -705,6 +709,8 @@ let storeSnapshot: SupportPainterState = {
   failedCandidates: [],
   activeFailureIndex: null,
   clientAdjacencyMap: null,
+  smartBrushesDisplayMode,
+  modelStatsCardCollapsed,
 };
 
 
@@ -758,6 +764,8 @@ function updateSnapshot() {
     failedCandidates: [...failedCandidates],
     activeFailureIndex,
     clientAdjacencyMap,
+    smartBrushesDisplayMode,
+    modelStatsCardCollapsed,
   };
 }
 
@@ -959,6 +967,27 @@ export const supportPainterStore = {
 
   setClientAdjacencyMap(map: ClientAdjacencyMap | null) {
     clientAdjacencyMap = map;
+    updateSnapshot();
+    notify();
+  },
+
+  setSmartBrushesDisplayMode(mode: 'std' | 'ext') {
+    if (smartBrushesDisplayMode === mode) return;
+    smartBrushesDisplayMode = mode;
+    if (mode === 'std') {
+      const hiddenBrushes = new Set<BrushType>(['Point', 'RoughEdge', 'SoftRidge', 'Ring', 'PointPath']);
+      if (hiddenBrushes.has(activeBrush)) {
+        this.setActiveBrush('MacroFace');
+        return;
+      }
+    }
+    updateSnapshot();
+    notify();
+  },
+
+  setModelStatsCardCollapsed(collapsed: boolean) {
+    if (modelStatsCardCollapsed === collapsed) return;
+    modelStatsCardCollapsed = collapsed;
     updateSnapshot();
     notify();
   },

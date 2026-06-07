@@ -1,5 +1,7 @@
 
 import React from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+import { useSupportPainterState, supportPainterStore } from '@/features/supportPainter/supportPainterStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
@@ -40,6 +42,8 @@ export function ModelStatsCard({
   estimatedResinLabelOverride,
 }: ModelStatsCardProps) {
   const [isFlipped, setIsFlipped] = React.useState(false);
+  const painterState = useSupportPainterState();
+  const collapsed = painterState.modelStatsCardCollapsed;
   const baseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const inFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [estimatedResinMl, setEstimatedResinMl] = React.useState<number | null>(null);
@@ -422,6 +426,29 @@ export function ModelStatsCard({
     event.stopPropagation();
   };
 
+  if (collapsed) {
+    return (
+      <div className="pointer-events-auto select-none w-[320px] max-w-[320px]">
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            supportPainterStore.setModelStatsCardCollapsed(false);
+          }}
+          className="w-full ui-panel rounded-md px-3 py-1.5 shadow-md flex items-center justify-between cursor-pointer hover:bg-neutral-800/40 transition-colors"
+          style={{
+            background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
+            height: '32px',
+          }}
+        >
+          <span className="text-[11px] font-semibold truncate" style={{ color: frontHeaderColor }}>
+            {frontHeader}
+          </span>
+          <ChevronUp className="w-3.5 h-3.5 text-gray-400" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="pointer-events-auto select-none w-[320px] max-w-[320px]">
       <div
@@ -443,8 +470,20 @@ export function ModelStatsCard({
               backfaceVisibility: 'hidden',
             }}
           >
-            <div className="font-semibold text-[12px] truncate" style={{ color: frontHeaderColor }}>
-              {frontHeader}
+            <div className="flex items-center justify-between font-semibold text-[12px] truncate" style={{ color: frontHeaderColor }}>
+              <span className="truncate">{frontHeader}</span>
+              <button
+                type="button"
+                onMouseDown={stopEvent}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  supportPainterStore.setModelStatsCardCollapsed(true);
+                }}
+                className="p-0.5 hover:bg-neutral-800/40 rounded transition-colors"
+                title="Collapse Card"
+              >
+                <ChevronDown className="w-3.5 h-3.5 text-gray-400 hover:text-gray-200" />
+              </button>
             </div>
 
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
@@ -522,8 +561,22 @@ export function ModelStatsCard({
               transform: 'rotateY(180deg)',
             }}
           >
-            <div className="w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[12px]" style={{ color: 'var(--text-strong)' }} title={model ? model.name : 'No model selected'}>
-              {model ? model.name : 'No model selected'}
+            <div className="flex items-center justify-between font-semibold text-[12px] truncate" style={{ color: 'var(--text-strong)' }}>
+              <span className="truncate" title={model ? model.name : 'No model selected'}>
+                {model ? model.name : 'No model selected'}
+              </span>
+              <button
+                type="button"
+                onMouseDown={stopEvent}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  supportPainterStore.setModelStatsCardCollapsed(true);
+                }}
+                className="p-0.5 hover:bg-neutral-800/40 rounded transition-colors"
+                title="Collapse Card"
+              >
+                <ChevronDown className="w-3.5 h-3.5 text-gray-400 hover:text-gray-200" />
+              </button>
             </div>
 
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>

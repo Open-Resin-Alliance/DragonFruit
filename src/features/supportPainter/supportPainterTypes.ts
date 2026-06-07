@@ -4,7 +4,7 @@ import type { ClientAdjacencyMap } from './useClientAdjacencyMap';
 
 // ─── Brush Identity ─────────────────────────────────────────────────────────
 
-export type BrushType = 'MacroFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands' | 'Unk Legacy Brush';
+export type BrushType = 'MacroFace' | 'TexturedFace' | 'Ridge' | 'Point' | 'RoughEdge' | 'SoftRidge' | 'Ring' | 'ManualCircle' | 'ManualSquare' | 'Marker' | 'PointPath' | 'MinimaIslands' | 'Unk Legacy Brush';
 
 export type CustomSupportOperationType = 'minima' | 'perimeter' | 'infill' | 'centerline';
 
@@ -135,6 +135,7 @@ export interface CustomBrushTemplate {
 // Colors are defined as CSS hex strings here; converted to vec3 for GLSL.
 export const BRUSH_COLORS: Record<BrushType, string> = {
   MacroFace:      '#4A90E2',   // blue
+  TexturedFace:   '#14B8A6',   // teal/turquoise
   Ridge:          '#E2844A',   // orange
   Point:          '#7ED321',   // green
   RoughEdge:      '#9B59B6',   // purple
@@ -303,6 +304,9 @@ export interface SupportPainterState {
   // ─── Phase 4 Failed Placements Tracking & Walker State ───
   failedCandidates:       FailedPlacementCandidate[];
   activeFailureIndex:     number | null;
+
+  smartBrushesDisplayMode: 'std' | 'ext';
+  modelStatsCardCollapsed: boolean;
 }
 
 export interface FailedPlacementCandidate {

@@ -11,7 +11,7 @@ import {
 import { type SupportPreset } from '../../supports/Settings/types';
 
 const KNOWN_BRUSH_TYPES = new Set<string>([
-  'MacroFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
+  'MacroFace', 'TexturedFace', 'Ridge', 'Point', 'RoughEdge', 'SoftRidge', 'Ring',
   'ManualCircle', 'ManualSquare', 'Marker', 'PointPath', 'MinimaIslands',
   'Unk Legacy Brush'
 ]);

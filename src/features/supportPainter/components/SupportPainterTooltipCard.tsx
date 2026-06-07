@@ -131,7 +131,7 @@ export function SupportPainterTooltipCard({ mode }: SupportPainterTooltipCardPro
 
   return (
     <div
-      className="w-full max-w-[320px] rounded-md border backdrop-blur-md shadow-xl transition-all duration-200 pointer-events-auto flex flex-col"
+      className="w-full max-w-[320px] rounded-md border backdrop-blur-md shadow-xl transition-all duration-200 pointer-events-auto flex flex-col max-h-full min-h-0"
       style={{
         background: 'rgba(15, 17, 23, 0.88)',
         borderColor: 'rgba(45, 55, 72, 0.45)',
@@ -142,7 +142,7 @@ export function SupportPainterTooltipCard({ mode }: SupportPainterTooltipCardPro
       {/* Premium Cased Rollup Header */}
       <div
         onClick={() => setIsCollapsed(!isCollapsed)}
-        className="flex items-center justify-between px-3.5 py-2 cursor-pointer select-none"
+        className="flex items-center justify-between px-3.5 py-2 cursor-pointer select-none flex-shrink-0"
         style={{
           borderBottom: isCollapsed ? 'none' : '1px solid rgba(45, 55, 72, 0.25)',
         }}
@@ -176,7 +176,7 @@ export function SupportPainterTooltipCard({ mode }: SupportPainterTooltipCardPro
 
       {/* Main Reference Body */}
       {!isCollapsed && (
-        <div className="px-3.5 py-3 flex flex-col gap-2.5">
+        <div className="px-3.5 py-3 flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto pr-1 scrollbar-thin">
           {/* Hotkeys header */}
           <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">
             Hotkeys

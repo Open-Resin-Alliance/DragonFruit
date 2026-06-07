@@ -181,6 +181,32 @@ export function proposeRegionOnClient(
   switch (brushType) {
     case 'MacroFace':
       return walkMacroFace(map, seedFaceIndex, localUp, customBrush);
+    case 'TexturedFace': {
+      const syntheticBrush: CustomBrushTemplate = {
+        id: 'default-textured-face',
+        name: 'Textured Face',
+        color: '#14B8A6',
+        selection: {
+          enableNormalConeLimit: true,
+          normalConeAngleMinDeg: 0,
+          normalConeAngleMaxDeg: 30,
+          enableSlopeLimit: true,
+          overhangSlopeMinDeg: 0,
+          overhangSlopeMaxDeg: 90,
+          enableDihedralLimit: true,
+          dihedralAngleToleranceDeg: 45,
+          enableMacroNormalFiltering: true,
+          useMacroNormalForCone: true,
+          useMacroNormalForSlope: true,
+          macroNormalSmoothingIterations: 15,
+          macroNormalSmoothingLambda: 0.50,
+          curvatureMin: 0,
+          curvatureMax: 0,
+        },
+        operations: [],
+      };
+      return walkMacroFace(map, seedFaceIndex, localUp, syntheticBrush);
+    }
     case 'Ridge':
       return walkRidge(map, seedFaceIndex, localUp, customBrush);
     case 'RoughEdge':

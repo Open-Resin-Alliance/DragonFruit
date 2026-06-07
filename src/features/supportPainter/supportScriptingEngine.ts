@@ -47,6 +47,7 @@ import { buildTrunkData } from '@/supports/SupportTypes/Trunk/trunkBuilder';
 // [AGENT_NOTE] Display names used for summary reporting in the toast component.
 const BRUSH_DETAILS: Record<BrushType, { label: string }> = {
   MacroFace:      { label: 'MacroFace' },
+  TexturedFace:   { label: 'Textured Face' },
   Ridge:          { label: 'Ridge Crease' },
   Point:          { label: 'Point Geodesic' },
   RoughEdge:      { label: 'Rough Edge' },
@@ -1570,7 +1571,7 @@ export async function generateSupportsFromPainter(
           vertexIds: [...finalPath],
         });
       }
-      if (region.brushType === 'MacroFace' || region.brushType === 'Marker' || region.brushType === 'Unk Legacy Brush' || region.brushType === 'ManualCircle' || region.brushType === 'ManualSquare' || (region.brushType === 'PointPath' && !isPointPathLine)) {
+      if (region.brushType === 'MacroFace' || region.brushType === 'TexturedFace' || region.brushType === 'Marker' || region.brushType === 'Unk Legacy Brush' || region.brushType === 'ManualCircle' || region.brushType === 'ManualSquare' || (region.brushType === 'PointPath' && !isPointPathLine)) {
         const blobSpine = getBlobCenterlineSpine(triangleIds, uniqueVertices, triangles, vertexNormals);
         if (blobSpine) {
           regionSpines.set(region.id, blobSpine);
@@ -1624,7 +1625,7 @@ export async function generateSupportsFromPainter(
     const brush: BrushMetadata = {
       brushType: region.brushType,
       parameters: {
-        coplanarityAngleDeg: region.brushType === 'MacroFace' ? 15 : undefined,
+        coplanarityAngleDeg: (region.brushType === 'MacroFace' || region.brushType === 'TexturedFace') ? 15 : undefined,
         creaseAngleDeg: region.brushType === 'Ridge' ? 30 : undefined,
         radiusMm: region.brushType === 'Point' ? 5 : undefined,
         pointPathMode: region.brushType === 'PointPath' ? state.pointPathMode : undefined,
