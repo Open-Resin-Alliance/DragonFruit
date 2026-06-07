@@ -16,6 +16,9 @@ jobs:
   linux-build:
     name: Linux compile check
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit_hash: ${{ steps.version.outputs.commit_hash }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,6 +49,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Derive version info
+        id: version
+        shell: bash
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Compile Linux bundle
         uses: tauri-apps/tauri-action@v0
         env:
@@ -53,6 +63,66 @@ jobs:
         with:
           tauriScript: npx tauri
           args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
+
+      - name: Install Flatpak build tooling
+        run: sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
+
+      - name: Prepare XDG runtime directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/xdg-runtime"
+          chmod 700 "$RUNNER_TEMP/xdg-runtime"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg-runtime" >> "$GITHUB_ENV"
+
+      - name: Configure Flathub remote
+        run: |
+          flatpak remote-add --user --if-not-exists \
+            flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install Flatpak runtime dependencies (user)
+        run: |
+          flatpak --user install -y --noninteractive flathub \
+            org.freedesktop.Sdk//24.08 \
+            org.freedesktop.Platform//24.08
+
+      - name: Build Tauri app for Flatpak
+        run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
+
+      - name: Rename Linux artifacts for nightly release
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT_HASH: ${{ steps.version.outputs.commit_hash }}
+        run: |
+          nightly_tag="pr-${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+
+          for f in src-tauri/target/release/bundle/deb/*.deb; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.deb"
+          done
+
+          for f in src-tauri/target/release/bundle/rpm/*.rpm; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.rpm"
+          done
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: src-tauri/target/release/bundle/deb/*_DragonFruit_nightly.deb
+          if-no-files-found: error
+
+      - name: Upload rpm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm
+          path: src-tauri/target/release/bundle/rpm/*_DragonFruit_nightly.rpm
+          if-no-files-found: error
+
+      - name: Upload flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak
+          path: src-tauri/target/release/bundle/flatpak/*.flatpak
+          if-no-files-found: error
 
   comment-status:
     name: Comment Linux build status
@@ -161,3 +231,29 @@ jobs:
               issue_number,
               body
             });
+
+  dispatch-nightly:
+    name: Dispatch nightly build if labeled
+    needs:
+      - linux-build
+    if: >
+      success() &&
+      contains(github.event.pull_request.labels.*.name, 'nightly-build')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Dispatch build-nightly workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          gh workflow run build-nightly.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$BRANCH" \
+            -f branch="$BRANCH" \
+            -f skip_linux=true \
+            -f pr_run_id="$RUN_ID"

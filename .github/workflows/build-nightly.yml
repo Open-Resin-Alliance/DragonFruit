@@ -8,10 +8,15 @@ on:
         required: true
         type: string
         default: dev
-  pull_request:
-    types:
-      - labeled
-      - synchronize
+      skip_linux:
+        description: Skip Linux/Flatpak build (use artifacts from PR check)
+        required: false
+        type: boolean
+        default: false
+      pr_run_id:
+        description: Workflow run ID of the PR check to download Linux artifacts from
+        required: false
+        type: string
   issue_comment:
     types:
       - created
@@ -21,7 +26,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: nightly-${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.head_ref }}
+  group: nightly-${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -141,14 +146,11 @@ jobs:
         run: |
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
-            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Every new push to this PR will automatically rebuild |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
+            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Each new push will rebuild after Linux check passes |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
 
   # ── Derive metadata (branch, tag, names) ────────────────────────────────
   derive:
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'nightly-build'))
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       branch: ${{ steps.branch.outputs.branch }}
@@ -157,8 +159,6 @@ jobs:
       release_name: ${{ steps.meta.outputs.release_name }}
       version: ${{ steps.meta.outputs.version }}
       commit_hash: ${{ steps.meta.outputs.commit_hash }}
-      is_pr: ${{ steps.meta.outputs.is_pr }}
-      pr_number: ${{ steps.meta.outputs.pr_number }}
     steps:
       - name: Determine branch
         id: branch
@@ -215,94 +215,56 @@ jobs:
           echo "release_name=${human_name}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
-          echo "is_pr=${{ github.event_name == 'pull_request' && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
-          echo "pr_number=${{ github.event.pull_request.number || '' }}" >> "$GITHUB_OUTPUT"
 
-  # ── Gate: wait for PR Linux build to pass ───────────────────────────────
-  check-pr-build:
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'nightly-build'))
+  # ── Fetch Linux artifacts from PR check run ────────────────────────────
+  fetch-linux-artifacts:
+    if: github.event_name == 'workflow_dispatch' && inputs.skip_linux == 'true' && inputs.pr_run_id
+    needs:
+      - derive
     runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.check.outputs.status }}
     steps:
-      - name: Skip gate for manual triggers
-        if: github.event_name == 'workflow_dispatch'
-        run: echo "Manual trigger — no PR build to wait for."
-
-      - name: Wait for PR Linux build check to complete
-        id: check
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Download Linux build artifacts from PR check
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const headSha = process.env.HEAD_SHA;
-            const workflowName = 'PR Linux Build Check';
-            const pollIntervalMs = 60_000;
-            const maxAttempts = 45;  // 45 minutes total
+          path: linux-artifacts
+          run-id: ${{ inputs.pr_run_id }}
+          github-token: ${{ github.token }}
 
-            core.info(`Waiting for ${workflowName} to pass on commit ${headSha}...`);
+      - name: Rename Linux artifacts to nightly convention
+        shell: bash
+        env:
+          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
+          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
+          VERSION: ${{ needs.derive.outputs.version }}
+        run: |
+          nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
 
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-              // List check runs for the head commit
-              const { data } = await github.rest.checks.listForRef({
-                owner,
-                repo,
-                ref: headSha,
-              });
+          for f in linux-artifacts/linux-deb/*.deb; do
+            [ -e "$f" ] && cp -v "$f" "linux-artifacts/linux-deb/${nightly_tag}.deb"
+          done
+          for f in linux-artifacts/linux-rpm/*.rpm; do
+            [ -e "$f" ] && cp -v "$f" "linux-artifacts/linux-rpm/${nightly_tag}.rpm"
+          done
 
-              const prBuildRun = data.check_runs.find(
-                (run) => run.name.includes(workflowName) || run.name === 'linux-build',
-              );
+      - name: Upload renamed deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: dragonfruit-linux-deb
+          path: linux-artifacts/linux-deb/*_DragonFruit_nightly.deb
+          if-no-files-found: warn
 
-              if (!prBuildRun) {
-                core.info(`Attempt ${attempt}/${maxAttempts}: No PR build check run found yet. Retrying in 60s...`);
-                await new Promise((r) => setTimeout(r, pollIntervalMs));
-                continue;
-              }
-
-              const status = prBuildRun.conclusion || 'in_progress';
-              const name = prBuildRun.name;
-              core.info(
-                `Attempt ${attempt}/${maxAttempts}: ${name} → status=${prBuildRun.status}, conclusion=${prBuildRun.conclusion}`
-              );
-
-              if (prBuildRun.status !== 'completed') {
-                core.info(`Still in progress. Retrying in 60s...`);
-                await new Promise((r) => setTimeout(r, pollIntervalMs));
-                continue;
-              }
-
-              if (status === 'success') {
-                core.info(`PR build check passed! Proceeding with nightly.`);
-                core.setOutput('status', 'passed');
-                return;
-              }
-
-              core.setFailed(
-                `PR Linux build check finished with status: ${status}. ` +
-                `Nightly build aborted — compilation would likely fail.`
-              );
-              return;
-            }
-
-            core.setFailed(
-              `Timed out after ${maxAttempts * pollIntervalMs / 60_000} minutes waiting for ` +
-              `the PR Linux build check to complete. Aborting nightly.`
-            );
+      - name: Upload renamed rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: dragonfruit-linux-rpm
+          path: linux-artifacts/linux-rpm/*_DragonFruit_nightly.rpm
+          if-no-files-found: warn
 
   # ── Build matrix ────────────────────────────────────────────────────────
   build-tauri:
     name: Build ${{ matrix.artifact_name }}
     needs:
       - derive
-      - check-pr-build
     strategy:
       fail-fast: false
       matrix:
@@ -329,7 +291,7 @@ jobs:
           submodules: recursive
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-22.04' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
@@ -399,7 +361,7 @@ jobs:
             org.freedesktop.Platform//24.08
 
       - name: Build Tauri app (CEF variant on Linux)
-        if: matrix.build_kind == 'flatpak'
+        if: matrix.build_kind == 'flatpak' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
         run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
 
       - name: Rename installer artifact
@@ -426,7 +388,7 @@ jobs:
           done
 
       - name: Rename flatpak artifact
-        if: matrix.build_kind == 'flatpak'
+        if: matrix.build_kind == 'flatpak' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
         shell: bash
         env:
           SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
@@ -451,7 +413,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload flatpak artifact
-        if: matrix.build_kind == 'flatpak'
+        if: matrix.build_kind == 'flatpak' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -461,9 +423,11 @@ jobs:
   # ── Publish nightly prerelease ──────────────────────────────────────────
   publish-nightly:
     name: Publish nightly prerelease
+    if: always() && !cancelled() && needs.derive.result == 'success' && needs.build-tauri.result == 'success'
     needs:
       - derive
       - build-tauri
+      - fetch-linux-artifacts
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
@@ -538,16 +502,3 @@ jobs:
           target_commitish: ${{ needs.derive.outputs.branch }}
           files: |
             release-assets/**/*
-
-      - name: Comment on PR with release URL
-        if: needs.derive.outputs.is_pr == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.derive.outputs.release_tag }}
-          PR: ${{ needs.derive.outputs.pr_number }}
-          NAME: ${{ needs.derive.outputs.release_name }}
-        run: |
-          release_url="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
-          gh issue comment "$PR" \
-            --repo "${{ github.repository }}" \
-            --body $'### ✅ Nightly Build Complete\n\n**'"${NAME}"$'** is ready for download.\n\n| | |\n|---|---|\n| 📦 **Release** | ['"${TAG}"$']('"${release_url}"$') |\n| 🖥️ **Platforms** | Windows, macOS, Linux |\n\n---\n\n> 💡 The next commit pushed to this PR will automatically rebuild and update this release.'
