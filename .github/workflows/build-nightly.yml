@@ -102,21 +102,24 @@ jobs:
             --repo "${{ github.repository }}" \
             --body $'### ❌ Access Denied\n\nSorry, only **collaborators with write access** can trigger nightly builds.\n\nIf you believe this is a mistake, please contact a maintainer.'
 
-      - name: Fetch PR head branch
+      - name: Fetch PR branch info
         id: pr_info
         if: steps.check_access.outputs.result == 'granted'
         uses: actions/github-script@v7
         env:
           PR: ${{ github.event.issue.number }}
         with:
-          result-encoding: string
           script: |
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: parseInt(process.env.PR),
             });
-            return pr.head.ref;
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('base_ref', pr.base.ref);
+            if (pr.head.repo?.fork) {
+              core.info(`PR is from a fork (${pr.head.repo.full_name}) — will dispatch on base ref.`);
+            }
 
       - name: Add nightly-build label
         if: steps.check_access.outputs.result == 'granted'
@@ -130,19 +133,20 @@ jobs:
         if: steps.check_access.outputs.result == 'granted'
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.pr_info.outputs.result }}
+          HEAD_BRANCH: ${{ steps.pr_info.outputs.head_ref }}
+          BASE_BRANCH: ${{ steps.pr_info.outputs.base_ref }}
         run: |
           gh workflow run build-nightly.yml \
             --repo "${{ github.repository }}" \
-            --ref "$BRANCH" \
-            -f branch="$BRANCH"
+            --ref "$BASE_BRANCH" \
+            -f branch="$HEAD_BRANCH"
 
       - name: Acknowledge activation
         if: steps.check_access.outputs.result == 'granted'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.issue.number }}
-          BRANCH: ${{ steps.pr_info.outputs.result }}
+          BRANCH: ${{ steps.pr_info.outputs.head_ref }}
         run: |
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
