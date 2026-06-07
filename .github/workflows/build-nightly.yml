@@ -169,6 +169,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       commit_hash: ${{ steps.meta.outputs.commit_hash }}
       commit_sha: ${{ steps.meta.outputs.commit_sha }}
+      checkout_ref: ${{ steps.checkout_ref.outputs.ref }}
     steps:
       - name: Determine branch
         id: branch
@@ -177,12 +178,22 @@ jobs:
 
       - name: Determine checkout ref
         id: checkout_ref
-        run: |
-          if [[ -n "${{ inputs.pr_number }}" ]]; then
-            echo "ref=refs/pull/${{ inputs.pr_number }}/head" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ steps.branch.outputs.branch }}" >> "$GITHUB_OUTPUT"
-          fi
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        with:
+          script: |
+            const prNumber = process.env.PR_NUMBER;
+            const branch = process.env.BRANCH;
+            if (prNumber) {
+              const ref = `refs/pull/${prNumber}/head`;
+              core.info(`PR #${prNumber} provided — using checkout ref ${ref}`);
+              core.setOutput('ref', ref);
+            } else {
+              core.info(`No PR number — using branch ref: ${branch}`);
+              core.setOutput('ref', branch);
+            }
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -304,7 +315,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.derive.outputs.branch }}
+          ref: ${{ needs.derive.outputs.checkout_ref }}
           submodules: recursive
 
       - name: Install Linux system dependencies
