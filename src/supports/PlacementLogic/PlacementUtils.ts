@@ -77,3 +77,49 @@ export function calculateSmoothedNormal(hit: THREE.Intersection): { x: number, y
         z: _interpolated.z 
     };
 }
+
+/**
+ * Finds the mesh in `candidates` whose surface is closest to `point`.
+ * Prefers BVH closest-point distance when available, otherwise falls back to
+ * world-space bounding-box distance.
+ */
+export function findClosestMeshToPoint(point: { x: number; y: number; z: number }, candidates: THREE.Object3D[]): THREE.Mesh | undefined {
+    const worldPoint = new THREE.Vector3(point.x, point.y, point.z);
+    const localPoint = new THREE.Vector3();
+    const bbox = new THREE.Box3();
+    const bboxPoint = new THREE.Vector3();
+    const resultTarget = { point: new THREE.Vector3(), distance: 0, faceIndex: -1 };
+
+    let bestMesh: THREE.Mesh | undefined;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const candidate of candidates) {
+        if (!(candidate instanceof THREE.Mesh) || !candidate.geometry) continue;
+
+        let distance = Number.POSITIVE_INFINITY;
+        const boundsTree = (candidate.geometry as any).boundsTree;
+        if (boundsTree?.closestPointToPoint) {
+            localPoint.copy(worldPoint).applyMatrix4(candidate.matrixWorld.clone().invert());
+            const result = boundsTree.closestPointToPoint(localPoint, resultTarget);
+            if (result) {
+                distance = result.distance;
+            }
+        } else {
+            if (!candidate.geometry.boundingBox) {
+                candidate.geometry.computeBoundingBox();
+            }
+            if (candidate.geometry.boundingBox) {
+                bbox.copy(candidate.geometry.boundingBox).applyMatrix4(candidate.matrixWorld);
+                bbox.clampPoint(worldPoint, bboxPoint);
+                distance = bboxPoint.distanceTo(worldPoint);
+            }
+        }
+
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestMesh = candidate;
+        }
+    }
+
+    return bestMesh;
+}

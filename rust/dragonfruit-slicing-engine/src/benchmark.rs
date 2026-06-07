@@ -18,6 +18,11 @@ pub struct BenchmarkConfigV3 {
     pub build_depth_mm: f32,
     pub layer_height_mm: f32,
     pub cube_count: u32,
+    pub anti_aliasing_level: String,
+    pub anti_aliasing_mode: String,
+    pub blur_brush_radius_px: u32,
+    pub minimum_aa_alpha_percent: f32,
+    pub dither_enabled: bool,
 }
 
 impl Default for BenchmarkConfigV3 {
@@ -32,6 +37,11 @@ impl Default for BenchmarkConfigV3 {
             build_depth_mm: 122.904,
             layer_height_mm: 0.05,
             cube_count: 400,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 1,
+            minimum_aa_alpha_percent: 35.0,
+            dither_enabled: false,
         }
     }
 }
@@ -118,8 +128,10 @@ fn build_synthetic_triangles(cfg: &BenchmarkConfigV3) -> Vec<f32> {
 pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, SlicerV3Error> {
     let triangles = build_synthetic_triangles(&cfg);
     let output_format = supported_output_formats()
-        .first()
+        .iter()
         .copied()
+        .find(|&f| f.contains("ctb") || f.contains("pw0"))
+        .or_else(|| supported_output_formats().first().copied())
         .ok_or_else(|| SlicerV3Error::UnsupportedOutput("no registered output formats".into()))?;
 
     let job = SliceJobV3 {
@@ -136,11 +148,32 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         export_thumbnail_png_base64: None,
         png_compression_strategy: "fastest".to_string(),
         container_compression_level: 2,
-        anti_aliasing_level: "Off".to_string(),
+        anti_aliasing_level: cfg.anti_aliasing_level,
+        anti_aliasing_mode: cfg.anti_aliasing_mode,
+        blur_brush_radius_px: cfg.blur_brush_radius_px,
+        blur_brush_kernel: "box".to_string(),
+        blur_brush_sigma_x: 1.5,
+        blur_brush_sigma_y: 1.5,
+        z_blur_radius_layers: 0,
+        z_blur_kernel: "gaussian".to_string(),
+        z_blur_sigma: 0.5,
         aa_on_supports: false,
-        minimum_aa_alpha_percent: 35.0,
+        model_triangle_count: (triangles.len() / 9) as u32,
+        minimum_aa_alpha_percent: cfg.minimum_aa_alpha_percent,
         mirror_x: false,
         mirror_y: false,
+        z_blend_look_back: 2,
+        z_blend_fade_px: 20,
+        z_blend_auto_fade: true,
+        z_blend_minimum_alpha_percent: 0.0,
+        z_blend_max_alpha_percent: 90.0,
+        z_blend_custom_lut: None,
+        zaa_kernel: None,
+        zaa_pattern: None,
+        zaa_duplicate_z: None,
+        dither_enabled: cfg.dither_enabled,
+        dither_bit_depth: Some(3),
+        dither_device_gamma: 3.0,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
         x_packing_mode: "none".to_string(),

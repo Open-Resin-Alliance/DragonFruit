@@ -66,6 +66,42 @@ export function SliceMetricsDebugModal({
   outputName,
   outputSizeLabel,
 }: SliceMetricsDebugModalProps) {
+  const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'error'>('idle');
+
+  const copyPayload = React.useMemo(() => {
+    if (!benchmark) return '';
+
+    const payload = {
+      copiedAt: new Date().toISOString(),
+      outputName: outputName ?? null,
+      outputSizeLabel,
+      benchmark,
+    };
+
+    return JSON.stringify(payload, null, 2);
+  }, [benchmark, outputName, outputSizeLabel]);
+
+  const handleCopyMetrics = React.useCallback(async () => {
+    if (!copyPayload) return;
+
+    try {
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
+      }
+
+      await navigator.clipboard.writeText(copyPayload);
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+  }, [copyPayload]);
+
+  React.useEffect(() => {
+    if (copyState === 'idle') return;
+    const id = window.setTimeout(() => setCopyState('idle'), 1800);
+    return () => window.clearTimeout(id);
+  }, [copyState]);
+
   if (!isOpen || !benchmark) return null;
 
   const perf = benchmark.nativePerf.perf;
@@ -156,14 +192,34 @@ export function SliceMetricsDebugModal({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border transition-colors hover:bg-red-500/10"
-            style={{ borderColor: 'var(--border-subtle)' }}
-            aria-label="Close slice metrics"
-          >
-            <X className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                void handleCopyMetrics();
+              }}
+              className="inline-flex h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium transition-colors"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                background: copyState === 'copied'
+                  ? 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)'
+                  : 'var(--surface-1)',
+                color: copyState === 'copied' ? 'var(--text-strong)' : 'var(--text-muted)',
+              }}
+              aria-label="Copy slice metrics"
+              title="Copy all slice metrics as JSON"
+            >
+              {copyState === 'copied' ? 'Copied!' : copyState === 'error' ? 'Copy failed' : 'Copy'}
+            </button>
+
+            <button
+              onClick={onClose}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border transition-colors hover:bg-red-500/10"
+              style={{ borderColor: 'var(--border-subtle)' }}
+              aria-label="Close slice metrics"
+            >
+              <X className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
+            </button>
+          </div>
         </div>
 
         <div className="p-4 md:p-5 space-y-4">
@@ -252,6 +308,13 @@ export function SliceMetricsDebugModal({
                   <RuntimeStat label="renderNs" value={formatNs(perf?.renderNs)} />
                   <RuntimeStat label="pngEncodeNs" value={formatNs(perf?.pngEncodeNs)} />
                   <RuntimeStat label="archiveEncodeNs" value={formatNs(perf?.archiveEncodeNs)} />
+                  <RuntimeStat label="zBlendBackwardNs" value={formatNs(perf?.zBlendBackwardNs)} />
+                  <RuntimeStat label="zBlendForwardNs" value={formatNs(perf?.zBlendForwardNs)} />
+                  <RuntimeStat label="crossBlendNs" value={formatNs(perf?.crossBlendNs)} />
+                  <RuntimeStat label="crossBlendTouchedPixels" value={perf?.crossBlendTouchedPixels != null ? perf.crossBlendTouchedPixels.toLocaleString() : '—'} />
+                  <RuntimeStat label="crossBlendContributingLayers" value={perf?.crossBlendContributingLayers != null ? perf.crossBlendContributingLayers.toLocaleString() : '—'} />
+                  <RuntimeStat label="postBlurNs" value={formatNs(perf?.postBlurNs)} />
+                  <RuntimeStat label="supportMergeNs" value={formatNs(perf?.supportMergeNs)} />
                   <RuntimeStat label="layers" value={perf?.layers != null ? `${perf.layers}` : '—'} />
                   <RuntimeStat label="Core vs native total" value={formatPercent(coreVsNativePct)} />
                   <RuntimeStat label="Bridge payload build" value={formatMs(benchmark.nativePerf.bridgePayloadBuildMs, 2)} />
@@ -270,6 +333,8 @@ export function SliceMetricsDebugModal({
                   <RuntimeStat label="Rayon pool threads" value={runtime ? String(runtime.poolThreads) : '—'} />
                   <RuntimeStat label="Max concurrent workers" value={runtime ? String(runtime.maxConcurrent) : '—'} />
                   <RuntimeStat label="Bounded queue buffer" value={runtime ? String(runtime.queueBuffer) : '—'} />
+                  <RuntimeStat label="3DAA post threads" value={runtime?.daaPostThreads != null ? String(runtime.daaPostThreads) : '—'} />
+                  <RuntimeStat label="3DAA post buffer" value={runtime?.daaPostBufferDepth != null ? String(runtime.daaPostBufferDepth) : '—'} />
                   <RuntimeStat label="Build profile" value={runtime?.buildProfile ?? '—'} />
                   <RuntimeStat label="Metadata parse" value={formatNs(runtime?.metadataParseNs)} />
                   <RuntimeStat label="Mesh decode" value={formatNs(runtime?.meshDecodeNs)} />

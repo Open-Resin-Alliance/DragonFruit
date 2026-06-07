@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -68,7 +68,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
-import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
+import { computeProjectedFootprintHull, computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
@@ -161,12 +161,14 @@ import {
   savePrintArtifactWithNativeDialog,
   writeBytesToNativePath,
 } from '@/features/slicing/tauri/nativeSlicerBridge';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, transformSupportsForModel } from '@/supports/state';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
 } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
+import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
@@ -265,6 +267,14 @@ type HomeSupportCollectionsSnapshot = Pick<
   HomeSupportSnapshot,
   'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
 >;
+
+function countRecordEntries(record: Record<string, unknown>): number {
+  let count = 0;
+  for (const _key in record) {
+    count += 1;
+  }
+  return count;
+}
 
 type HomeKickstandSnapshot = ReturnType<typeof getKickstandSnapshot>;
 type HomeKickstandCollectionsSnapshot = Pick<
@@ -390,7 +400,6 @@ function installReactDevtoolsSemverGuard() {
 if (typeof window !== 'undefined') {
   initializeBVH();
   installReactDevtoolsSemverGuard();
-  console.log('[App] BVH acceleration initialized');
 }
 
 type ExportThumbnailRenderOptions = {
@@ -423,6 +432,7 @@ const PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
   ?? 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
+const REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT = 'dragonfruit:slicing-remote-offline-layer-height-changed';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
 const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
@@ -433,6 +443,18 @@ const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
 const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
+
+function readRemoteOfflineLayerHeightSnapshotMm(): number | null {
+  if (typeof window === 'undefined') return null;
+
+  const raw = window.localStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
+  if (raw == null || raw.trim().length === 0) return null;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(0.01, Math.min(1, parsed));
+}
 
 type TransformStoreCommitResult = {
   updated: boolean;
@@ -832,21 +854,6 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
-  const networkSelectedMaterialLayerHeightMm = React.useMemo(() => {
-    const profile = activePrinterProfile;
-    if (!profile || !profile.networkSupport) return null;
-    if (profile.networkConnection?.connected !== true) return null;
-    const selectedMaterialId = profile.networkConnection?.selectedMaterialId?.trim() ?? '';
-    if (!selectedMaterialId) return null;
-    const candidate = Number(profile.networkConnection?.selectedMaterialLayerHeightMm);
-    if (!Number.isFinite(candidate) || candidate <= 0) return null;
-    return candidate;
-  }, [
-    activePrinterProfile?.networkConnection?.connected,
-    activePrinterProfile?.networkConnection?.selectedMaterialId,
-    activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
-    activePrinterProfile?.networkSupport,
-  ]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
@@ -1021,6 +1028,10 @@ export default function Home() {
   const sceneAutosaveEnabled = sceneAutosaveSettings.enabled
     && !isSlicingBusy
     && scene.mode !== 'printing';
+  const sceneImportAutosaveSuppressMs = Math.min(
+    Math.max(sceneAutosaveSettings.debounceMs + 5_000, 15_000),
+    45_000,
+  );
 
   const { isAutosaving, clearAutosave, flushAutosave } = useSceneAutosave({
     models: scene.models,
@@ -1119,6 +1130,10 @@ export default function Home() {
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [editorContextMenuSupportTarget, setEditorContextMenuSupportTarget] = React.useState<{
+    segmentId: string;
+    point: { x: number; y: number; z: number };
+  } | null>(null);
   const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
   const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
@@ -1645,6 +1660,12 @@ export default function Home() {
     const proceed = await maybeConfirmPluginImportWarning(sceneFiles);
     if (!proceed) return false;
 
+    // Fresh imports can emit a burst of history/model-count changes while meshes are
+    // still decoding and settling. Keep autosave asleep across the import and the
+    // immediate post-import stabilization window to avoid adding save/export work to
+    // the hot path.
+    suppressSceneAutosave(sceneImportAutosaveSuppressMs);
+
     const imported = sceneFiles.length === 1
       ? await importSceneFile(sceneFiles[0], {
           sourcePath: options?.sourcePaths?.[0] ?? options?.resultingScenePath ?? null,
@@ -1667,10 +1688,12 @@ export default function Home() {
       } else {
         setLoadedSceneSaveSource(null);
       }
+
+      suppressSceneAutosave(sceneImportAutosaveSuppressMs);
     }
 
     return imported;
-  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmPluginImportWarning]);
+  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmPluginImportWarning, sceneImportAutosaveSuppressMs]);
 
   // ── ZIP import helpers ───────────────────────────────────────────────────
 
@@ -2393,15 +2416,15 @@ export default function Home() {
         lastAt: historyDebug.lastAt,
       },
       supportCounts: {
-        trunks: Object.keys(supportStateSnapshot.trunks).length,
-        branches: Object.keys(supportStateSnapshot.branches).length,
-        leaves: Object.keys(supportStateSnapshot.leaves).length,
-        twigs: Object.keys(supportStateSnapshot.twigs).length,
-        sticks: Object.keys(supportStateSnapshot.sticks).length,
-        braces: Object.keys(supportStateSnapshot.braces).length,
-        roots: Object.keys(supportStateSnapshot.roots).length,
-        knots: Object.keys(supportStateSnapshot.knots).length,
-        kickstands: Object.keys(kickstandStateSnapshot.kickstands).length,
+        trunks: countRecordEntries(supportStateSnapshot.trunks),
+        branches: countRecordEntries(supportStateSnapshot.branches),
+        leaves: countRecordEntries(supportStateSnapshot.leaves),
+        twigs: countRecordEntries(supportStateSnapshot.twigs),
+        sticks: countRecordEntries(supportStateSnapshot.sticks),
+        braces: countRecordEntries(supportStateSnapshot.braces),
+        roots: countRecordEntries(supportStateSnapshot.roots),
+        knots: countRecordEntries(supportStateSnapshot.knots),
+        kickstands: countRecordEntries(kickstandStateSnapshot.kickstands),
       },
     };
   }, [kickstandStateSnapshot.kickstands, scene.activeModelId, scene.models, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
@@ -2588,6 +2611,83 @@ export default function Home() {
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
+
+  const supportMenuSnapshot = React.useSyncExternalStore(
+    subscribeSupportState,
+    getSupportSnapshot,
+    getSupportSnapshot,
+  );
+
+  const supportMenuSelection = React.useMemo(() => {
+    const selectedId = supportMenuSnapshot.selectedId;
+    return {
+      selectedId,
+      selectedCategory: supportMenuSnapshot.selectedCategory,
+      isBraceSelected: Boolean(selectedId && supportMenuSnapshot.braces[selectedId]),
+    };
+  }, [supportMenuSnapshot]);
+
+  const supportsCanToggleCurve = React.useMemo(() => {
+    if (scene.mode !== 'support') return false;
+    if (supportMenuSelection.selectedCategory === 'segment' && supportMenuSelection.selectedId) return true;
+    return supportMenuSelection.isBraceSelected;
+  }, [scene.mode, supportMenuSelection.isBraceSelected, supportMenuSelection.selectedCategory, supportMenuSelection.selectedId]);
+
+  const supportContextMenuSegmentOwner = React.useMemo(() => {
+    const segmentId = editorContextMenuSupportTarget?.segmentId;
+    if (!segmentId) return null;
+
+    const trunk = Object.values(supportMenuSnapshot.trunks).find((item) => item.segments.some((segment) => segment.id === segmentId));
+    if (trunk) return { kind: 'trunk' as const, id: trunk.id };
+
+    const branch = Object.values(supportMenuSnapshot.branches).find((item) => item.segments.some((segment) => segment.id === segmentId));
+    if (branch) return { kind: 'branch' as const, id: branch.id };
+
+    const twig = Object.values(supportMenuSnapshot.twigs).find((item) => item.segments.some((segment) => segment.id === segmentId));
+    if (twig) return { kind: 'twig' as const, id: twig.id };
+
+    const stick = Object.values(supportMenuSnapshot.sticks).find((item) => item.segments.some((segment) => segment.id === segmentId));
+    if (stick) return { kind: 'stick' as const, id: stick.id };
+
+    return null;
+  }, [editorContextMenuSupportTarget?.segmentId, supportMenuSnapshot.branches, supportMenuSnapshot.sticks, supportMenuSnapshot.trunks, supportMenuSnapshot.twigs]);
+
+  const supportsCanAddJoint = React.useMemo(() => {
+    if (scene.mode !== 'support') return false;
+    if (!editorContextMenuSupportTarget?.segmentId || !editorContextMenuSupportTarget.point) return false;
+    return supportContextMenuSegmentOwner !== null;
+  }, [editorContextMenuSupportTarget, scene.mode, supportContextMenuSegmentOwner]);
+
+  const supportContextMenuItems = React.useMemo(() => {
+    return [
+      {
+        id: 'supports-toggle-curve' as const,
+        label: 'Toggle Curve',
+        icon: RefreshCw,
+      },
+      {
+        id: 'supports-add-joint' as const,
+        label: 'Add Joint',
+        icon: Plus,
+      },
+    ];
+  }, []);
+
+  const editorContextMenuTitle = scene.mode === 'support' ? 'Supports' : 'Editor';
+  const editorContextMenuItems = scene.mode === 'support' ? supportContextMenuItems : undefined;
+  const editorContextMenuDisabledActions = React.useMemo(() => {
+    if (scene.mode === 'support') {
+      return [
+        ...(!supportsCanToggleCurve ? (['supports-toggle-curve'] as const) : []),
+        ...(!supportsCanAddJoint ? (['supports-add-joint'] as const) : []),
+      ];
+    }
+
+    return [
+      ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
+      ...(!scene.canPasteModel ? (['paste'] as const) : []),
+    ];
+  }, [scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
@@ -2963,20 +3063,10 @@ export default function Home() {
     const printerHeight = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionY ?? 0));
     const pixelSizeX = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.x ?? 1));
     const pixelSizeY = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.y ?? 1));
-    const bitDepth = Math.max(0, Math.round(Number(activePrinterProfile?.bitDepth?.bits ?? 0)));
     const hasPrintableArtifact = (printingArtifact?.outputName ?? '').trim().length > 0;
 
     if (!hasPrintableArtifact || printerWidth <= 0 || printerHeight <= 0) {
       return null;
-    }
-
-    const isLikely16kClass = printerWidth >= 15000 && printerWidth <= 15400;
-    if (isLikely16kClass) {
-      if (bitDepth === 3) {
-        printerWidth = 15136;
-      } else if (bitDepth === 8) {
-        printerWidth = 15120;
-      }
     }
 
     return {
@@ -2990,7 +3080,6 @@ export default function Home() {
     activePrinterProfile?.display?.resolutionY,
     activePrinterProfile?.pixelSize?.x,
     activePrinterProfile?.pixelSize?.y,
-    activePrinterProfile?.bitDepth?.bits,
     printingArtifact?.outputName,
   ]);
 
@@ -3393,9 +3482,9 @@ export default function Home() {
   }, [computeBaseResinMlChunked]);
 
   // Support/raft aggregation is comparatively heavy, so keep it scoped to
-  // export + pre-artifact printing. Base model volume estimation runs in the
+  // pre-artifact printing only. Base model volume estimation runs in the
   // background across active editing modes (for warm, up-to-date estimates).
-  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'printing' && !printingArtifact;
   const resinBuildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
@@ -3481,7 +3570,7 @@ export default function Home() {
   const supportAndRaftResinMl = React.useMemo(() => {
     if (!shouldCalculateSupportAndRaftVolumes) return 0;
 
-    // Expensive calculation ONLY runs when mode is export/printing
+    // Expensive calculation ONLY runs in pre-artifact printing mode.
     const visibleModelIds = resinInBoundsModelIdSet;
     if (visibleModelIds.size === 0) return 0;
 
@@ -3949,23 +4038,58 @@ export default function Home() {
   const selectedSliceDeviceReachability = selectedSliceDeviceId
     ? (printerReachabilityByDeviceId[selectedSliceDeviceId] ?? null)
     : null;
-  const shouldUseRemoteOfflineLayerHeight = Boolean(activeNetworkUiAdapter) && (
-    activePrinterProfile?.networkConnection?.connected !== true
-    || selectedSliceDeviceReachability === false
-  );
-  const remoteOfflineSlicedLayerHeightMm = (() => {
-    if (!activeNetworkUiAdapter) return null;
+  const shouldUseRemoteOfflineLayerHeight = Boolean(activeNetworkUiAdapter)
+    && activeNetworkUiAdapter?.supportsRemoteMaterialProfiles !== false
+    && (
+      activePrinterProfile?.networkConnection?.connected !== true
+      || selectedSliceDeviceReachability === false
+    );
+  const [remoteOfflineLayerHeightSnapshotMm, setRemoteOfflineLayerHeightSnapshotMm] = React.useState<number | null>(() => (
+    readRemoteOfflineLayerHeightSnapshotMm()
+  ));
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateSnapshot = () => {
+      const next = readRemoteOfflineLayerHeightSnapshotMm();
+      setRemoteOfflineLayerHeightSnapshotMm((previous) => (Object.is(previous, next) ? previous : next));
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY) updateSnapshot();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener(REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT, updateSnapshot);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT, updateSnapshot);
+    };
+  }, []);
+
+  const remoteOfflineSlicedLayerHeightMm = React.useMemo(() => {
     if (!shouldUseRemoteOfflineLayerHeight) return null;
-    if (typeof window === 'undefined') return null;
+    return remoteOfflineLayerHeightSnapshotMm;
+  }, [remoteOfflineLayerHeightSnapshotMm, shouldUseRemoteOfflineLayerHeight]);
+  const remoteSelectedMaterialLayerHeightMm = React.useMemo(() => {
+    if (!activeNetworkUiAdapter) return null;
+    if (activeNetworkUiAdapter.supportsRemoteMaterialProfiles === false) return null;
+    if (activePrinterProfile?.networkConnection?.connected !== true) return null;
+    if (selectedSliceDeviceReachability === false) return null;
 
-    const raw = window.localStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
-      ?? window.sessionStorage.getItem(REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
-    if (raw == null || raw.trim().length === 0) return null;
+    const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return null;
 
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) return null;
-    return Math.max(0.001, Math.min(1, parsed));
-  })();
+    const candidate = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+    if (!Number.isFinite(candidate) || candidate <= 0) return null;
+    return Math.max(0.001, candidate);
+  }, [
+    activeNetworkUiAdapter,
+    activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialId,
+    activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
+    selectedSliceDeviceReachability,
+  ]);
   const printingMonitoringAdapter = React.useMemo(
     () => getProfileMonitoringUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
@@ -3974,11 +4098,12 @@ export default function Home() {
     if (remoteOfflineSlicedLayerHeightMm != null) {
       return remoteOfflineSlicedLayerHeightMm;
     }
-    if (networkSelectedMaterialLayerHeightMm != null) {
-      return Math.max(0.001, Number(networkSelectedMaterialLayerHeightMm));
+    if (remoteSelectedMaterialLayerHeightMm != null) {
+      return remoteSelectedMaterialLayerHeightMm;
     }
     return Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
-  }, [activeMaterialProfile?.layerHeightMm, networkSelectedMaterialLayerHeightMm, remoteOfflineSlicedLayerHeightMm]);
+  }, [activeMaterialProfile?.layerHeightMm, remoteOfflineSlicedLayerHeightMm, remoteSelectedMaterialLayerHeightMm]);
+  const crossSectionLayerHeightMm = slicedLayerHeightMm;
   const isLayerHeightMatch = React.useCallback((candidateLayerHeightMm: number | null | undefined) => {
     if (candidateLayerHeightMm == null) return false;
     return Math.abs(candidateLayerHeightMm - slicedLayerHeightMm) <= 0.0005;
@@ -4268,11 +4393,6 @@ export default function Home() {
     printingArtifact
     && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
-  );
-  const canRetrySendToPrinter = Boolean(
-    printingUploadDialogStage === 'failed'
-    && !printingSendBusy
-    && canSendToPrinter,
   );
   // Whether the slicing panel can offer Slice & Upload / Slice & Print actions
   const canSliceAndUpload = Boolean(
@@ -9143,6 +9263,7 @@ export default function Home() {
 
   const closeEditorContextMenu = React.useCallback(() => {
     setEditorContextMenuPos(null);
+    setEditorContextMenuSupportTarget(null);
   }, []);
 
   const handleEditorContextMenu = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -9645,6 +9766,14 @@ export default function Home() {
     const moved = Boolean(gesture?.moved);
     const shouldSuppress = performance.now() < suppressEditorContextMenuUntilRef.current;
     if (!moved && !shouldSuppress) {
+      if (scene.mode === 'support' && supportShaftHoverDebug.segmentId && supportShaftHoverDebug.point) {
+        setEditorContextMenuSupportTarget({
+          segmentId: supportShaftHoverDebug.segmentId,
+          point: supportShaftHoverDebug.point,
+        });
+      } else {
+        setEditorContextMenuSupportTarget(null);
+      }
       setEditorContextMenuPos({ x: e.clientX, y: e.clientY });
     }
 
@@ -9652,7 +9781,7 @@ export default function Home() {
     window.setTimeout(() => {
       rightClickGestureRef.current = null;
     }, 0);
-  }, []);
+  }, [scene.mode, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId]);
 
   React.useEffect(() => {
     const markSuppressed = (durationMs: number) => {
@@ -9672,7 +9801,186 @@ export default function Home() {
   }, []);
 
   const handleEditorMenuAction = React.useCallback((action: EditorMenuAction) => {
+    const projectSplitPoint = (
+      start: { x: number; y: number; z: number },
+      end: { x: number; y: number; z: number },
+      point: { x: number; y: number; z: number },
+    ) => {
+      const startVec = new THREE.Vector3(start.x, start.y, start.z);
+      const endVec = new THREE.Vector3(end.x, end.y, end.z);
+      const pointVec = new THREE.Vector3(point.x, point.y, point.z);
+      const lineDir = endVec.clone().sub(startVec);
+      const lenSq = lineDir.lengthSq();
+      if (lenSq <= 1e-10) {
+        return {
+          t: 0,
+          point: { x: startVec.x, y: startVec.y, z: startVec.z },
+        };
+      }
+
+      const rawT = pointVec.clone().sub(startVec).dot(lineDir) / lenSq;
+      const t = Math.max(0, Math.min(1, rawT));
+      const projected = startVec.clone().lerp(endVec, t);
+      return {
+        t,
+        point: { x: projected.x, y: projected.y, z: projected.z },
+      };
+    };
+
+    const projectBezierSplitPoint = (
+      start: { x: number; y: number; z: number },
+      control1: { x: number; y: number; z: number },
+      control2: { x: number; y: number; z: number },
+      end: { x: number; y: number; z: number },
+      point: { x: number; y: number; z: number },
+    ) => {
+      const target = new THREE.Vector3(point.x, point.y, point.z);
+      let bestT = 0;
+      let bestPoint = start;
+      let bestDistanceSq = Number.POSITIVE_INFINITY;
+
+      const steps = 40;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const sample = getBezierPointAtT(start, control1, control2, end, t);
+        const sampleVec = new THREE.Vector3(sample.x, sample.y, sample.z);
+        const distanceSq = sampleVec.distanceToSquared(target);
+        if (distanceSq < bestDistanceSq) {
+          bestDistanceSq = distanceSq;
+          bestT = t;
+          bestPoint = sample;
+        }
+      }
+
+      return {
+        t: bestT,
+        point: bestPoint,
+      };
+    };
+
     switch (action) {
+      case 'supports-toggle-curve': {
+        const state = getSupportSnapshot();
+        if (state.selectedCategory === 'segment' && state.selectedId) {
+          toggleSegmentCurve(state.selectedId);
+        } else if (state.selectedId && state.braces[state.selectedId]) {
+          toggleSegmentCurve(`braceSegment:${state.selectedId}`);
+        }
+        break;
+      }
+      case 'supports-add-joint': {
+        const target = editorContextMenuSupportTarget;
+        if (!target?.segmentId || !target.point) break;
+
+        const state = getSupportSnapshot();
+        const segmentId = target.segmentId;
+        const splitTargetPoint = target.point;
+        const beforeSnapshot = captureSupportEditSnapshot();
+
+        const trunk = Object.values(state.trunks).find((item) => item.segments.some((segment) => segment.id === segmentId));
+        if (trunk) {
+          const segmentIndex = trunk.segments.findIndex((segment) => segment.id === segmentId);
+          if (segmentIndex >= 0) {
+            const segment = trunk.segments[segmentIndex];
+            const root = state.roots[trunk.rootId];
+            let start = segment.bottomJoint?.pos;
+            if (!start) {
+              if (segmentIndex === 0 && root) {
+                start = {
+                  x: root.transform.pos.x,
+                  y: root.transform.pos.y,
+                  z: root.transform.pos.z + root.diskHeight + root.coneHeight,
+                };
+              } else {
+                start = trunk.segments[segmentIndex - 1]?.topJoint?.pos;
+              }
+            }
+
+            const end = segment.topJoint?.pos
+              ?? (trunk.contactCone ? getFinalSocketPosition(trunk.contactCone) : null)
+              ?? (start ? { x: start.x, y: start.y, z: start.z + 10 } : null);
+
+            if (start && end) {
+              const projected = segment.type === 'bezier'
+                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
+                : projectSplitPoint(start, end, splitTargetPoint);
+              const updated = splitShaft(trunk, segmentId, projected.point, projected.t, root);
+              updateTrunk(updated);
+              pushSupportEditHistory('Create trunk joint', beforeSnapshot, captureSupportEditSnapshot());
+            }
+          }
+          break;
+        }
+
+        const branch = Object.values(state.branches).find((item) => item.segments.some((segment) => segment.id === segmentId));
+        if (branch) {
+          const segmentIndex = branch.segments.findIndex((segment) => segment.id === segmentId);
+          if (segmentIndex >= 0) {
+            const segment = branch.segments[segmentIndex];
+            const parentKnot = state.knots[branch.parentKnotId];
+            const start = segmentIndex === 0
+              ? (parentKnot?.pos ?? segment.bottomJoint?.pos ?? null)
+              : (branch.segments[segmentIndex - 1]?.topJoint?.pos ?? segment.bottomJoint?.pos ?? null);
+            const end = segment.topJoint?.pos
+              ?? (branch.contactCone ? getFinalSocketPosition(branch.contactCone) : null)
+              ?? (start ? { x: start.x, y: start.y, z: start.z + 5 } : null);
+
+            if (start && end) {
+              const projected = segment.type === 'bezier'
+                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
+                : projectSplitPoint(start, end, splitTargetPoint);
+              const updated = splitBranchShaft(branch, segmentId, projected.point, projected.t, parentKnot);
+              updateBranch(updated);
+              pushSupportEditHistory('Create branch joint', beforeSnapshot, captureSupportEditSnapshot());
+            }
+          }
+          break;
+        }
+
+        const twig = Object.values(state.twigs).find((item) => item.segments.some((segment) => segment.id === segmentId));
+        if (twig) {
+          const segmentIndex = twig.segments.findIndex((segment) => segment.id === segmentId);
+          if (segmentIndex >= 0) {
+            const segment = twig.segments[segmentIndex];
+            const start = segmentIndex === 0
+              ? (segment.bottomJoint?.pos ?? null)
+              : (twig.segments[segmentIndex - 1]?.topJoint?.pos ?? segment.bottomJoint?.pos ?? null);
+            const end = segment.topJoint?.pos ?? (start ? { x: start.x, y: start.y, z: start.z + 5 } : null);
+
+            if (start && end) {
+              const projected = segment.type === 'bezier'
+                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
+                : projectSplitPoint(start, end, splitTargetPoint);
+              const updated = splitTwigShaft(twig, segmentId, projected.point, projected.t);
+              updateTwig(updated);
+              pushSupportEditHistory('Create twig joint', beforeSnapshot, captureSupportEditSnapshot());
+            }
+          }
+          break;
+        }
+
+        const stick = Object.values(state.sticks).find((item) => item.segments.some((segment) => segment.id === segmentId));
+        if (stick) {
+          const segmentIndex = stick.segments.findIndex((segment) => segment.id === segmentId);
+          if (segmentIndex >= 0) {
+            const segment = stick.segments[segmentIndex];
+            const start = segmentIndex === 0
+              ? (segment.bottomJoint?.pos ?? null)
+              : (stick.segments[segmentIndex - 1]?.topJoint?.pos ?? segment.bottomJoint?.pos ?? null);
+            const end = segment.topJoint?.pos ?? (start ? { x: start.x, y: start.y, z: start.z + 5 } : null);
+
+            if (start && end) {
+              const projected = segment.type === 'bezier'
+                ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
+                : projectSplitPoint(start, end, splitTargetPoint);
+              const updated = splitStickShaft(stick, segmentId, projected.point, projected.t);
+              updateStick(updated);
+              pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
+            }
+          }
+        }
+        break;
+      }
       case 'delete':
         if (scene.activeModelId) {
           scene.deleteModel(scene.activeModelId);
@@ -10348,8 +10656,17 @@ export default function Home() {
 
   const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
 
+  const setSceneZRangeIfChanged = React.useCallback((nextRange: { min: number; max: number }) => {
+    setSceneZRange((previous) => {
+      if (Object.is(previous.min, nextRange.min) && Object.is(previous.max, nextRange.max)) {
+        return previous;
+      }
+      return nextRange;
+    });
+  }, []);
+
   const projectedZRangeCacheRef = React.useRef<Map<string, { min: number; max: number }>>(new Map());
-  const projectedZRangeCacheKey = React.useMemo(() => {
+  const buildProjectedZRangeCacheKey = React.useCallback(() => {
     const visibleSignature = scene.models
       .filter((model) => model.visible)
       .map((model) => {
@@ -10374,14 +10691,14 @@ export default function Home() {
       visibleSignature,
       `support-refresh:${supportRenderRefreshNonce}`,
       `raft-mode:${raftSettingsSnapshot.bottomMode}`,
-      `roots:${Object.keys(supportStateSnapshot.roots).length}`,
-      `trunks:${Object.keys(supportStateSnapshot.trunks).length}`,
-      `branches:${Object.keys(supportStateSnapshot.branches).length}`,
-      `leaves:${Object.keys(supportStateSnapshot.leaves).length}`,
-      `twigs:${Object.keys(supportStateSnapshot.twigs).length}`,
-      `sticks:${Object.keys(supportStateSnapshot.sticks).length}`,
-      `braces:${Object.keys(supportStateSnapshot.braces).length}`,
-      `kickstands:${Object.keys(kickstandStateSnapshot.kickstands).length}`,
+      `roots:${countRecordEntries(supportStateSnapshot.roots)}`,
+      `trunks:${countRecordEntries(supportStateSnapshot.trunks)}`,
+      `branches:${countRecordEntries(supportStateSnapshot.branches)}`,
+      `leaves:${countRecordEntries(supportStateSnapshot.leaves)}`,
+      `twigs:${countRecordEntries(supportStateSnapshot.twigs)}`,
+      `sticks:${countRecordEntries(supportStateSnapshot.sticks)}`,
+      `braces:${countRecordEntries(supportStateSnapshot.braces)}`,
+      `kickstands:${countRecordEntries(kickstandStateSnapshot.kickstands)}`,
     ].join('||');
   }, [
     kickstandStateSnapshot.kickstands,
@@ -10400,15 +10717,16 @@ export default function Home() {
   useEffect(() => {
     // Projected world-triangle bounds are expensive.
     // Analysis can run on fallback bounds to keep mode-entry instant.
-    // Printing needs accurate support/raft-aware bounds before a print artifact
-    // exists; Export needs the same fidelity so layer estimates match real slicing.
-    const needsAccurateZRange = (scene.mode === 'printing' && !printingArtifact) || scene.mode === 'export';
+    // Printing needs accurate support/raft-aware bounds before a print artifact exists.
+    // Export intentionally uses fallback bounds to avoid full-plate OOM spikes on entry.
+    const needsAccurateZRange = scene.mode === 'printing' && !printingArtifact;
     const shouldUseSlicerAlignedRange = scene.mode === 'printing' || scene.mode === 'export';
     
     if (needsAccurateZRange) {
+      const projectedZRangeCacheKey = buildProjectedZRangeCacheKey();
       const cached = projectedZRangeCacheRef.current.get(projectedZRangeCacheKey);
       if (cached) {
-        setSceneZRange(cached);
+        setSceneZRangeIfChanged(cached);
         return;
       }
 
@@ -10429,7 +10747,7 @@ export default function Home() {
           const oldest = projectedZRangeCacheRef.current.keys().next().value;
           if (oldest != null) projectedZRangeCacheRef.current.delete(oldest);
         }
-        setSceneZRange(nextRange);
+        setSceneZRangeIfChanged(nextRange);
       };
 
       timeoutId = window.setTimeout(() => {
@@ -10452,26 +10770,31 @@ export default function Home() {
       };
     } else {
       // Use fast fallback for non-export modes where projected bounds aren't required.
-      setSceneZRange(shouldUseSlicerAlignedRange ? normalizeToSlicerZRange(fallbackZRange) : fallbackZRange);
+      const nextRange = shouldUseSlicerAlignedRange
+        ? normalizeToSlicerZRange(fallbackZRange)
+        : fallbackZRange;
+      setSceneZRangeIfChanged(nextRange);
     }
   }, [
+    buildProjectedZRangeCacheKey,
     normalizeToSlicerZRange,
     fallbackZRange,
     printingArtifact,
-    projectedZRangeCacheKey,
     scene.mode,
     scene.models,
+    setSceneZRangeIfChanged,
   ]);
 
   const slicing = useSlicingManager({
     hasGeometry: scene.models.length > 0,
-    zRange: sceneZRange
+    zRange: sceneZRange,
+    layerHeightMm: crossSectionLayerHeightMm,
   });
 
   const estimatedSlicerLayerCount = React.useMemo(() => {
     if (scene.models.length === 0) return 0;
 
-    const layerHeightMm = Math.max(0.001, slicedLayerHeightMm || 0.05);
+    const layerHeightMm = Math.max(0.001, crossSectionLayerHeightMm || 0.05);
     const printableMaxZMm = Math.max(0, Number(sceneZRange.max) || 0);
     const buildHeightLimitMm = Math.max(0, Number(activePrinterProfile?.buildVolumeMm.height) || 0);
     const slicerHeightMm = buildHeightLimitMm > 0
@@ -10479,7 +10802,7 @@ export default function Home() {
       : printableMaxZMm;
 
     return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
-  }, [activePrinterProfile?.buildVolumeMm.height, scene.models.length, sceneZRange.max, slicedLayerHeightMm]);
+  }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, scene.models.length, sceneZRange.max]);
 
   const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile) return '—';
@@ -10520,9 +10843,9 @@ export default function Home() {
     if (printingPreviewTotalLayers <= 0) return null;
 
     const clampedLayer = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
-    const height = clampedLayer * slicedLayerHeightMm;
+    const height = clampedLayer * crossSectionLayerHeightMm;
     return Math.min(Math.max(height, 0), Math.max(slicing.heightMm, 0));
-  }, [printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicedLayerHeightMm, slicing.heightMm]);
+  }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm]);
 
   React.useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) => {
@@ -10639,12 +10962,12 @@ export default function Home() {
   }, [runExportThumbnailCapture]);
 
   React.useEffect(() => {
-    const targetMicron = Math.max(1, Math.round(slicedLayerHeightMm * 1000));
+    const targetMicron = Math.max(1, Math.round(crossSectionLayerHeightMm * 1000));
     if (slicing.layerHeightMicron !== targetMicron) {
       slicing.setLayerHeightMicron(targetMicron);
     }
   }, [
-    slicedLayerHeightMm,
+    crossSectionLayerHeightMm,
     slicing.layerHeightMicron,
     slicing.setLayerHeightMicron,
   ]);
@@ -11260,6 +11583,94 @@ export default function Home() {
       height: Math.max(2, maxZ - minZ),
     };
   }, [getArrangeTransform, supportBoundsByModelId]);
+
+  const getModelSupportAwareFootprintPolygon = React.useCallback((
+    model: (typeof scene.models)[number],
+    rotationZOverride?: number,
+    transformOverride?: (typeof scene.models)[number]['transform'],
+  ) => {
+    const t = transformOverride ?? getArrangeTransform(model);
+    const effectiveTransform = {
+      position: t.position.clone(),
+      rotation: new THREE.Euler(
+        t.rotation.x,
+        t.rotation.y,
+        rotationZOverride ?? t.rotation.z,
+        t.rotation.order,
+      ),
+      scale: t.scale.clone(),
+    };
+
+    const points = computeProjectedFootprintHull(
+      model.geometry,
+      effectiveTransform.rotation,
+      effectiveTransform.scale,
+    ).map((point) => new THREE.Vector2(
+      point.x + effectiveTransform.position.x,
+      point.y + effectiveTransform.position.y,
+    ));
+
+    const supportBoundsBase = supportBoundsByModelId.get(model.id);
+    if (supportBoundsBase && !supportBoundsBase.isEmpty()) {
+      const sourceMatrix = new THREE.Matrix4().compose(
+        model.transform.position,
+        new THREE.Quaternion().setFromEuler(model.transform.rotation),
+        model.transform.scale,
+      );
+      const targetMatrix = new THREE.Matrix4().compose(
+        effectiveTransform.position,
+        new THREE.Quaternion().setFromEuler(effectiveTransform.rotation),
+        effectiveTransform.scale,
+      );
+      const delta = new THREE.Matrix4().multiplyMatrices(targetMatrix, sourceMatrix.clone().invert());
+      const transformedSupportBounds = supportBoundsBase.clone().applyMatrix4(delta);
+      points.push(
+        new THREE.Vector2(transformedSupportBounds.min.x, transformedSupportBounds.min.y),
+        new THREE.Vector2(transformedSupportBounds.max.x, transformedSupportBounds.min.y),
+        new THREE.Vector2(transformedSupportBounds.max.x, transformedSupportBounds.max.y),
+        new THREE.Vector2(transformedSupportBounds.min.x, transformedSupportBounds.max.y),
+      );
+    }
+
+    if (points.length < 3) {
+      const dims = getModelSupportAwareDimensionsMm(model, rotationZOverride, transformOverride);
+      return [
+        new THREE.Vector2(effectiveTransform.position.x - dims.width * 0.5, effectiveTransform.position.y - dims.depth * 0.5),
+        new THREE.Vector2(effectiveTransform.position.x + dims.width * 0.5, effectiveTransform.position.y - dims.depth * 0.5),
+        new THREE.Vector2(effectiveTransform.position.x + dims.width * 0.5, effectiveTransform.position.y + dims.depth * 0.5),
+        new THREE.Vector2(effectiveTransform.position.x - dims.width * 0.5, effectiveTransform.position.y + dims.depth * 0.5),
+      ];
+    }
+
+    const sorted = points
+      .map((point) => point.clone())
+      .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+    const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) =>
+      (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower: THREE.Vector2[] = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+        lower.pop();
+      }
+      lower.push(point);
+    }
+    const upper: THREE.Vector2[] = [];
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      const point = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+        upper.pop();
+      }
+      upper.push(point);
+    }
+    upper.pop();
+    lower.pop();
+    return lower.concat(upper);
+  }, [getArrangeTransform, getModelSupportAwareDimensionsMm, supportBoundsByModelId]);
+
+  const getModelSupportAwareFootprintPolygonRef = React.useRef(getModelSupportAwareFootprintPolygon);
+  React.useEffect(() => {
+    getModelSupportAwareFootprintPolygonRef.current = getModelSupportAwareFootprintPolygon;
+  }, [getModelSupportAwareFootprintPolygon]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
@@ -12665,7 +13076,6 @@ export default function Home() {
     transformMgr.setIsTransforming(false);
 
     if (operation === 'rotate') {
-      console.log('[Rotation] Clearing scan data - rotation invalidates island detection');
       islands.clearScanData();
       applyPostRotateLift();
     } else {
@@ -13326,30 +13736,37 @@ export default function Home() {
       const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
       const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
 
-      type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
-
-      // Use a tiny tolerance to allow touching (not overlapping) rects when spacing = 0
-      const COLLISION_TOLERANCE = 0.01;
-      const intersectsRect = (a: Rect2D, b: Rect2D) => {
-        return !(a.maxX <= b.minX + COLLISION_TOLERANCE || a.minX + COLLISION_TOLERANCE >= b.maxX || 
-                 a.maxY <= b.minY + COLLISION_TOLERANCE || a.minY + COLLISION_TOLERANCE >= b.maxY);
+      const projectPolygon = (poly: THREE.Vector2[], axis: THREE.Vector2) => {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const point of poly) {
+          const projected = point.dot(axis);
+          min = Math.min(min, projected);
+          max = Math.max(max, projected);
+        }
+        return { min, max };
       };
 
-      const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-        const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
-        const mW = dims.width;
-        const mD = dims.depth;
-        return {
-          minX: m.transform.position.x - (mW * 0.5),
-          maxX: m.transform.position.x + (mW * 0.5),
-          minY: m.transform.position.y - (mD * 0.5),
-          maxY: m.transform.position.y + (mD * 0.5),
+      const polygonsOverlap = (a: THREE.Vector2[], b: THREE.Vector2[]) => {
+        const testAxes = (poly: THREE.Vector2[]) => {
+          for (let i = 0; i < poly.length; i += 1) {
+            const p0 = poly[i];
+            const p1 = poly[(i + 1) % poly.length];
+            const edge = new THREE.Vector2(p1.x - p0.x, p1.y - p0.y);
+            if (edge.lengthSq() <= 1e-10) continue;
+            const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
+            const pa = projectPolygon(a, axis);
+            const pb = projectPolygon(b, axis);
+            if (pa.max <= pb.min + spacing || pb.max <= pa.min + spacing) return false;
+          }
+          return true;
         };
+        return testAxes(a) && testAxes(b);
       };
 
-      const blockedRects = scene.models
+      const blockedPolygons = scene.models
         .filter((m) => m.visible && m.id !== model.id)
-        .map(modelToRect);
+        .map((m) => getModelSupportAwareFootprintPolygonRef.current(m, undefined, m.transform));
 
       const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
       for (let row = 0; row < maxRows; row += 1) {
@@ -13368,19 +13785,19 @@ export default function Home() {
       for (const candidate of candidateCenters) {
         if (chosenCenters.length >= totalCount) break;
 
-        const rect: Rect2D = {
-          minX: candidate.x - (width * 0.5),
-          maxX: candidate.x + (width * 0.5),
-          minY: candidate.y - (depth * 0.5),
-          maxY: candidate.y + (depth * 0.5),
+        const candidateTransform = {
+          position: new THREE.Vector3(candidate.x, candidate.y, model.transform.position.z),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
         };
+        const candidatePolygon = getModelSupportAwareFootprintPolygonRef.current(model, undefined, candidateTransform);
 
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+        if (blockedPolygons.some((blocked) => polygonsOverlap(candidatePolygon, blocked))) {
           continue;
         }
 
         chosenCenters.push({ x: candidate.x, y: candidate.y });
-        blockedRects.push(rect);
+        blockedPolygons.push(candidatePolygon);
       }
 
       for (const center of chosenCenters) {
@@ -13707,30 +14124,37 @@ export default function Home() {
     const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
     const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
 
-    type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
-
-    // Use a tiny tolerance to allow touching (not overlapping) rects when spacing = 0
-    const COLLISION_TOLERANCE = 0.01;
-    const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX <= b.minX + COLLISION_TOLERANCE || a.minX + COLLISION_TOLERANCE >= b.maxX || 
-               a.maxY <= b.minY + COLLISION_TOLERANCE || a.minY + COLLISION_TOLERANCE >= b.maxY);
+    const projectPolygon = (poly: THREE.Vector2[], axis: THREE.Vector2) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const point of poly) {
+        const projected = point.dot(axis);
+        min = Math.min(min, projected);
+        max = Math.max(max, projected);
+      }
+      return { min, max };
     };
 
-    const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-      const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
-      const mW = dims.width;
-      const mD = dims.depth;
-      return {
-        minX: m.transform.position.x - (mW * 0.5),
-        maxX: m.transform.position.x + (mW * 0.5),
-        minY: m.transform.position.y - (mD * 0.5),
-        maxY: m.transform.position.y + (mD * 0.5),
+    const polygonsOverlap = (a: THREE.Vector2[], b: THREE.Vector2[]) => {
+      const testAxes = (poly: THREE.Vector2[]) => {
+        for (let i = 0; i < poly.length; i += 1) {
+          const p0 = poly[i];
+          const p1 = poly[(i + 1) % poly.length];
+          const edge = new THREE.Vector2(p1.x - p0.x, p1.y - p0.y);
+          if (edge.lengthSq() <= 1e-10) continue;
+          const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
+          const pa = projectPolygon(a, axis);
+          const pb = projectPolygon(b, axis);
+          if (pa.max <= pb.min + spacing || pb.max <= pa.min + spacing) return false;
+        }
+        return true;
       };
+      return testAxes(a) && testAxes(b);
     };
 
-    const blockedRects = scene.models
+    const blockedPolygons = scene.models
       .filter((m) => m.visible && m.id !== model.id)
-      .map(modelToRect);
+      .map((m) => getModelSupportAwareFootprintPolygonRef.current(m, undefined, m.transform));
 
     const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
     for (let row = 0; row < maxRows; row += 1) {
@@ -13746,18 +14170,18 @@ export default function Home() {
 
     let capacity = 0;
     for (const candidate of candidateCenters) {
-      const rect: Rect2D = {
-        minX: candidate.x - (width * 0.5),
-        maxX: candidate.x + (width * 0.5),
-        minY: candidate.y - (depth * 0.5),
-        maxY: candidate.y + (depth * 0.5),
+      const candidateTransform = {
+        position: new THREE.Vector3(candidate.x, candidate.y, model.transform.position.z),
+        rotation: model.transform.rotation.clone(),
+        scale: model.transform.scale.clone(),
       };
+      const candidatePolygon = getModelSupportAwareFootprintPolygonRef.current(model, undefined, candidateTransform);
 
-      if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+      if (blockedPolygons.some((blocked) => polygonsOverlap(candidatePolygon, blocked))) {
         continue;
       }
 
-      blockedRects.push(rect);
+      blockedPolygons.push(candidatePolygon);
       capacity += 1;
     }
 
@@ -13850,11 +14274,8 @@ export default function Home() {
     const { modelId, flips, previewTransform, initialGeometry } = session;
     const anyFlip = flips.x || flips.y || flips.z;
 
-    console.log('[Mirror] finalizeMirrorSession:', { modelId, flips, anyFlip });
-
     if (!anyFlip) {
       // Net-zero session (e.g. user clicked X twice). Nothing to commit.
-      console.log('[Mirror] No flips to commit, returning');
       return;
     }
 
@@ -13865,9 +14286,7 @@ export default function Home() {
       console.error('[Mirror] bakeWithFlips threw during finalize, preserving live mirrored state:', error);
       return;
     }
-    console.log('[Mirror] bakeWithFlips result:', { baked, isValid: !!baked });
     if (!baked) {
-      console.log('[Mirror] bakeWithFlips returned null, aborting');
       return;
     }
 
@@ -13904,11 +14323,9 @@ export default function Home() {
     // direct state and the final batched React state has both the correct geometry
     // AND the correct transform.
     const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
-    console.log('[Mirror] Replacing geometry with axes:', axes);
     scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
       includeSupportState: !flips.z,
     });
-    console.log('[Mirror] Applying finalized mirrored transform');
     scene.setModelTransformRaw(modelId, {
       position: finalizedTransform.position.clone(),
       rotation: finalizedTransform.rotation.clone(),
@@ -14091,9 +14508,7 @@ export default function Home() {
   React.useEffect(() => {
     const wasActive = mirrorPrevToolActiveRef.current;
     mirrorPrevToolActiveRef.current = mirrorToolActive;
-    console.log('[Mirror] useEffect check - wasActive:', wasActive, 'mirrorToolActive:', mirrorToolActive);
     if (wasActive && !mirrorToolActive) {
-      console.log('[Mirror] Calling flushPendingBake from useEffect');
       flushPendingBake();
     }
   }, [mirrorToolActive, flushPendingBake]);
@@ -14104,11 +14519,8 @@ export default function Home() {
     const model = scene.models.find((m) => m.id === modelId);
     if (!model) return;
 
-    console.log('[Mirror] handleMirror called, axis:', axis, 'modelId:', modelId);
-
     if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
       // Finalize any prior session that was for a different model first.
-      console.log('[Mirror] Creating new session');
       if (mirrorSessionRef.current) flushPendingBake();
       mirrorSessionRef.current = {
         modelId,
@@ -14132,7 +14544,6 @@ export default function Home() {
 
     const performMirror = () => {
       session.flips[axis] = !session.flips[axis];
-      console.log('[Mirror] performMirror axis:', axis, 'flips now:', session.flips);
 
       // Reflect the model's transform across the world-space axis through the
       // model's world bbox center. This produces a true world-space mirror
@@ -14592,6 +15003,7 @@ export default function Home() {
               models={scene.models}
               activeModel={scene.activeModel}
               estimatedLayerCountOverride={estimatedSlicerLayerCount}
+              estimatedLayerHeightMmOverride={crossSectionLayerHeightMm}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
@@ -14634,7 +15046,6 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
-              sendCanRetry={canRetrySendToPrinter}
               sendButtonLabel={sendToPrinterButtonLabel}
               showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
               onOpenSendTargetPicker={() => {
@@ -14644,7 +15055,6 @@ export default function Home() {
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
               onCancelSendToPrinter={handleCancelSendToPrinter}
-              onRetrySendToPrinter={handleSendToPrinter}
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
@@ -15352,10 +15762,9 @@ export default function Home() {
       <EditorContextMenu
         position={editorContextMenuPos}
         onAction={handleEditorMenuAction}
-        disabledActions={[
-          ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
-          ...(!scene.canPasteModel ? (['paste'] as const) : []),
-        ]}
+        title={editorContextMenuTitle}
+        items={editorContextMenuItems}
+        disabledActions={editorContextMenuDisabledActions}
       />
 
       <DiagnosticsModal
@@ -16672,6 +17081,17 @@ export default function Home() {
                     disabled={printingSendBusy || printingPrintNowBusy}
                   >
                     Close
+                  </button>
+                )}
+
+                {printingUploadDialogStage === 'failed' && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    onClick={() => { void handleSendToPrinter(); }}
+                    disabled={printingSendBusy || printingPrintNowBusy || !canSendToPrinter}
+                  >
+                    Retry Upload
                   </button>
                 )}
 

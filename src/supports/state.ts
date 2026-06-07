@@ -756,9 +756,11 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
 
             const t = computeClosestTOnSegmentFromPoint(authoredPos, activeEndpoints.start, activeEndpoints.end, activeSegment);
             const computedPos = calculateKnotPositionOnSegmentFromT(activeEndpoints.start, activeEndpoints.end, activeSegment, t);
+            const effectiveNormalizationHint = knot.normalizationHint ?? knot._importHint;
+
             const preserveImportedBraceUniformDiameter =
                 braceHostKnotIds.has(knot.id)
-                && knot._importHint === 'braceImported'
+                && effectiveNormalizationHint === 'braceImported'
                 && Number.isFinite(knot.diameter as number);
             const computedDiameter = preserveImportedBraceUniformDiameter
                 ? (knot.diameter as number)
@@ -778,7 +780,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
             // This takes priority over all derived preserve rules to avoid the two systems
             // making conflicting decisions (e.g. leaf s85 vs back leaves both look identical
             // to heuristic rules but require opposite treatment).
-            const importHint = knot._importHint;
+            const importHint = effectiveNormalizationHint;
             if (importHint === 'project') {
                 const posChanged =
                     computedPos.x !== knot.pos.x ||
@@ -907,15 +909,18 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         finalKnots = braceSeg2.knots;
     }
 
-    // Strip import hints from final output — they are consumed by normalization
-    // and must not persist into the runtime support state.
-    const hasAnyHints = Object.values(finalKnots).some(k => k._importHint !== undefined);
-    if (hasAnyHints) {
+    // Strip transient import hints from final runtime output, but persist the resolved
+    // normalization intent so VOXL save/load roundtrips can replay the same behavior.
+    const hasAnyTransientImportHints = Object.values(finalKnots).some(k => k._importHint !== undefined);
+    if (hasAnyTransientImportHints) {
         const stripped: Record<string, Knot> = {};
         for (const [id, k] of Object.entries(finalKnots)) {
             if (k._importHint !== undefined) {
-                const { _importHint: _, ...rest } = k;
-                stripped[id] = rest;
+                const { _importHint: transientImportHint, ...rest } = k;
+                stripped[id] = {
+                    ...rest,
+                    normalizationHint: rest.normalizationHint ?? transientImportHint,
+                };
             } else {
                 stripped[id] = k;
             }

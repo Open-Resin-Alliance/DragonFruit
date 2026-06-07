@@ -15,7 +15,9 @@ export type EditorMenuAction =
   | 'cut'
   | 'copy'
   | 'paste'
-  | 'repair';
+  | 'repair'
+  | 'supports-toggle-curve'
+  | 'supports-add-joint';
 
 export type EditorContextMenuPosition = {
   x: number;
@@ -26,6 +28,8 @@ type EditorContextMenuProps = {
   position: EditorContextMenuPosition | null;
   onAction: (action: EditorMenuAction) => void;
   disabledActions?: EditorMenuAction[];
+  title?: string;
+  items?: MenuItemDef[];
 };
 
 type MenuItemDef = {
@@ -43,16 +47,18 @@ const MENU_ITEMS: MenuItemDef[] = [
 ];
 
 const MENU_WIDTH = 176;
-const MENU_HEIGHT = 200;
+const BASE_MENU_HEIGHT = 44;
+const MENU_ITEM_HEIGHT = 32;
 
-export function EditorContextMenu({ position, onAction, disabledActions = [] }: EditorContextMenuProps) {
+export function EditorContextMenu({ position, onAction, disabledActions = [], title = 'Editor', items = MENU_ITEMS }: EditorContextMenuProps) {
   if (!position) return null;
 
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
 
+  const menuHeight = BASE_MENU_HEIGHT + (items.length * MENU_ITEM_HEIGHT);
   const left = Math.max(8, Math.min(position.x, viewportWidth - MENU_WIDTH - 8));
-  const top = Math.max(8, Math.min(position.y, viewportHeight - MENU_HEIGHT - 8));
+  const top = Math.max(8, Math.min(position.y, viewportHeight - menuHeight - 8));
 
   return (
     <div
@@ -70,10 +76,10 @@ export function EditorContextMenu({ position, onAction, disabledActions = [] }: 
       aria-label="Editor context menu"
     >
       <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-        Editor
+        {title}
       </div>
       <div className="space-y-0.5">
-        {MENU_ITEMS.map((item) => {
+        {items.map((item) => {
           const Icon = item.icon;
           const isDisabled = disabledActions.includes(item.id);
           return (

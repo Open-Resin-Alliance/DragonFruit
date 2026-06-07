@@ -93,11 +93,11 @@ export const StickRenderer = React.memo(function StickRenderer({
       scene,
       initialEvent,
       modelId: stick.modelId,
-      onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+      onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
         const latestStick = getSnapshot().sticks[stick.id];
         const latestCone = latestStick?.[coneKey] as ContactCone | undefined;
         if (!latestStick || !latestCone) return;
-        const newCone = recomputeContactConeForMovedDisk(latestCone, point, surfaceNormal, socketAnchor);
+        const newCone = recomputeContactConeForMovedDisk(latestCone, point, surfaceNormal, socketAnchor, mesh);
         if (coneKey === 'contactConeA') liveDragConeARef.current = newCone;
         else liveDragConeBRef.current = newCone;
         setDragTick(t => t + 1);

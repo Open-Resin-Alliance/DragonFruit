@@ -28,7 +28,7 @@ import { getSettings } from '../../Settings/state';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { buildBranchData } from './branchBuilder';
 import { branchPlacementStore, useBranchPlacementState } from './branchPlacementState';
-import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
+import { calculateSmoothedNormal, findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
 import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
@@ -185,6 +185,11 @@ export function BranchPlacementController() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    const resolveTipMesh = useCallback(() => {
+        if (!tipPosition) return undefined;
+        return findClosestMeshToPoint(tipPosition, modelMeshesRef.current);
+    }, [tipPosition]);
 
     const publishPreview = useCallback((signature: string, previewData: SupportData | null) => {
         if (lastPreviewSignatureRef.current === signature) return;
@@ -433,6 +438,7 @@ export function BranchPlacementController() {
                     tipNormal: tipNormal,
                     modelId: modelId,
                     parentKnot,
+                    mesh: resolveTipMesh(),
                 });
 
                 branchPlacementStore.setPreviewData({
@@ -521,6 +527,7 @@ export function BranchPlacementController() {
                             tipNormal: tipNormal,
                             modelId: modelId,
                             parentKnot,
+                            mesh: resolveTipMesh(),
                         });
 
                         branchPlacementStore.setPreviewData({
@@ -657,6 +664,7 @@ export function BranchPlacementController() {
                 tipNormal: tipNormal,
                 modelId: modelId,
                 parentKnot,
+                mesh: resolveTipMesh(),
             });
 
             branchPlacementStore.setPreviewData({
@@ -746,6 +754,7 @@ export function BranchPlacementController() {
                 tipNormal: tipNormal,
                 modelId: modelId,
                 parentKnot,
+                mesh: resolveTipMesh(),
             });
 
             console.log('[BranchPlacement] Creating branch via snap click', branch);
@@ -770,7 +779,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, resetSnapping]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, resetSnapping, resolveTipMesh]);
 
     // Reset snapping when deactivated
     useEffect(() => {

@@ -67,6 +67,50 @@ function makePayload(): DragonfruitImportFormat {
     sticks: [],
     braces: [],
     knots: [],
+    kickstands: [
+      {
+        root: {
+          id: 'kick-root-a',
+          modelId: 'm1',
+          transform: { pos: { x: -5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+          diameter: 5,
+          diskHeight: 1,
+          coneHeight: 1,
+        },
+        hostKnot: {
+          id: 'kick-knot-a',
+          parentShaftId: 'seg-a',
+          t: 0.5,
+          pos: { x: 0, y: 0, z: 4 },
+          diameter: 1,
+        },
+        kickstand: {
+          id: 'kickstand-a',
+          modelId: 'm1',
+          rootId: 'kick-root-a',
+          hostKnotId: 'kick-knot-a',
+          hostSegmentId: 'seg-a',
+          hostMinT: 0,
+          segments: [
+            {
+              id: 'kick-seg-a',
+              type: 'straight',
+              diameter: 0.9,
+              topJoint: {
+                id: 'kick-ja',
+                pos: { x: -2, y: 0, z: 4 },
+                diameter: 0.9,
+              },
+            },
+          ],
+          profile: {
+            bodyDiameterMm: 0.9,
+            terminalStartDiameterMm: 0.9,
+            terminalEndDiameterMm: 1,
+          },
+        },
+      },
+    ],
   };
 }
 
@@ -159,8 +203,10 @@ test('applyImportDefaultsToSupportPayload aligns root diameter to trunk diameter
   assert.notEqual(next, payload);
   assert.equal(next.roots[0].diameter, 1.25);
   assert.equal(next.roots[1].diameter, 2.1);
+  assert.equal(next.kickstands?.[0]?.root.diameter, 0.9);
   assert.equal(payload.roots[0].diameter, 4, 'original payload must not be mutated');
   assert.equal(payload.roots[1].diameter, 7, 'original payload must not be mutated');
+  assert.equal(payload.kickstands?.[0]?.root.diameter, 5, 'original kickstand root must not be mutated');
 });
 
 test('getImportDefaultsRaftPatch disables wall when raft base is off', () => {

@@ -338,6 +338,10 @@ test('loadFromImportFormat preserves imported uniform brace knot diameters', () 
     assert.ok(knotLeft && knotRight, 'Expected brace host knots to exist after load');
     assert.ok(almostEqual(knotLeft.diameter ?? 0, 1.1), 'Left imported brace knot should keep uniform imported diameter');
     assert.ok(almostEqual(knotRight.diameter ?? 0, 1.1), 'Right imported brace knot should keep uniform imported diameter');
+    assert.strictEqual(knotLeft._importHint, undefined, 'Transient import hint should be stripped after load');
+    assert.strictEqual(knotRight._importHint, undefined, 'Transient import hint should be stripped after load');
+    assert.strictEqual(knotLeft.normalizationHint, 'braceImported', 'Brace normalization intent should persist after load');
+    assert.strictEqual(knotRight.normalizationHint, 'braceImported', 'Brace normalization intent should persist after load');
 
     resetStore();
 });

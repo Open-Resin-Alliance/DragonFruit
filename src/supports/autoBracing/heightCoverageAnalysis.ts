@@ -33,7 +33,7 @@ export function analyzeTrunkHeightCoverage(
         grid: GridSettings;
     },
 ): HeightCoverageAnalysis {
-    const maxHorizontalRun = options.maxBraceLengthMm / Math.SQRT2;
+    const maxHorizontalRun = options.maxBraceLengthMm;
     const requiredTopCoverageBandMm = Math.max(options.patternIntervalMm, TOP_COVERAGE_MARGIN_MIN_MM);
     const requiredAnchorZ = trunk.topZ - requiredTopCoverageBandMm;
 

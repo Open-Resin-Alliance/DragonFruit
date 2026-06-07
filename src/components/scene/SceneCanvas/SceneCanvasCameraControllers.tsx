@@ -198,10 +198,8 @@ export function OrbitPivotIndicator({
     markerRef.current.position.copy(orbit.target);
   });
 
-  if (!visible) return null;
-
   return (
-    <points ref={markerRef} raycast={() => null} renderOrder={32}>
+    <points ref={markerRef} raycast={() => null} renderOrder={32} frustumCulled={false}>
       <bufferGeometry>
         <bufferAttribute
           attach="attributes-position"
@@ -215,7 +213,7 @@ export function OrbitPivotIndicator({
         map={markerTexture}
         alphaTest={0.5}
         transparent
-        opacity={0.6}
+        opacity={visible ? 0.6 : 0}
         depthTest={false}
         depthWrite={false}
       />

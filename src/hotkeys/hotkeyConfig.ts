@@ -62,6 +62,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         TEMP_SPOTLIGHT_HOLD: {
             key: 'p',
             description: 'Hold to temporarily enable Spotlight highlight in Support mode'
+        },
+        FORCE_PLACE_SUPPORT: {
+            key: 'q',
+            description: 'Hold to force placing support'
         }
     },
     CAMERA: {

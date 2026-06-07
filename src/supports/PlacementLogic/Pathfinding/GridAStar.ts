@@ -50,7 +50,7 @@ export interface GridAStarOptions {
      * but the roots volume at that XY may intersect the mesh. The validator
      * rejects those positions so the A* keeps searching.
      */
-    goalValidator?: (wx: number, wy: number, wz: number) => boolean;
+    goalValidator?: (wx: number, wy: number, wz: number, parentPos: Vec3 | null) => boolean;
     /**
      * When true, each neighbor edge collision check uses `sdf.isBlocked` on
      * the endpoint cell only instead of the full `sdf.segmentBlocked` sweep.
@@ -71,6 +71,10 @@ export interface GridAStarOptions {
      * Acceptable for hover preview — click-time always uses full resolution.
      */
     endpointOnlyCollisionCheck?: boolean;
+    /** Optional label used by the pathfinding debug overlay. */
+    debugLabel?: string;
+    /** When true, capture expanded/frontier/path snapshots for the debug overlay. */
+    captureDebug?: boolean;
 }
 
 export interface GridAStarResult {
@@ -88,6 +92,8 @@ export interface GridAStarResult {
     hitExpansionLimit: boolean;
     /** Reusable warm-start state for the next frame. */
     warmState: WarmStartState | null;
+    /** Optional debug snapshot of the explored cells and solved path. */
+    debug?: GridAStarDebugSnapshot;
 }
 
 export interface WarmStartState {
@@ -99,6 +105,19 @@ export interface WarmStartState {
     cameFrom: Map<number, number>;
 }
 
+export interface GridAStarDebugSnapshot {
+    label: string;
+    searchStepMm: number;
+    expansions: number;
+    reached: boolean;
+    stagnated: boolean;
+    hitExpansionLimit: boolean;
+    expandedNodes: Vec3[];
+    frontierNodes: Vec3[];
+    rawPath: Vec3[];
+    simplifiedPath: Vec3[];
+}
+
 // ---------- Internal ----------
 
 interface AStarEntry {
@@ -108,6 +127,12 @@ interface AStarEntry {
     z: number;
     f: number; // g + h
     g: number;
+}
+
+interface NodeRuntimeState {
+    g: number;
+    cameFrom?: number;
+    closed: boolean;
 }
 
 interface NeighborRuntime {
@@ -122,6 +147,8 @@ interface NeighborRuntime {
     lateralPerDrop: number;
 }
 
+type DistanceAtWithin = (wx: number, wy: number, wz: number, maxDistance: number) => number;
+
 // 26-connected neighborhood offsets (no (0,0,0))
 const NEIGHBORS: ReadonlyArray<{ dx: number; dy: number; dz: number; cost: number }> = (() => {
     const out: { dx: number; dy: number; dz: number; cost: number }[] = [];
@@ -132,6 +159,11 @@ const NEIGHBORS: ReadonlyArray<{ dx: number; dy: number; dz: number; cost: numbe
                 out.push({ dx, dy, dz, cost: Math.sqrt(dx * dx + dy * dy + dz * dz) });
             }
         }
+    }
+    // Long pure-down strides keep tall, mostly vertical routes from spending
+    // one expansion per fine Z cell. These edges are still segment-checked.
+    for (const dz of [-2, -4, -8]) {
+        out.push({ dx: 0, dy: 0, dz, cost: Math.abs(dz) });
     }
     return out;
 })();
@@ -149,6 +181,14 @@ const NEIGHBOR_RUNTIME: ReadonlyArray<NeighborRuntime> = NEIGHBORS.map((n) => {
     };
 });
 
+const PURE_DOWN_PRIORITY_INDICES = NEIGHBOR_RUNTIME
+    .map((n, index) => ({ n, index }))
+    .filter(({ n }) => n.dx === 0 && n.dy === 0 && n.dz < 0)
+    .sort((a, b) => Math.abs(b.n.dz) - Math.abs(a.n.dz))
+    .map(({ index }) => index);
+
+const STRAIGHT_DESCENT_CLEARANCE_FACTOR = 2;
+
 function cellKeyInt(qx: number, qy: number, qz: number): number {
     const ux = (qx + 0x4000) | 0;
     const uy = (qy + 0x4000) | 0;
@@ -158,39 +198,88 @@ function cellKeyInt(qx: number, qy: number, qz: number): number {
 
 // ---------- Min-heap for A* open set ----------
 
-function heapPush(heap: AStarEntry[], entry: AStarEntry): void {
-    heap.push(entry);
-    let i = heap.length - 1;
+type HeapCompare = (a: AStarEntry, b: AStarEntry) => number;
+
+function heapSwap(heap: AStarEntry[], heapIndexByKey: Map<number, number>, i: number, j: number): void {
+    const a = heap[i];
+    const b = heap[j];
+    heap[i] = b;
+    heap[j] = a;
+    heapIndexByKey.set(a.key, j);
+    heapIndexByKey.set(b.key, i);
+}
+
+function heapSiftUp(heap: AStarEntry[], heapIndexByKey: Map<number, number>, startIndex: number, compare: HeapCompare): void {
+    let i = startIndex;
     while (i > 0) {
         const pi = (i - 1) >> 1;
-        if (heap[pi].f <= heap[i].f) break;
-        [heap[pi], heap[i]] = [heap[i], heap[pi]];
+        if (compare(heap[pi], heap[i]) <= 0) break;
+        heapSwap(heap, heapIndexByKey, pi, i);
         i = pi;
     }
 }
 
-function heapPop(heap: AStarEntry[]): AStarEntry | undefined {
-    if (heap.length <= 1) return heap.pop();
-    const top = heap[0];
-    heap[0] = heap.pop()!;
-    let i = 0;
+function heapSiftDown(heap: AStarEntry[], heapIndexByKey: Map<number, number>, startIndex: number, compare: HeapCompare): void {
+    let i = startIndex;
     const len = heap.length;
     while (true) {
         const l = i * 2 + 1;
         const r = l + 1;
         let smallest = i;
-        if (l < len && heap[l].f < heap[smallest].f) smallest = l;
-        if (r < len && heap[r].f < heap[smallest].f) smallest = r;
+        if (l < len && compare(heap[l], heap[smallest]) < 0) smallest = l;
+        if (r < len && compare(heap[r], heap[smallest]) < 0) smallest = r;
         if (smallest === i) break;
-        [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+        heapSwap(heap, heapIndexByKey, i, smallest);
         i = smallest;
     }
+}
+
+function heapPushOrUpdate(
+    heap: AStarEntry[],
+    heapIndexByKey: Map<number, number>,
+    entry: AStarEntry,
+    compare: HeapCompare,
+): void {
+    const existingIndex = heapIndexByKey.get(entry.key);
+    if (existingIndex !== undefined) {
+        const existing = heap[existingIndex];
+        if (compare(entry, existing) >= 0) {
+            return;
+        }
+        heap[existingIndex] = entry;
+        heapIndexByKey.set(entry.key, existingIndex);
+        heapSiftUp(heap, heapIndexByKey, existingIndex, compare);
+        heapSiftDown(heap, heapIndexByKey, heapIndexByKey.get(entry.key)!, compare);
+        return;
+    }
+
+    heap.push(entry);
+    const index = heap.length - 1;
+    heapIndexByKey.set(entry.key, index);
+    heapSiftUp(heap, heapIndexByKey, index, compare);
+}
+
+function heapPopIndexed(heap: AStarEntry[], heapIndexByKey: Map<number, number>, compare: HeapCompare): AStarEntry | undefined {
+    if (heap.length === 0) return undefined;
+    const top = heap[0];
+    heapIndexByKey.delete(top.key);
+
+    if (heap.length === 1) {
+        heap.pop();
+        return top;
+    }
+
+    const last = heap.pop()!;
+    heap[0] = last;
+    heapIndexByKey.set(last.key, 0);
+    heapSiftDown(heap, heapIndexByKey, 0, compare);
     return top;
 }
 
 // ---------- Heuristic ----------
 
 /** Octile-distance heuristic in 3D (admissible for 26-connected grids). */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function heuristic(qx: number, qy: number, qz: number, gqx: number, gqy: number, gqz: number): number {
     let dx = Math.abs(qx - gqx);
     let dy = Math.abs(qy - gqy);
@@ -225,45 +314,74 @@ export function gridAStar(
 ): GridAStarResult {
     const step = opts.stepMm ?? 2.0; // Coarse grid for pathfinding (2mm default)
     const invStep = 1 / step;
-    const maxExp = opts.maxExpansions ?? 2000;
+    const maxExp = opts.maxExpansions ?? 1000;
     const clearance = opts.clearanceMm;
     const maxLateral = opts.maxLateralMm ?? 30;
     const maxLateralSq = maxLateral * maxLateral;
     const occupancy = opts.occupancy;
     const ignoreSupportId = opts.ignoreSupportId;
     const endpointOnlyCollisionCheck = !!opts.endpointOnlyCollisionCheck;
+    const captureDebug = !!opts.captureDebug;
+    const nodeDistanceMaxMm = clearance * 2;
+    const sdfWithThreshold = sdf as SDFCache & { distanceAtWithin?: DistanceAtWithin };
+    const distanceAtWithin = typeof sdfWithThreshold.distanceAtWithin === 'function'
+        ? sdfWithThreshold.distanceAtWithin.bind(sdf)
+        : null;
 
     // Angle constraint: minimum angle from vertical in degrees
     // Converted to maximum lateral-per-vertical ratio
     const minAngleFromVertDeg = opts.minAngleFromVerticalDeg ?? 15;
     const maxLateralPerDrop = Math.tan((minAngleFromVertDeg * Math.PI) / 180);
     const goalValidator = opts.goalValidator;
+    const goalPlaneHeuristic = (qz: number): number => Math.max(0, qz - gqz) * step;
 
     // Per-neighbor static costs (independent of node position).
+    // Resin printing philosophy: go straight down. Only deviate the minimum
+    // amount needed to clear an obstruction.  Lateral and shallow-angle
+    // movement are heavily penalised so the A* treats them as a last resort.
     const neighborStaticCosts = new Array<number>(NEIGHBOR_RUNTIME.length);
     for (let i = 0; i < NEIGHBOR_RUNTIME.length; i++) {
         const n = NEIGHBOR_RUNTIME[i];
         const moveCost = n.stepCostFactor * step;
-        const verticalityPenalty = n.lateralCells * step * 1.5;
+        // Strong penalty for any lateral (XY) displacement — each 1mm lateral
+        // costs ~2.5mm of vertical equivalent.
+        const verticalityPenalty = n.lateralCells * step * 2.5;
         let shallowAnglePenalty = 0;
         if (n.lateralCells > 0) {
             if (n.dz !== 0) {
                 const ratio = n.lateralPerDrop;
-                shallowAnglePenalty = ratio * ratio * step * 0.8;
+                // Quadratic penalty on shallow angles — moving at 45° from
+                // vertical costs much more than moving at 15°.
+                shallowAnglePenalty = ratio * ratio * step * 1.5;
             } else {
-                // Pure horizontal: maximum angle penalty
-                shallowAnglePenalty = step * 4.0;
+                // Pure horizontal: nearly forbidden — only used when absolutely
+                // necessary to route around a thin obstruction.
+                shallowAnglePenalty = step * 8.0;
             }
         }
-        const climbPenalty = n.dz > 0 ? step * 3 : 0;
+        // Climbing (moving upward): heavily penalised — only for escaping
+        // local concavities, not for "reach-around" routes.
+        const climbPenalty = n.dz > 0 ? step * 5 : 0;
         neighborStaticCosts[i] = moveCost + verticalityPenalty + shallowAnglePenalty + climbPenalty;
     }
 
-    // Maximum upward climb in grid cells — allows routing over protrusions
-    // but prevents the path from going far above the socket
-    const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
+    // Maximum upward climb: tight limit so the A* can't "reach around" overhangs
+    // by climbing far above the socket.  Small climbs (~12mm) are allowed for
+    // escaping local concavities.
+    const maxClimbCells = Math.max(3, Math.ceil(12 / step));
 
     const q = (v: number) => Math.round(v * invStep);
+    const compareHeapEntries: HeapCompare = (a, b) => {
+        const fDiff = a.f - b.f;
+        if (Math.abs(fDiff) > 1e-12) return fDiff;
+
+        const zDiff = a.z - b.z;
+        if (zDiff !== 0) return zDiff;
+
+        const aLatSq = (a.x - sqx) * (a.x - sqx) + (a.y - sqy) * (a.y - sqy);
+        const bLatSq = (b.x - sqx) * (b.x - sqx) + (b.y - sqy) * (b.y - sqy);
+        return aLatSq - bLatSq;
+    };
 
     // Quantized start / goal
     const sqx = q(startPos.x);
@@ -273,9 +391,8 @@ export function gridAStar(
 
     // ---- Warm-start or fresh ----
     let openSet: AStarEntry[];
-    const gScore: Map<number, number> = new Map();
-    const cameFrom: Map<number, number> = new Map();
-    const closedSet = new Set<number>();
+    const openSetIndexByKey = new Map<number, number>();
+    const nodeState = new Map<number, NodeRuntimeState>();
 
     const canWarmStart = warmStart &&
         Math.abs(warmStart.socketPos.x - startPos.x) < step * 2 &&
@@ -284,29 +401,163 @@ export function gridAStar(
 
     if (canWarmStart && warmStart) {
         // Re-seed from previous search state
-        openSet = [...warmStart.openEntries];
-        for (const [k, v] of warmStart.gScores) gScore.set(k, v);
-        for (const [k, v] of warmStart.cameFrom) cameFrom.set(k, v);
+        openSet = [];
+        for (const [k, v] of warmStart.gScores) {
+            const existing = nodeState.get(k);
+            if (existing) {
+                existing.g = v;
+            } else {
+                nodeState.set(k, { g: v, closed: false });
+            }
+        }
+        for (const [k, v] of warmStart.cameFrom) {
+            const existing = nodeState.get(k);
+            if (existing) {
+                existing.cameFrom = v;
+            } else {
+                nodeState.set(k, { g: Infinity, cameFrom: v, closed: false });
+            }
+        }
+        for (const entry of warmStart.openEntries) {
+            heapPushOrUpdate(openSet, openSetIndexByKey, entry, compareHeapEntries);
+        }
     } else {
         const startKey = cellKeyInt(sqx, sqy, sqz);
-        const h = Math.max(0, sqz - gqz); // pure vertical heuristic
+        const h = goalPlaneHeuristic(sqz);
         openSet = [];
-        heapPush(openSet, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h });
-        gScore.set(startKey, 0);
+        heapPushOrUpdate(openSet, openSetIndexByKey, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h }, compareHeapEntries);
+        nodeState.set(startKey, { g: 0, closed: false });
     }
 
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
+    const debugExpandedNodes: Vec3[] = [];
+    const edgeBlockedCache = new Map<number, Map<number, boolean>>();
+    const nodeDistanceCache = new Map<number, number>();
+    const occupancyCache = new Map<number, boolean>();
 
-    const STAGNATION_LIMIT = 600;
+    const STAGNATION_LIMIT = 400;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 
+    function decodeKey(key: number): { x: number; y: number; z: number } {
+        const uz = key % 0x8000;
+        const rem = (key - uz) / 0x8000;
+        const uy = rem % 0x8000;
+        const ux = (rem - uy) / 0x8000;
+        return { x: ux - 0x4000, y: uy - 0x4000, z: uz - 0x4000 };
+    }
+
+    function getNodeDistance(key: number, wx: number, wy: number, wz: number): number {
+        const cached = nodeDistanceCache.get(key);
+        if (cached !== undefined) return cached;
+        const distance = distanceAtWithin
+            ? distanceAtWithin(wx, wy, wz, nodeDistanceMaxMm)
+            : sdf.distanceAt(wx, wy, wz);
+        nodeDistanceCache.set(key, distance);
+        return distance;
+    }
+
+    function getEdgeBlocked(
+        aKey: number,
+        bKey: number,
+        compute: () => boolean,
+    ): boolean {
+        const lowKey = aKey < bKey ? aKey : bKey;
+        const highKey = aKey < bKey ? bKey : aKey;
+        let highMap = edgeBlockedCache.get(lowKey);
+        if (!highMap) {
+            highMap = new Map<number, boolean>();
+            edgeBlockedCache.set(lowKey, highMap);
+        } else {
+            const cached = highMap.get(highKey);
+            if (cached !== undefined) return cached;
+        }
+        const blocked = compute();
+        highMap.set(highKey, blocked);
+        return blocked;
+    }
+
+    function getSegmentMoveBlocked(
+        aKey: number,
+        bKey: number,
+        ax: number,
+        ay: number,
+        az: number,
+        bx: number,
+        by: number,
+        bz: number,
+    ): boolean {
+        return getEdgeBlocked(
+            aKey,
+            bKey,
+            () => {
+                if (occupancy?.segmentOccupied(
+                    ax,
+                    ay,
+                    az,
+                    bx,
+                    by,
+                    bz,
+                    Math.min(step, occupancy.cellSize),
+                    ignoreSupportId,
+                )) {
+                    return true;
+                }
+                return sdf.segmentBlocked(ax, ay, az, bx, by, bz, clearance);
+            },
+        );
+    }
+
+    function getNodeOccupied(key: number, wx: number, wy: number, wz: number): boolean {
+        const cached = occupancyCache.get(key);
+        if (cached !== undefined) return cached;
+        const occupied = occupancy ? occupancy.isOccupied(wx, wy, wz, ignoreSupportId) : false;
+        occupancyCache.set(key, occupied);
+        return occupied;
+    }
+
+    function chooseStraightDescentIndex(current: AStarEntry, cwx: number, cwy: number, cwz: number): number {
+        const minStraightClearance = clearance * STRAIGHT_DESCENT_CLEARANCE_FACTOR;
+        for (const ni of PURE_DOWN_PRIORITY_INDICES) {
+            const n = NEIGHBOR_RUNTIME[ni];
+            let nz = current.z + n.dz;
+            if (nz < gqz) {
+                nz = gqz;
+            }
+            if (nz === current.z) continue;
+
+            const nKey = cellKeyInt(current.x, current.y, nz);
+            const existingState = nodeState.get(nKey);
+            if (existingState?.closed) continue;
+
+            const wz = nz * step;
+            if (occupancy && getNodeOccupied(nKey, cwx, cwy, wz)) continue;
+
+            const dist = getNodeDistance(nKey, cwx, cwy, wz);
+            if (dist < minStraightClearance) continue;
+            if (getSegmentMoveBlocked(current.key, nKey, cwx, cwy, cwz, cwx, cwy, wz)) continue;
+
+            return ni;
+        }
+        return -1;
+    }
+
     while (openSet.length > 0 && expansions < maxExp) {
-        const current = heapPop(openSet)!;
-        if (closedSet.has(current.key)) continue;
-        closedSet.add(current.key);
+        const current = heapPopIndexed(openSet, openSetIndexByKey, compareHeapEntries)!;
+        const currentState = nodeState.get(current.key);
+        if (!currentState) continue;
+        if (current.g > currentState.g) continue;
+        if (currentState.closed) continue;
+        currentState.closed = true;
         expansions++;
+        if (captureDebug) {
+            debugExpandedNodes.push({
+                x: current.x * step,
+                y: current.y * step,
+                z: current.z * step,
+            });
+        }
 
         if (current.z < bestZReached) {
             bestZReached = current.z;
@@ -315,7 +566,18 @@ export function gridAStar(
         if (expansions - lastZProgressAt > STAGNATION_LIMIT) break;
 
         if (current.z <= gqz) {
-            if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step)) {
+            const parentKey = currentState.cameFrom;
+            const parentPos = parentKey === undefined
+                ? null
+                : (() => {
+                    const parent = decodeKey(parentKey);
+                    return {
+                        x: parent.x * step,
+                        y: parent.y * step,
+                        z: parent.z * step,
+                    };
+                })();
+            if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step, parentPos)) {
                 goalEntry = current;
                 break;
             }
@@ -324,17 +586,24 @@ export function gridAStar(
         const cwx = current.x * step;
         const cwy = current.y * step;
         const cwz = current.z * step;
+        const straightDescentOnlyIndex = chooseStraightDescentIndex(current, cwx, cwy, cwz);
 
         for (let ni = 0; ni < NEIGHBOR_RUNTIME.length; ni++) {
+            if (straightDescentOnlyIndex >= 0 && ni !== straightDescentOnlyIndex) continue;
+
             const n = NEIGHBOR_RUNTIME[ni];
             const nx = current.x + n.dx;
             const ny = current.y + n.dy;
-            const nz = current.z + n.dz;
+            let nz = current.z + n.dz;
+            if (n.dz < 0 && nz < gqz) {
+                nz = gqz;
+            }
 
             if (n.dz > 0 && nz > sqz + maxClimbCells) continue;
 
             const nKey = cellKeyInt(nx, ny, nz);
-            if (closedSet.has(nKey)) continue;
+            const existingState = nodeState.get(nKey);
+            if (existingState?.closed) continue;
 
             const latX = (nx - sqx) * step;
             const latY = (ny - sqy) * step;
@@ -347,30 +616,59 @@ export function gridAStar(
             const wy = ny * step;
             const wz = nz * step;
 
-            if (endpointOnlyCollisionCheck
-                ? sdf.isBlocked(wx, wy, wz, clearance)
-                : sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)
-            ) continue;
+            if (occupancy && getNodeOccupied(nKey, wx, wy, wz)) continue;
 
-            if (occupancy && occupancy.isOccupied(wx, wy, wz, ignoreSupportId)) continue;
+            const dist = getNodeDistance(nKey, wx, wy, wz);
+            const requiresSegmentCheck = !endpointOnlyCollisionCheck || Math.abs(nz - current.z) > 1;
+            if (!requiresSegmentCheck) {
+                if (dist < clearance) continue;
+            } else if (getSegmentMoveBlocked(current.key, nKey, cwx, cwy, cwz, wx, wy, wz)) {
+                continue;
+            }
 
-            const dist = sdf.distanceAt(wx, wy, wz);
             const clearancePenalty = dist < clearance * 2 ? (clearance * 2 - dist) * 0.5 : 0;
-            const tentativeG = current.g + neighborStaticCosts[ni] + clearancePenalty;
+            const edgeCost = n.dx === 0 && n.dy === 0 && n.dz < -1
+                ? Math.abs(nz - current.z) * step
+                : neighborStaticCosts[ni];
+            const tentativeG = current.g + edgeCost + clearancePenalty;
 
-            const existingG = gScore.get(nKey);
+            const existingG = existingState?.g;
             if (existingG !== undefined && tentativeG >= existingG) continue;
 
-            gScore.set(nKey, tentativeG);
-            cameFrom.set(nKey, current.key);
+            if (existingState) {
+                existingState.g = tentativeG;
+                existingState.cameFrom = current.key;
+            } else {
+                nodeState.set(nKey, { g: tentativeG, cameFrom: current.key, closed: false });
+            }
 
-            const h = Math.max(0, nz - gqz);
-            heapPush(openSet, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h });
+            const h = goalPlaneHeuristic(nz);
+            heapPushOrUpdate(openSet, openSetIndexByKey, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h }, compareHeapEntries);
         }
     }
 
     const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
     const hitExpansionLimit = !goalEntry && !stagnated && expansions >= maxExp;
+    const toDebugSnapshot = (
+        reached: boolean,
+        rawPath: Vec3[],
+        simplifiedPath: Vec3[],
+    ): GridAStarDebugSnapshot | undefined => captureDebug ? ({
+        label: opts.debugLabel ?? 'astar',
+        searchStepMm: step,
+        expansions,
+        reached,
+        stagnated,
+        hitExpansionLimit,
+        expandedNodes: debugExpandedNodes,
+        frontierNodes: openSet.slice(0, 128).map((entry) => ({
+            x: entry.x * step,
+            y: entry.y * step,
+            z: entry.z * step,
+        })),
+        rawPath,
+        simplifiedPath,
+    }) : undefined;
 
     if (!goalEntry) {
         return {
@@ -379,25 +677,24 @@ export function gridAStar(
             reached: false,
             stagnated,
             hitExpansionLimit,
+            debug: toDebugSnapshot(false, [], []),
             warmState: stagnated ? null : {
                 socketPos: { ...startPos },
                 openEntries: openSet.slice(0, 64),
-                gScores: gScore,
-                cameFrom,
+                gScores: new Map(
+                    Array.from(nodeState.entries(), ([key, state]) => [key, state.g]),
+                ),
+                cameFrom: new Map(
+                    Array.from(nodeState.entries(), ([key, state]) =>
+                        state.cameFrom === undefined ? null : ([key, state.cameFrom] as [number, number]),
+                    ).filter((entry): entry is [number, number] => entry !== null),
+                ),
             },
         };
     }
 
     const rawPath: Vec3[] = [];
     let traceKey = goalEntry.key;
-
-    function decodeKey(key: number): { x: number; y: number; z: number } {
-        const uz = key % 0x8000;
-        const rem = (key - uz) / 0x8000;
-        const uy = rem % 0x8000;
-        const ux = (rem - uy) / 0x8000;
-        return { x: ux - 0x4000, y: uy - 0x4000, z: uz - 0x4000 };
-    }
 
     while (traceKey !== undefined) {
         const coords = decodeKey(traceKey);
@@ -406,7 +703,7 @@ export function gridAStar(
             y: coords.y * step,
             z: coords.z * step,
         });
-        const parent = cameFrom.get(traceKey);
+        const parent = nodeState.get(traceKey)?.cameFrom;
         if (parent === undefined) break;
         traceKey = parent;
     }
@@ -421,11 +718,18 @@ export function gridAStar(
         reached: true,
         stagnated: false,
         hitExpansionLimit: false,
+        debug: toDebugSnapshot(true, rawPath, simplified),
         warmState: {
             socketPos: { ...startPos },
             openEntries: [],
-            gScores: gScore,
-            cameFrom,
+            gScores: new Map(
+                Array.from(nodeState.entries(), ([key, state]) => [key, state.g]),
+            ),
+            cameFrom: new Map(
+                Array.from(nodeState.entries(), ([key, state]) =>
+                    state.cameFrom === undefined ? null : ([key, state.cameFrom] as [number, number]),
+                ).filter((entry): entry is [number, number] => entry !== null),
+            ),
         },
     };
 }
@@ -445,7 +749,7 @@ function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: numb
     // movement to route around protrusions, but the final support must
     // only descend. Walk the path and track the running Z minimum;
     // remove any waypoint that rises above the envelope.
-    let monoPath: Vec3[] = [path[0]];
+    const monoPath: Vec3[] = [path[0]];
     let minZ = path[0].z;
     for (let i = 1; i < path.length; i++) {
         if (path[i].z <= minZ) {
@@ -456,12 +760,13 @@ function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: numb
     }
     if (monoPath.length <= 2) return monoPath;
 
-    // Preview fast-mode (endpoint-only A*): preserve path geometry while
-    // removing only strictly co-linear runs. This avoids expensive LOS
-    // segmentBlocked sweeps in hover mode without changing the polyline's
-    // occupied space.
+    // Preview fast-mode (endpoint-only A*): remove co-linear runs and a capped
+    // number of tiny clear detours. This keeps hover responsive without
+    // preserving cosmetic one-cell sidesteps as visible trunk bends.
     if (previewFastMode) {
         const out: Vec3[] = [monoPath[0]];
+        let shortcutChecks = 0;
+        const MAX_PREVIEW_SHORTCUT_CHECKS = 48;
         for (let i = 1; i < monoPath.length - 1; i++) {
             const a = monoPath[i - 1];
             const b = monoPath[i];
@@ -475,6 +780,15 @@ function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: numb
             const d2z = Math.round((c.z - b.z) / step);
 
             if (d1x === d2x && d1y === d2y && d1z === d2z) continue;
+            if (
+                shortcutChecks < MAX_PREVIEW_SHORTCUT_CHECKS
+                && segmentSavesMeaningfulDetour(a, b, c)
+                && !sdf.segmentBlocked(a.x, a.y, a.z, c.x, c.y, c.z, clearance)
+            ) {
+                shortcutChecks++;
+                continue;
+            }
+            shortcutChecks++;
             out.push(b);
         }
         out.push(monoPath[monoPath.length - 1]);
@@ -498,4 +812,15 @@ function simplifyPath(path: Vec3[], sdf: SDFCache, clearance: number, step: numb
 
     result.push(monoPath[monoPath.length - 1]);
     return result;
+}
+
+function segmentSavesMeaningfulDetour(a: Vec3, b: Vec3, c: Vec3): boolean {
+    const splitLateral = Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(c.x - b.x, c.y - b.y);
+    const directLateral = Math.hypot(c.x - a.x, c.y - a.y);
+    if (splitLateral - directLateral <= 0.001) return true;
+
+    const splitLength = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2 + (b.z - a.z) ** 2)
+        + Math.sqrt((c.x - b.x) ** 2 + (c.y - b.y) ** 2 + (c.z - b.z) ** 2);
+    const directLength = Math.sqrt((c.x - a.x) ** 2 + (c.y - a.y) ** 2 + (c.z - a.z) ** 2);
+    return splitLength - directLength <= 1.0;
 }

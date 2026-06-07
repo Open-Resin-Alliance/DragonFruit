@@ -25,6 +25,7 @@ import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearest
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
+import { findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -110,6 +111,11 @@ export function LeafPlacementController() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    const resolveTipMesh = useCallback(() => {
+        if (!tipPosition) return undefined;
+        return findClosestMeshToPoint(tipPosition, modelMeshesRef.current);
+    }, [tipPosition]);
 
     useEffect(() => {
         const handleShaftHover = (event: Event) => {
@@ -403,6 +409,7 @@ export function LeafPlacementController() {
                     modelId,
                     parentKnot,
                     hostDiameterMm: resolvedHostDiameter,
+                    mesh: resolveTipMesh(),
                 });
 
                 const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
@@ -489,6 +496,7 @@ export function LeafPlacementController() {
                 modelId,
                 parentKnot,
                 hostDiameterMm,
+                mesh: resolveTipMesh(),
             });
 
             addKnot(parentKnot);
@@ -525,7 +533,7 @@ export function LeafPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, surfaceNormal, modelId, leafBinding]);
+    }, [isActive, stage, tipPosition, surfaceNormal, modelId, leafBinding, resolveTipMesh]);
 
     useEffect(() => {
         if (!isActive) {

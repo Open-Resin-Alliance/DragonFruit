@@ -4,6 +4,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
+import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { convexHull2d } from '../geometry/convexHull2d';
 import { computeFootprint } from '../geometry/computeFootprint';
@@ -12,7 +13,7 @@ import { generateUnionedLineRaftMesh } from '../geometry/generateUnionedLineRaft
 import { generateChamferedBeam } from '../geometry/generateChamferedBeam';
 import { generatePerimeterWall } from '../geometry/generatePerimeterWall';
 import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWallManual';
-import type { SupportBaseCircle } from '../RaftTypes';
+import { collectRaftBaseCirclesByModel, fromRaftModelKey } from '../raftFootprintCircles';
 
 type EdgeKey = string;
 
@@ -144,6 +145,7 @@ export default function LineRaftRenderer({
   onModelPointerSelect,
 }: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
+  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
@@ -238,56 +240,23 @@ export default function LineRaftRenderer({
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'line') return null;
 
-    const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
-    for (const root of Object.values(supportState.roots)) {
-      if (excludeModelId && root.modelId === excludeModelId) continue;
-      if (root.modelId && excludedModelIdSet.has(root.modelId)) continue;
-      if (modelFilterId && root.modelId !== modelFilterId) continue;
-      const key = root.modelId || 'unknown';
-      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
-      rootsByModel.get(key)!.push(root);
-    }
-
-    // Include anchor roots for raft footprint
-    for (const anchor of Object.values(supportState.anchors)) {
-      if (excludeModelId && anchor.modelId === excludeModelId) continue;
-      if (anchor.modelId && excludedModelIdSet.has(anchor.modelId)) continue;
-      if (modelFilterId && anchor.modelId !== modelFilterId) continue;
-      const key = anchor.modelId || 'unknown';
-      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
-      rootsByModel.get(key)!.push({
-        id: anchor.id,
-        modelId: anchor.modelId,
-        transform: { pos: anchor.rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
-        diameter: anchor.rootBaseDiameter,
-        diskHeight: anchor.rootHeight,
-        coneHeight: 0,
-      });
-    }
-
-    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
-      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
-
-    const resolveTintStrength = (modelId: string) => {
-      if (!colorized) return 0;
-      if (selectedModelIdSet.has(modelId)) return 1;
-      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
-      if (hasSelectedModels) return 0;
-      return hoverized ? 0.5 : 1;
-    };
+    const rootsByModel = collectRaftBaseCirclesByModel({
+      roots: Object.values(supportState.roots),
+      anchors: Object.values(supportState.anchors),
+      kickstandRoots: Object.values(kickstandState.roots),
+    }, {
+      modelFilterId,
+      excludeModelId,
+      excludedModelIds: excludedModelIdSet,
+      fallbackModelKey: 'unknown',
+    });
 
     const meshes: Array<{ beamMeshes: THREE.Mesh[]; wallMesh: THREE.Mesh | null }> = [];
 
-    for (const [modelId, roots] of rootsByModel) {
-      if (roots.length === 0) continue;
-
-      const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
-
-      const circles: SupportBaseCircle[] = roots.map((r) => ({
-        x: r.transform.pos.x,
-        y: r.transform.pos.y,
-        r: r.diameter / 2,
-      }));
+    for (const [modelKey, circles] of rootsByModel) {
+      if (circles.length === 0) continue;
+      const modelId = fromRaftModelKey(modelKey, 'unknown') ?? modelKey;
+      const nodes2d = circles.map((circle) => new THREE.Vector2(circle.x, circle.y));
 
     // Footprint polygon wraps around the *outer edge* of all supports.
     // Important: the border is chamfered (bottom inset). To ensure the *bottom* of the chamfer
@@ -374,7 +343,7 @@ export default function LineRaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, raft, supportState, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, raft, supportState, kickstandState.roots, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
