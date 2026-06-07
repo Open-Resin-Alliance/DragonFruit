@@ -248,12 +248,15 @@ jobs:
       - name: Dispatch build-nightly workflow
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ github.head_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          BASE_BRANCH: ${{ github.base_ref }}
           RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           gh workflow run build-nightly.yml \
             --repo "${{ github.repository }}" \
-            --ref "$BRANCH" \
-            -f branch="$BRANCH" \
+            --ref "$BASE_BRANCH" \
+            -f branch="$HEAD_BRANCH" \
             -f skip_linux=true \
-            -f pr_run_id="$RUN_ID"
+            -f pr_run_id="$RUN_ID" \
+            -f pr_number="$PR_NUMBER"

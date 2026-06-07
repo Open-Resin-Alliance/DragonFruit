@@ -17,6 +17,10 @@ on:
         description: Workflow run ID of the PR check to download Linux artifacts from
         required: false
         type: string
+      pr_number:
+        description: PR number (for fork PR checkout)
+        required: false
+        type: string
   issue_comment:
     types:
       - created
@@ -139,7 +143,8 @@ jobs:
           gh workflow run build-nightly.yml \
             --repo "${{ github.repository }}" \
             --ref "$BASE_BRANCH" \
-            -f branch="$HEAD_BRANCH"
+            -f branch="$HEAD_BRANCH" \
+            -f pr_number="${{ github.event.issue.number }}"
 
       - name: Acknowledge activation
         if: steps.check_access.outputs.result == 'granted'
@@ -163,20 +168,26 @@ jobs:
       release_name: ${{ steps.meta.outputs.release_name }}
       version: ${{ steps.meta.outputs.version }}
       commit_hash: ${{ steps.meta.outputs.commit_hash }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
     steps:
       - name: Determine branch
         id: branch
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "branch=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
+          echo "branch=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine checkout ref
+        id: checkout_ref
+        run: |
+          if [[ -n "${{ inputs.pr_number }}" ]]; then
+            echo "ref=refs/pull/${{ inputs.pr_number }}/head" >> "$GITHUB_OUTPUT"
           else
-            echo "branch=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ steps.branch.outputs.branch }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.branch.outputs.branch }}
+          ref: ${{ steps.checkout_ref.outputs.ref }}
           submodules: recursive
           fetch-depth: 0
 
@@ -186,6 +197,7 @@ jobs:
         run: |
           version="$(node -p "require('./package.json').version")"
           commit_hash="$(git rev-parse --short HEAD)"
+          commit_sha="$(git rev-parse HEAD)"
           branch_name="${{ steps.branch.outputs.branch }}"
 
           # Sanitize branch name for tags / filenames
@@ -219,6 +231,7 @@ jobs:
           echo "release_name=${human_name}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
 
   # ── Fetch Linux artifacts from PR check run ────────────────────────────
   fetch-linux-artifacts:
@@ -473,17 +486,19 @@ jobs:
         uses: actions/github-script@v7
         env:
           TAG_NAME: ${{ needs.derive.outputs.release_tag }}
+          COMMIT_SHA: ${{ needs.derive.outputs.commit_sha }}
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const tag = process.env.TAG_NAME;
+            const sha = process.env.COMMIT_SHA;
 
             await github.rest.git.createRef({
               owner,
               repo,
               ref: `refs/tags/${tag}`,
-              sha: context.sha
+              sha
             });
 
       - name: Publish nightly prerelease
@@ -503,6 +518,6 @@ jobs:
             ⚠️ This is an automated pre-release built from a feature branch. It is intended for testing purposes only.
           prerelease: true
           draft: false
-          target_commitish: ${{ needs.derive.outputs.branch }}
+          target_commitish: ${{ needs.derive.outputs.commit_sha }}
           files: |
             release-assets/**/*
