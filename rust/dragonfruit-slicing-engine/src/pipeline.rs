@@ -9,7 +9,10 @@ use crate::engine::SlicerV3Error;
 use crate::geometry::Triangle;
 use crate::index::LayerIndex;
 use crate::metrics::SlicingPerfV3;
-use crate::raster::{rasterize_layer_rle, rasterize_layer_with_stats};
+use crate::raster::{
+    rasterize_layer_rle, rasterize_layer_with_stats, recompute_layer_stats_from_rle,
+};
+use crate::rle::{RleAccum, RleRun};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3, SliceProgressPhaseV3,
     SliceProgressUpdateV3,
@@ -25,8 +28,19 @@ pub fn return_mask_to_pool(mask: Vec<u8>) {
     if mask.is_empty() {
         return;
     }
+    // Large masks (≥32 MB, i.e. full-frame 8K–12K layers) are allocated via OS
+    // mmap and their physical pages are returned to the OS promptly when the Vec
+    // is dropped. Capping the pool at 4 for these prevents the pool from holding
+    // 16 × 59 MB = 944 MB of idle buffers for the lifetime of a job. A pool of
+    // 4 is still enough to satisfy raster worker recycling (effective parallelism
+    // at 12K is ~2–3×, so at most 2–3 masks are recycled per cycle).
+    let max_pool = if mask.len() >= 32 * 1024 * 1024 {
+        4
+    } else {
+        16
+    };
     if let Ok(mut pool) = MASK_POOL.get_or_init(|| Mutex::new(Vec::new())).lock() {
-        if pool.len() < 16 {
+        if pool.len() < max_pool {
             // Keep the capacity, don't drop
             pool.push(mask);
         }
@@ -43,6 +57,229 @@ pub fn get_recycled_mask(size: usize) -> Vec<u8> {
         }
     }
     vec![0u8; size]
+}
+
+fn merge_rle_max(lhs_runs: &[RleRun], rhs_runs: &[RleRun]) -> Vec<RleRun> {
+    let mut out = RleAccum::new();
+    let mut lhs_index = 0usize;
+    let mut rhs_index = 0usize;
+    let mut lhs_remaining = 0u32;
+    let mut rhs_remaining = 0u32;
+    let mut lhs_value = 0u8;
+    let mut rhs_value = 0u8;
+
+    loop {
+        if lhs_remaining == 0 {
+            if let Some(run) = lhs_runs.get(lhs_index) {
+                lhs_remaining = run.length;
+                lhs_value = run.value;
+                lhs_index += 1;
+            }
+        }
+
+        if rhs_remaining == 0 {
+            if let Some(run) = rhs_runs.get(rhs_index) {
+                rhs_remaining = run.length;
+                rhs_value = run.value;
+                rhs_index += 1;
+            }
+        }
+
+        if lhs_remaining == 0 && rhs_remaining == 0 {
+            break;
+        }
+
+        let chunk = match (lhs_remaining, rhs_remaining) {
+            (0, rhs) => rhs,
+            (lhs, 0) => lhs,
+            (lhs, rhs) => lhs.min(rhs),
+        };
+        out.push_run(chunk, lhs_value.max(rhs_value));
+
+        if lhs_remaining > 0 {
+            lhs_remaining -= chunk;
+            if lhs_remaining == 0 {
+                lhs_value = 0;
+            }
+        }
+        if rhs_remaining > 0 {
+            rhs_remaining -= chunk;
+            if rhs_remaining == 0 {
+                rhs_value = 0;
+            }
+        }
+    }
+
+    out.finish()
+}
+
+fn compute_rle_max_basic_stats(
+    lhs_runs: &[RleRun],
+    rhs_runs: &[RleRun],
+    width: usize,
+    height: usize,
+    pixel_area_mm2: f64,
+) -> LayerAreaStatsV3 {
+    let mut stats = LayerAreaStatsV3::default();
+    if width == 0 || height == 0 {
+        return stats;
+    }
+
+    let total_pixels = width.saturating_mul(height);
+    let mut lhs_index = 0usize;
+    let mut rhs_index = 0usize;
+    let mut lhs_remaining = 0u32;
+    let mut rhs_remaining = 0u32;
+    let mut lhs_value = 0u8;
+    let mut rhs_value = 0u8;
+    let mut pos = 0usize;
+    let mut any_non_zero = false;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+
+    loop {
+        if lhs_remaining == 0 {
+            if let Some(run) = lhs_runs.get(lhs_index) {
+                lhs_remaining = run.length;
+                lhs_value = run.value;
+                lhs_index += 1;
+            }
+        }
+
+        if rhs_remaining == 0 {
+            if let Some(run) = rhs_runs.get(rhs_index) {
+                rhs_remaining = run.length;
+                rhs_value = run.value;
+                rhs_index += 1;
+            }
+        }
+
+        if lhs_remaining == 0 && rhs_remaining == 0 {
+            break;
+        }
+
+        let chunk = match (lhs_remaining, rhs_remaining) {
+            (0, rhs) => rhs,
+            (lhs, 0) => lhs,
+            (lhs, rhs) => lhs.min(rhs),
+        };
+        let out_value = lhs_value.max(rhs_value);
+
+        if out_value > 0 {
+            any_non_zero = true;
+            let chunk_len = (chunk as usize).min(total_pixels.saturating_sub(pos));
+            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(chunk_len as u32);
+
+            let mut cur = pos;
+            let end = pos + chunk_len;
+            while cur < end {
+                let row = cur / width;
+                let col = cur % width;
+                let take = (end - cur).min(width - col);
+                min_x = min_x.min(col);
+                max_x = max_x.max(col + take - 1);
+                min_y = min_y.min(row);
+                max_y = max_y.max(row);
+                cur += take;
+            }
+        }
+
+        pos = pos.saturating_add(chunk as usize);
+
+        if lhs_remaining > 0 {
+            lhs_remaining -= chunk;
+            if lhs_remaining == 0 {
+                lhs_value = 0;
+            }
+        }
+        if rhs_remaining > 0 {
+            rhs_remaining -= chunk;
+            if rhs_remaining == 0 {
+                rhs_value = 0;
+            }
+        }
+    }
+
+    if !any_non_zero {
+        return stats;
+    }
+
+    let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+    stats.total_solid_area_mm2 = total_area;
+    stats.largest_area_mm2 = total_area;
+    stats.smallest_area_mm2 = total_area;
+    stats.area_count = 1;
+    stats.min_x = min_x as i32;
+    stats.min_y = min_y as i32;
+    stats.max_x = max_x as i32;
+    stats.max_y = max_y as i32;
+    stats
+}
+
+fn encode_zero_rle(width: usize, height: usize) -> Vec<RleRun> {
+    let mut out = RleAccum::new();
+    crate::rle::emit_zero_rows(&mut out, height, width);
+    out.finish()
+}
+
+fn rasterize_layer_rle_with_support_split(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_candidates: &[usize],
+    layer: u32,
+    compute_area_stats: bool,
+    model_triangle_count: usize,
+) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
+    let mut model_layer_indices = Vec::with_capacity(layer_candidates.len());
+    let mut support_layer_indices = Vec::with_capacity(layer_candidates.len());
+    for &candidate in layer_candidates {
+        if candidate < model_triangle_count {
+            model_layer_indices.push(candidate);
+        } else {
+            support_layer_indices.push(candidate);
+        }
+    }
+
+    if support_layer_indices.is_empty() {
+        let (runs, stats) =
+            rasterize_layer_rle(job, triangles, layer_candidates, layer, compute_area_stats);
+        return (runs, None, stats);
+    }
+
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let pixel_area_mm2 = ((job.build_width_mm as f64)
+        / (job.effective_render_width_px().max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+
+    let model_runs = if model_layer_indices.is_empty() {
+        encode_zero_rle(width, height)
+    } else {
+        rasterize_layer_rle(job, triangles, &model_layer_indices, layer, false).0
+    };
+
+    let (support_runs, support_stats) = rasterize_layer_rle(
+        job,
+        triangles,
+        &support_layer_indices,
+        layer,
+        compute_area_stats,
+    );
+
+    if model_layer_indices.is_empty() {
+        return (model_runs, Some(support_runs), support_stats);
+    }
+
+    let stats = if compute_area_stats {
+        let merged_runs = merge_rle_max(&model_runs, &support_runs);
+        recompute_layer_stats_from_rle(&merged_runs, width, height, pixel_area_mm2, true)
+    } else {
+        compute_rle_max_basic_stats(&model_runs, &support_runs, width, height, pixel_area_mm2)
+    };
+
+    (model_runs, Some(support_runs), stats)
 }
 
 fn encode_uniform_png_cached(
@@ -110,42 +347,55 @@ fn cap_concurrency_for_mask_bytes(
         capped = capped.min(allowed);
     }
 
-    // Safety-first caps for very large layers (e.g., 7,680x7,680 ~= 56.25 MB/mask).
-    // These avoid simultaneous large allocations across many workers.
+    // Concurrency caps for large raw-mask layers.  The goal is to keep peak
+    // raster-buffer memory (max_concurrent × bytes_per_mask) reasonable while
+    // still saturating available cores.
+    //
+    // In streaming 3DAA mode the consumer callback (topology sweep + BFS dispatch)
+    // frees each mask quickly, but the pump processes layers sequentially, so
+    // measured avg-parallelism at 8K–12K is typically 2–3× even with 8 workers.
+    // Capping at 4 for the largest frames captures the same effective throughput
+    // while halving the peak in-flight mask memory:
+    //
+    // Rough peak: (max_concurrent + buffer) × bytes_per_mask
+    //   48 MB × (4+4) = 384 MB  (was 8+8 = 768 MB)
+    //   59 MB × (4+4) = 472 MB  (was 8+8 = 944 MB)
+    //   74 MB × (4+4) = 592 MB  (was 8+8 = 1184 MB)
     if budget_override.is_none() {
         if bytes_per_mask >= 48 * 1024 * 1024 {
-            capped = capped.min(1);
-        } else if bytes_per_mask >= 24 * 1024 * 1024 {
-            capped = capped.min(2);
-        } else if bytes_per_mask >= 12 * 1024 * 1024 {
+            // 8K–12K class: pump-bound pipeline makes avg effective parallelism
+            // ~2–3×, so 4 workers is more than enough to saturate the rasteriser.
+            // This halves the raster-phase mask memory (was 8+8=16 masks × 59 MB).
             capped = capped.min(4);
-        }
-    }
-
-    // In streaming mode, downstream encode work can also retain large buffers.
-    // Keep raster producers tighter to prevent queueing huge masks.
-    if streaming_raw_mask_sink {
-        if budget_override.is_none() {
-            if bytes_per_mask >= 48 * 1024 * 1024 {
-                capped = capped.min(2);
-            } else if bytes_per_mask >= 24 * 1024 * 1024 {
-                capped = capped.min(4);
-            } else if bytes_per_mask >= 12 * 1024 * 1024 {
-                capped = capped.min(8);
-            }
+        } else if bytes_per_mask >= 24 * 1024 * 1024 {
+            capped = capped.min(6);
+        } else if bytes_per_mask >= 12 * 1024 * 1024 {
+            capped = capped.min(8);
         }
     }
 
     capped.max(1)
 }
 
-fn choose_streaming_buffer_depth_for_mask_bytes(layer_pixels_len: usize) -> usize {
+fn choose_streaming_buffer_depth_for_mask_bytes(
+    layer_pixels_len: usize,
+    max_concurrent: usize,
+) -> usize {
     let bytes_per_mask = layer_pixels_len;
-    if bytes_per_mask >= 24 * 1024 * 1024 {
-        // For giant layers (e.g., 16K-class), keep exactly one queued mask.
-        1
+    if let Ok(v) = std::env::var("DF_V3_STREAMING_BUFFER_DEPTH") {
+        if let Ok(parsed) = v.parse::<usize>() {
+            return parsed.clamp(1, 32);
+        }
+    }
+    if bytes_per_mask >= 48 * 1024 * 1024 {
+        // 8K-12K-class: cap at 4 to match the reduced raster_concurrent cap.
+        // With raster_concurrent=4 and buffer=4, peak = 8 × 59 MB = 472 MB
+        // (down from 8+8=16 × 59 MB = 944 MB with the old caps).
+        max_concurrent.clamp(2, 4)
+    } else if bytes_per_mask >= 24 * 1024 * 1024 {
+        4
     } else {
-        2
+        4
     }
 }
 
@@ -157,7 +407,9 @@ pub fn render_layers_bounded(
     compute_area_stats: bool,
     emit_png_layers: bool,
     emit_raw_mask_layers: bool,
-    mut on_raw_mask_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
+    mut on_raw_mask_layer: Option<
+        &mut dyn FnMut(u32, Vec<u8>, LayerAreaStatsV3) -> Result<(), SlicerV3Error>,
+    >,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -191,7 +443,7 @@ pub fn render_layers_bounded(
     // can use a generous buffer matching render_layers_rle.  Streaming raw
     // masks need a tight buffer to avoid accumulating 56MB masks.
     let buffer = if streaming_raw_mask_sink {
-        choose_streaming_buffer_depth_for_mask_bytes(layer_pixels)
+        choose_streaming_buffer_depth_for_mask_bytes(layer_pixels, max_concurrent)
     } else if use_rle_png_path {
         (max_concurrent * 4).clamp(4, 64)
     } else {
@@ -203,7 +455,7 @@ pub fn render_layers_bounded(
     let png_ns = AtomicU64::new(0);
     let layer_pixels_len =
         (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
-    let binary_png_expected = job.anti_aliasing_level.trim() == "Off";
+    let binary_png_expected = job.produces_binary_output();
 
     let empty_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
     let full_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
@@ -427,7 +679,7 @@ pub fn render_layers_bounded(
                             }
                             (None, Some(mask)) => {
                                 if let Some(ref mut sink) = on_raw_mask_layer {
-                                    if let Err(err) = sink(next, mask) {
+                                    if let Err(err) = sink(next, mask, stats.clone()) {
                                         pipeline_error = Err(err);
                                         break;
                                     }
@@ -489,12 +741,11 @@ pub fn render_layers_rle(
     triangles: &[Triangle],
     layer_index: &LayerIndex,
     compute_area_stats: bool,
-    mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    support_split_model_triangle_count: Option<usize>,
+    mut on_rle_layer: impl FnMut(u32, Vec<RleRun>, Option<Vec<RleRun>>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
-    use crate::rle::RleRun;
-
     let render_wall_start = std::time::Instant::now();
     let total_layers = job.total_layers;
     let max_concurrent = choose_max_concurrent();
@@ -503,9 +754,11 @@ pub fn render_layers_rle(
 
     let raster_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
+    let support_split_model_triangle_count =
+        support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
-        Result<(u32, Vec<RleRun>, LayerAreaStatsV3), SlicerV3Error>,
+        Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
     >(buffer);
 
     let mut pipeline_error: Result<(), SlicerV3Error> = Ok(());
@@ -514,13 +767,16 @@ pub fn render_layers_rle(
     rayon::in_place_scope(|s| {
         s.spawn(|_| {
             let produce = |tx: std::sync::mpsc::SyncSender<
-                Result<(u32, Vec<RleRun>, LayerAreaStatsV3), SlicerV3Error>,
+                Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
             >| {
                 (0..total_layers)
                     .into_par_iter()
                     .for_each_with(tx, |tx, layer| {
                         let result =
-                            (|| -> Result<(u32, Vec<RleRun>, LayerAreaStatsV3), SlicerV3Error> {
+                            (|| -> Result<
+                                (u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3),
+                                SlicerV3Error,
+                            > {
                                 if cancel_flag
                                     .map(|flag| flag.load(Ordering::Relaxed))
                                     .unwrap_or(false)
@@ -530,19 +786,34 @@ pub fn render_layers_rle(
 
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
-                                let (runs, stats) = rasterize_layer_rle(
-                                    job,
-                                    triangles,
-                                    layer_candidates,
-                                    layer,
-                                    compute_area_stats,
-                                );
+                                let (runs, support_runs, stats) =
+                                    if let Some(model_triangle_count) =
+                                        support_split_model_triangle_count
+                                    {
+                                        rasterize_layer_rle_with_support_split(
+                                            job,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                            model_triangle_count,
+                                        )
+                                    } else {
+                                        let (runs, stats) = rasterize_layer_rle(
+                                            job,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                        );
+                                        (runs, None, stats)
+                                    };
                                 raster_ns.fetch_add(
                                     raster_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,
                                 );
 
-                                Ok((layer, runs, stats))
+                                Ok((layer, runs, support_runs, stats))
                             })();
                         let _ = tx.send(result);
                     });
@@ -554,7 +825,7 @@ pub fn render_layers_rle(
             }
         });
 
-        let mut pending: Vec<Option<(Vec<RleRun>, LayerAreaStatsV3)>> =
+        let mut pending: Vec<Option<(Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3)>> =
             Vec::with_capacity(total_layers as usize);
         pending.resize_with(total_layers as usize, || None);
         let mut next = 0u32;
@@ -565,8 +836,8 @@ pub fn render_layers_rle(
             }
             match msg {
                 Err(e) => pipeline_error = Err(e),
-                Ok((layer, runs, stats)) => {
-                    pending[layer as usize] = Some((runs, stats));
+                Ok((layer, runs, support_runs, stats)) => {
+                    pending[layer as usize] = Some((runs, support_runs, stats));
                     // Report on arrival so progress reflects actual work done,
                     // not just the contiguous drain position.
                     let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
@@ -579,10 +850,11 @@ pub fn render_layers_rle(
                     }
 
                     while next < total_layers {
-                        let Some((runs, stats)) = pending[next as usize].take() else {
+                        let Some((runs, support_runs, stats)) = pending[next as usize].take()
+                        else {
                             break;
                         };
-                        if let Err(e) = on_rle_layer(next, runs) {
+                        if let Err(e) = on_rle_layer(next, runs, support_runs) {
                             pipeline_error = Err(e);
                             break;
                         }
@@ -628,8 +900,9 @@ pub fn render_layers_rle_encoded(
     triangles: &[Triangle],
     layer_index: &LayerIndex,
     compute_area_stats: bool,
+    support_split_model_triangle_count: Option<usize>,
     encode_fn: std::sync::Arc<
-        dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
+        dyn Fn(u32, &[RleRun], Option<&[RleRun]>) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
     >,
     mut on_encoded_layer: impl FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
@@ -643,6 +916,8 @@ pub fn render_layers_rle_encoded(
     let raster_ns = AtomicU64::new(0);
     let encode_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
+    let support_split_model_triangle_count =
+        support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
@@ -671,20 +946,35 @@ pub fn render_layers_rle_encoded(
 
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
-                                let (runs, stats) = rasterize_layer_rle(
-                                    job,
-                                    triangles,
-                                    layer_candidates,
-                                    layer,
-                                    compute_area_stats,
-                                );
+                                let (runs, support_runs, stats) =
+                                    if let Some(model_triangle_count) =
+                                        support_split_model_triangle_count
+                                    {
+                                        rasterize_layer_rle_with_support_split(
+                                            job,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                            model_triangle_count,
+                                        )
+                                    } else {
+                                        let (runs, stats) = rasterize_layer_rle(
+                                            job,
+                                            triangles,
+                                            layer_candidates,
+                                            layer,
+                                            compute_area_stats,
+                                        );
+                                        (runs, None, stats)
+                                    };
                                 raster_ns.fetch_add(
                                     raster_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,
                                 );
 
                                 let encode_start = std::time::Instant::now();
-                                let bytes = encode_fn(layer, &runs)?;
+                                let bytes = encode_fn(layer, &runs, support_runs.as_deref())?;
                                 encode_ns.fetch_add(
                                     encode_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,

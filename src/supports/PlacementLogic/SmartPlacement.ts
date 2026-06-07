@@ -207,7 +207,7 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
     const { mesh } = input;
     const settings = getSettings();
     const shaftRadius = settings.shaft.diameterMm / 2;
-    const collisionRadius = shaftRadius + 0.25;
+    const collisionRadius = shaftRadius + 0.8;
     const standard = calculateStandardPlacement(input);
     if (standard.error === 'ANGLE_TOO_STEEP') {
         return standard;

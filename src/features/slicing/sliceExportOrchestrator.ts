@@ -2,10 +2,11 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
-import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
+import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
   isNativeSlicerAvailable,
   sliceSolidAndEncodeWithNativeSlicerToTempPath,
+  type AntiAliasingLevel,
   type NativeSlicerPerfMetrics,
   type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
@@ -14,7 +15,7 @@ import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/plugi
 
 function resolvePngCompressionStrategy(
   mode: PngCompressionStrategy,
-  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x',
+  antiAliasingLevel: AntiAliasingLevel,
   outputUsesPngLayers: boolean,
 ): 'fastest' | 'balanced' | 'smallest' | 'optimal' {
   if (!outputUsesPngLayers) {
@@ -161,8 +162,30 @@ export type SliceExportOrchestratorOptions = {
   materialProfile: MaterialProfile;
   filenameBase: string;
   outputPath?: string | null;
-  antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
+  antiAliasingLevel?: AntiAliasingLevel;
+  antiAliasingMode?: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  blurBrushRadiusPx?: number;
+  blurBrushKernel?: 'box' | 'gaussian';
+  blurBrushSigma?: number;
+  blurBrushSigmaX?: number;
+  blurBrushSigmaY?: number;
+  zBlurRadiusLayers?: number;
+  zBlurKernel?: 'box' | 'gaussian';
+  zBlurSigma?: number;
+  zBlendLookBack?: number;
+  zBlendFadePx?: number;
+  zBlendAutoFade?: boolean;
+  zBlendMinimumAlphaPercent?: number;
+  zBlendMaxAlphaPercent?: number;
+  zBlendCustomLut?: number[];
+  zaaKernel?: 'perturb';
+  zaaPattern?: 'uniform' | 'halton' | 'base2';
+  zaaDuplicateZ?: boolean;
   minimumAaAlphaPercentOverride?: number;
+  aaOnSupports?: boolean;
+  ditherEnabled?: boolean;
+  ditherBitDepth?: number;
+  ditherDeviceGamma?: number;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
   abortSignal?: AbortSignal;
@@ -233,9 +256,20 @@ export type SliceExportResult = {
       pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
       containerCompressionLevel: number;
       bvhAccelerationEnabled: boolean;
-      antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+      antiAliasingLevel: AntiAliasingLevel;
+      antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+      blurBrushRadiusPx: number;
+      blurBrushKernel: 'box' | 'gaussian';
+      blurBrushSigmaX: number;
+      blurBrushSigmaY: number;
+      zBlurRadiusLayers: number;
+      zBlurKernel: 'box' | 'gaussian';
+      zBlurSigma: number;
       aaOnSupports: boolean;
       minimumAaAlphaPercent: number;
+      zaaKernel?: 'perturb';
+      zaaPattern?: 'uniform' | 'halton' | 'base2';
+      zaaDuplicateZ?: boolean;
       modelTriangleCount: number;
       triangleFloatCount: number;
       buildWidthMm: number;
@@ -396,6 +430,36 @@ function mergeMetadataOverridesIntoMetadata(
   } catch {
     return metadataJson;
   }
+}
+
+function resolveEffectiveDitherPolicy(options: SliceExportOrchestratorOptions): {
+  ditherEnabled: boolean;
+  ditherBitDepth: number;
+  ditherDeviceGamma: number;
+} {
+  const materialDitherEnabled = options.materialProfile.antiAliasingSettings?.ditherEnabled ?? false;
+  const materialDitherBitDepth = options.materialProfile.antiAliasingSettings?.ditherBitDepth ?? 3;
+  const materialDitherGamma = options.materialProfile.antiAliasingSettings?.ditherDeviceGamma ?? 3.0;
+
+  const configuredDitherEnabled = options.ditherEnabled ?? materialDitherEnabled;
+  const configuredDitherBitDepth = options.ditherBitDepth ?? materialDitherBitDepth;
+  const configuredDitherGamma = options.ditherDeviceGamma ?? materialDitherGamma;
+
+  const printerBitDepthRaw = Number(options.printerProfile.bitDepth?.bits);
+  const printerBitDepth = Number.isFinite(printerBitDepthRaw)
+    ? Math.round(printerBitDepthRaw)
+    : null;
+
+  const hasKnownNon8BitDisplay = printerBitDepth != null && printerBitDepth > 0 && printerBitDepth !== 8;
+  const derivedBitDepth = (printerBitDepth != null && printerBitDepth > 0)
+    ? Math.max(2, Math.min(7, printerBitDepth))
+    : Math.max(2, Math.min(7, Math.round(configuredDitherBitDepth)));
+
+  return {
+    ditherEnabled: hasKnownNon8BitDisplay ? true : configuredDitherEnabled,
+    ditherBitDepth: derivedBitDepth,
+    ditherDeviceGamma: Math.max(0.5, Math.min(4.0, Number(configuredDitherGamma))),
+  };
 }
 
 /**
@@ -621,11 +685,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
   options.onProgress?.(0, solidMesh.totalLayers, 'Staging');
 
+  const perfSettings = getSavedSlicingPerformanceSettings();
+
   const resolvedPngStrategy = resolvePngCompressionStrategy(
     solidMesh.pngCompressionStrategy,
     options.antiAliasingLevel ?? 'Off',
     format.layerDataKind === 'png',
   );
+
+  const effectiveDitherPolicy = resolveEffectiveDitherPolicy(options);
 
   const nativeJob = {
     outputFormat: format.outputFormat,
@@ -646,7 +714,24 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     pngCompressionStrategy: resolvedPngStrategy,
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
-    aaOnSupports: true,
+    antiAliasingMode: options.antiAliasingMode ?? 'Blur',
+    blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
+    blurBrushKernel: options.blurBrushKernel ?? 'gaussian',
+    blurBrushSigmaX: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaX ?? options.blurBrushSigma ?? 0.5))),
+    blurBrushSigmaY: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaY ?? options.blurBrushSigma ?? 0.5))),
+    zBlurRadiusLayers: Math.max(0, Math.min(8, Math.round(options.zBlurRadiusLayers ?? 0))),
+    zBlurKernel: options.zBlurKernel ?? 'box',
+    zBlurSigma: Math.max(0.05, Math.min(16, Number(options.zBlurSigma ?? 0.5))),
+    zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
+    zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
+    zBlendAutoFade: options.zBlendAutoFade !== false,
+    zBlendMinimumAlphaPercent: Math.max(0, Math.min(100, options.zBlendMinimumAlphaPercent ?? 0)),
+    zBlendMaxAlphaPercent: Math.max(0, Math.min(100, options.zBlendMaxAlphaPercent ?? 90)),
+    zBlendCustomLut: options.zBlendCustomLut,
+    zaaKernel: options.zaaKernel,
+    zaaPattern: options.zaaPattern,
+    zaaDuplicateZ: options.zaaDuplicateZ,
+    aaOnSupports: options.aaOnSupports ?? (perfSettings.aaOnSupportsExperimental === true),
     minimumAaAlphaPercent: Math.max(
       0,
       Math.min(
@@ -658,6 +743,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     ),
     mirrorX: solidMesh.mirrorX,
     mirrorY: solidMesh.mirrorY,
+    ditherEnabled: effectiveDitherPolicy.ditherEnabled,
+    ditherBitDepth: effectiveDitherPolicy.ditherBitDepth,
+    ditherDeviceGamma: effectiveDitherPolicy.ditherDeviceGamma,
     modelTriangleCount: solidMesh.modelTriangleCount,
     containerCompressionLevel: resolveContainerCompressionLevel(resolvedPngStrategy),
     buildWidthMm: solidMesh.buildWidthMm,
@@ -684,6 +772,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   logDebug('Native slicing starting…');
   logDebug('Native slicing AA settings', {
     antiAliasingLevel: nativeJob.antiAliasingLevel,
+    antiAliasingMode: nativeJob.antiAliasingMode,
+    blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+    zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
+    zaaKernel: nativeJob.zaaKernel,
+    zaaPattern: nativeJob.zaaPattern,
+    zaaDuplicateZ: nativeJob.zaaDuplicateZ,
   });
 
   let progressTotal = solidMesh.totalLayers;
@@ -764,8 +858,19 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         containerCompressionLevel: nativeJob.containerCompressionLevel,
         bvhAccelerationEnabled: nativeJob.bvhAccelerationEnabled,
         antiAliasingLevel: nativeJob.antiAliasingLevel,
+        antiAliasingMode: nativeJob.antiAliasingMode,
+        blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+        blurBrushKernel: nativeJob.blurBrushKernel,
+        blurBrushSigmaX: nativeJob.blurBrushSigmaX,
+        blurBrushSigmaY: nativeJob.blurBrushSigmaY,
+        zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
+        zBlurKernel: nativeJob.zBlurKernel,
+        zBlurSigma: nativeJob.zBlurSigma,
         aaOnSupports: nativeJob.aaOnSupports,
         minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
+        zaaKernel: nativeJob.zaaKernel,
+        zaaPattern: nativeJob.zaaPattern,
+        zaaDuplicateZ: nativeJob.zaaDuplicateZ,
         modelTriangleCount: nativeJob.modelTriangleCount,
         triangleFloatCount: nativeJob.trianglesXYZ.length,
         buildWidthMm: nativeJob.buildWidthMm,

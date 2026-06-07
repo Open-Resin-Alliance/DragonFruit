@@ -9,6 +9,8 @@
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod benchmark;
+pub mod binary_mask;
+pub mod dither;
 pub mod encode;
 pub mod encoders;
 pub mod engine;
@@ -19,6 +21,7 @@ pub mod pipeline;
 pub mod raster;
 pub mod rle;
 pub mod types;
+pub mod zaa;
 
 pub use engine::{slice_with_progress_v3, SlicerV3Error};
 pub use metrics::SlicingPerfV3;

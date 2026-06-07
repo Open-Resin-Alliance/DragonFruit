@@ -31,6 +31,21 @@ export interface SDFQuery {
     nearestPoint: THREE.Vector3;
 }
 
+interface MeshBVHClosestPointTarget {
+    point: THREE.Vector3;
+    distance: number;
+    faceIndex: number;
+}
+
+interface MeshBVHLike {
+    closestPointToPoint(
+        point: THREE.Vector3,
+        target: MeshBVHClosestPointTarget,
+        minThreshold?: number,
+        maxThreshold?: number,
+    ): MeshBVHClosestPointTarget | null;
+}
+
 // ---------- Helpers ----------
 
 function quantize(v: number, cellSize: number): number {
@@ -53,8 +68,9 @@ export class SDFCache {
 
     private readonly mesh: THREE.Mesh;
     /** BVH instance from three-mesh-bvh (geometry.boundsTree) */
-    private readonly bvh: any;
+    private readonly bvh: MeshBVHLike;
     private inverseMatrix = new THREE.Matrix4();
+    private readonly worldBounds = new THREE.Box3();
     private worldScale = 1;
     private readonly cache = new Map<number, number>();
 
@@ -74,7 +90,7 @@ export class SDFCache {
         this.cellSize = opts?.cellSize ?? 0.5;
         this.mesh = mesh;
 
-        const geom = mesh.geometry as any;
+        const geom = mesh.geometry as THREE.BufferGeometry & { boundsTree?: MeshBVHLike };
         this.bvh = geom.boundsTree;
         if (!this.bvh) {
             throw new Error('SDFCache: mesh geometry has no boundsTree (BVH). Ensure BVH is computed before constructing the cache.');
@@ -89,6 +105,16 @@ export class SDFCache {
         const scale = new THREE.Vector3();
         this.mesh.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
         this.worldScale = (scale.x + scale.y + scale.z) / 3;
+
+        const geom = this.mesh.geometry;
+        if (!geom.boundingBox) {
+            geom.computeBoundingBox();
+        }
+        if (geom.boundingBox) {
+            this.worldBounds.copy(geom.boundingBox).applyMatrix4(this.mesh.matrixWorld);
+        } else {
+            this.worldBounds.makeEmpty();
+        }
     }
 
     /**
@@ -129,16 +155,92 @@ export class SDFCache {
         const cached = this.cache.get(key);
         if (cached !== undefined) return cached;
 
+        const dist = this._computeSignedDistanceAtQuantizedCell(qx, qy, qz);
+        this.cache.set(key, dist);
+        return dist;
+    }
+
+    /**
+     * Returns the signed distance if this cell might be within `maxDistance`
+     * of the mesh, otherwise returns Infinity without traversing the BVH.
+     *
+     * This is conservative: cells outside the mesh world AABB expanded by
+     * `maxDistance` cannot be close enough to affect routing clearance or
+     * clearance penalties. Cells inside the actual mesh AABB still use the
+     * full signed distance path, preserving interior-blocking behavior.
+     */
+    distanceAtWithin(wx: number, wy: number, wz: number, maxDistance: number): number {
+        const cs = this.cellSize;
+        const qx = quantize(wx, cs);
+        const qy = quantize(wy, cs);
+        const qz = quantize(wz, cs);
+        const key = cellKey(qx, qy, qz);
+
+        const cached = this.cache.get(key);
+        if (cached !== undefined) return cached;
+
+        const cX = qx * cs;
+        const cY = qy * cs;
+        const cZ = qz * cs;
+        if (!this._expandedWorldBoundsContains(cX, cY, cZ, maxDistance)) {
+            return Infinity;
+        }
+
+        const canBeInterior = this._expandedWorldBoundsContains(cX, cY, cZ, 0);
+        const dist = this._computeSignedDistanceAtQuantizedCell(
+            qx,
+            qy,
+            qz,
+            canBeInterior ? Infinity : maxDistance,
+        );
+        if (canBeInterior || dist !== Infinity) {
+            this.cache.set(key, dist);
+        }
+        return dist;
+    }
+
+    private _expandedWorldBoundsContains(x: number, y: number, z: number, margin: number): boolean {
+        if (this.worldBounds.isEmpty()) return true;
+        return x >= this.worldBounds.min.x - margin
+            && x <= this.worldBounds.max.x + margin
+            && y >= this.worldBounds.min.y - margin
+            && y <= this.worldBounds.max.y + margin
+            && z >= this.worldBounds.min.z - margin
+            && z <= this.worldBounds.max.z + margin;
+    }
+
+    private _segmentIntersectsExpandedWorldBounds(
+        ax: number, ay: number, az: number,
+        bx: number, by: number, bz: number,
+        margin: number,
+    ): boolean {
+        if (this.worldBounds.isEmpty()) return true;
+        const minX = Math.min(ax, bx);
+        const maxX = Math.max(ax, bx);
+        const minY = Math.min(ay, by);
+        const maxY = Math.max(ay, by);
+        const minZ = Math.min(az, bz);
+        const maxZ = Math.max(az, bz);
+        return maxX >= this.worldBounds.min.x - margin
+            && minX <= this.worldBounds.max.x + margin
+            && maxY >= this.worldBounds.min.y - margin
+            && minY <= this.worldBounds.max.y + margin
+            && maxZ >= this.worldBounds.min.z - margin
+            && minZ <= this.worldBounds.max.z + margin;
+    }
+
+    private _computeSignedDistanceAtQuantizedCell(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
+        const cs = this.cellSize;
         // Compute via BVH (local space)
         const cX = qx * cs;
         const cY = qy * cs;
         const cZ = qz * cs;
 
         this._localPoint.set(cX, cY, cZ).applyMatrix4(this.inverseMatrix);
-        const result = this.bvh.closestPointToPoint(this._localPoint, this._resultTarget);
+        const localMaxDistance = maxDistance === Infinity ? Infinity : maxDistance / Math.max(0.000001, this.worldScale);
+        const result = this.bvh.closestPointToPoint(this._localPoint, this._resultTarget, 0, localMaxDistance);
 
         if (!result) {
-            this.cache.set(key, Infinity);
             return Infinity;
         }
 
@@ -158,7 +260,6 @@ export class SDFCache {
             }
         }
 
-        this.cache.set(key, dist);
         return dist;
     }
 
@@ -251,6 +352,9 @@ export class SDFCache {
         const dz = bz - az;
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (len < 0.01) return this.distanceAt(ax, ay, az) < clearance;
+        if (!this._segmentIntersectsExpandedWorldBounds(ax, ay, az, bx, by, bz, clearance)) {
+            return false;
+        }
 
         const invLen = 1 / len;
         const ux = dx * invLen;

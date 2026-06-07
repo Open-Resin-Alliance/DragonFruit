@@ -43,6 +43,9 @@ hide:
         <span class="df-download-dropdown-label">Download Nightly</span>
         <span class="df-download-dropdown-sub" id="download-nightly-version">Fetching…</span>
       </a>
+      <button class="df-download-dropdown-item df-show-all-nightlies" id="show-all-nightlies">
+        <span class="df-download-dropdown-label">Show other versions…</span>
+      </button>
     </div>
   </div>
   <a class="md-button" href="./getting-started/installation/">View Docs</a>
@@ -52,4 +55,16 @@ hide:
 
 <p><a href="https://discord.com/invite/beFeTaPH6v">Join our Discord</a></p>
 
+</div>
+
+<div class="df-modal-overlay" id="nightly-modal-overlay" hidden>
+  <div class="df-modal" role="dialog" aria-modal="true" aria-labelledby="nightly-modal-title">
+    <div class="df-modal-header">
+      <h2 id="nightly-modal-title">Nightly Builds</h2>
+      <button class="df-modal-close" id="nightly-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="df-modal-body" id="nightly-modal-body">
+      <p class="df-modal-loading">Loading…</p>
+    </div>
+  </div>
 </div>

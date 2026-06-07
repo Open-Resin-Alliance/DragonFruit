@@ -538,7 +538,7 @@ impl FormatEncoder for AthenaPluginEncoder {
         &self,
         job: &SliceJobV3,
     ) -> Result<Option<Box<dyn RleStreamEncoder>>, SlicerV3Error> {
-        let binary_png = job.anti_aliasing_level.trim() == "Off";
+        let binary_png = job.produces_binary_output();
         let force_full_res_gray3_output = should_force_full_res_gray3_output(job);
         Ok(Some(Box::new(AthenaRleStreamEncoder {
             job: job.clone(),

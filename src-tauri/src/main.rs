@@ -5,6 +5,55 @@ mod network;
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
+
+fn default_blur_brush_radius_px() -> u32 {
+    1
+}
+
+fn default_blur_brush_kernel() -> String {
+    "gaussian".to_string()
+}
+
+fn default_blur_brush_sigma_x() -> f64 {
+    0.5
+}
+
+fn default_blur_brush_sigma_y() -> f64 {
+    0.5
+}
+
+fn default_z_blur_radius_layers() -> u32 {
+    0
+}
+
+fn default_z_blur_kernel() -> String {
+    "box".to_string()
+}
+
+fn default_z_blur_sigma() -> f64 {
+    0.5
+}
+
+fn default_anti_aliasing_mode() -> String {
+    "Blur".to_string()
+}
+
+fn default_z_blend_look_back() -> u32 {
+    2
+}
+
+fn default_z_blend_fade_px() -> u32 {
+    20
+}
+
+fn default_z_blend_max_alpha_percent() -> f32 {
+    90.0
+}
+
+fn default_dither_device_gamma() -> f64 {
+    3.0
+}
+
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -106,8 +155,43 @@ fn sweep_all_temp_artifacts() -> u32 {
     removed
 }
 
-fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SaveDialogFilterDef {
+    name: String,
+    extensions: Vec<String>,
+}
+
+fn build_save_dialog_with_filters(
+    suggested_name: &str,
+    custom_filters: Option<&[SaveDialogFilterDef]>,
+) -> rfd::FileDialog {
     let mut dialog = rfd::FileDialog::new().set_file_name(suggested_name);
+
+    if let Some(filters) = custom_filters {
+        for filter in filters {
+            let trimmed_name = filter.name.trim();
+            if trimmed_name.is_empty() {
+                continue;
+            }
+
+            let normalized_exts: Vec<String> = filter
+                .extensions
+                .iter()
+                .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
+                .filter(|ext| !ext.is_empty())
+                .collect();
+
+            if normalized_exts.is_empty() {
+                continue;
+            }
+
+            let ext_refs: Vec<&str> = normalized_exts.iter().map(String::as_str).collect();
+            dialog = dialog.add_filter(trimmed_name, &ext_refs);
+        }
+
+        return dialog;
+    }
 
     let maybe_ext = std::path::Path::new(suggested_name)
         .extension()
@@ -307,6 +391,22 @@ struct SliceJobMetadata {
     x_packing_mode: Option<String>,
     png_compression_strategy: String,
     anti_aliasing_level: String,
+    #[serde(default = "default_anti_aliasing_mode")]
+    anti_aliasing_mode: String,
+    #[serde(default = "default_blur_brush_radius_px")]
+    blur_brush_radius_px: u32,
+    #[serde(default = "default_blur_brush_kernel")]
+    blur_brush_kernel: String,
+    #[serde(default = "default_blur_brush_sigma_x", alias = "blur_brush_sigma")]
+    blur_brush_sigma_x: f64,
+    #[serde(default = "default_blur_brush_sigma_y")]
+    blur_brush_sigma_y: f64,
+    #[serde(default = "default_z_blur_radius_layers")]
+    z_blur_radius_layers: u32,
+    #[serde(default = "default_z_blur_kernel")]
+    z_blur_kernel: String,
+    #[serde(default = "default_z_blur_sigma")]
+    z_blur_sigma: f64,
     aa_on_supports: bool,
     #[serde(default = "default_minimum_aa_alpha_percent")]
     minimum_aa_alpha_percent: f32,
@@ -314,12 +414,43 @@ struct SliceJobMetadata {
     mirror_x: bool,
     #[serde(default)]
     mirror_y: bool,
+    #[serde(default = "default_z_blend_look_back")]
+    z_blend_look_back: u32,
+    #[serde(default = "default_z_blend_fade_px")]
+    z_blend_fade_px: u32,
+    #[serde(default)]
+    z_blend_auto_fade: bool,
+    #[serde(default)]
+    z_blend_minimum_alpha_percent: f32,
+    /// Maximum gray level (0–100 %) for z-blend gradient pixels at the inner boundary.
+    #[serde(default = "default_z_blend_max_alpha_percent")]
+    z_blend_max_alpha_percent: f32,
+    /// Optional custom grayscale cure LUT (256 u8 values).
+    ///
+    /// Used by 3DAA to override the linear cure-window ramp and by 2D Blur AA
+    /// to remap the post-blur grayscale output directly.
+    #[serde(default)]
+    z_blend_custom_lut: Option<Vec<u8>>,
+    #[serde(default)]
+    zaa_kernel: Option<String>,
+    #[serde(default)]
+    zaa_pattern: Option<String>,
+    #[serde(default)]
+    zaa_duplicate_z: Option<bool>,
+    #[serde(default)]
+    model_triangle_count: u32,
     container_compression_level: u8,
     build_width_mm: f32,
     build_depth_mm: f32,
     layer_height_mm: f32,
     total_layers: u32,
     export_thumbnail_png_base64: Option<String>,
+    #[serde(default)]
+    dither_enabled: bool,
+    #[serde(default)]
+    dither_bit_depth: Option<u32>,
+    #[serde(default = "default_dither_device_gamma")]
+    dither_device_gamma: f64,
     #[serde(default)]
     mesh_encoding: Option<String>,
     #[serde(default)]
@@ -336,6 +467,13 @@ struct NativeSlicerPerfMetrics {
     render_ns: u64,
     png_encode_ns: u64,
     archive_encode_ns: u64,
+    z_blend_backward_ns: u64,
+    z_blend_forward_ns: u64,
+    cross_blend_ns: u64,
+    cross_blend_touched_pixels: u64,
+    cross_blend_contributing_layers: u64,
+    post_blur_ns: u64,
+    support_merge_ns: u64,
     layers: u32,
 }
 
@@ -345,6 +483,8 @@ struct NativeSlicerRuntimeMetrics {
     pool_threads: u32,
     max_concurrent: u32,
     queue_buffer: u32,
+    daa_post_threads: u32,
+    daa_post_buffer_depth: u32,
     build_profile: String,
     artifact_dir: String,
     mesh_stage_dir: String,
@@ -507,6 +647,8 @@ struct NativeSliceTempPathResult {
 
 fn v3_runtime_metrics(
     output_path: &std::path::Path,
+    daa_post_threads: u32,
+    daa_post_buffer_depth: u32,
     metadata_parse_ns: u64,
     mesh_decode_ns: u64,
     artifact_metadata_ns: u64,
@@ -541,6 +683,8 @@ fn v3_runtime_metrics(
         pool_threads: hw_threads as u32,
         max_concurrent: max_concurrent as u32,
         queue_buffer: queue_buffer as u32,
+        daa_post_threads,
+        daa_post_buffer_depth,
         build_profile,
         artifact_dir,
         mesh_stage_dir,
@@ -1217,10 +1361,31 @@ async fn slice_solid_native_to_temp_path(
             x_packing_mode: meta.x_packing_mode.unwrap_or_else(|| "none".to_string()),
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
+            anti_aliasing_mode: meta.anti_aliasing_mode,
+            blur_brush_radius_px: meta.blur_brush_radius_px,
+            blur_brush_kernel: meta.blur_brush_kernel,
+            blur_brush_sigma_x: meta.blur_brush_sigma_x,
+            blur_brush_sigma_y: meta.blur_brush_sigma_y,
+            z_blur_radius_layers: meta.z_blur_radius_layers,
+            z_blur_kernel: meta.z_blur_kernel,
+            z_blur_sigma: meta.z_blur_sigma,
             aa_on_supports: meta.aa_on_supports,
+            model_triangle_count: meta.model_triangle_count,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
+            z_blend_look_back: meta.z_blend_look_back,
+            z_blend_fade_px: meta.z_blend_fade_px,
+            z_blend_auto_fade: meta.z_blend_auto_fade,
+            z_blend_minimum_alpha_percent: meta.z_blend_minimum_alpha_percent,
+            z_blend_max_alpha_percent: meta.z_blend_max_alpha_percent,
+            z_blend_custom_lut: meta.z_blend_custom_lut,
+            zaa_kernel: meta.zaa_kernel,
+            zaa_pattern: meta.zaa_pattern,
+            zaa_duplicate_z: meta.zaa_duplicate_z,
+            dither_enabled: meta.dither_enabled,
+            dither_bit_depth: meta.dither_bit_depth,
+            dither_device_gamma: meta.dither_device_gamma,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,
             build_depth_mm: meta.build_depth_mm,
@@ -1269,6 +1434,13 @@ async fn slice_solid_native_to_temp_path(
                 render_ns: perf_raw.render_ns,
                 png_encode_ns: perf_raw.png_encode_ns,
                 archive_encode_ns: perf_raw.archive_encode_ns,
+                z_blend_backward_ns: perf_raw.z_blend_backward_ns,
+                z_blend_forward_ns: perf_raw.z_blend_forward_ns,
+                cross_blend_ns: perf_raw.cross_blend_ns,
+                cross_blend_touched_pixels: perf_raw.cross_blend_touched_pixels,
+                cross_blend_contributing_layers: perf_raw.cross_blend_contributing_layers,
+                post_blur_ns: perf_raw.post_blur_ns,
+                support_merge_ns: perf_raw.support_merge_ns,
                 layers: perf_raw.layers,
             };
 
@@ -1282,6 +1454,8 @@ async fn slice_solid_native_to_temp_path(
             let wrapper_overhead_ns = wrapper_total_ns.saturating_sub(perf_raw.total_ns);
             let runtime = v3_runtime_metrics(
                 &path,
+                perf_raw.daa_post_threads,
+                perf_raw.daa_post_buffer_depth,
                 metadata_parse_ns,
                 mesh_decode_ns,
                 artifact_metadata_ns,
@@ -1659,6 +1833,8 @@ struct SavePrintFileFromPathArgs {
 #[serde(rename_all = "camelCase")]
 struct PickSavePathArgs {
     default_filename: String,
+    #[serde(default)]
+    filters: Option<Vec<SaveDialogFilterDef>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2281,7 +2457,7 @@ async fn save_print_file(args: SavePrintFileArgs) -> Result<String, String> {
             }
         };
 
-        let picked = build_save_dialog_with_filters(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name, None)
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
@@ -2318,7 +2494,7 @@ async fn save_print_file_from_path(args: SavePrintFileFromPathArgs) -> Result<St
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        let picked = build_save_dialog_with_filters(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name, None)
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
@@ -2350,7 +2526,7 @@ async fn pick_save_path(args: PickSavePathArgs) -> Result<String, String> {
             }
         };
 
-        let picked = build_save_dialog_with_filters(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name, args.filters.as_deref())
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 

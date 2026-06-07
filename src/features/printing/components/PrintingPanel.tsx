@@ -14,14 +14,12 @@ type PrintingPanelProps = {
   canSendToPrinter: boolean;
   sendBusy: boolean;
   sendStatusText: string | null;
-  sendCanRetry?: boolean;
   sendButtonLabel?: string;
   showSendTargetPicker?: boolean;
   onOpenSendTargetPicker?: () => void;
   onDownload: () => void;
   onSendToPrinter: () => void;
   onCancelSendToPrinter?: () => void;
-  onRetrySendToPrinter?: () => void;
   sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | null;
   savedFilePath?: string | null;
 };
@@ -38,14 +36,12 @@ export function PrintingPanel({
   canSendToPrinter,
   sendBusy,
   sendStatusText,
-  sendCanRetry = false,
   sendButtonLabel = 'Send to Printer',
   showSendTargetPicker = false,
   onOpenSendTargetPicker,
   onDownload,
   onSendToPrinter,
   onCancelSendToPrinter,
-  onRetrySendToPrinter,
   sliceIntent = null,
   savedFilePath = null,
 }: PrintingPanelProps) {
@@ -74,10 +70,10 @@ export function PrintingPanel({
     }
   }, [isDesktopRuntime, savedPathForReveal]);
 
-  const showSendActionButton = sendBusy || sendCanRetry;
-  const sendActionTitle = sendBusy ? 'Cancel current upload' : 'Retry failed upload';
-  const sendActionLabel = sendBusy ? 'Cancel' : 'Retry';
-  const sendActionHandler = sendBusy ? onCancelSendToPrinter : onRetrySendToPrinter;
+  const showSendActionButton = sendBusy;
+  const sendActionTitle = 'Cancel current upload';
+  const sendActionLabel = 'Cancel';
+  const sendActionHandler = onCancelSendToPrinter;
 
   return (
     <Card className="w-[22rem]">

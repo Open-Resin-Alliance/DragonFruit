@@ -30,6 +30,8 @@ extra_css:
   - stylesheets/dragonfruit-theme.css
 extra_javascript:
   - javascripts/homepage-release-feed.js
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 plugins:
   - search
   - meta
@@ -39,6 +41,9 @@ markdown_extensions:
   - admonition
   - attr_list
   - tables
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.superfences
   - toc:
       permalink: true
 nav:
@@ -74,6 +79,7 @@ nav:
       - Plugin Framework: dev/plugins-framework.md
       - Complex Plugin Contributing: dev/plugins-complex-contributing.md
       - Support System: dev/support-system.md
+      - Support Pathfinding V3: dev/support-pathfinding-v3.md
       - Branch Supports: dev/branch-supports.md
       - Grid and Branching: dev/grid-and-branching.md
       - Raft Geometry: dev/raft-geometry.md

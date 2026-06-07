@@ -40,7 +40,6 @@ export function SelectionManager({
 
     const handleModelClick = (e: CustomEvent<{ modelId: string }>) => {
       const modelId = e.detail.modelId;
-      console.log('[SelectionManager] Selecting model:', modelId);
       select(modelId);
     };
 
@@ -69,7 +68,6 @@ export function SelectionManager({
         // Canvas click only deselects - clicking model is required to select
         // Check global state directly to avoid stale closure issues
         if (state.hasSelection) {
-          console.log('[SelectionManager] Deselecting (canvas click)');
           deselect();
           window.dispatchEvent(new CustomEvent('model-deselected'));
         }

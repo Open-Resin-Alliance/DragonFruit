@@ -6,6 +6,8 @@ type TauriEventModule = {
   listen: <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
 };
 
+export type AntiAliasingLevel = 'Off' | `${number}x`;
+
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
   formatVersion?: string | null;
@@ -18,11 +20,29 @@ export type NativeSolidSliceJobEnvelope = {
   computeBackend?: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
-  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+  antiAliasingLevel: AntiAliasingLevel;
+  antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  blurBrushRadiusPx: number;
+  blurBrushKernel?: 'box' | 'gaussian';
+  blurBrushSigma?: number;
+  blurBrushSigmaX?: number;
+  blurBrushSigmaY?: number;
+  zBlurRadiusLayers?: number;
+  zBlurKernel?: 'box' | 'gaussian';
+  zBlurSigma?: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
   mirrorX: boolean;
   mirrorY: boolean;
+  zBlendLookBack?: number;
+  zBlendFadePx?: number;
+  zBlendAutoFade?: boolean;
+  zBlendMinimumAlphaPercent?: number;
+  zBlendMaxAlphaPercent?: number;
+  zBlendCustomLut?: number[];
+  zaaKernel?: 'perturb';
+  zaaPattern?: 'uniform' | 'halton' | 'base2';
+  zaaDuplicateZ?: boolean;
   modelTriangleCount: number;
   containerCompressionLevel?: number;
   buildWidthMm: number;
@@ -41,6 +61,9 @@ export type NativeSolidSliceJobEnvelope = {
     maxZ: number;
   } | null;
   metadataJson: string;
+  ditherEnabled?: boolean;
+  ditherBitDepth?: number;
+  ditherDeviceGamma?: number;
 };
 
 type NativeSolidSlicePayload = {
@@ -54,11 +77,28 @@ type NativeSolidSlicePayload = {
   compute_backend: 'auto' | 'cpu' | 'gpu';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
-  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
+  anti_aliasing_level: AntiAliasingLevel;
+  anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  blur_brush_radius_px: number;
+  blur_brush_kernel: 'box' | 'gaussian';
+  blur_brush_sigma_x: number;
+  blur_brush_sigma_y: number;
+  z_blur_radius_layers: number;
+  z_blur_kernel: 'box' | 'gaussian';
+  z_blur_sigma: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
+  z_blend_look_back?: number;
+  z_blend_fade_px?: number;
+  z_blend_auto_fade?: boolean;
+  z_blend_minimum_alpha_percent?: number;
+  z_blend_max_alpha_percent?: number;
+  z_blend_custom_lut?: number[];
+  zaa_kernel?: 'perturb';
+  zaa_pattern?: 'uniform' | 'halton' | 'base2';
+  zaa_duplicate_z?: boolean;
   model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
@@ -77,6 +117,9 @@ type NativeSolidSlicePayload = {
     max_z: number;
   } | null;
   metadata_json: string;
+  dither_enabled?: boolean;
+  dither_bit_depth?: number | null;
+  dither_device_gamma?: number;
 };
 
 /** Metadata-only payload for the binary mesh staging path (no inline triangles). */
@@ -90,11 +133,29 @@ type NativeSolidSliceMetadataPayload = {
   height_px: number;
   x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
-  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
+  anti_aliasing_level: AntiAliasingLevel;
+  anti_aliasing_mode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
+  blur_brush_radius_px: number;
+  blur_brush_kernel: 'box' | 'gaussian';
+  blur_brush_sigma_x: number;
+  blur_brush_sigma_y: number;
+  z_blur_radius_layers: number;
+  z_blur_kernel: 'box' | 'gaussian';
+  z_blur_sigma: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
+  z_blend_look_back?: number;
+  z_blend_fade_px?: number;
+  z_blend_auto_fade?: boolean;
+  z_blend_minimum_alpha_percent?: number;
+  z_blend_max_alpha_percent?: number;
+  z_blend_custom_lut?: number[];
+  zaa_kernel?: 'perturb';
+  zaa_pattern?: 'uniform' | 'halton' | 'base2';
+  zaa_duplicate_z?: boolean;
+  model_triangle_count: number;
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -111,6 +172,9 @@ type NativeSolidSliceMetadataPayload = {
     max_z: number;
   } | null;
   metadata_json: string;
+  dither_enabled?: boolean;
+  dither_bit_depth?: number | null;
+  dither_device_gamma?: number;
 };
 
 type SliceProgressEvent = {
@@ -172,10 +236,27 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     png_compression_strategy: job.pngCompressionStrategy,
     bvh_acceleration_enabled: job.bvhAccelerationEnabled,
     anti_aliasing_level: job.antiAliasingLevel,
+    anti_aliasing_mode: job.antiAliasingMode,
+    blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
+    blur_brush_kernel: job.blurBrushKernel ?? 'gaussian',
+    blur_brush_sigma_x: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaX ?? job.blurBrushSigma ?? 0.5))),
+    blur_brush_sigma_y: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaY ?? job.blurBrushSigma ?? 0.5))),
+    z_blur_radius_layers: Math.max(0, Math.min(8, Math.round(job.zBlurRadiusLayers ?? 0))),
+    z_blur_kernel: job.zBlurKernel ?? 'box',
+    z_blur_sigma: Math.max(0.05, Math.min(16, Number(job.zBlurSigma ?? 0.5))),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
+    z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
+    z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
+    z_blend_auto_fade: job.zBlendAutoFade !== false,
+    z_blend_minimum_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMinimumAlphaPercent ?? 0))),
+    z_blend_max_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMaxAlphaPercent ?? 90))),
+    z_blend_custom_lut: job.zBlendCustomLut,
+    zaa_kernel: job.zaaKernel,
+    zaa_pattern: job.zaaPattern,
+    zaa_duplicate_z: job.zaaDuplicateZ,
     model_triangle_count: job.modelTriangleCount,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
@@ -196,6 +277,9 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
         }
       : null,
     metadata_json: job.metadataJson,
+    dither_enabled: job.ditherEnabled ?? false,
+    dither_bit_depth: job.ditherBitDepth ?? null,
+    dither_device_gamma: job.ditherDeviceGamma ?? 3.0,
   };
 }
 
@@ -211,10 +295,28 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     x_packing_mode: job.xPackingMode,
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
+    anti_aliasing_mode: job.antiAliasingMode,
+    blur_brush_radius_px: Math.max(1, Math.round(job.blurBrushRadiusPx ?? 1)),
+    blur_brush_kernel: job.blurBrushKernel ?? 'gaussian',
+    blur_brush_sigma_x: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaX ?? job.blurBrushSigma ?? 0.5))),
+    blur_brush_sigma_y: Math.max(0.05, Math.min(16, Number(job.blurBrushSigmaY ?? job.blurBrushSigma ?? 0.5))),
+    z_blur_radius_layers: Math.max(0, Math.min(8, Math.round(job.zBlurRadiusLayers ?? 0))),
+    z_blur_kernel: job.zBlurKernel ?? 'box',
+    z_blur_sigma: Math.max(0.05, Math.min(16, Number(job.zBlurSigma ?? 0.5))),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
+    z_blend_look_back: Math.max(1, Math.round(job.zBlendLookBack ?? 2)),
+    z_blend_fade_px: Math.max(1, Math.round(job.zBlendFadePx ?? 20)),
+    z_blend_auto_fade: job.zBlendAutoFade !== false,
+    z_blend_minimum_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMinimumAlphaPercent ?? 0))),
+    z_blend_max_alpha_percent: Math.max(0, Math.min(100, Number(job.zBlendMaxAlphaPercent ?? 90))),
+    z_blend_custom_lut: job.zBlendCustomLut,
+    zaa_kernel: job.zaaKernel,
+    zaa_pattern: job.zaaPattern,
+    zaa_duplicate_z: job.zaaDuplicateZ,
+    model_triangle_count: Math.max(0, Math.floor(job.modelTriangleCount ?? 0)),
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
@@ -233,6 +335,9 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
         }
       : null,
     metadata_json: job.metadataJson,
+    dither_enabled: job.ditherEnabled ?? false,
+    dither_bit_depth: job.ditherBitDepth ?? null,
+    dither_device_gamma: job.ditherDeviceGamma ?? 3.0,
   };
 }
 
@@ -259,6 +364,11 @@ export type NativeSliceTempPathArtifact = {
 
 export type NativeOpenDialogCategory = 'mesh' | 'scene' | 'bundle';
 
+export type NativeSaveDialogFilter = {
+  name: string;
+  extensions: string[];
+};
+
 export type NativePickedOpenFile = {
   path: string;
   name: string;
@@ -283,6 +393,13 @@ export type NativeSlicerPerfMetrics = {
   renderNs: number;
   pngEncodeNs: number;
   archiveEncodeNs: number;
+  zBlendBackwardNs: number;
+  zBlendForwardNs: number;
+  crossBlendNs: number;
+  crossBlendTouchedPixels: number;
+  crossBlendContributingLayers: number;
+  postBlurNs: number;
+  supportMergeNs: number;
   layers: number;
 };
 
@@ -290,6 +407,8 @@ export type NativeSlicerRuntimeMetrics = {
   poolThreads: number;
   maxConcurrent: number;
   queueBuffer: number;
+  daaPostThreads?: number;
+  daaPostBufferDepth?: number;
   buildProfile?: 'debug' | 'release' | string;
   artifactDir?: string;
   meshStageDir?: string;
@@ -584,6 +703,25 @@ export async function pickSavePathWithNativeDialog(defaultFilename: string): Pro
   return core.invoke<string>('pick_save_path', {
     args: {
       defaultFilename,
+    },
+  });
+}
+
+export async function pickSavePathWithNativeDialogOptions(
+  defaultFilename: string,
+  options?: {
+    filters?: NativeSaveDialogFilter[];
+  },
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native save dialog is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('pick_save_path', {
+    args: {
+      defaultFilename,
+      filters: options?.filters,
     },
   });
 }

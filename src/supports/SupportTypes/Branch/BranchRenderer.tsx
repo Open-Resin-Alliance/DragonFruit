@@ -7,7 +7,6 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -16,6 +15,7 @@ import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { getSnapshot, updateBranch } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { buildBranchData } from './branchBuilder';
 
 interface BranchRendererProps {
   branch: Branch;
@@ -61,7 +61,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const previewBranch = usePartDragUpdate<Branch>('branch', baseBranch.id);
   const branch = previewBranch ?? baseBranch;
   const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-  const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+  const liveDragBranchRef = React.useRef<Branch | null>(null);
   const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
   const [, setDragTick] = React.useState(0);
 
@@ -88,7 +88,6 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     if (!isSelected || !branch.contactCone) return;
     if (!isPrimaryPointerPress(e)) return;
 
-    const socketAnchor = getFinalSocketPosition(branch.contactCone);
     beforeHistoryRef.current = captureSupportEditSnapshot();
 
     dragSessionRef.current?.stop();
@@ -98,26 +97,38 @@ export const BranchRenderer = React.memo(function BranchRenderer({
       scene,
       initialEvent: e,
       modelId: branch.modelId,
-      onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+      onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
         const latest = getSnapshot().branches[branch.id];
         if (!latest?.contactCone) return;
-        liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+        const rebuilt = buildBranchData({
+          tipPos: point,
+          tipNormal: surfaceNormal,
+          modelId: branch.modelId,
+          parentKnot,
+          mesh,
+        }).branch;
+        liveDragBranchRef.current = {
+          ...rebuilt,
+          id: latest.id,
+          parentKnotId: latest.parentKnotId,
+          settingsCodeHex: latest.settingsCodeHex,
+          modelId: latest.modelId,
+        };
         setDragTick(t => t + 1);
       },
       onEnd: () => {
-        if (liveDragConeRef.current) {
-          const latest = getSnapshot().branches[branch.id];
-          if (latest) updateBranch({ ...latest, contactCone: liveDragConeRef.current });
+        if (liveDragBranchRef.current) {
+          updateBranch(liveDragBranchRef.current);
           if (beforeHistoryRef.current) {
             pushSupportEditHistory('Move branch tip', beforeHistoryRef.current, captureSupportEditSnapshot());
           }
         }
-        liveDragConeRef.current = null;
+        liveDragBranchRef.current = null;
         dragSessionRef.current = null;
         beforeHistoryRef.current = null;
       },
     });
-  }, [branch.id, branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, scene]);
+  }, [branch.id, branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, parentKnot, scene]);
 
   const handleContactDiskHudPointerUp = React.useCallback(() => {
     dragSessionRef.current?.stop();
@@ -135,7 +146,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const batchedStraightShafts: InstancedShaft[] = [];
   const joints: React.ReactNode[] = [];
 
-  const effectiveBranch = previewBranch ?? branch;
+  const effectiveBranch = liveDragBranchRef.current ?? previewBranch ?? branch;
 
   effectiveBranch.segments.forEach((seg, index) => {
     let endPoint: THREE.Vector3;
@@ -231,7 +242,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   });
 
   // --- Render Contact Cone (if present) ---
-  const effectiveCone = liveDragConeRef.current ?? effectiveBranch.contactCone;
+  const effectiveCone = effectiveBranch.contactCone;
   let coneRender = null;
   if (effectiveCone && !deferContactConesToSceneBatch) {
     const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;

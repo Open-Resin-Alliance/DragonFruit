@@ -64,6 +64,12 @@ impl LayerIndex {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerSamplingSpan {
+    CenterOnly,
+    FullLayer,
+}
+
 fn resolve_layer_index_budget_bytes() -> u64 {
     let mb = std::env::var("DF_V3_LAYER_INDEX_BUDGET_MB")
         .ok()
@@ -79,13 +85,22 @@ fn layer_range_for_triangle(
     tri: &Triangle,
     layer_height_mm: f32,
     total_layers: u32,
+    sampling_span: LayerSamplingSpan,
 ) -> Option<(u32, u32)> {
     if total_layers == 0 {
         return None;
     }
     let last = (total_layers as i32) - 1;
-    let start = ((tri.z_min / layer_height_mm) - 0.5).ceil() as i32;
-    let end = ((tri.z_max / layer_height_mm) - 0.5).floor() as i32;
+    let (start, end) = match sampling_span {
+        LayerSamplingSpan::CenterOnly => (
+            ((tri.z_min / layer_height_mm) - 0.5).ceil() as i32,
+            ((tri.z_max / layer_height_mm) - 0.5).floor() as i32,
+        ),
+        LayerSamplingSpan::FullLayer => (
+            ((tri.z_min / layer_height_mm) - 1.0 - 1e-5).ceil() as i32,
+            ((tri.z_max / layer_height_mm) + 1e-5).floor() as i32,
+        ),
+    };
     if end < 0 || start > last {
         return None;
     }
@@ -103,12 +118,15 @@ pub fn build_layer_index(
     triangles: &[Triangle],
     total_layers: u32,
     layer_height_mm: f32,
+    sampling_span: LayerSamplingSpan,
 ) -> LayerIndex {
     let mut ranges = Vec::<Option<(u32, u32)>>::with_capacity(triangles.len());
     let mut estimated_dense_entries = 0u64;
 
     for tri in triangles {
-        if let Some((start, end)) = layer_range_for_triangle(tri, layer_height_mm, total_layers) {
+        if let Some((start, end)) =
+            layer_range_for_triangle(tri, layer_height_mm, total_layers, sampling_span)
+        {
             estimated_dense_entries = estimated_dense_entries
                 .saturating_add((end.saturating_sub(start).saturating_add(1)) as u64);
             ranges.push(Some((start, end)));
@@ -147,8 +165,13 @@ pub fn build_layer_index(
         return LayerIndex::Dense(buckets);
     }
 
-    build_zbin_index_from_ranges(triangles, layer_height_mm,
-        estimated_dense_entries, max_dense_entries)
+    build_zbin_index_from_ranges(
+        triangles,
+        layer_height_mm,
+        estimated_dense_entries,
+        max_dense_entries,
+        sampling_span,
+    )
 }
 
 /// Build a Z-bin spatial index as a memory-efficient fallback when Dense is too large.
@@ -157,6 +180,7 @@ fn build_zbin_index_from_ranges(
     layer_height_mm: f32,
     estimated_dense_entries: u64,
     max_dense_entries: u64,
+    sampling_span: LayerSamplingSpan,
 ) -> LayerIndex {
     let z_min_model = triangles
         .iter()
@@ -171,10 +195,16 @@ fn build_zbin_index_from_ranges(
 
     let mut bin_sizes = vec![0usize; ZBIN_COUNT];
     for tri in triangles.iter() {
-        let b_start = ((tri.z_min - z_min_model) / bin_height)
+        let (tri_z_min, tri_z_max) = match sampling_span {
+            LayerSamplingSpan::CenterOnly => (tri.z_min, tri.z_max),
+            LayerSamplingSpan::FullLayer => {
+                (tri.z_min - layer_height_mm, tri.z_max + layer_height_mm)
+            }
+        };
+        let b_start = ((tri_z_min - z_min_model) / bin_height)
             .floor()
             .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
-        let b_end = ((tri.z_max - z_min_model) / bin_height)
+        let b_end = ((tri_z_max - z_min_model) / bin_height)
             .floor()
             .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
         for b in b_start..=b_end {
@@ -188,10 +218,16 @@ fn build_zbin_index_from_ranges(
         .collect();
 
     for (idx, tri) in triangles.iter().enumerate() {
-        let b_start = ((tri.z_min - z_min_model) / bin_height)
+        let (tri_z_min, tri_z_max) = match sampling_span {
+            LayerSamplingSpan::CenterOnly => (tri.z_min, tri.z_max),
+            LayerSamplingSpan::FullLayer => {
+                (tri.z_min - layer_height_mm, tri.z_max + layer_height_mm)
+            }
+        };
+        let b_start = ((tri_z_min - z_min_model) / bin_height)
             .floor()
             .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
-        let b_end = ((tri.z_max - z_min_model) / bin_height)
+        let b_end = ((tri_z_max - z_min_model) / bin_height)
             .floor()
             .clamp(0.0, (ZBIN_COUNT - 1) as f32) as usize;
         for b in b_start..=b_end {
@@ -212,5 +248,61 @@ fn build_zbin_index_from_ranges(
         bin_height,
         layer_height_mm,
         bins,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_layer_index, layer_range_for_triangle, LayerSamplingSpan};
+    use crate::geometry::{Triangle, Vec3};
+
+    fn make_triangle(z_min: f32, z_max: f32) -> Triangle {
+        Triangle {
+            a: Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: z_min,
+            },
+            b: Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: z_max,
+            },
+            c: Vec3 {
+                x: 0.0,
+                y: 1.0,
+                z: z_max,
+            },
+            z_min,
+            z_max,
+            dir_x: 0.0,
+            dir_y: 0.0,
+            fill_wind: 1,
+            px_ax: 0.0,
+            px_ay: 0.0,
+            px_bx: 0.0,
+            px_by: 0.0,
+            px_cx: 0.0,
+            px_cy: 0.0,
+        }
+    }
+
+    #[test]
+    fn full_layer_sampling_indexes_top_of_layer_triangles() {
+        let tri = make_triangle(0.8, 0.9);
+
+        assert_eq!(
+            layer_range_for_triangle(&tri, 1.0, 2, LayerSamplingSpan::CenterOnly),
+            None,
+            "center-only indexing should ignore triangles that never cross the layer center"
+        );
+        assert_eq!(
+            layer_range_for_triangle(&tri, 1.0, 2, LayerSamplingSpan::FullLayer),
+            Some((0, 0)),
+            "full-layer indexing should keep triangles reachable by perturbed Z samples"
+        );
+
+        let dense = build_layer_index(&[tri], 2, 1.0, LayerSamplingSpan::FullLayer);
+        assert_eq!(dense.candidates_for_layer(0), &[0]);
     }
 }

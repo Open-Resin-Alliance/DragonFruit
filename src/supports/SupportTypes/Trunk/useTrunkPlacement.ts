@@ -1,8 +1,8 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { addAnchor, addBranch, addKnot, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
+import { addAnchor, addBranch, addKnot, addLeaf, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
+import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_LEAF, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
@@ -15,6 +15,9 @@ import { clearSupportSelection } from '../../interaction/shared/selection/select
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { buildStick } from '../Stick/stickBuilder';
 import { buildTwig } from '../Twig/twigBuilder';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import { getSupportPathfindingDebugEnabled, setSupportPathfindingDebugSnapshot } from '../../PlacementLogic/Pathfinding/pathfindingDebugState';
 
 // ---------------------------------------------------------------------------
 // Cavity stick helpers
@@ -124,6 +127,8 @@ export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
     const HOVER_POS_EPSILON_MM = 0.1;
     const HOVER_NORMAL_DOT_MIN = 0.998;
+    const { getHotkey } = useHotkeyConfig();
+    const forcePlaceBinding = getHotkey('SUPPORTS', 'FORCE_PLACE_SUPPORT');
 
     const [previewData, setPreviewData] = useState<SupportData | null>(null);
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
@@ -131,6 +136,7 @@ export function useTrunkPlacementV2() {
     const { isPlacementHardDisabled } = useInteractionStatus();
     const hoverFrameRef = useRef<number | null>(null);
     const latestHoverRef = useRef<THREE.Intersection | null>(null);
+    const forcePlaceOverrideRef = useRef(false);
     const hoverNormalRef = useRef(new THREE.Vector3());
     const cavityPreviewCacheNormalRef = useRef(new THREE.Vector3());
     const cavityPreviewCacheRef = useRef<{
@@ -154,6 +160,22 @@ export function useTrunkPlacementV2() {
         setPreviewError((prev) => (prev === null ? prev : null));
         setPreviewWarning((prev) => (prev === null ? prev : null));
         cavityPreviewCacheRef.current = null;
+        if (getSupportPathfindingDebugEnabled()) {
+            setSupportPathfindingDebugSnapshot(null);
+        }
+    }, []);
+
+    const commitTrunkBuild = useCallback((trunkBuild: ReturnType<typeof buildTrunkData>) => {
+        addRoot(trunkBuild.root);
+        addTrunk(trunkBuild.trunk);
+        pushHistory({
+            type: SUPPORT_ADD_TRUNK,
+            payload: {
+                trunk: trunkBuild.trunk,
+                root: trunkBuild.root,
+            },
+        });
+        clearSupportSelection();
     }, []);
 
     const resolveCavityStickPreview = useCallback((
@@ -274,14 +296,21 @@ export function useTrunkPlacementV2() {
 
         const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
 
-        // Pass mesh for collision detection
-        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh, isPreview: true });
         const settings = getSettings();
+        const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // Fast-path for cavity hover when stagnated (closed cavity) or budget
-        // exhausted after both V1+V2 failed — these are genuine routing dead-ends.
-        if (result.stagnated || result.exhaustedBudget) {
+        // Grid mode is intentionally grid-native: build a cheap straight
+        // candidate, then let the fixed-grid resolver snap/merge/reject it.
+        // Feeding the mesh here starts the flexible A* router, which is the
+        // wrong cost model for hover on a fixed lattice.
+        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh, isPreview: true });
+
+        // Fast-path for cavity hover when the trunk can't route to the build
+        // plate: try a stick/twig bridge to the nearest surface below the tip.
+        // This covers stagnation, budget exhaustion, AND general collision errors
+        // (e.g. tip inside a "mouth" cavity where the straight path is blocked).
+        if (!isGridMode && (result.error || result.stagnated || result.exhaustedBudget)) {
             if (mesh) {
                 const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -291,10 +320,15 @@ export function useTrunkPlacementV2() {
                     return;
                 }
             }
-            setPreviewData(result.supportData);
-            setPreviewError(result.error || null);
-            setPreviewWarning(null);
-            return;
+            // No cavity floor found — show the trunk error as fallback.
+            if (result.stagnated || result.exhaustedBudget) {
+                setPreviewData(result.supportData);
+                setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
+                setPreviewWarning(null);
+                return;
+            }
+            // For non-stagnation errors, fall through to grid placement decision
+            // (which may still place a branch or reject).
         }
 
         const decision = decideGridPlacement({
@@ -309,19 +343,26 @@ export function useTrunkPlacementV2() {
 
         if (decision.kind === 'place_trunk') {
             setPreviewData(decision.trunkBuild.supportData);
-            setPreviewError(decision.trunkBuild.error || null);
+            setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
             return;
         }
 
         if (decision.kind === 'replace_trunk') {
             setPreviewData(decision.trunkBuild.supportData);
-            setPreviewError(decision.trunkBuild.error || null);
+            setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
             return;
         }
 
         if (decision.kind === 'place_branch') {
+            setPreviewData(decision.supportData);
+            setPreviewError(null);
+            setPreviewWarning(null);
+            return;
+        }
+
+        if (decision.kind === 'place_leaf') {
             setPreviewData(decision.supportData);
             setPreviewError(null);
             setPreviewWarning(null);
@@ -338,14 +379,15 @@ export function useTrunkPlacementV2() {
         // reject
         if (decision.trunkBuild) {
             setPreviewData(decision.trunkBuild.supportData);
-            setPreviewError(decision.trunkBuild.error || null);
+            setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
             return;
         }
 
         setPreviewData((prev) => (prev === null ? prev : null));
-        setPreviewError(
-            decision.reason === 'KNOT_ABOVE_TIP'
+        setPreviewError(forcePlaceOverrideRef.current
+            ? null
+            : decision.reason === 'KNOT_ABOVE_TIP'
                 ? 'KNOT_ABOVE_TIP'
                 : decision.reason === 'COLLISION_WITH_MODEL'
                     ? 'COLLISION_WITH_MODEL'
@@ -353,6 +395,39 @@ export function useTrunkPlacementV2() {
         );
         setPreviewWarning((prev) => (prev === null ? prev : null));
     }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled, resolveCavityStickPreview]);
+
+    useEffect(() => {
+        const refreshCurrentHover = () => {
+            if (hoverFrameRef.current !== null) return;
+            hoverFrameRef.current = requestAnimationFrame(() => {
+                hoverFrameRef.current = null;
+                processSupportHover(latestHoverRef.current);
+            });
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (!matchesConfiguredHotkeyDown(event, forcePlaceBinding) || forcePlaceOverrideRef.current) return;
+            event.preventDefault();
+            forcePlaceOverrideRef.current = true;
+            refreshCurrentHover();
+        };
+
+        const handleKeyUp = (event: KeyboardEvent) => {
+            if (!matchesConfiguredHotkeyUp(event, forcePlaceBinding) || !forcePlaceOverrideRef.current) return;
+            event.preventDefault();
+            forcePlaceOverrideRef.current = false;
+            refreshCurrentHover();
+        };
+
+        window.addEventListener('keydown', handleKeyDown, true);
+        window.addEventListener('keyup', handleKeyUp, true);
+        document.addEventListener('keyup', handleKeyUp, true);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown, true);
+            window.removeEventListener('keyup', handleKeyUp, true);
+            document.removeEventListener('keyup', handleKeyUp, true);
+        };
+    }, [forcePlaceBinding, processSupportHover]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
         latestHoverRef.current = hit;
@@ -377,14 +452,18 @@ export function useTrunkPlacementV2() {
         const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
         const modelId = hit.object.userData.modelId || 'unknown';
         
-        // Pass mesh for collision detection
-        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
+        const settings = getSettings();
+        const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // When the pathfinder stagnates or exhausts both V1+V2 budgets, the tip
-        // can't route to the build plate. Fall back to a cavity stick/twig that
-        // spans straight down to the nearest suitable surface.
-        if (result.stagnated || result.exhaustedBudget) {
+        // In grid mode, avoid the flexible A* route search entirely. The grid
+        // resolver owns snapping and same-node merge behavior.
+        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh });
+
+        // When the trunk can't route to the build plate (stagnation, budget
+        // exhaustion, or general collision), fall back to a cavity stick/twig
+        // that spans from the tip down to the nearest surface below.
+        if (!isGridMode && (result.error || result.stagnated || result.exhaustedBudget)) {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -405,14 +484,20 @@ export function useTrunkPlacementV2() {
                     return;
                 }
             }
-            // No cavity floor found — bail silently; hover preview already shows the error.
+            // No cavity floor found — for stagnation/budget, bail silently.
+            // For other errors (collision), let the user force-place if desired.
+            if (forcePlaceOverrideRef.current && (result.stagnated || result.exhaustedBudget || result.error)) {
+                commitTrunkBuild(result);
+            }
             return;
         }
 
         // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
         // Only bail on trunk errors when grid is disabled (direct placement path).
-        const settings = getSettings();
         if (result.error && !settings.grid?.enabled) {
+            if (forcePlaceOverrideRef.current) {
+                commitTrunkBuild(result);
+            }
             // Stick/twig is now strict last resort: do not fallback here unless
             // the solver reported true stagnation (handled above).
             return;
@@ -471,6 +556,21 @@ export function useTrunkPlacementV2() {
             return;
         }
 
+        if (decision.kind === 'place_leaf') {
+            addKnot(decision.knot);
+            addLeaf(decision.leaf);
+
+            pushHistory({
+                type: SUPPORT_ADD_LEAF,
+                payload: {
+                    leaf: decision.leaf,
+                    knot: decision.knot,
+                },
+            });
+            clearSupportSelection();
+            return;
+        }
+
         if (decision.kind === 'replace_trunk') {
             const before = structuredClone(getSnapshot());
 
@@ -509,6 +609,9 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'reject') {
+            if (forcePlaceOverrideRef.current && decision.trunkBuild) {
+                commitTrunkBuild(decision.trunkBuild);
+            }
             // Stick/twig is now strict last resort: keep reject behavior here.
             return;
         }
@@ -516,20 +619,9 @@ export function useTrunkPlacementV2() {
         // decision.kind === 'place_trunk'
         const trunkBuild = decision.trunkBuild;
         
-        // Add to store
-        addRoot(trunkBuild.root);
-        addTrunk(trunkBuild.trunk);
-        pushHistory({
-            type: SUPPORT_ADD_TRUNK,
-            payload: {
-                trunk: trunkBuild.trunk,
-                root: trunkBuild.root,
-            },
-        });
-        
-        clearSupportSelection();
+        commitTrunkBuild(trunkBuild);
         console.log('[V2] Added trunk:', trunkBuild.trunk.id, 'to model:', modelId);
-    }, [isPlacementHardDisabled]);
+    }, [commitTrunkBuild, isPlacementHardDisabled]);
 
     return {
         onSupportHover,
