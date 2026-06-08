@@ -856,6 +856,12 @@ if (uDitherAmount > 0.0) {
               return;
             }
 
+            // In interior view, if a non-model object (placed hole punch) is behind
+            // the X-Ray front face, let the click propagate to it for selection.
+            if ((interiorView && cavityGeometry) && hasVisibleNonModelIntersection(e.intersections, e.object, null, null)) {
+              return;
+            }
+
             let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
             const isClippedHit =
               (clipUpper != null && e.point.z > clipUpper) ||
@@ -870,7 +876,7 @@ if (uDitherAmount > 0.0) {
               if (!fallback) return;
               clickHit = fallback;
             }
-            if (!isClippedHit) e.stopPropagation();
+            if (!isClippedHit && !(interiorView && cavityGeometry)) e.stopPropagation();
             onHolePunchClick(clickHit);
             return;
           }
@@ -896,7 +902,7 @@ if (uDitherAmount > 0.0) {
           }
 
           if (mode === 'support' && onActiveModelChange && !isActiveModel) {
-            e.stopPropagation();
+            if (!(interiorView && cavityGeometry)) e.stopPropagation();
             onActiveModelChange(modelId);
 
             // In support mode, first click should select the model only.
@@ -916,6 +922,13 @@ if (uDitherAmount > 0.0) {
               return; // Don't stop propagation — support will handle the click.
             }
 
+            // In interior view, if a non-model object (placed support, hole punch)
+            // is behind the X-Ray front face, let the click propagate to it instead
+            // of placing a new support on the interior surface.
+            if ((interiorView && cavityGeometry) && hasVisibleNonModelIntersection(e.intersections, e.object, null, null)) {
+              return;
+            }
+
             let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
             const isClippedHit =
               (clipUpper != null && e.point.z > clipUpper) ||
@@ -930,7 +943,7 @@ if (uDitherAmount > 0.0) {
               if (!fallback) return;
               clickHit = fallback;
             }
-            e.stopPropagation();
+            if (!(interiorView && cavityGeometry)) e.stopPropagation();
             onSupportClick(clickHit);
           }
         }}
@@ -1011,7 +1024,9 @@ if (uDitherAmount > 0.0) {
 
           // For clipped-zone hits, don't stop propagation but fall through
           // to the placement-preview section so inner-wall hover still works.
-          if (!primaryInClippedZone) {
+          // In interior view, always let events propagate so placed supports
+          // and hole punches behind the X-Ray front face can receive hover.
+          if (!primaryInClippedZone && !(interiorView && cavityGeometry)) {
             e.stopPropagation();
           }
 
@@ -1162,7 +1177,7 @@ if (uDitherAmount > 0.0) {
               return;
             }
 
-            e.stopPropagation();
+            if (!(interiorView && cavityGeometry)) e.stopPropagation();
             window.__modelClickGuardUntil = performance.now() + 48;
             window.__modelClickedThisFrame = true;
             window.setTimeout(() => {
