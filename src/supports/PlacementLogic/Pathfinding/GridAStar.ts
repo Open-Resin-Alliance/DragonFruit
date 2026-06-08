@@ -187,7 +187,7 @@ const PURE_DOWN_PRIORITY_INDICES = NEIGHBOR_RUNTIME
     .sort((a, b) => Math.abs(b.n.dz) - Math.abs(a.n.dz))
     .map(({ index }) => index);
 
-const STRAIGHT_DESCENT_CLEARANCE_FACTOR = 2;
+const STRAIGHT_DESCENT_CLEARANCE_FACTOR = 1.3;
 
 function cellKeyInt(qx: number, qy: number, qz: number): number {
     const ux = (qx + 0x4000) | 0;
@@ -322,7 +322,7 @@ export function gridAStar(
     const ignoreSupportId = opts.ignoreSupportId;
     const endpointOnlyCollisionCheck = !!opts.endpointOnlyCollisionCheck;
     const captureDebug = !!opts.captureDebug;
-    const nodeDistanceMaxMm = clearance * 2;
+    const nodeDistanceMaxMm = clearance * 1.3;
     const sdfWithThreshold = sdf as SDFCache & { distanceAtWithin?: DistanceAtWithin };
     const distanceAtWithin = typeof sdfWithThreshold.distanceAtWithin === 'function'
         ? sdfWithThreshold.distanceAtWithin.bind(sdf)
@@ -626,7 +626,7 @@ export function gridAStar(
                 continue;
             }
 
-            const clearancePenalty = dist < clearance * 2 ? (clearance * 2 - dist) * 0.5 : 0;
+            const clearancePenalty = dist < clearance * 1.3 ? (clearance * 1.3 - dist) * 0.5 : 0;
             const edgeCost = n.dx === 0 && n.dy === 0 && n.dz < -1
                 ? Math.abs(nz - current.z) * step
                 : neighborStaticCosts[ni];
