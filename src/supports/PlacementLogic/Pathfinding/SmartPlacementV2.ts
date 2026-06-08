@@ -1984,10 +1984,7 @@ export function calculateSmartPlacementV2(
                 tipProfile: input.tipProfile,
             },
             buildNearestCandidateNodeKeys,
-            subGridOffset: !settings.grid.enabled ? {
-                x: input.tipPos.x - Math.round(input.tipPos.x / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
-                y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
-            } : null,
+            subGridOffset: null,
             rootsDiskBlockedAt,
             segmentBlockedBetween: raycastSegmentBlockedBetween,
             contactConeBlockedAt,
@@ -2029,10 +2026,7 @@ export function calculateSmartPlacementV2(
                 tipProfile: input.tipProfile,
             },
             buildNearestCandidateNodeKeys,
-            subGridOffset: !settings.grid.enabled ? {
-                x: input.tipPos.x - Math.round(input.tipPos.x / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
-                y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
-            } : null,
+            subGridOffset: null,
             rootsDiskBlockedAt,
             segmentBlockedBetween: raycastSegmentBlockedBetween,
             contactConeBlockedAt,
@@ -2066,10 +2060,7 @@ export function calculateSmartPlacementV2(
                 tipProfile: input.tipProfile,
             },
             buildNearestCandidateNodeKeys,
-            subGridOffset: !settings.grid.enabled ? {
-                x: input.tipPos.x - Math.round(input.tipPos.x / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
-                y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
-            } : null,
+            subGridOffset: null,
             rootsDiskBlockedAt,
             segmentBlockedBetween: raycastSegmentBlockedBetween,
             contactConeBlockedAt,
@@ -2481,6 +2472,14 @@ export function calculateSmartPlacementV2(
                 x: input.tipPos.x - Math.round(input.tipPos.x / WIDE_ASTAR_STEP_MM) * WIDE_ASTAR_STEP_MM,
                 y: input.tipPos.y - Math.round(input.tipPos.y / WIDE_ASTAR_STEP_MM) * WIDE_ASTAR_STEP_MM,
             } : null;
+
+            if (!_ge && _wideSubGridOffset) {
+                for (const j of widePathJoints) {
+                    j.x += _wideSubGridOffset.x;
+                    j.y += _wideSubGridOffset.y;
+                }
+            }
+
             let _best = resolveCommittedBaseCandidate({
                 preferredBottomPos: _ubp,
                 lastSegmentStart: widePathJoints.length > 0 ? widePathJoints[widePathJoints.length - 1] : widePathEnd,
@@ -3077,6 +3076,13 @@ export function calculateSmartPlacementV2(
         y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
     } : null;
 
+    if (!gridEnabled && subGridOffset) {
+        for (const j of pathJoints) {
+            j.x += subGridOffset.x;
+            j.y += subGridOffset.y;
+        }
+    }
+
     // Find best grid node for the base
     let bestBase = resolveCommittedBaseCandidate({
         preferredBottomPos: unsnappedBottomPos,
@@ -3120,7 +3126,7 @@ export function calculateSmartPlacementV2(
         ? pathJoints[pathJoints.length - 1]
         : { x: socketPos.x, y: socketPos.y, z: socketPos.z };
     const finalSegmentLateralMm = distanceXY(lastPointBeforeBase, bestBase.rootTopTarget);
-    const FINAL_SEGMENT_STRAIGHTEN_THRESHOLD_MM = 1.5;
+    const FINAL_SEGMENT_STRAIGHTEN_THRESHOLD_MM = !gridEnabled ? 0.05 : 1.5;
     if (finalSegmentLateralMm > FINAL_SEGMENT_STRAIGHTEN_THRESHOLD_MM) {
         const straightDownBase: Vec3 = {
             x: lastPointBeforeBase.x,
